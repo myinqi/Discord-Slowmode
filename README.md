@@ -142,6 +142,12 @@ docker compose down
 ### Audit Log
 Protokoll aller Aktionen: gelöschte Nachrichten, Konfigurationsänderungen, Benutzerverwaltung.
 
+### Listening Party
+- Input-Kanal (muss ein überwachter Kanal sein) und Output-Kanal definieren
+- Zeitraum in Stunden konfigurieren (wie weit zurück nach Songs gesucht wird)
+- Per `/random-song` Slash-Command wird ein zufälliger Suno-Song aus dem Zeitraum in den Output-Kanal gepostet
+- Unterstützte URL-Formate: `https://suno.com/s/...` und `https://suno.com/song/...`
+
 ### Settings (Einstellungen)
 - Bot-Name ändern
 - Guild-ID ändern (erfordert Neustart)
@@ -157,6 +163,7 @@ Protokoll aller Aktionen: gelöschte Nachrichten, Konfigurationsänderungen, Ben
 | `/cooldown-reset @user [#kanal]` | Cooldown eines Nutzers zurücksetzen |
 | `/cooldown-clear [#kanal]` | Alle Cooldowns in einem/allen Kanal/Kanälen löschen |
 | `/cooldown-toggle #kanal true/false` | Monitoring für einen Kanal ein-/ausschalten |
+| `/random-song [#input-kanal]` | Zufälligen Suno-Song aus dem Input-Kanal posten |
 
 > Slash-Commands können nur von Serverbesitzern und Mitgliedern mit einer **Command Role** genutzt werden.
 

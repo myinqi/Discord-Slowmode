@@ -65,6 +65,14 @@ class Database:
                 UNIQUE(user_id, channel_id)
             );
 
+            CREATE TABLE IF NOT EXISTS listening_party_config (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                input_channel_id INTEGER NOT NULL,
+                output_channel_id INTEGER NOT NULL,
+                time_range_hours INTEGER DEFAULT 24,
+                UNIQUE(input_channel_id)
+            );
+
             CREATE TABLE IF NOT EXISTS audit_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp REAL DEFAULT (unixepoch()),
@@ -321,3 +329,43 @@ class Database:
         async with self.db.execute("SELECT COUNT(*) as cnt FROM audit_log") as cursor:
             row = await cursor.fetchone()
             return row["cnt"]
+
+    # --- Listening Party Config ---
+
+    async def get_listening_party_configs(self) -> list[dict]:
+        async with self.db.execute("SELECT * FROM listening_party_config") as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def get_listening_party_config(self, config_id: int) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM listening_party_config WHERE id = ?", (config_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def add_listening_party_config(
+        self, input_channel_id: int, output_channel_id: int, time_range_hours: int = 24
+    ):
+        await self.db.execute(
+            "INSERT INTO listening_party_config (input_channel_id, output_channel_id, time_range_hours) "
+            "VALUES (?, ?, ?) ON CONFLICT(input_channel_id) DO UPDATE SET "
+            "output_channel_id = excluded.output_channel_id, time_range_hours = excluded.time_range_hours",
+            (input_channel_id, output_channel_id, time_range_hours),
+        )
+        await self.db.commit()
+
+    async def update_listening_party_config(
+        self, config_id: int, output_channel_id: int, time_range_hours: int
+    ):
+        await self.db.execute(
+            "UPDATE listening_party_config SET output_channel_id = ?, time_range_hours = ? WHERE id = ?",
+            (output_channel_id, time_range_hours, config_id),
+        )
+        await self.db.commit()
+
+    async def remove_listening_party_config(self, config_id: int):
+        await self.db.execute(
+            "DELETE FROM listening_party_config WHERE id = ?", (config_id,)
+        )
+        await self.db.commit()

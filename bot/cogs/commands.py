@@ -1,6 +1,11 @@
+import re
+import random
+from datetime import datetime, timedelta, timezone
 import discord
 from discord import app_commands
 from discord.ext import commands
+
+SUNO_URL_PATTERN = re.compile(r'https://suno\.com/(?:s|song)/[\w-]+')
 
 
 class CommandsCog(commands.Cog):
@@ -179,6 +184,95 @@ class CommandsCog(commands.Cog):
 
         await interaction.response.send_message(
             f"Monitoring for #{channel.name} is now **{state}**.", ephemeral=True
+        )
+
+    @app_commands.command(name="random-song", description="Pick a random Suno song from a listening party input channel")
+    @app_commands.describe(input_channel="The input channel to scan (must have a listening party config)")
+    async def random_song(
+        self, interaction: discord.Interaction, input_channel: discord.TextChannel = None
+    ):
+        if not await self._permission_check(interaction):
+            return
+
+        await interaction.response.defer(ephemeral=False)
+
+        configs = await self.bot.db.get_listening_party_configs()
+        if not configs:
+            await interaction.followup.send("No listening party configs found. Set one up in the web interface.", ephemeral=True)
+            return
+
+        if input_channel:
+            config = None
+            for c in configs:
+                if c["input_channel_id"] == input_channel.id:
+                    config = c
+                    break
+            if not config:
+                await interaction.followup.send(
+                    f"#{input_channel.name} is not configured as a listening party input channel.", ephemeral=True
+                )
+                return
+        else:
+            config = configs[0]
+
+        source_channel = interaction.guild.get_channel(config["input_channel_id"])
+        output_channel = interaction.guild.get_channel(config["output_channel_id"])
+
+        if not source_channel:
+            await interaction.followup.send("Input channel not found.", ephemeral=True)
+            return
+        if not output_channel:
+            await interaction.followup.send("Output channel not found.", ephemeral=True)
+            return
+
+        time_range_hours = config["time_range_hours"]
+        after_time = datetime.now(timezone.utc) - timedelta(hours=time_range_hours)
+
+        suno_urls = []
+        async for message in source_channel.history(after=after_time, limit=5000):
+            if message.author.bot:
+                continue
+            urls = SUNO_URL_PATTERN.findall(message.content)
+            for url in urls:
+                suno_urls.append({
+                    "url": url,
+                    "author": str(message.author),
+                    "author_id": message.author.id,
+                    "posted_at": message.created_at,
+                })
+
+        if not suno_urls:
+            await interaction.followup.send(
+                f"No Suno songs found in #{source_channel.name} within the last {time_range_hours}h.", ephemeral=True
+            )
+            return
+
+        pick = random.choice(suno_urls)
+        bot_name = await self.bot.db.get_setting("bot_name") or "Slowmode Bot"
+
+        embed = discord.Embed(
+            title="🎵 Random Song Pick",
+            description=f"From #{source_channel.name} (last {time_range_hours}h)\n\n{pick['url']}",
+            color=discord.Color.purple(),
+        )
+        embed.add_field(name="Posted by", value=f"<@{pick['author_id']}>", inline=True)
+        embed.add_field(name="Originally posted", value=discord.utils.format_dt(pick["posted_at"], style="R"), inline=True)
+        embed.set_footer(text=f"{bot_name} • {len(suno_urls)} songs scanned")
+        embed.timestamp = discord.utils.utcnow()
+
+        await output_channel.send(embed=embed)
+        await interaction.followup.send(
+            f"Random song posted to #{output_channel.name}! ({len(suno_urls)} songs found)", ephemeral=True
+        )
+
+        await self.bot.db.add_audit_log(
+            event_type="random_song",
+            user_id=interaction.user.id,
+            user_name=str(interaction.user),
+            channel_id=output_channel.id,
+            channel_name=output_channel.name,
+            details=f"Random song picked from #{source_channel.name}: {pick['url']}",
+            actor=str(interaction.user),
         )
 
 

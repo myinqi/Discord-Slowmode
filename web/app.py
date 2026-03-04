@@ -414,4 +414,89 @@ def create_app(db: Database, bot=None) -> Quart:
             total=total,
         )
 
+    @app.route("/listening-party", methods=["GET", "POST"])
+    @login_required
+    async def listening_party():
+        if request.method == "POST":
+            form = await request.form
+            action = form.get("action")
+
+            if action == "add":
+                input_channel_id = form.get("input_channel_id", "").strip()
+                output_channel_id = form.get("output_channel_id", "").strip()
+                time_range = int(form.get("time_range_hours", "24"))
+
+                if not input_channel_id.isdigit() or not output_channel_id.isdigit():
+                    await flash("Invalid channel ID.", "error")
+                else:
+                    input_channel_id = int(input_channel_id)
+                    output_channel_id = int(output_channel_id)
+
+                    monitored = await db.get_monitored_channel(input_channel_id)
+                    if not monitored:
+                        await flash("Input channel must be a monitored channel.", "error")
+                    elif input_channel_id == output_channel_id:
+                        await flash("Input and output channel must be different.", "error")
+                    else:
+                        await db.add_listening_party_config(input_channel_id, output_channel_id, time_range)
+                        await db.add_audit_log(
+                            event_type="listening_party_added",
+                            channel_id=input_channel_id,
+                            details=f"Listening party config added: input={input_channel_id}, output={output_channel_id}, range={time_range}h",
+                            actor=session.get("username", "unknown"),
+                        )
+                        await flash("Listening party config added.", "success")
+
+            elif action == "update":
+                config_id = int(form.get("config_id", "0"))
+                output_channel_id = int(form.get("output_channel_id", "0"))
+                time_range = int(form.get("time_range_hours", "24"))
+                await db.update_listening_party_config(config_id, output_channel_id, time_range)
+                await db.add_audit_log(
+                    event_type="listening_party_updated",
+                    details=f"Config {config_id} updated: output={output_channel_id}, range={time_range}h",
+                    actor=session.get("username", "unknown"),
+                )
+                await flash("Config updated.", "success")
+
+            elif action == "remove":
+                config_id = int(form.get("config_id", "0"))
+                await db.remove_listening_party_config(config_id)
+                await db.add_audit_log(
+                    event_type="listening_party_removed",
+                    details=f"Config {config_id} removed",
+                    actor=session.get("username", "unknown"),
+                )
+                await flash("Config removed.", "success")
+
+            return redirect(url_for("listening_party"))
+
+        configs = await db.get_listening_party_configs()
+
+        guild = get_guild()
+        monitored_channels = await db.get_monitored_channels()
+        available_output_channels = []
+        if guild:
+            for ch in guild.text_channels:
+                available_output_channels.append({"id": ch.id, "name": ch.name})
+
+        # Resolve channel names
+        for cfg in configs:
+            cfg["input_name"] = f"channel-{cfg['input_channel_id']}"
+            cfg["output_name"] = f"channel-{cfg['output_channel_id']}"
+            if guild:
+                inch = guild.get_channel(cfg["input_channel_id"])
+                if inch:
+                    cfg["input_name"] = inch.name
+                outch = guild.get_channel(cfg["output_channel_id"])
+                if outch:
+                    cfg["output_name"] = outch.name
+
+        return await render_template(
+            "listening_party.html",
+            configs=configs,
+            monitored_channels=monitored_channels,
+            available_output_channels=available_output_channels,
+        )
+
     return app
