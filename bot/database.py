@@ -78,6 +78,16 @@ class Database:
             );
         """)
         await self.db.commit()
+        await self._run_migrations()
+
+    async def _run_migrations(self):
+        async with self.db.execute("PRAGMA table_info(monitored_channels)") as cursor:
+            columns = [row[1] async for row in cursor]
+        if "cooldown_hours" in columns and "cooldown_minutes" not in columns:
+            await self.db.execute(
+                "ALTER TABLE monitored_channels RENAME COLUMN cooldown_hours TO cooldown_minutes"
+            )
+            await self.db.commit()
 
     # --- Settings ---
 
