@@ -1,11 +1,33 @@
 import re
 import random
 from datetime import datetime, timedelta, timezone
+import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
 
 SUNO_URL_PATTERN = re.compile(r'https://suno\.com/(?:s|song)/[\w-]+')
+OG_IMAGE_PATTERN = re.compile(r'<meta\s+(?:property|name)=["\']og:image["\']\s+content=["\']([^"\']+)["\']', re.IGNORECASE)
+OG_TITLE_PATTERN = re.compile(r'<meta\s+(?:property|name)=["\']og:title["\']\s+content=["\']([^"\']+)["\']', re.IGNORECASE)
+
+
+async def fetch_suno_meta(url: str) -> dict:
+    """Fetch og:image and og:title from a Suno URL."""
+    meta = {"image": None, "title": None}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status == 200:
+                    html = await resp.text()
+                    img_match = OG_IMAGE_PATTERN.search(html)
+                    if img_match:
+                        meta["image"] = img_match.group(1)
+                    title_match = OG_TITLE_PATTERN.search(html)
+                    if title_match:
+                        meta["title"] = title_match.group(1)
+    except Exception:
+        pass
+    return meta
 
 
 class CommandsCog(commands.Cog):
@@ -247,11 +269,16 @@ class CommandsCog(commands.Cog):
         pick = random.choice(suno_urls)
         bot_name = await self.bot.db.get_setting("bot_name") or "Slowmode Bot"
 
+        meta = await fetch_suno_meta(pick["url"])
+        song_title = meta["title"] or "Random Song Pick"
+
         embed = discord.Embed(
-            title="🎵 Random Song Pick",
+            title=f"🎵 {song_title}",
             description=f"From #{source_channel.name} (last {time_range_hours}h)\n\n{pick['url']}",
             color=discord.Color.purple(),
         )
+        if meta["image"]:
+            embed.set_image(url=meta["image"])
         embed.add_field(name="Posted by", value=f"<@{pick['author_id']}>", inline=True)
         embed.add_field(name="Originally posted", value=discord.utils.format_dt(pick["posted_at"], style="R"), inline=True)
         embed.set_footer(text=f"{bot_name} • {len(suno_urls)} songs scanned")
