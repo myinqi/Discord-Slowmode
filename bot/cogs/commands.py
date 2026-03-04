@@ -191,9 +191,6 @@ class CommandsCog(commands.Cog):
     async def random_song(
         self, interaction: discord.Interaction, input_channel: discord.TextChannel = None
     ):
-        if not await self._permission_check(interaction):
-            return
-
         await interaction.response.defer(ephemeral=False)
 
         configs = await self.bot.db.get_listening_party_configs()
