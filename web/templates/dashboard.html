@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<h2 class="text-2xl font-bold text-white mb-6">Dashboard</h2>
+
+<!-- Status Cards -->
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+    <div class="bg-discord-dark rounded-xl p-5 border border-gray-700/50">
+        <div class="text-gray-400 text-sm mb-1">Bot Status</div>
+        {% if bot_connected %}
+        <div class="text-discord-green font-semibold text-lg flex items-center gap-2">
+            <span class="w-2.5 h-2.5 bg-discord-green rounded-full animate-pulse"></span> Connected
+        </div>
+        {% else %}
+        <div class="text-discord-red font-semibold text-lg flex items-center gap-2">
+            <span class="w-2.5 h-2.5 bg-discord-red rounded-full"></span> Disconnected
+        </div>
+        {% endif %}
+    </div>
+    <div class="bg-discord-dark rounded-xl p-5 border border-gray-700/50">
+        <div class="text-gray-400 text-sm mb-1">Server</div>
+        <div class="text-white font-semibold text-lg">{{ guild_name or 'Not connected' }}</div>
+    </div>
+    <div class="bg-discord-dark rounded-xl p-5 border border-gray-700/50">
+        <div class="text-gray-400 text-sm mb-1">Monitored Channels</div>
+        <div class="text-white font-semibold text-lg">{{ channels|length }}</div>
+    </div>
+    <div class="bg-discord-dark rounded-xl p-5 border border-gray-700/50">
+        <div class="text-gray-400 text-sm mb-1">Audit Events</div>
+        <div class="text-white font-semibold text-lg">{{ log_count }}</div>
+    </div>
+</div>
+
+<!-- Channel Overview -->
+<div class="bg-discord-dark rounded-xl border border-gray-700/50 mb-6">
+    <div class="px-5 py-4 border-b border-gray-700/50">
+        <h3 class="text-white font-semibold">Monitored Channels</h3>
+    </div>
+    <div class="p-5">
+        {% if channels %}
+        <div class="space-y-2">
+            {% for ch in channels %}
+            <div class="flex items-center justify-between bg-discord-darker rounded-lg px-4 py-3">
+                <div class="flex items-center gap-3">
+                    <span class="text-gray-400">#</span>
+                    <span class="text-white">{{ ch.channel_name }}</span>
+                </div>
+                <div class="flex items-center gap-4">
+                    {% if ch.cooldown_hours > 0 %}
+                    <span class="text-sm bg-discord-blurple/20 text-blue-300 px-2.5 py-1 rounded-full">{{ ch.cooldown_hours }}h cooldown</span>
+                    {% else %}
+                    <span class="text-sm bg-gray-700/50 text-gray-400 px-2.5 py-1 rounded-full">No cooldown</span>
+                    {% endif %}
+                    {% if ch.enabled %}
+                    <span class="text-sm text-discord-green">Active</span>
+                    {% else %}
+                    <span class="text-sm text-discord-red">Disabled</span>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-gray-500 text-sm">No channels configured. <a href="{{ url_for('channels') }}" class="text-discord-blurple hover:underline">Add one</a>.</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Roles Overview -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">Exempt Roles</h3>
+        </div>
+        <div class="p-5">
+            {% if exempt_roles %}
+            <div class="flex flex-wrap gap-2">
+                {% for r in exempt_roles %}
+                <span class="bg-discord-blurple/20 text-blue-300 text-sm px-3 py-1 rounded-full">{{ r.role_name }}</span>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-gray-500 text-sm">No exempt roles configured.</p>
+            {% endif %}
+        </div>
+    </div>
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">Command Roles</h3>
+        </div>
+        <div class="p-5">
+            {% if command_roles %}
+            <div class="flex flex-wrap gap-2">
+                {% for r in command_roles %}
+                <span class="bg-discord-green/20 text-green-300 text-sm px-3 py-1 rounded-full">{{ r.role_name }}</span>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-gray-500 text-sm">No command roles configured.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

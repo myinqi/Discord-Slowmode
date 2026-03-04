@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Roles{% endblock %}
+{% block content %}
+<h2 class="text-2xl font-bold text-white mb-6">Role Management</h2>
+
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <!-- Exempt Roles -->
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">Exempt Roles</h3>
+            <p class="text-gray-400 text-xs mt-1">Members with these roles are not affected by cooldowns.</p>
+        </div>
+        <div class="p-5">
+            <form method="POST" class="flex items-end gap-3 mb-4">
+                <input type="hidden" name="action" value="add">
+                <input type="hidden" name="role_type" value="exempt">
+                <div class="flex-1">
+                    {% if available_roles %}
+                    <select name="role_id" required
+                        class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple">
+                        <option value="">Select a role...</option>
+                        {% for r in available_roles %}
+                        {% if not r.is_exempt %}
+                        <option value="{{ r.id }}">{{ r.name }}</option>
+                        {% endif %}
+                        {% endfor %}
+                    </select>
+                    {% else %}
+                    <input type="text" name="role_id" placeholder="Role ID" required
+                        class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-discord-blurple">
+                    {% endif %}
+                </div>
+                <button type="submit"
+                    class="px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg text-sm font-medium transition-colors">
+                    Add
+                </button>
+            </form>
+            {% if exempt_roles %}
+            <div class="space-y-2">
+                {% for r in exempt_roles %}
+                <div class="flex items-center justify-between bg-discord-darker rounded-lg px-4 py-2.5">
+                    <span class="text-white text-sm">{{ r.role_name }}</span>
+                    <form method="POST">
+                        <input type="hidden" name="action" value="remove">
+                        <input type="hidden" name="role_type" value="exempt">
+                        <input type="hidden" name="role_id" value="{{ r.role_id }}">
+                        <button type="submit"
+                            class="text-gray-500 hover:text-discord-red text-sm transition-colors">Remove</button>
+                    </form>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-gray-500 text-sm">No exempt roles.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Command Roles -->
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">Command Roles</h3>
+            <p class="text-gray-400 text-xs mt-1">Members with these roles can use slash commands. Server owners always can.</p>
+        </div>
+        <div class="p-5">
+            <form method="POST" class="flex items-end gap-3 mb-4">
+                <input type="hidden" name="action" value="add">
+                <input type="hidden" name="role_type" value="command">
+                <div class="flex-1">
+                    {% if available_roles %}
+                    <select name="role_id" required
+                        class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple">
+                        <option value="">Select a role...</option>
+                        {% for r in available_roles %}
+                        {% if not r.is_command %}
+                        <option value="{{ r.id }}">{{ r.name }}</option>
+                        {% endif %}
+                        {% endfor %}
+                    </select>
+                    {% else %}
+                    <input type="text" name="role_id" placeholder="Role ID" required
+                        class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-discord-blurple">
+                    {% endif %}
+                </div>
+                <button type="submit"
+                    class="px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg text-sm font-medium transition-colors">
+                    Add
+                </button>
+            </form>
+            {% if command_roles %}
+            <div class="space-y-2">
+                {% for r in command_roles %}
+                <div class="flex items-center justify-between bg-discord-darker rounded-lg px-4 py-2.5">
+                    <span class="text-white text-sm">{{ r.role_name }}</span>
+                    <form method="POST">
+                        <input type="hidden" name="action" value="remove">
+                        <input type="hidden" name="role_type" value="command">
+                        <input type="hidden" name="role_id" value="{{ r.role_id }}">
+                        <button type="submit"
+                            class="text-gray-500 hover:text-discord-red text-sm transition-colors">Remove</button>
+                    </form>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-gray-500 text-sm">No command roles.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}Channels{% endblock %}
+{% block content %}
+<h2 class="text-2xl font-bold text-white mb-6">Channel Management</h2>
+
+<!-- Add Channel -->
+<div class="bg-discord-dark rounded-xl border border-gray-700/50 mb-6">
+    <div class="px-5 py-4 border-b border-gray-700/50">
+        <h3 class="text-white font-semibold">Add Channel</h3>
+    </div>
+    <div class="p-5">
+        <form method="POST" class="flex flex-wrap items-end gap-4">
+            <input type="hidden" name="action" value="add">
+            <div class="flex-1 min-w-[200px]">
+                <label class="block text-sm text-gray-400 mb-1">Channel</label>
+                {% if available_channels %}
+                <select name="channel_id" required
+                    class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple">
+                    <option value="">Select a channel...</option>
+                    {% for ch in available_channels %}
+                    <option value="{{ ch.id }}">#{{ ch.name }}</option>
+                    {% endfor %}
+                </select>
+                {% else %}
+                <input type="text" name="channel_id" placeholder="Channel ID" required
+                    class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-discord-blurple">
+                <p class="text-xs text-gray-500 mt-1">Bot not connected — enter the channel ID manually.</p>
+                {% endif %}
+            </div>
+            <div class="w-40">
+                <label class="block text-sm text-gray-400 mb-1">Cooldown (hours)</label>
+                <input type="number" name="cooldown_hours" value="0" min="0" max="48"
+                    class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple">
+                <p class="text-xs text-gray-500 mt-1">0 = no cooldown</p>
+            </div>
+            <button type="submit"
+                class="px-5 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg font-medium transition-colors">
+                Add Channel
+            </button>
+        </form>
+    </div>
+</div>
+
+<!-- Channel List -->
+<div class="bg-discord-dark rounded-xl border border-gray-700/50">
+    <div class="px-5 py-4 border-b border-gray-700/50">
+        <h3 class="text-white font-semibold">Monitored Channels</h3>
+    </div>
+    <div class="p-5">
+        {% if channels %}
+        <div class="space-y-3">
+            {% for ch in channels %}
+            <div class="bg-discord-darker rounded-lg p-4">
+                <div class="flex items-center justify-between flex-wrap gap-3">
+                    <div class="flex items-center gap-3">
+                        <span class="text-gray-400 text-lg">#</span>
+                        <div>
+                            <span class="text-white font-medium">{{ ch.channel_name }}</span>
+                            <span class="text-gray-500 text-xs ml-2">ID: {{ ch.channel_id }}</span>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <!-- Update Cooldown -->
+                        <form method="POST" class="flex items-center gap-2">
+                            <input type="hidden" name="action" value="update">
+                            <input type="hidden" name="channel_id" value="{{ ch.channel_id }}">
+                            <input type="number" name="cooldown_hours" value="{{ ch.cooldown_hours }}" min="0" max="48"
+                                class="w-20 px-2 py-1.5 bg-discord-dark border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:border-discord-blurple">
+                            <span class="text-gray-400 text-sm">hrs</span>
+                            <button type="submit"
+                                class="px-3 py-1.5 bg-discord-blurple/20 hover:bg-discord-blurple/40 text-blue-300 rounded-lg text-sm transition-colors">
+                                Update
+                            </button>
+                        </form>
+                        <!-- Toggle -->
+                        <form method="POST">
+                            <input type="hidden" name="action" value="toggle">
+                            <input type="hidden" name="channel_id" value="{{ ch.channel_id }}">
+                            <input type="hidden" name="enabled" value="{{ '0' if ch.enabled else '1' }}">
+                            <button type="submit"
+                                class="px-3 py-1.5 rounded-lg text-sm transition-colors {% if ch.enabled %}bg-discord-green/20 text-green-300 hover:bg-discord-green/40{% else %}bg-gray-700/50 text-gray-400 hover:bg-gray-600/50{% endif %}">
+                                {{ 'Enabled' if ch.enabled else 'Disabled' }}
+                            </button>
+                        </form>
+                        <!-- Remove -->
+                        <form method="POST" onsubmit="return confirm('Remove this channel?')">
+                            <input type="hidden" name="action" value="remove">
+                            <input type="hidden" name="channel_id" value="{{ ch.channel_id }}">
+                            <button type="submit"
+                                class="px-3 py-1.5 bg-discord-red/20 hover:bg-discord-red/40 text-red-300 rounded-lg text-sm transition-colors">
+                                Remove
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-gray-500 text-sm">No channels configured yet.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

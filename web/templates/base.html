@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-gray-900">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Dashboard{% endblock %} — Slowmode Bot</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        discord: {
+                            dark: '#1e1f22',
+                            darker: '#111214',
+                            light: '#2b2d31',
+                            lighter: '#383a40',
+                            blurple: '#5865f2',
+                            green: '#57f287',
+                            yellow: '#fee75c',
+                            red: '#ed4245',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .sidebar-link { transition: background-color 0.15s ease; }
+        .sidebar-link:hover { background-color: rgba(88, 101, 242, 0.2); }
+        .sidebar-link.active { background-color: rgba(88, 101, 242, 0.3); border-left: 3px solid #5865f2; }
+    </style>
+</head>
+<body class="h-full dark">
+    {% if session.get('user_id') and request.endpoint not in ('login', 'change_password') %}
+    <div class="flex h-full">
+        <!-- Sidebar -->
+        <aside class="w-64 bg-discord-dark flex flex-col border-r border-gray-700/50 min-h-screen">
+            <div class="p-4 border-b border-gray-700/50">
+                <h1 class="text-white font-bold text-lg">🤖 Slowmode Bot</h1>
+                <p class="text-gray-400 text-xs mt-1">Admin Panel</p>
+            </div>
+            <nav class="flex-1 p-3 space-y-1">
+                <a href="{{ url_for('dashboard') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'dashboard' %}active{% endif %}">
+                    <span class="mr-3">📊</span> Dashboard
+                </a>
+                <a href="{{ url_for('channels') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'channels' %}active{% endif %}">
+                    <span class="mr-3">📢</span> Channels
+                </a>
+                <a href="{{ url_for('roles') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'roles' %}active{% endif %}">
+                    <span class="mr-3">🛡️</span> Roles
+                </a>
+                <a href="{{ url_for('users') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'users' %}active{% endif %}">
+                    <span class="mr-3">👥</span> Users
+                </a>
+                <a href="{{ url_for('audit') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'audit' %}active{% endif %}">
+                    <span class="mr-3">📋</span> Audit Log
+                </a>
+                <a href="{{ url_for('settings') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'settings' %}active{% endif %}">
+                    <span class="mr-3">⚙️</span> Settings
+                </a>
+            </nav>
+            <div class="p-3 border-t border-gray-700/50">
+                <div class="flex items-center justify-between">
+                    <span class="text-gray-400 text-sm">{{ session.get('username', '') }}</span>
+                    <a href="{{ url_for('logout') }}" class="text-gray-500 hover:text-discord-red text-sm">Logout</a>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 overflow-y-auto bg-discord-darker">
+            <div class="p-8">
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                <div class="mb-6 space-y-2">
+                    {% for category, message in messages %}
+                    <div class="px-4 py-3 rounded-lg text-sm {% if category == 'error' %}bg-discord-red/20 text-red-300 border border-discord-red/30{% else %}bg-discord-green/20 text-green-300 border border-discord-green/30{% endif %}">
+                        {{ message }}
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+                {% endwith %}
+                {% block content %}{% endblock %}
+            </div>
+        </main>
+    </div>
+    {% else %}
+    <div class="min-h-screen bg-discord-darker flex items-center justify-center">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        <div class="absolute top-4 left-1/2 -translate-x-1/2 space-y-2 w-96 z-50">
+            {% for category, message in messages %}
+            <div class="px-4 py-3 rounded-lg text-sm {% if category == 'error' %}bg-discord-red/20 text-red-300 border border-discord-red/30{% else %}bg-discord-green/20 text-green-300 border border-discord-green/30{% endif %}">
+                {{ message }}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% endwith %}
+        {% block fullcontent %}{% endblock %}
+    </div>
+    {% endif %}
+</body>
+</html>

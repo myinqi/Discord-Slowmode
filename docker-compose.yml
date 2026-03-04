@@ -1,0 +1,16 @@
+services:
+  slowmode-bot:
+    build: .
+    container_name: slowmode-bot
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      - bot-data:/app/data
+    env_file:
+      - .env
+    environment:
+      - DATABASE_PATH=/app/data/bot.db
+
+volumes:
+  bot-data:
