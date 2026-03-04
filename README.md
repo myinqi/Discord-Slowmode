@@ -6,7 +6,7 @@ Ein modularer Discord-Bot, der benutzerdefinierte Cooldowns pro Kanal durchsetzt
 
 ## Funktionen
 
-- **Kanal-Cooldowns**: Pro Kanal einstellbar (1–48 Stunden), oder Kanäle ohne Cooldown zur späteren Erweiterung
+- **Kanal-Cooldowns**: Pro Kanal einstellbar (1–2880 Minuten / 48 Stunden), oder Kanäle ohne Cooldown zur späteren Erweiterung
 - **Rollenausnahmen**: Bestimmte Rollen können vom Cooldown ausgenommen werden
 - **Slash-Commands**: Konfiguration direkt aus Discord heraus (nur für berechtigte Rollen + Serverbesitzer)
 - **Web-Interface**: Vollständiges Admin-Panel mit Discord-ähnlichem Design
@@ -31,12 +31,12 @@ Ein modularer Discord-Bot, der benutzerdefinierte Cooldowns pro Kanal durchsetzt
 2. Klicke auf **„New Application"** und vergib einen Namen
 3. Gehe zu **„Bot"** in der linken Seitenleiste
 4. Klicke auf **„Reset Token"** und kopiere den Token — **diesen sicher aufbewahren!**
-5. Aktiviere unter **„Privileged Gateway Intents"** folgende Intents:
-   - ✅ **MESSAGE CONTENT INTENT**
-   - ✅ **SERVER MEMBERS INTENT**
-6. Gehe zu **„OAuth2" → „URL Generator"**:
-   - **Scopes**: `bot`, `applications.commands`
-   - **Bot Permissions**: `Send Messages`, `Manage Messages`, `Read Message History`, `View Channels`
+5. Aktiviere unter **„Privileged Gateway Intents“** folgende Intents:
+   - ✅ **SERVER MEMBERS INTENT** (Zugriff auf Servermitglieder-Informationen)
+   - ✅ **MESSAGE CONTENT INTENT** (Zugriff auf Nachrichteninhalte)
+6. Gehe zu **„OAuth2“ → „URL Generator“**:
+   - **Anwendungsbereiche (Scopes)**: `bot`, `applications.commands`
+   - **Bot-Berechtigungen**: `Nachrichten senden`, `Nachrichten verwalten`, `Nachrichtenverlauf lesen`, `Kanäle ansehen`
 7. Kopiere die generierte URL und öffne sie im Browser, um den Bot auf deinen Server einzuladen
 
 ---
@@ -87,9 +87,13 @@ Folgende Werte anpassen:
 
 ## Schritt 4: Bot starten
 
+Bot im Hintergrund (detached) starten:
+
 ```bash
 docker compose up -d --build
 ```
+
+> Das `-d` Flag steht für **detached** — der Bot läuft im Hintergrund und blockiert das Terminal nicht.
 
 Logs prüfen:
 
@@ -121,7 +125,8 @@ docker compose down
 
 ### Channels (Kanäle)
 - Kanäle hinzufügen (Dropdown wenn Bot verbunden, sonst manuelle ID-Eingabe)
-- Cooldown pro Kanal einstellen (0–48 Stunden, 0 = kein Cooldown)
+- Cooldown pro Kanal einstellen (0–2880 Minuten, 0 = kein Cooldown)
+- Aktive Cooldowns pro Kanal einsehen mit Reset-Button pro Nutzer
 - Kanäle aktivieren/deaktivieren
 - Kanäle entfernen
 
@@ -147,7 +152,7 @@ Protokoll aller Aktionen: gelöschte Nachrichten, Konfigurationsänderungen, Ben
 
 | Command | Beschreibung |
 |---|---|
-| `/cooldown-set #kanal 24` | Cooldown für einen Kanal setzen (0–48h) |
+| `/cooldown-set #kanal 120` | Cooldown für einen Kanal setzen (in Minuten, 0–2880) |
 | `/cooldown-info #kanal` | Aktuelle Konfiguration eines Kanals anzeigen |
 | `/cooldown-reset @user [#kanal]` | Cooldown eines Nutzers zurücksetzen |
 | `/cooldown-clear [#kanal]` | Alle Cooldowns in einem/allen Kanal/Kanälen löschen |

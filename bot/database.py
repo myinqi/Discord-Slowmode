@@ -40,7 +40,7 @@ class Database:
             CREATE TABLE IF NOT EXISTS monitored_channels (
                 channel_id INTEGER PRIMARY KEY,
                 channel_name TEXT NOT NULL,
-                cooldown_hours INTEGER DEFAULT 0,
+                cooldown_minutes INTEGER DEFAULT 0,
                 enabled INTEGER DEFAULT 1,
                 added_at REAL DEFAULT (unixepoch())
             );
@@ -159,20 +159,20 @@ class Database:
             return dict(row) if row else None
 
     async def add_monitored_channel(
-        self, channel_id: int, channel_name: str, cooldown_hours: int = 0
+        self, channel_id: int, channel_name: str, cooldown_minutes: int = 0
     ):
         await self.db.execute(
-            "INSERT INTO monitored_channels (channel_id, channel_name, cooldown_hours) "
+            "INSERT INTO monitored_channels (channel_id, channel_name, cooldown_minutes) "
             "VALUES (?, ?, ?) ON CONFLICT(channel_id) DO UPDATE SET "
-            "channel_name = excluded.channel_name, cooldown_hours = excluded.cooldown_hours",
-            (channel_id, channel_name, cooldown_hours),
+            "channel_name = excluded.channel_name, cooldown_minutes = excluded.cooldown_minutes",
+            (channel_id, channel_name, cooldown_minutes),
         )
         await self.db.commit()
 
-    async def update_channel_cooldown(self, channel_id: int, cooldown_hours: int):
+    async def update_channel_cooldown(self, channel_id: int, cooldown_minutes: int):
         await self.db.execute(
-            "UPDATE monitored_channels SET cooldown_hours = ? WHERE channel_id = ?",
-            (cooldown_hours, channel_id),
+            "UPDATE monitored_channels SET cooldown_minutes = ? WHERE channel_id = ?",
+            (cooldown_minutes, channel_id),
         )
         await self.db.commit()
 
@@ -235,6 +235,15 @@ class Database:
         await self.db.commit()
 
     # --- Cooldown Records ---
+
+    async def get_active_cooldowns(self, channel_id: int, cooldown_minutes: int) -> list[dict]:
+        cutoff = time.time() - (cooldown_minutes * 60)
+        async with self.db.execute(
+            "SELECT * FROM cooldown_records WHERE channel_id = ? AND timestamp > ? ORDER BY timestamp DESC",
+            (channel_id, cutoff),
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
 
     async def get_cooldown_record(
         self, user_id: int, channel_id: int

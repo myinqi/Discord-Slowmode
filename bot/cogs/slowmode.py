@@ -25,8 +25,8 @@ class SlowmodeCog(commands.Cog):
         if not channel_config["enabled"]:
             return
 
-        cooldown_hours = channel_config["cooldown_hours"]
-        if cooldown_hours <= 0:
+        cooldown_minutes = channel_config["cooldown_minutes"]
+        if cooldown_minutes <= 0:
             return
 
         if await self._is_exempt(message.author):
@@ -36,7 +36,7 @@ class SlowmodeCog(commands.Cog):
 
         if record:
             elapsed = time.time() - record["timestamp"]
-            cooldown_seconds = cooldown_hours * 3600
+            cooldown_seconds = cooldown_minutes * 60
             remaining = cooldown_seconds - elapsed
 
             if remaining > 0:

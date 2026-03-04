@@ -1,4 +1,6 @@
 import functools
+import math
+import time
 import bcrypt
 from quart import Quart, render_template, request, redirect, url_for, session, flash
 from bot.database import Database
@@ -149,7 +151,7 @@ def create_app(db: Database, bot=None) -> Quart:
 
             if action == "add":
                 channel_id = form.get("channel_id", "").strip()
-                cooldown = int(form.get("cooldown_hours", "0"))
+                cooldown = int(form.get("cooldown_minutes", "0"))
 
                 if not channel_id.isdigit():
                     await flash("Invalid channel ID.", "error")
@@ -168,19 +170,19 @@ def create_app(db: Database, bot=None) -> Quart:
                         event_type="channel_added",
                         channel_id=channel_id,
                         channel_name=channel_name,
-                        details=f"Added with {cooldown}h cooldown",
+                        details=f"Added with {cooldown}min cooldown",
                         actor=session.get("username", "unknown"),
                     )
                     await flash(f"Channel #{channel_name} added.", "success")
 
             elif action == "update":
                 channel_id = int(form.get("channel_id", "0"))
-                cooldown = int(form.get("cooldown_hours", "0"))
+                cooldown = int(form.get("cooldown_minutes", "0"))
                 await db.update_channel_cooldown(channel_id, cooldown)
                 await db.add_audit_log(
                     event_type="channel_updated",
                     channel_id=channel_id,
-                    details=f"Cooldown updated to {cooldown}h",
+                    details=f"Cooldown updated to {cooldown}min",
                     actor=session.get("username", "unknown"),
                 )
                 await flash("Channel updated.", "success")
@@ -202,6 +204,19 @@ def create_app(db: Database, bot=None) -> Quart:
                 )
                 await flash("Channel removed.", "success")
 
+            elif action == "reset_user_cooldown":
+                channel_id = int(form.get("channel_id", "0"))
+                user_id = int(form.get("user_id", "0"))
+                await db.clear_cooldown_record(user_id, channel_id)
+                await db.add_audit_log(
+                    event_type="cooldown_reset",
+                    user_id=user_id,
+                    channel_id=channel_id,
+                    details=f"Cooldown manually reset via web interface",
+                    actor=session.get("username", "unknown"),
+                )
+                await flash("User cooldown reset.", "success")
+
             return redirect(url_for("channels"))
 
         channel_list = await db.get_monitored_channels()
@@ -214,10 +229,37 @@ def create_app(db: Database, bot=None) -> Quart:
                 if ch.id not in monitored_ids:
                     available_channels.append({"id": ch.id, "name": ch.name})
 
+        channel_cooldowns = {}
+        for ch in channel_list:
+            if ch["cooldown_minutes"] > 0:
+                records = await db.get_active_cooldowns(ch["channel_id"], ch["cooldown_minutes"])
+                users = []
+                for r in records:
+                    elapsed = time.time() - r["timestamp"]
+                    remaining = (ch["cooldown_minutes"] * 60) - elapsed
+                    if remaining > 0:
+                        user_name = f"User {r['user_id']}"
+                        if guild:
+                            member = guild.get_member(r["user_id"])
+                            if member:
+                                user_name = str(member)
+                        hours = remaining / 3600
+                        if hours >= 1:
+                            time_str = f"{math.ceil(hours)}h remaining"
+                        else:
+                            time_str = f"{math.ceil(remaining / 60)}min remaining"
+                        users.append({
+                            "user_id": r["user_id"],
+                            "user_name": user_name,
+                            "time_remaining": time_str,
+                        })
+                channel_cooldowns[ch["channel_id"]] = users
+
         return await render_template(
             "channels.html",
             channels=channel_list,
             available_channels=available_channels,
+            channel_cooldowns=channel_cooldowns,
         )
 
     @app.route("/roles", methods=["GET", "POST"])

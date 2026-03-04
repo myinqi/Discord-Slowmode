@@ -33,36 +33,36 @@ class CommandsCog(commands.Cog):
             return False
         return True
 
-    @app_commands.command(name="cooldown-set", description="Set cooldown hours for a channel")
-    @app_commands.describe(channel="The channel to configure", hours="Cooldown in hours (0-48, 0 = disabled)")
+    @app_commands.command(name="cooldown-set", description="Set cooldown for a channel in minutes")
+    @app_commands.describe(channel="The channel to configure", minutes="Cooldown in minutes (0 = disabled)")
     async def cooldown_set(
-        self, interaction: discord.Interaction, channel: discord.TextChannel, hours: int
+        self, interaction: discord.Interaction, channel: discord.TextChannel, minutes: int
     ):
         if not await self._permission_check(interaction):
             return
 
-        if hours < 0 or hours > 48:
+        if minutes < 0 or minutes > 2880:
             await interaction.response.send_message(
-                "Cooldown must be between 0 and 48 hours.", ephemeral=True
+                "Cooldown must be between 0 and 2880 minutes (48 hours).", ephemeral=True
             )
             return
 
-        await self.bot.db.add_monitored_channel(channel.id, channel.name, hours)
+        await self.bot.db.add_monitored_channel(channel.id, channel.name, minutes)
         await self.bot.db.add_audit_log(
             event_type="channel_config",
             channel_id=channel.id,
             channel_name=channel.name,
-            details=f"Cooldown set to {hours}h via slash command",
+            details=f"Cooldown set to {minutes}min via slash command",
             actor=str(interaction.user),
         )
 
-        if hours == 0:
+        if minutes == 0:
             await interaction.response.send_message(
                 f"#{channel.name} is now monitored with **no cooldown**.", ephemeral=True
             )
         else:
             await interaction.response.send_message(
-                f"#{channel.name} cooldown set to **{hours} hour(s)**.", ephemeral=True
+                f"#{channel.name} cooldown set to **{minutes} minute(s)**.", ephemeral=True
             )
 
     @app_commands.command(name="cooldown-info", description="Show cooldown info for a channel")
@@ -81,8 +81,8 @@ class CommandsCog(commands.Cog):
             return
 
         status = "enabled" if config["enabled"] else "disabled"
-        hours = config["cooldown_hours"]
-        cooldown_str = f"{hours}h" if hours > 0 else "none"
+        minutes = config["cooldown_minutes"]
+        cooldown_str = f"{minutes}min" if minutes > 0 else "none"
 
         embed = discord.Embed(
             title=f"Channel Config: #{channel.name}",

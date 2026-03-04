@@ -46,8 +46,8 @@
                     <span class="text-white">{{ ch.channel_name }}</span>
                 </div>
                 <div class="flex items-center gap-4">
-                    {% if ch.cooldown_hours > 0 %}
-                    <span class="text-sm bg-discord-blurple/20 text-blue-300 px-2.5 py-1 rounded-full">{{ ch.cooldown_hours }}h cooldown</span>
+                    {% if ch.cooldown_minutes > 0 %}
+                    <span class="text-sm bg-discord-blurple/20 text-blue-300 px-2.5 py-1 rounded-full">{{ ch.cooldown_minutes }}min cooldown</span>
                     {% else %}
                     <span class="text-sm bg-gray-700/50 text-gray-400 px-2.5 py-1 rounded-full">No cooldown</span>
                     {% endif %}
