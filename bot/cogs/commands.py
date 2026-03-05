@@ -6,6 +6,7 @@ from discord import app_commands
 from discord.ext import commands
 
 SUNO_URL_PATTERN = re.compile(r'https://suno\.com/(?:s|song)/[\w-]+')
+SUNO_PLAYLIST_PATTERN = re.compile(r'https://suno\.com/playlist/[\w-]+')
 
 
 class CommandsCog(commands.Cog):
@@ -270,6 +271,91 @@ class CommandsCog(commands.Cog):
             channel_id=output_channel.id,
             channel_name=output_channel.name,
             details=f"Random song picked from #{source_channel.name}: {pick['url']}",
+            actor=str(interaction.user),
+        )
+
+
+    @app_commands.command(name="find-list", description="Search for Suno playlists by artist or keyword")
+    @app_commands.describe(search="Artist name or keyword to search for")
+    async def find_list(self, interaction: discord.Interaction, search: str):
+        await interaction.response.defer(ephemeral=True)
+
+        configs = await self.bot.db.get_playlist_search_channels()
+        if not configs:
+            await interaction.followup.send(
+                "No playlist search channels configured. Ask an admin to set one up.", ephemeral=True
+            )
+            return
+
+        search_lower = search.lower()
+        results = []
+
+        for cfg in configs:
+            channel = interaction.guild.get_channel(cfg["channel_id"])
+            if not channel:
+                continue
+
+            async for message in channel.history(limit=10000):
+                if message.author.bot:
+                    continue
+                if search_lower not in message.content.lower():
+                    continue
+                urls = SUNO_PLAYLIST_PATTERN.findall(message.content)
+                for url in urls:
+                    results.append({
+                        "url": url,
+                        "author": str(message.author),
+                        "author_id": message.author.id,
+                        "posted_at": message.created_at,
+                        "context": message.content[:150],
+                        "channel_name": channel.name,
+                    })
+
+        if not results:
+            await interaction.followup.send(
+                f"No playlists found for **{search}**.", ephemeral=True
+            )
+            return
+
+        # Deduplicate by URL
+        seen = set()
+        unique = []
+        for r in results:
+            if r["url"] not in seen:
+                seen.add(r["url"])
+                unique.append(r)
+        results = unique
+
+        # Build response (Discord has a 2000 char limit, split if needed)
+        header = f"🔍 **{len(results)} playlist(s) found for \"{search}\":**\n\n"
+        entries = []
+        for i, r in enumerate(results, 1):
+            entry = (
+                f"**{i}.** {r['url']}\n"
+                f"   Posted by <@{r['author_id']}> in #{r['channel_name']} "
+                f"({discord.utils.format_dt(r['posted_at'], style='R')})"
+            )
+            entries.append(entry)
+
+        # Split into chunks that fit Discord's 2000 char limit
+        chunks = []
+        current = header
+        for entry in entries:
+            if len(current) + len(entry) + 2 > 1900:
+                chunks.append(current)
+                current = ""
+            current += entry + "\n\n"
+        if current.strip():
+            chunks.append(current)
+
+        for chunk in chunks:
+            await interaction.followup.send(chunk, ephemeral=True)
+
+        await self.bot.db.add_audit_log(
+            event_type="playlist_search",
+            user_id=interaction.user.id,
+            user_name=str(interaction.user),
+            details=f"Searched for '{search}', found {len(results)} result(s)",
             actor=str(interaction.user),
         )
 

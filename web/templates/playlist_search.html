@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Playlist Search{% endblock %}
+{% block content %}
+<h2 class="text-2xl font-bold text-white mb-6">Playlist Search</h2>
+
+<!-- Add Channel -->
+<div class="bg-discord-dark rounded-xl border border-gray-700/50 mb-6">
+    <div class="px-5 py-4 border-b border-gray-700/50">
+        <h3 class="text-white font-semibold">Add Search Channel</h3>
+        <p class="text-gray-400 text-sm mt-1">Define channels where Suno playlist links are posted. Users can search these with <code class="text-gray-300">/find-list</code>.</p>
+    </div>
+    <div class="p-5">
+        <form method="POST" class="flex flex-wrap items-end gap-4">
+            <input type="hidden" name="action" value="add">
+            <div class="flex-1 min-w-[200px]">
+                <label class="block text-sm text-gray-400 mb-1">Channel</label>
+                {% if available_channels %}
+                <select name="channel_id" required
+                    class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple">
+                    <option value="">Select a channel...</option>
+                    {% for ch in available_channels %}
+                    <option value="{{ ch.id }}">#{{ ch.name }}</option>
+                    {% endfor %}
+                </select>
+                {% else %}
+                <input type="text" name="channel_id" placeholder="Channel ID" required
+                    class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-discord-blurple">
+                <p class="text-xs text-gray-500 mt-1">Bot not connected — enter channel ID manually.</p>
+                {% endif %}
+            </div>
+            <button type="submit"
+                class="px-5 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg font-medium transition-colors">
+                Add Channel
+            </button>
+        </form>
+    </div>
+</div>
+
+<!-- Channel List -->
+<div class="bg-discord-dark rounded-xl border border-gray-700/50">
+    <div class="px-5 py-4 border-b border-gray-700/50">
+        <h3 class="text-white font-semibold">Configured Search Channels</h3>
+    </div>
+    <div class="p-5">
+        {% if configs %}
+        <div class="space-y-3">
+            {% for cfg in configs %}
+            <div class="bg-discord-darker rounded-lg p-4">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                        <span class="text-gray-400 text-lg">#</span>
+                        <div>
+                            <span class="text-white font-medium">{{ cfg.channel_name }}</span>
+                            <span class="text-gray-500 text-xs ml-2">ID: {{ cfg.channel_id }}</span>
+                        </div>
+                    </div>
+                    <form method="POST" onsubmit="return confirm('Remove this channel?')">
+                        <input type="hidden" name="action" value="remove">
+                        <input type="hidden" name="config_id" value="{{ cfg.id }}">
+                        <button type="submit"
+                            class="px-3 py-1.5 bg-discord-red/20 hover:bg-discord-red/40 text-red-300 rounded-lg text-sm transition-colors">
+                            Remove
+                        </button>
+                    </form>
+                </div>
+                <p class="text-gray-500 text-xs mt-2">Users can search this channel with <code class="text-gray-400">/find-list &lt;artist name&gt;</code></p>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-gray-500 text-sm">No channels configured for playlist search yet.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

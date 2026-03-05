@@ -58,6 +58,9 @@
                 <a href="{{ url_for('listening_party') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'listening_party' %}active{% endif %}">
                     <span class="mr-3">🎵</span> Listening Party
                 </a>
+                <a href="{{ url_for('playlist_search') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'playlist_search' %}active{% endif %}">
+                    <span class="mr-3">🔍</span> Playlist Search
+                </a>
                 <a href="{{ url_for('audit') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'audit' %}active{% endif %}">
                     <span class="mr-3">📋</span> Audit Log
                 </a>

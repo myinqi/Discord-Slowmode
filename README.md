@@ -148,6 +148,12 @@ Protokoll aller Aktionen: gelöschte Nachrichten, Konfigurationsänderungen, Ben
 - Per `/random-song` Slash-Command wird ein zufälliger Suno-Song aus dem Zeitraum in den Output-Kanal gepostet
 - Unterstützte URL-Formate: `https://suno.com/s/...` und `https://suno.com/song/...`
 
+### Playlist Search
+- Kanäle definieren, in denen Suno-Playlist-Links gepostet werden
+- Nutzer können mit `/find-list <Suchbegriff>` nach Playlists suchen
+- Ergebnisse werden nur dem suchenden Nutzer angezeigt (ephemeral)
+- Unterstütztes URL-Format: `https://suno.com/playlist/...`
+
 ### Settings (Einstellungen)
 - Bot-Name ändern
 - Guild-ID ändern (erfordert Neustart)
@@ -164,8 +170,9 @@ Protokoll aller Aktionen: gelöschte Nachrichten, Konfigurationsänderungen, Ben
 | `/cooldown-clear [#kanal]` | Alle Cooldowns in einem/allen Kanal/Kanälen löschen |
 | `/cooldown-toggle #kanal true/false` | Monitoring für einen Kanal ein-/ausschalten |
 | `/random-song [#input-kanal]` | Zufälligen Suno-Song aus dem Input-Kanal posten |
+| `/find-list <Suchbegriff>` | Suno-Playlists nach Interpret/Keyword durchsuchen (nur für dich sichtbar) |
 
-> Slash-Commands können nur von Serverbesitzern und Mitgliedern mit einer **Command Role** genutzt werden.
+> Cooldown- und Toggle-Commands können nur von Serverbesitzern und Mitgliedern mit einer **Command Role** genutzt werden. `/random-song` und `/find-list` sind für **alle** Servermitglieder verfügbar.
 
 ---
 

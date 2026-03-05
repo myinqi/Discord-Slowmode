@@ -73,6 +73,11 @@ class Database:
                 UNIQUE(input_channel_id)
             );
 
+            CREATE TABLE IF NOT EXISTS playlist_search_config (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL UNIQUE
+            );
+
             CREATE TABLE IF NOT EXISTS audit_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp REAL DEFAULT (unixepoch()),
@@ -367,5 +372,25 @@ class Database:
     async def remove_listening_party_config(self, config_id: int):
         await self.db.execute(
             "DELETE FROM listening_party_config WHERE id = ?", (config_id,)
+        )
+        await self.db.commit()
+
+    # --- Playlist Search Config ---
+
+    async def get_playlist_search_channels(self) -> list[dict]:
+        async with self.db.execute("SELECT * FROM playlist_search_config") as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def add_playlist_search_channel(self, channel_id: int):
+        await self.db.execute(
+            "INSERT OR IGNORE INTO playlist_search_config (channel_id) VALUES (?)",
+            (channel_id,),
+        )
+        await self.db.commit()
+
+    async def remove_playlist_search_channel(self, config_id: int):
+        await self.db.execute(
+            "DELETE FROM playlist_search_config WHERE id = ?", (config_id,)
         )
         await self.db.commit()

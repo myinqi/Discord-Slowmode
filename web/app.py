@@ -499,4 +499,69 @@ def create_app(db: Database, bot=None) -> Quart:
             available_output_channels=available_output_channels,
         )
 
+    @app.route("/playlist-search", methods=["GET", "POST"])
+    @login_required
+    async def playlist_search():
+        if request.method == "POST":
+            form = await request.form
+            action = form.get("action")
+
+            if action == "add":
+                channel_id = form.get("channel_id", "").strip()
+                if not channel_id.isdigit():
+                    await flash("Invalid channel ID.", "error")
+                else:
+                    channel_id = int(channel_id)
+                    await db.add_playlist_search_channel(channel_id)
+                    channel_name = f"channel-{channel_id}"
+                    guild = get_guild()
+                    if guild:
+                        ch = guild.get_channel(channel_id)
+                        if ch:
+                            channel_name = ch.name
+                    await db.add_audit_log(
+                        event_type="playlist_search_added",
+                        channel_id=channel_id,
+                        channel_name=channel_name,
+                        details="Playlist search channel added",
+                        actor=session.get("username", "unknown"),
+                    )
+                    await flash(f"Channel #{channel_name} added for playlist search.", "success")
+
+            elif action == "remove":
+                config_id = int(form.get("config_id", "0"))
+                await db.remove_playlist_search_channel(config_id)
+                await db.add_audit_log(
+                    event_type="playlist_search_removed",
+                    details=f"Playlist search config {config_id} removed",
+                    actor=session.get("username", "unknown"),
+                )
+                await flash("Channel removed.", "success")
+
+            return redirect(url_for("playlist_search"))
+
+        configs = await db.get_playlist_search_channels()
+
+        guild = get_guild()
+        available_channels = []
+        if guild:
+            existing_ids = {c["channel_id"] for c in configs}
+            for ch in guild.text_channels:
+                if ch.id not in existing_ids:
+                    available_channels.append({"id": ch.id, "name": ch.name})
+
+        # Resolve channel names
+        for cfg in configs:
+            cfg["channel_name"] = f"channel-{cfg['channel_id']}"
+            if guild:
+                ch = guild.get_channel(cfg["channel_id"])
+                if ch:
+                    cfg["channel_name"] = ch.name
+
+        return await render_template(
+            "playlist_search.html",
+            configs=configs,
+            available_channels=available_channels,
+        )
+
     return app
