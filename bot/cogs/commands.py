@@ -275,8 +275,8 @@ class CommandsCog(commands.Cog):
         )
 
 
-    @app_commands.command(name="find-list", description="Search for Suno playlists by artist or keyword")
-    @app_commands.describe(search="Artist name or keyword to search for")
+    @app_commands.command(name="find-list", description="Search for Suno playlists by artist, @user, or keyword")
+    @app_commands.describe(search="Artist name, @user mention, or keyword to search for")
     async def find_list(self, interaction: discord.Interaction, search: str):
         await interaction.response.defer(ephemeral=True)
 
@@ -287,7 +287,11 @@ class CommandsCog(commands.Cog):
             )
             return
 
+        # Check if search is a user mention like <@123456> or <@!123456>
+        mention_match = re.match(r'<@!?(\d+)>', search)
+        search_user_id = int(mention_match.group(1)) if mention_match else None
         search_lower = search.lower()
+
         results = []
 
         for cfg in configs:
@@ -298,9 +302,25 @@ class CommandsCog(commands.Cog):
             async for message in channel.history(limit=10000):
                 if message.author.bot:
                     continue
-                if search_lower not in message.content.lower():
-                    continue
+
                 urls = SUNO_PLAYLIST_PATTERN.findall(message.content)
+                if not urls:
+                    continue
+
+                # Match by: user mention, author name/display name, or message content
+                matched = False
+                if search_user_id and message.author.id == search_user_id:
+                    matched = True
+                elif search_lower in message.author.name.lower():
+                    matched = True
+                elif search_lower in message.author.display_name.lower():
+                    matched = True
+                elif search_lower in message.content.lower():
+                    matched = True
+
+                if not matched:
+                    continue
+
                 for url in urls:
                     results.append({
                         "url": url,
