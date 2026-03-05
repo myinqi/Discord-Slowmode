@@ -194,85 +194,89 @@ class CommandsCog(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=False)
 
-        configs = await self.bot.db.get_listening_party_configs()
-        if not configs:
-            await interaction.followup.send("No listening party configs found. Set one up in the web interface.", ephemeral=True)
-            return
+        try:
+            configs = await self.bot.db.get_listening_party_configs()
+            if not configs:
+                await interaction.followup.send("No listening party configs found. Set one up in the web interface.", ephemeral=True)
+                return
 
-        if input_channel:
-            config = None
-            for c in configs:
-                if c["input_channel_id"] == input_channel.id:
-                    config = c
-                    break
-            if not config:
+            if input_channel:
+                config = None
+                for c in configs:
+                    if c["input_channel_id"] == input_channel.id:
+                        config = c
+                        break
+                if not config:
+                    await interaction.followup.send(
+                        f"#{input_channel.name} is not configured as a listening party input channel.", ephemeral=True
+                    )
+                    return
+            else:
+                config = configs[0]
+
+            source_channel = interaction.guild.get_channel(config["input_channel_id"])
+            output_channel = interaction.guild.get_channel(config["output_channel_id"])
+
+            if not source_channel:
+                await interaction.followup.send("Input channel not found.", ephemeral=True)
+                return
+            if not output_channel:
+                await interaction.followup.send("Output channel not found.", ephemeral=True)
+                return
+
+            time_range_hours = config["time_range_hours"]
+            after_time = datetime.now(timezone.utc) - timedelta(hours=time_range_hours)
+
+            suno_urls = []
+            async for message in source_channel.history(after=after_time, limit=5000):
+                if message.author.bot:
+                    continue
+                urls = SUNO_URL_PATTERN.findall(message.content)
+                for url in urls:
+                    suno_urls.append({
+                        "url": url,
+                        "author": str(message.author),
+                        "author_id": message.author.id,
+                        "posted_at": message.created_at,
+                    })
+
+            if not suno_urls:
                 await interaction.followup.send(
-                    f"#{input_channel.name} is not configured as a listening party input channel.", ephemeral=True
+                    f"No Suno songs found in #{source_channel.name} within the last {time_range_hours}h.", ephemeral=True
                 )
                 return
-        else:
-            config = configs[0]
 
-        source_channel = interaction.guild.get_channel(config["input_channel_id"])
-        output_channel = interaction.guild.get_channel(config["output_channel_id"])
+            pick = random.choice(suno_urls)
+            bot_name = await self.bot.db.get_setting("bot_name") or "Slowmode Bot"
 
-        if not source_channel:
-            await interaction.followup.send("Input channel not found.", ephemeral=True)
-            return
-        if not output_channel:
-            await interaction.followup.send("Output channel not found.", ephemeral=True)
-            return
-
-        time_range_hours = config["time_range_hours"]
-        after_time = datetime.now(timezone.utc) - timedelta(hours=time_range_hours)
-
-        suno_urls = []
-        async for message in source_channel.history(after=after_time, limit=5000):
-            if message.author.bot:
-                continue
-            urls = SUNO_URL_PATTERN.findall(message.content)
-            for url in urls:
-                suno_urls.append({
-                    "url": url,
-                    "author": str(message.author),
-                    "author_id": message.author.id,
-                    "posted_at": message.created_at,
-                })
-
-        if not suno_urls:
-            await interaction.followup.send(
-                f"No Suno songs found in #{source_channel.name} within the last {time_range_hours}h.", ephemeral=True
+            embed = discord.Embed(
+                title="🎵 Random Song Pick",
+                description=f"From #{source_channel.name} (last {time_range_hours}h)",
+                color=discord.Color.purple(),
             )
-            return
+            embed.add_field(name="Posted by", value=f"<@{pick['author_id']}>", inline=True)
+            embed.add_field(name="Originally posted", value=discord.utils.format_dt(pick["posted_at"], style="R"), inline=True)
+            embed.set_footer(text=f"{bot_name} • {len(suno_urls)} songs scanned")
+            embed.timestamp = discord.utils.utcnow()
 
-        pick = random.choice(suno_urls)
-        bot_name = await self.bot.db.get_setting("bot_name") or "Slowmode Bot"
+            await output_channel.send(embed=embed)
+            await output_channel.send(pick["url"])
+            await interaction.followup.send(
+                f"Random song posted to #{output_channel.name}! ({len(suno_urls)} songs found)", ephemeral=True
+            )
 
-        embed = discord.Embed(
-            title="🎵 Random Song Pick",
-            description=f"From #{source_channel.name} (last {time_range_hours}h)",
-            color=discord.Color.purple(),
-        )
-        embed.add_field(name="Posted by", value=f"<@{pick['author_id']}>", inline=True)
-        embed.add_field(name="Originally posted", value=discord.utils.format_dt(pick["posted_at"], style="R"), inline=True)
-        embed.set_footer(text=f"{bot_name} • {len(suno_urls)} songs scanned")
-        embed.timestamp = discord.utils.utcnow()
-
-        await output_channel.send(embed=embed)
-        await output_channel.send(pick["url"])
-        await interaction.followup.send(
-            f"Random song posted to #{output_channel.name}! ({len(suno_urls)} songs found)", ephemeral=True
-        )
-
-        await self.bot.db.add_audit_log(
-            event_type="random_song",
-            user_id=interaction.user.id,
-            user_name=str(interaction.user),
-            channel_id=output_channel.id,
-            channel_name=output_channel.name,
-            details=f"Random song picked from #{source_channel.name}: {pick['url']}",
-            actor=str(interaction.user),
-        )
+            await self.bot.db.add_audit_log(
+                event_type="random_song",
+                user_id=interaction.user.id,
+                user_name=str(interaction.user),
+                channel_id=output_channel.id,
+                channel_name=output_channel.name,
+                details=f"Random song picked from #{source_channel.name}: {pick['url']}",
+                actor=str(interaction.user),
+            )
+        except Exception as e:
+            print(f"[random-song] Error: {e}")
+            await interaction.followup.send(f"Error: {e}", ephemeral=True)
 
 
     @app_commands.command(name="find-list", description="Search for Suno playlists by artist, @user, or keyword")
@@ -280,104 +284,108 @@ class CommandsCog(commands.Cog):
     async def find_list(self, interaction: discord.Interaction, search: str):
         await interaction.response.defer(ephemeral=True)
 
-        configs = await self.bot.db.get_playlist_search_channels()
-        if not configs:
-            await interaction.followup.send(
-                "No playlist search channels configured. Ask an admin to set one up.", ephemeral=True
-            )
-            return
+        try:
+            configs = await self.bot.db.get_playlist_search_channels()
+            if not configs:
+                await interaction.followup.send(
+                    "No playlist search channels configured. Ask an admin to set one up.", ephemeral=True
+                )
+                return
 
-        # Check if search is a user mention like <@123456> or <@!123456>
-        mention_match = re.match(r'<@!?(\d+)>', search)
-        search_user_id = int(mention_match.group(1)) if mention_match else None
-        search_lower = search.lower()
+            # Check if search is a user mention like <@123456> or <@!123456>
+            mention_match = re.match(r'<@!?(\d+)>', search)
+            search_user_id = int(mention_match.group(1)) if mention_match else None
+            search_lower = search.lower()
 
-        results = []
+            results = []
 
-        for cfg in configs:
-            channel = interaction.guild.get_channel(cfg["channel_id"])
-            if not channel:
-                continue
-
-            async for message in channel.history(limit=10000):
-                if message.author.bot:
+            for cfg in configs:
+                channel = interaction.guild.get_channel(cfg["channel_id"])
+                if not channel:
                     continue
 
-                urls = SUNO_PLAYLIST_PATTERN.findall(message.content)
-                if not urls:
-                    continue
+                async for message in channel.history(limit=10000):
+                    if message.author.bot:
+                        continue
 
-                # Match by: user mention, author name/display name, or message content
-                matched = False
-                if search_user_id and message.author.id == search_user_id:
-                    matched = True
-                elif search_lower in message.author.name.lower():
-                    matched = True
-                elif search_lower in message.author.display_name.lower():
-                    matched = True
-                elif search_lower in message.content.lower():
-                    matched = True
+                    urls = SUNO_PLAYLIST_PATTERN.findall(message.content)
+                    if not urls:
+                        continue
 
-                if not matched:
-                    continue
+                    # Match by: user mention, author name/display name, or message content
+                    matched = False
+                    if search_user_id and message.author.id == search_user_id:
+                        matched = True
+                    elif search_lower in message.author.name.lower():
+                        matched = True
+                    elif search_lower in message.author.display_name.lower():
+                        matched = True
+                    elif search_lower in message.content.lower():
+                        matched = True
 
-                for url in urls:
-                    results.append({
-                        "url": url,
-                        "author": str(message.author),
-                        "author_id": message.author.id,
-                        "posted_at": message.created_at,
-                        "context": message.content[:150],
-                        "channel_name": channel.name,
-                    })
+                    if not matched:
+                        continue
 
-        if not results:
-            await interaction.followup.send(
-                f"No playlists found for **{search}**.", ephemeral=True
-            )
-            return
+                    for url in urls:
+                        results.append({
+                            "url": url,
+                            "author": str(message.author),
+                            "author_id": message.author.id,
+                            "posted_at": message.created_at,
+                            "context": message.content[:150],
+                            "channel_name": channel.name,
+                        })
 
-        # Deduplicate by URL
-        seen = set()
-        unique = []
-        for r in results:
-            if r["url"] not in seen:
-                seen.add(r["url"])
-                unique.append(r)
-        results = unique
+            if not results:
+                await interaction.followup.send(
+                    f"No playlists found for **{search}**.", ephemeral=True
+                )
+                return
 
-        # Build response (Discord has a 2000 char limit, split if needed)
-        header = f"🔍 **{len(results)} playlist(s) found for \"{search}\":**\n\n"
-        entries = []
-        for i, r in enumerate(results, 1):
-            entry = (
-                f"**{i}.** {r['url']}\n"
-                f"   Posted by <@{r['author_id']}> in #{r['channel_name']} "
-                f"({discord.utils.format_dt(r['posted_at'], style='R')})"
-            )
-            entries.append(entry)
+            # Deduplicate by URL
+            seen = set()
+            unique = []
+            for r in results:
+                if r["url"] not in seen:
+                    seen.add(r["url"])
+                    unique.append(r)
+            results = unique
 
-        # Split into chunks that fit Discord's 2000 char limit
-        chunks = []
-        current = header
-        for entry in entries:
-            if len(current) + len(entry) + 2 > 1900:
+            # Build response (Discord has a 2000 char limit, split if needed)
+            header = f"🔍 **{len(results)} playlist(s) found for \"{search}\":**\n\n"
+            entries = []
+            for i, r in enumerate(results, 1):
+                entry = (
+                    f"**{i}.** {r['url']}\n"
+                    f"   Posted by <@{r['author_id']}> in #{r['channel_name']} "
+                    f"({discord.utils.format_dt(r['posted_at'], style='R')})"
+                )
+                entries.append(entry)
+
+            # Split into chunks that fit Discord's 2000 char limit
+            chunks = []
+            current = header
+            for entry in entries:
+                if len(current) + len(entry) + 2 > 1900:
+                    chunks.append(current)
+                    current = ""
+                current += entry + "\n\n"
+            if current.strip():
                 chunks.append(current)
-                current = ""
-            current += entry + "\n\n"
-        if current.strip():
-            chunks.append(current)
 
-        for chunk in chunks:
-            await interaction.followup.send(chunk, ephemeral=True)
+            for chunk in chunks:
+                await interaction.followup.send(chunk, ephemeral=True)
 
-        await self.bot.db.add_audit_log(
-            event_type="playlist_search",
-            user_id=interaction.user.id,
-            user_name=str(interaction.user),
-            details=f"Searched for '{search}', found {len(results)} result(s)",
-            actor=str(interaction.user),
-        )
+            await self.bot.db.add_audit_log(
+                event_type="playlist_search",
+                user_id=interaction.user.id,
+                user_name=str(interaction.user),
+                details=f"Searched for '{search}', found {len(results)} result(s)",
+                actor=str(interaction.user),
+            )
+        except Exception as e:
+            print(f"[find-list] Error: {e}")
+            await interaction.followup.send(f"Error: {e}", ephemeral=True)
 
 
 async def setup(bot):
