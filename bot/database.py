@@ -478,3 +478,92 @@ class Database:
         ) as cursor:
             row = await cursor.fetchone()
             return row[0]
+
+    async def get_user_song_stats(self, user_id: int) -> dict:
+        """Comprehensive stats for a single user."""
+        stats = {
+            "total": 0,
+            "per_channel": [],
+            "first_post": None,
+            "last_post": None,
+            "avg_per_week": 0.0,
+            "avg_per_month": 0.0,
+            "by_month": [],
+            "by_weekday": [],
+            "top_days": [],
+            "active_weeks": 0,
+        }
+
+        # Total
+        async with self.db.execute(
+            "SELECT COUNT(*) FROM song_posts WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            stats["total"] = (await cursor.fetchone())[0]
+
+        if stats["total"] == 0:
+            return stats
+
+        # Per channel
+        async with self.db.execute(
+            "SELECT channel_id, COUNT(*) as cnt FROM song_posts WHERE user_id = ? GROUP BY channel_id ORDER BY cnt DESC",
+            (user_id,),
+        ) as cursor:
+            stats["per_channel"] = [{"channel_id": r[0], "count": r[1]} for r in await cursor.fetchall()]
+
+        # First and last post
+        async with self.db.execute(
+            "SELECT MIN(posted_at), MAX(posted_at) FROM song_posts WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            stats["first_post"] = row[0]
+            stats["last_post"] = row[1]
+
+        # Averages: calculate from timespan
+        if stats["first_post"] and stats["last_post"]:
+            span_seconds = stats["last_post"] - stats["first_post"]
+            span_weeks = max(span_seconds / 604800, 1)
+            span_months = max(span_seconds / 2592000, 1)
+            stats["avg_per_week"] = round(stats["total"] / span_weeks, 1)
+            stats["avg_per_month"] = round(stats["total"] / span_months, 1)
+
+        # By month (last 12)
+        async with self.db.execute(
+            "SELECT strftime('%Y-%m', posted_at, 'unixepoch') as ym, COUNT(*) as cnt "
+            "FROM song_posts WHERE user_id = ? GROUP BY ym ORDER BY ym DESC LIMIT 12",
+            (user_id,),
+        ) as cursor:
+            stats["by_month"] = [{"label": r[0], "count": r[1]} for r in await cursor.fetchall()]
+
+        # By weekday (0=Sunday .. 6=Saturday in SQLite strftime %w)
+        weekday_names = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"]
+        async with self.db.execute(
+            "SELECT strftime('%w', posted_at, 'unixepoch') as wd, COUNT(*) as cnt "
+            "FROM song_posts WHERE user_id = ? GROUP BY wd ORDER BY wd",
+            (user_id,),
+        ) as cursor:
+            stats["by_weekday"] = [{"label": weekday_names[int(r[0])], "day_num": int(r[0]), "count": r[1]} for r in await cursor.fetchall()]
+
+        # Top posting days
+        async with self.db.execute(
+            "SELECT strftime('%Y-%m-%d', posted_at, 'unixepoch') as yd, COUNT(*) as cnt "
+            "FROM song_posts WHERE user_id = ? GROUP BY yd ORDER BY cnt DESC LIMIT 5",
+            (user_id,),
+        ) as cursor:
+            stats["top_days"] = [{"label": r[0], "count": r[1]} for r in await cursor.fetchall()]
+
+        # Active weeks count
+        async with self.db.execute(
+            "SELECT COUNT(DISTINCT strftime('%Y-%W', posted_at, 'unixepoch')) "
+            "FROM song_posts WHERE user_id = ?",
+            (user_id,),
+        ) as cursor:
+            stats["active_weeks"] = (await cursor.fetchone())[0]
+
+        return stats
+
+    async def get_all_users_ranking(self) -> list[dict]:
+        """Leaderboard: all users ranked by total songs."""
+        async with self.db.execute(
+            "SELECT user_id, user_name, COUNT(*) as cnt FROM song_posts GROUP BY user_id ORDER BY cnt DESC"
+        ) as cursor:
+            return [{"user_id": r[0], "user_name": r[1], "count": r[2]} for r in await cursor.fetchall()]

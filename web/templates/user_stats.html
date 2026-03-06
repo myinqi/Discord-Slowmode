@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}User Statistics{% endblock %}
+{% block content %}
+<h2 class="text-2xl font-bold text-white mb-6">User Statistics</h2>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <!-- Leaderboard -->
+    <div class="lg:col-span-1">
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            <div class="px-5 py-4 border-b border-gray-700/50">
+                <h3 class="text-white font-semibold">🏆 Leaderboard</h3>
+                <p class="text-gray-500 text-xs mt-1">Click a user to see details</p>
+            </div>
+            <div class="divide-y divide-gray-700/30 max-h-[600px] overflow-y-auto">
+                {% for entry in ranking %}
+                <a href="{{ url_for('user_stats', user_id=entry.user_id) }}"
+                    class="flex items-center justify-between px-5 py-3 hover:bg-discord-lighter/30 transition-colors {% if selected_user_id == entry.user_id %}bg-discord-blurple/10 border-l-2 border-discord-blurple{% endif %}">
+                    <div class="flex items-center gap-3">
+                        <span class="text-gray-500 text-sm w-6 text-right">
+                            {% if loop.index == 1 %}🥇{% elif loop.index == 2 %}🥈{% elif loop.index == 3 %}🥉{% else %}{{ loop.index }}.{% endif %}
+                        </span>
+                        <span class="text-gray-200 text-sm">{{ entry.display_name }}</span>
+                    </div>
+                    <span class="text-white font-semibold text-sm">{{ entry.count }}</span>
+                </a>
+                {% else %}
+                <div class="px-5 py-8 text-center text-gray-500 text-sm">No song data yet. Run a history scan first.</div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <!-- User Detail -->
+    <div class="lg:col-span-2">
+        {% if user_detail and user_detail.total > 0 %}
+        <div class="space-y-6">
+            <!-- Summary Cards -->
+            <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+                <div class="px-5 py-4 border-b border-gray-700/50">
+                    <h3 class="text-white font-semibold">📊 {{ user_display_name }}</h3>
+                </div>
+                <div class="p-5">
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                        <div class="bg-discord-darker rounded-lg p-4 text-center">
+                            <div class="text-white text-2xl font-bold">{{ user_detail.total }}</div>
+                            <div class="text-gray-500 text-xs mt-1">Songs Total</div>
+                        </div>
+                        <div class="bg-discord-darker rounded-lg p-4 text-center">
+                            <div class="text-discord-blurple text-2xl font-bold">{{ user_detail.avg_per_week }}</div>
+                            <div class="text-gray-500 text-xs mt-1">Avg / Week</div>
+                        </div>
+                        <div class="bg-discord-darker rounded-lg p-4 text-center">
+                            <div class="text-discord-green text-2xl font-bold">{{ user_detail.avg_per_month }}</div>
+                            <div class="text-gray-500 text-xs mt-1">Avg / Month</div>
+                        </div>
+                        <div class="bg-discord-darker rounded-lg p-4 text-center">
+                            <div class="text-discord-yellow text-2xl font-bold">{{ user_detail.active_weeks }}</div>
+                            <div class="text-gray-500 text-xs mt-1">Active Weeks</div>
+                        </div>
+                    </div>
+                    {% if user_detail.first_post %}
+                    <div class="mt-4 text-gray-400 text-sm">
+                        First post: <span class="text-gray-300">{{ user_detail.first_post | int | timestamp_to_date }}</span>
+                        &nbsp;•&nbsp;
+                        Last post: <span class="text-gray-300">{{ user_detail.last_post | int | timestamp_to_date }}</span>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Per Channel -->
+            {% if user_detail.per_channel %}
+            <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+                <div class="px-5 py-4 border-b border-gray-700/50">
+                    <h3 class="text-white font-semibold">Songs per Channel</h3>
+                </div>
+                <div class="p-5 space-y-3">
+                    {% for pc in user_detail.per_channel %}
+                    <div class="flex items-center justify-between">
+                        <span class="text-gray-300 text-sm">#{{ pc.channel_name }}</span>
+                        <div class="flex items-center gap-3">
+                            <div class="w-40 bg-discord-darker rounded-full h-2.5">
+                                <div class="bg-discord-blurple rounded-full h-2.5" style="width: {{ (pc.count / user_detail.total * 100) | round(1) }}%"></div>
+                            </div>
+                            <span class="text-white font-medium text-sm w-12 text-right">{{ pc.count }}</span>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- By Month -->
+                {% if user_detail.by_month %}
+                <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+                    <div class="px-5 py-4 border-b border-gray-700/50">
+                        <h3 class="text-white font-semibold">By Month <span class="text-gray-500 text-xs font-normal">(last 12)</span></h3>
+                    </div>
+                    <div class="p-5 space-y-2">
+                        {% if user_detail.by_month %}{% set max_m = user_detail.by_month | map(attribute='count') | list | max %}{% else %}{% set max_m = 1 %}{% endif %}
+                        {% for item in user_detail.by_month %}
+                        <div class="flex items-center justify-between">
+                            <span class="text-gray-300 text-sm">{{ item.label }}</span>
+                            <div class="flex items-center gap-3">
+                                <div class="w-24 bg-discord-darker rounded-full h-2">
+                                    <div class="bg-discord-green rounded-full h-2" style="width: {{ (item.count / max_m * 100) | round(1) }}%"></div>
+                                </div>
+                                <span class="text-white font-medium text-sm w-8 text-right">{{ item.count }}</span>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- By Weekday -->
+                {% if user_detail.by_weekday %}
+                <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+                    <div class="px-5 py-4 border-b border-gray-700/50">
+                        <h3 class="text-white font-semibold">By Weekday</h3>
+                    </div>
+                    <div class="p-5 space-y-2">
+                        {% if user_detail.by_weekday %}{% set max_wd = user_detail.by_weekday | map(attribute='count') | list | max %}{% else %}{% set max_wd = 1 %}{% endif %}
+                        {% for item in user_detail.by_weekday %}
+                        <div class="flex items-center justify-between">
+                            <span class="text-gray-300 text-sm font-medium">{{ item.label }}</span>
+                            <div class="flex items-center gap-3">
+                                <div class="w-24 bg-discord-darker rounded-full h-2">
+                                    <div class="bg-discord-yellow rounded-full h-2" style="width: {{ (item.count / max_wd * 100) | round(1) }}%"></div>
+                                </div>
+                                <span class="text-white font-medium text-sm w-8 text-right">{{ item.count }}</span>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- Top Posting Days -->
+            {% if user_detail.top_days %}
+            <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+                <div class="px-5 py-4 border-b border-gray-700/50">
+                    <h3 class="text-white font-semibold">🔥 Top Posting Days</h3>
+                </div>
+                <div class="p-5">
+                    <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                        {% for item in user_detail.top_days %}
+                        <div class="bg-discord-darker rounded-lg p-3 text-center">
+                            <div class="text-white font-bold">{{ item.count }}</div>
+                            <div class="text-gray-500 text-xs">{{ item.label }}</div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+
+        {% elif selected_user_id %}
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-8 text-center">
+            <p class="text-gray-400">No song data found for this user.</p>
+        </div>
+        {% else %}
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-8 text-center">
+            <p class="text-gray-400 text-lg mb-2">👈 Select a user from the leaderboard</p>
+            <p class="text-gray-500 text-sm">Click on any user to see their detailed statistics.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

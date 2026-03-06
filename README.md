@@ -161,6 +161,13 @@ Protokoll aller Aktionen: gelöschte Nachrichten, Konfigurationsänderungen, Ben
 - "Scan History" Button zum Importieren aller bisherigen Song-Posts aus der Kanalhistorie
 - Neue Songs werden automatisch in Echtzeit erfasst
 
+### User Stats
+- Leaderboard: Rangliste aller Nutzer nach Anzahl geposteter Songs
+- Detailansicht pro User: Songs gesamt, Songs pro Kanal, Durchschnitt pro Woche/Monat
+- Aktivste Wochentage und Top Posting Days
+- Zeitraum: Erster und letzter Post, Anzahl aktiver Wochen
+- Auch per `/user-stats` Slash-Command verfügbar
+
 ### Settings (Einstellungen)
 - Bot-Name ändern
 - Guild-ID ändern (erfordert Neustart)
@@ -179,8 +186,9 @@ Protokoll aller Aktionen: gelöschte Nachrichten, Konfigurationsänderungen, Ben
 | `/random-song [#input-kanal]` | Zufälligen Suno-Song aus dem Input-Kanal posten |
 | `/find-list <Suchbegriff>` | Suno-Playlists nach Interpret/Keyword durchsuchen (nur für dich sichtbar) |
 | `/song-stats [#kanal]` | Song-Posting-Statistiken anzeigen (nur für dich sichtbar) |
+| `/user-stats [@user]` | User-Statistiken anzeigen — Songs gesamt, pro Kanal, Durchschnitte (nur für dich sichtbar) |
 
-> Cooldown- und Toggle-Commands können nur von Serverbesitzern und Mitgliedern mit einer **Command Role** genutzt werden. `/random-song`, `/find-list` und `/song-stats` sind für **alle** Servermitglieder verfügbar.
+> Cooldown- und Toggle-Commands können nur von Serverbesitzern und Mitgliedern mit einer **Command Role** genutzt werden. `/random-song`, `/find-list`, `/song-stats` und `/user-stats` sind für **alle** Servermitglieder verfügbar.
 
 ---
 

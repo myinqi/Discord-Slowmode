@@ -457,5 +457,78 @@ class CommandsCog(commands.Cog):
             await interaction.followup.send(f"Error: {e}", ephemeral=True)
 
 
+    @app_commands.command(name="user-stats", description="Show song posting statistics for a user")
+    @app_commands.describe(user="The user to show stats for")
+    async def user_stats(self, interaction: discord.Interaction, user: discord.Member = None):
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            target = user or interaction.user
+            stats = await self.bot.db.get_user_song_stats(target.id)
+
+            if stats["total"] == 0:
+                await interaction.followup.send(
+                    f"No song data found for {target.mention}.", ephemeral=True
+                )
+                return
+
+            lines = [f"📊 **User Stats for {target.mention}**\n"]
+            lines.append(f"**Total Songs:** {stats['total']}")
+            lines.append(f"**Avg/Week:** {stats['avg_per_week']}  •  **Avg/Month:** {stats['avg_per_month']}")
+            lines.append(f"**Active Weeks:** {stats['active_weeks']}")
+
+            if stats["first_post"]:
+                lines.append(
+                    f"**First Post:** {discord.utils.format_dt(datetime.fromtimestamp(stats['first_post'], tz=timezone.utc), style='D')}  •  "
+                    f"**Last Post:** {discord.utils.format_dt(datetime.fromtimestamp(stats['last_post'], tz=timezone.utc), style='R')}"
+                )
+
+            # Per channel
+            if stats["per_channel"]:
+                lines.append("\n**Songs per Channel:**")
+                for pc in stats["per_channel"]:
+                    ch = interaction.guild.get_channel(pc["channel_id"])
+                    ch_name = f"#{ch.name}" if ch else f"channel-{pc['channel_id']}"
+                    lines.append(f"  {ch_name}: **{pc['count']}**")
+
+            # By month
+            if stats["by_month"]:
+                lines.append("\n**By Month** (last 12):")
+                for item in stats["by_month"]:
+                    lines.append(f"  {item['label']}: **{item['count']}**")
+
+            # By weekday
+            if stats["by_weekday"]:
+                wd_str = " • ".join(f"{w['label']}: **{w['count']}**" for w in stats["by_weekday"])
+                lines.append(f"\n**By Weekday:** {wd_str}")
+
+            # Top days
+            if stats["top_days"]:
+                lines.append("\n**Top Posting Days:**")
+                for item in stats["top_days"]:
+                    lines.append(f"  {item['label']}: **{item['count']}** songs")
+
+            text = "\n".join(lines)
+
+            if len(text) <= 2000:
+                await interaction.followup.send(text, ephemeral=True)
+            else:
+                chunks = []
+                current = ""
+                for line in lines:
+                    if len(current) + len(line) + 1 > 1900:
+                        chunks.append(current)
+                        current = ""
+                    current += line + "\n"
+                if current.strip():
+                    chunks.append(current)
+                for chunk in chunks:
+                    await interaction.followup.send(chunk, ephemeral=True)
+
+        except Exception as e:
+            print(f"[user-stats] Error: {e}")
+            await interaction.followup.send(f"Error: {e}", ephemeral=True)
+
+
 async def setup(bot):
     await bot.add_cog(CommandsCog(bot))

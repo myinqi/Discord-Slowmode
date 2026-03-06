@@ -20,6 +20,11 @@ def create_app(db: Database, bot=None) -> Quart:
     app.bot = bot
     app.scan_status = {"running": False, "progress": "", "result": ""}
 
+    @app.template_filter("timestamp_to_date")
+    def timestamp_to_date(ts):
+        from datetime import datetime, timezone
+        return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%d.%m.%Y")
+
     # --- Auth helpers ---
 
     def login_required(f):
@@ -681,6 +686,56 @@ def create_app(db: Database, bot=None) -> Quart:
                 stats=stats,
                 filter_channel=filter_channel,
                 scan_status=app.scan_status,
+            )
+        except Exception as e:
+            traceback.print_exc()
+            return f"<pre>Error: {e}\n\n{traceback.format_exc()}</pre>", 500
+
+    @app.route("/user-stats")
+    @login_required
+    async def user_stats():
+        import traceback
+        try:
+            guild = get_guild()
+            selected_user_id = request.args.get("user_id", type=int)
+
+            # Leaderboard
+            ranking = await db.get_all_users_ranking()
+
+            # Resolve display names from guild
+            for entry in ranking:
+                entry["display_name"] = entry["user_name"] or f"User {entry['user_id']}"
+                if guild:
+                    member = guild.get_member(entry["user_id"])
+                    if member:
+                        entry["display_name"] = member.display_name
+
+            # User detail stats
+            user_detail = None
+            user_display_name = None
+            if selected_user_id:
+                user_detail = await db.get_user_song_stats(selected_user_id)
+                user_display_name = f"User {selected_user_id}"
+                if guild:
+                    member = guild.get_member(selected_user_id)
+                    if member:
+                        user_display_name = member.display_name
+
+                # Resolve channel names in per_channel
+                if user_detail and user_detail["per_channel"]:
+                    for pc in user_detail["per_channel"]:
+                        pc["channel_name"] = f"channel-{pc['channel_id']}"
+                        if guild:
+                            ch = guild.get_channel(pc["channel_id"])
+                            if ch:
+                                pc["channel_name"] = ch.name
+
+            return await render_template(
+                "user_stats.html",
+                ranking=ranking,
+                user_detail=user_detail,
+                user_display_name=user_display_name,
+                selected_user_id=selected_user_id,
             )
         except Exception as e:
             traceback.print_exc()
