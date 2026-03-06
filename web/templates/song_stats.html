@@ -12,12 +12,32 @@
         </div>
         <form method="POST">
             <input type="hidden" name="action" value="scan">
-            <button type="submit" onclick="this.disabled=true;this.innerText='Scanning...';this.form.submit()"
+            {% if scan_status.running %}
+            <button type="button" disabled
+                class="px-4 py-2 bg-gray-600 text-gray-300 rounded-lg font-medium text-sm cursor-not-allowed">
+                Scanning...
+            </button>
+            {% else %}
+            <button type="submit"
                 class="px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg font-medium transition-colors text-sm">
                 Scan History
             </button>
+            {% endif %}
         </form>
     </div>
+    {% if scan_status.running %}
+    <div class="px-5 py-3 border-b border-gray-700/50 bg-discord-blurple/10">
+        <div class="flex items-center gap-2">
+            <svg class="animate-spin h-4 w-4 text-discord-blurple" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/></svg>
+            <span class="text-discord-blurple text-sm font-medium">{{ scan_status.progress }}</span>
+        </div>
+        <p class="text-gray-500 text-xs mt-1">Refresh this page to see updated progress.</p>
+    </div>
+    {% elif scan_status.result %}
+    <div class="px-5 py-3 border-b border-gray-700/50 bg-green-500/10">
+        <span class="text-green-400 text-sm">{{ scan_status.result }}</span>
+    </div>
+    {% endif %}
     <div class="p-5">
         {% if channel_list %}
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">

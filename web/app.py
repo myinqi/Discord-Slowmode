@@ -1,3 +1,4 @@
+import asyncio
 import re
 import functools
 import math
@@ -17,6 +18,7 @@ def create_app(db: Database, bot=None) -> Quart:
     )
     app.db = db
     app.bot = bot
+    app.scan_status = {"running": False, "progress": "", "result": ""}
 
     # --- Auth helpers ---
 
@@ -567,6 +569,64 @@ def create_app(db: Database, bot=None) -> Quart:
             available_channels=available_channels,
         )
 
+    async def _run_scan(actor: str):
+        """Background task to scan all monitored channels for Suno URLs."""
+        app.scan_status["running"] = True
+        app.scan_status["progress"] = "Starting scan..."
+        app.scan_status["result"] = ""
+        try:
+            guild = get_guild()
+            if not guild:
+                app.scan_status["result"] = "Bot not connected to guild."
+                return
+
+            channels = await db.get_monitored_channels()
+            total_found = 0
+
+            for i, ch_cfg in enumerate(channels):
+                channel = guild.get_channel(ch_cfg["channel_id"])
+                if not channel:
+                    continue
+
+                app.scan_status["progress"] = f"Scanning #{channel.name} ({i+1}/{len(channels)})..."
+                rows = []
+                msg_count = 0
+                try:
+                    async for message in channel.history(limit=None):
+                        if message.author.bot:
+                            continue
+                        msg_count += 1
+                        if msg_count % 500 == 0:
+                            app.scan_status["progress"] = f"Scanning #{channel.name} ({i+1}/{len(channels)})... {msg_count} messages"
+                        urls = SUNO_URL_PATTERN.findall(message.content)
+                        for url in urls:
+                            rows.append((
+                                channel.id,
+                                message.author.id,
+                                str(message.author),
+                                url,
+                                message.created_at.timestamp(),
+                            ))
+                except Exception as e:
+                    app.scan_status["progress"] = f"Error scanning #{channel.name}: {e}"
+                    continue
+
+                if rows:
+                    await db.add_song_posts_bulk(rows)
+                    total_found += len(rows)
+
+            app.scan_status["result"] = f"Scan complete. {total_found} song(s) found across {len(channels)} channel(s)."
+            await db.add_audit_log(
+                event_type="song_scan",
+                details=f"History scan: {total_found} songs found",
+                actor=actor,
+            )
+        except Exception as e:
+            app.scan_status["result"] = f"Scan failed: {e}"
+        finally:
+            app.scan_status["running"] = False
+            app.scan_status["progress"] = ""
+
     @app.route("/song-stats", methods=["GET", "POST"])
     @login_required
     async def song_stats():
@@ -574,43 +634,15 @@ def create_app(db: Database, bot=None) -> Quart:
             form = await request.form
             action = form.get("action")
 
-            if action == "scan" and bot and bot.is_ready():
-                guild = get_guild()
-                if not guild:
-                    await flash("Bot not connected to guild.", "error")
+            if action == "scan":
+                if app.scan_status["running"]:
+                    await flash("A scan is already in progress.", "error")
+                elif bot and bot.is_ready():
+                    actor = session.get("username", "unknown")
+                    asyncio.get_event_loop().create_task(_run_scan(actor))
+                    await flash("Scan started in the background. Refresh this page to see progress.", "success")
                 else:
-                    channels = await db.get_monitored_channels()
-                    total_found = 0
-                    for ch_cfg in channels:
-                        channel = guild.get_channel(ch_cfg["channel_id"])
-                        if not channel:
-                            continue
-                        rows = []
-                        try:
-                            async for message in channel.history(limit=None):
-                                if message.author.bot:
-                                    continue
-                                urls = SUNO_URL_PATTERN.findall(message.content)
-                                for url in urls:
-                                    rows.append((
-                                        channel.id,
-                                        message.author.id,
-                                        str(message.author),
-                                        url,
-                                        message.created_at.timestamp(),
-                                    ))
-                        except Exception as e:
-                            await flash(f"Error scanning #{channel.name}: {e}", "error")
-                            continue
-                        if rows:
-                            await db.add_song_posts_bulk(rows)
-                            total_found += len(rows)
-                    await flash(f"Scan complete. {total_found} song(s) found across {len(channels)} channel(s).", "success")
-                    await db.add_audit_log(
-                        event_type="song_scan",
-                        details=f"History scan: {total_found} songs found",
-                        actor=session.get("username", "unknown"),
-                    )
+                    await flash("Bot is not ready.", "error")
 
             return redirect(url_for("song_stats"))
 
@@ -646,6 +678,7 @@ def create_app(db: Database, bot=None) -> Quart:
             channel_list=channel_list,
             stats=stats,
             filter_channel=filter_channel,
+            scan_status=app.scan_status,
         )
 
     return app
