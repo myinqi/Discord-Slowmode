@@ -596,7 +596,16 @@ class CommandsCog(commands.Cog):
                             urls = SUNO_URL_PATTERN.findall(message.content)
                             if not urls:
                                 continue
-                            if search_lower not in message.content.lower():
+                            # Search in message content AND embeds (title appears in link unfurl)
+                            searchable = message.content.lower()
+                            for embed in message.embeds:
+                                if embed.title:
+                                    searchable += " " + embed.title.lower()
+                                if embed.description:
+                                    searchable += " " + embed.description.lower()
+                                if embed.author and embed.author.name:
+                                    searchable += " " + embed.author.name.lower()
+                            if search_lower not in searchable:
                                 continue
                             for url in urls:
                                 results.append({
