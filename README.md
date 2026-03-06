@@ -187,8 +187,9 @@ Protokoll aller Aktionen: gelöschte Nachrichten, Konfigurationsänderungen, Ben
 | `/find-list <Suchbegriff>` | Suno-Playlists nach Interpret/Keyword durchsuchen (nur für dich sichtbar) |
 | `/song-stats [#kanal]` | Song-Posting-Statistiken anzeigen (nur für dich sichtbar) |
 | `/user-stats [@user]` | User-Statistiken anzeigen — Songs gesamt, pro Kanal, Durchschnitte (nur für dich sichtbar) |
+| `/user-score` | Song-Highscore/Leaderboard öffentlich im Kanal posten |
 
-> Cooldown- und Toggle-Commands können nur von Serverbesitzern und Mitgliedern mit einer **Command Role** genutzt werden. `/random-song`, `/find-list`, `/song-stats` und `/user-stats` sind für **alle** Servermitglieder verfügbar.
+> Cooldown- und Toggle-Commands können nur von Serverbesitzern und Mitgliedern mit einer **Command Role** genutzt werden. `/random-song`, `/find-list`, `/song-stats`, `/user-stats` und `/user-score` sind für **alle** Servermitglieder verfügbar.
 
 ---
 

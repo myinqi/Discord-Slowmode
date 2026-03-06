@@ -530,5 +530,42 @@ class CommandsCog(commands.Cog):
             await interaction.followup.send(f"Error: {e}", ephemeral=True)
 
 
+    @app_commands.command(name="user-score", description="Show the song posting leaderboard")
+    async def user_score(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=False)
+
+        try:
+            ranking = await self.bot.db.get_all_users_ranking()
+
+            if not ranking:
+                await interaction.followup.send("No song data yet.")
+                return
+
+            bot_name = await self.bot.db.get_setting("bot_name") or "Slowmode Bot"
+
+            medals = ["🥇", "🥈", "🥉"]
+            lines = []
+            for i, entry in enumerate(ranking[:20]):
+                prefix = medals[i] if i < 3 else f"**{i+1}.**"
+                lines.append(f"{prefix} <@{entry['user_id']}> — **{entry['count']}** songs")
+
+            embed = discord.Embed(
+                title="🏆 Song Highscore",
+                description="\n".join(lines),
+                color=discord.Color.gold(),
+            )
+            if len(ranking) > 20:
+                embed.set_footer(text=f"{bot_name} • Top 20 of {len(ranking)} users")
+            else:
+                embed.set_footer(text=f"{bot_name} • {len(ranking)} users")
+            embed.timestamp = discord.utils.utcnow()
+
+            await interaction.followup.send(embed=embed)
+
+        except Exception as e:
+            print(f"[user-score] Error: {e}")
+            await interaction.followup.send(f"Error: {e}", ephemeral=True)
+
+
 async def setup(bot):
     await bot.add_cog(CommandsCog(bot))
