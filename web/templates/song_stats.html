@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}Song Statistics{% endblock %}
+{% block content %}
+<h2 class="text-2xl font-bold text-white mb-6">Song Statistics</h2>
+
+<!-- Scan + Overview -->
+<div class="bg-discord-dark rounded-xl border border-gray-700/50 mb-6">
+    <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between flex-wrap gap-3">
+        <div>
+            <h3 class="text-white font-semibold">Overview</h3>
+            <p class="text-gray-400 text-sm mt-1">Total songs tracked per monitored channel. Use "Scan History" to import older posts.</p>
+        </div>
+        <form method="POST">
+            <input type="hidden" name="action" value="scan">
+            <button type="submit" onclick="this.disabled=true;this.innerText='Scanning...';this.form.submit()"
+                class="px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg font-medium transition-colors text-sm">
+                Scan History
+            </button>
+        </form>
+    </div>
+    <div class="p-5">
+        {% if channel_list %}
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {% for ch in channel_list %}
+            <a href="{{ url_for('song_stats', channel=ch.channel_id) }}"
+                class="bg-discord-darker rounded-lg p-4 hover:border-discord-blurple/50 border border-transparent transition-colors {% if filter_channel == ch.channel_id %}border-discord-blurple{% endif %}">
+                <div class="text-gray-400 text-xs">#{{ ch.channel_name }}</div>
+                <div class="text-white text-2xl font-bold mt-1">{{ ch.count }}</div>
+                <div class="text-gray-500 text-xs">songs tracked</div>
+            </a>
+            {% endfor %}
+            <a href="{{ url_for('song_stats') }}"
+                class="bg-discord-darker rounded-lg p-4 hover:border-discord-blurple/50 border border-transparent transition-colors {% if not filter_channel %}border-discord-blurple{% endif %}">
+                <div class="text-gray-400 text-xs">All Channels</div>
+                <div class="text-white text-2xl font-bold mt-1">{{ stats.total }}</div>
+                <div class="text-gray-500 text-xs">songs total</div>
+            </a>
+        </div>
+        {% else %}
+        <p class="text-gray-500 text-sm">No monitored channels configured.</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Detailed Stats -->
+{% if stats.total > 0 %}
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <!-- By Year -->
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">By Year</h3>
+        </div>
+        <div class="p-5 space-y-2">
+            {% for item in stats.by_year %}
+            <div class="flex items-center justify-between">
+                <span class="text-gray-300 text-sm">{{ item.label }}</span>
+                <div class="flex items-center gap-3">
+                    <div class="w-32 bg-discord-darker rounded-full h-2">
+                        <div class="bg-discord-blurple rounded-full h-2" style="width: {{ (item.count / stats.total * 100) | round(1) }}%"></div>
+                    </div>
+                    <span class="text-white font-medium text-sm w-12 text-right">{{ item.count }}</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- By Month -->
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">By Month <span class="text-gray-500 text-xs font-normal">(last 12)</span></h3>
+        </div>
+        <div class="p-5 space-y-2">
+            {% set max_month = stats.by_month | map(attribute='count') | max if stats.by_month else 1 %}
+            {% for item in stats.by_month %}
+            <div class="flex items-center justify-between">
+                <span class="text-gray-300 text-sm">{{ item.label }}</span>
+                <div class="flex items-center gap-3">
+                    <div class="w-32 bg-discord-darker rounded-full h-2">
+                        <div class="bg-discord-green rounded-full h-2" style="width: {{ (item.count / max_month * 100) | round(1) }}%"></div>
+                    </div>
+                    <span class="text-white font-medium text-sm w-12 text-right">{{ item.count }}</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- By Week -->
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">By Week <span class="text-gray-500 text-xs font-normal">(last 12)</span></h3>
+        </div>
+        <div class="p-5 space-y-2">
+            {% set max_week = stats.by_week | map(attribute='count') | max if stats.by_week else 1 %}
+            {% for item in stats.by_week %}
+            <div class="flex items-center justify-between">
+                <span class="text-gray-300 text-sm">{{ item.label }}</span>
+                <div class="flex items-center gap-3">
+                    <div class="w-32 bg-discord-darker rounded-full h-2">
+                        <div class="bg-discord-yellow rounded-full h-2" style="width: {{ (item.count / max_week * 100) | round(1) }}%"></div>
+                    </div>
+                    <span class="text-white font-medium text-sm w-12 text-right">{{ item.count }}</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- By Day -->
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">By Day <span class="text-gray-500 text-xs font-normal">(last 30)</span></h3>
+        </div>
+        <div class="p-5 space-y-2">
+            {% set max_day = stats.by_day | map(attribute='count') | max if stats.by_day else 1 %}
+            {% for item in stats.by_day %}
+            <div class="flex items-center justify-between">
+                <span class="text-gray-300 text-sm">{{ item.label }}</span>
+                <div class="flex items-center gap-3">
+                    <div class="w-32 bg-discord-darker rounded-full h-2">
+                        <div class="bg-purple-500 rounded-full h-2" style="width: {{ (item.count / max_day * 100) | round(1) }}%"></div>
+                    </div>
+                    <span class="text-white font-medium text-sm w-12 text-right">{{ item.count }}</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% else %}
+<div class="bg-discord-dark rounded-xl border border-gray-700/50 p-8 text-center">
+    <p class="text-gray-400">No song data yet. Click "Scan History" to import existing posts, or data will be tracked automatically going forward.</p>
+</div>
+{% endif %}
+{% endblock %}

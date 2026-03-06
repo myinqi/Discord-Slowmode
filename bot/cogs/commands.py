@@ -390,5 +390,72 @@ class CommandsCog(commands.Cog):
             await interaction.followup.send(f"Error: {e}", ephemeral=True)
 
 
+    @app_commands.command(name="song-stats", description="Show song posting statistics for monitored channels")
+    @app_commands.describe(channel="Optional: show stats for a specific channel only")
+    async def song_stats(self, interaction: discord.Interaction, channel: discord.TextChannel = None):
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            if channel:
+                stats = await self.bot.db.get_song_stats(channel_id=channel.id)
+                header = f"📈 **Song Stats for #{channel.name}**\n\n"
+            else:
+                stats = await self.bot.db.get_song_stats()
+                header = "📈 **Song Stats (all channels)**\n\n"
+
+            if stats["total"] == 0:
+                await interaction.followup.send(
+                    f"{header}No song data yet. An admin can run a history scan from the web interface.",
+                    ephemeral=True,
+                )
+                return
+
+            lines = [header, f"**Total:** {stats['total']} songs\n"]
+
+            if stats["by_year"]:
+                lines.append("\n**By Year:**")
+                for item in stats["by_year"]:
+                    lines.append(f"  {item['label']}: **{item['count']}**")
+
+            if stats["by_month"]:
+                lines.append("\n**By Month** (last 12):")
+                for item in stats["by_month"]:
+                    lines.append(f"  {item['label']}: **{item['count']}**")
+
+            if stats["by_week"]:
+                lines.append("\n**By Week** (last 12):")
+                for item in stats["by_week"]:
+                    lines.append(f"  {item['label']}: **{item['count']}**")
+
+            if stats["by_day"]:
+                lines.append("\n**By Day** (last 30):")
+                for item in stats["by_day"][:10]:
+                    lines.append(f"  {item['label']}: **{item['count']}**")
+                if len(stats["by_day"]) > 10:
+                    lines.append(f"  ... and {len(stats['by_day']) - 10} more days")
+
+            text = "\n".join(lines)
+
+            # Split if needed
+            if len(text) <= 2000:
+                await interaction.followup.send(text, ephemeral=True)
+            else:
+                chunks = []
+                current = ""
+                for line in lines:
+                    if len(current) + len(line) + 1 > 1900:
+                        chunks.append(current)
+                        current = ""
+                    current += line + "\n"
+                if current.strip():
+                    chunks.append(current)
+                for chunk in chunks:
+                    await interaction.followup.send(chunk, ephemeral=True)
+
+        except Exception as e:
+            print(f"[song-stats] Error: {e}")
+            await interaction.followup.send(f"Error: {e}", ephemeral=True)
+
+
 async def setup(bot):
     await bot.add_cog(CommandsCog(bot))

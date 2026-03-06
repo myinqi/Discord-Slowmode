@@ -1,7 +1,10 @@
+import re
 import time
 import math
 import discord
 from discord.ext import commands
+
+SUNO_URL_PATTERN = re.compile(r'https://suno\.com/(?:s|song)/[\w-]+')
 
 
 class SlowmodeCog(commands.Cog):
@@ -24,6 +27,20 @@ class SlowmodeCog(commands.Cog):
 
         if not channel_config["enabled"]:
             return
+
+        # Track Suno song URLs for statistics
+        suno_urls = SUNO_URL_PATTERN.findall(message.content)
+        for url in suno_urls:
+            try:
+                await db.add_song_post(
+                    channel_id=message.channel.id,
+                    user_id=message.author.id,
+                    user_name=str(message.author),
+                    url=url,
+                    posted_at=message.created_at.timestamp(),
+                )
+            except Exception:
+                pass
 
         cooldown_minutes = channel_config["cooldown_minutes"]
         if cooldown_minutes <= 0:

@@ -78,6 +78,16 @@ class Database:
                 channel_id INTEGER NOT NULL UNIQUE
             );
 
+            CREATE TABLE IF NOT EXISTS song_posts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                user_name TEXT,
+                url TEXT NOT NULL,
+                posted_at REAL NOT NULL,
+                UNIQUE(channel_id, url)
+            );
+
             CREATE TABLE IF NOT EXISTS audit_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp REAL DEFAULT (unixepoch()),
@@ -394,3 +404,77 @@ class Database:
             "DELETE FROM playlist_search_config WHERE id = ?", (config_id,)
         )
         await self.db.commit()
+
+    # --- Song Posts (Statistics) ---
+
+    async def add_song_post(self, channel_id: int, user_id: int, user_name: str, url: str, posted_at: float):
+        await self.db.execute(
+            "INSERT OR IGNORE INTO song_posts (channel_id, user_id, user_name, url, posted_at) VALUES (?, ?, ?, ?, ?)",
+            (channel_id, user_id, user_name, url, posted_at),
+        )
+        await self.db.commit()
+
+    async def add_song_posts_bulk(self, rows: list[tuple]):
+        await self.db.executemany(
+            "INSERT OR IGNORE INTO song_posts (channel_id, user_id, user_name, url, posted_at) VALUES (?, ?, ?, ?, ?)",
+            rows,
+        )
+        await self.db.commit()
+
+    async def get_song_stats(self, channel_id: int = None) -> dict:
+        """Return song counts grouped by year, month, week, day."""
+        where = "WHERE channel_id = ?" if channel_id else ""
+        params = (channel_id,) if channel_id else ()
+
+        stats = {"total": 0, "by_year": [], "by_month": [], "by_week": [], "by_day": []}
+
+        # Total
+        async with self.db.execute(
+            f"SELECT COUNT(*) FROM song_posts {where}", params
+        ) as cursor:
+            row = await cursor.fetchone()
+            stats["total"] = row[0]
+
+        # By year
+        async with self.db.execute(
+            f"SELECT strftime('%Y', posted_at, 'unixepoch') as yr, COUNT(*) as cnt "
+            f"FROM song_posts {where} GROUP BY yr ORDER BY yr DESC", params
+        ) as cursor:
+            stats["by_year"] = [{"label": r[0], "count": r[1]} for r in await cursor.fetchall()]
+
+        # By month (last 12)
+        async with self.db.execute(
+            f"SELECT strftime('%Y-%m', posted_at, 'unixepoch') as ym, COUNT(*) as cnt "
+            f"FROM song_posts {where} GROUP BY ym ORDER BY ym DESC LIMIT 12", params
+        ) as cursor:
+            stats["by_month"] = [{"label": r[0], "count": r[1]} for r in await cursor.fetchall()]
+
+        # By week (last 12)
+        async with self.db.execute(
+            f"SELECT strftime('%Y-W%W', posted_at, 'unixepoch') as yw, COUNT(*) as cnt "
+            f"FROM song_posts {where} GROUP BY yw ORDER BY yw DESC LIMIT 12", params
+        ) as cursor:
+            stats["by_week"] = [{"label": r[0], "count": r[1]} for r in await cursor.fetchall()]
+
+        # By day (last 30)
+        async with self.db.execute(
+            f"SELECT strftime('%Y-%m-%d', posted_at, 'unixepoch') as yd, COUNT(*) as cnt "
+            f"FROM song_posts {where} GROUP BY yd ORDER BY yd DESC LIMIT 30", params
+        ) as cursor:
+            stats["by_day"] = [{"label": r[0], "count": r[1]} for r in await cursor.fetchall()]
+
+        return stats
+
+    async def get_song_stats_all_channels(self) -> list[dict]:
+        """Return total song count per channel."""
+        async with self.db.execute(
+            "SELECT channel_id, COUNT(*) as cnt FROM song_posts GROUP BY channel_id ORDER BY cnt DESC"
+        ) as cursor:
+            return [{"channel_id": r[0], "count": r[1]} for r in await cursor.fetchall()]
+
+    async def get_song_post_count(self, channel_id: int) -> int:
+        async with self.db.execute(
+            "SELECT COUNT(*) FROM song_posts WHERE channel_id = ?", (channel_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row[0]

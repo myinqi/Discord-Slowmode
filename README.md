@@ -154,6 +154,13 @@ Protokoll aller Aktionen: gelöschte Nachrichten, Konfigurationsänderungen, Ben
 - Ergebnisse werden nur dem suchenden Nutzer angezeigt (ephemeral)
 - Unterstütztes URL-Format: `https://suno.com/playlist/...`
 
+### Song Stats
+- Übersicht über gepostete Songs pro überwachtem Kanal
+- Aufschlüsselung nach Jahr, Monat, Woche und Tag mit Balkendiagrammen
+- Filter nach einzelnem Kanal oder alle Kanäle zusammen
+- "Scan History" Button zum Importieren aller bisherigen Song-Posts aus der Kanalhistorie
+- Neue Songs werden automatisch in Echtzeit erfasst
+
 ### Settings (Einstellungen)
 - Bot-Name ändern
 - Guild-ID ändern (erfordert Neustart)
@@ -171,8 +178,9 @@ Protokoll aller Aktionen: gelöschte Nachrichten, Konfigurationsänderungen, Ben
 | `/cooldown-toggle #kanal true/false` | Monitoring für einen Kanal ein-/ausschalten |
 | `/random-song [#input-kanal]` | Zufälligen Suno-Song aus dem Input-Kanal posten |
 | `/find-list <Suchbegriff>` | Suno-Playlists nach Interpret/Keyword durchsuchen (nur für dich sichtbar) |
+| `/song-stats [#kanal]` | Song-Posting-Statistiken anzeigen (nur für dich sichtbar) |
 
-> Cooldown- und Toggle-Commands können nur von Serverbesitzern und Mitgliedern mit einer **Command Role** genutzt werden. `/random-song` und `/find-list` sind für **alle** Servermitglieder verfügbar.
+> Cooldown- und Toggle-Commands können nur von Serverbesitzern und Mitgliedern mit einer **Command Role** genutzt werden. `/random-song`, `/find-list` und `/song-stats` sind für **alle** Servermitglieder verfügbar.
 
 ---
 

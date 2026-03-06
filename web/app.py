@@ -1,9 +1,12 @@
+import re
 import functools
 import math
 import time
 import bcrypt
 from quart import Quart, render_template, request, redirect, url_for, session, flash
 from bot.database import Database
+
+SUNO_URL_PATTERN = re.compile(r'https://suno\.com/(?:s|song)/[\w-]+')
 
 
 def create_app(db: Database, bot=None) -> Quart:
@@ -562,6 +565,87 @@ def create_app(db: Database, bot=None) -> Quart:
             "playlist_search.html",
             configs=configs,
             available_channels=available_channels,
+        )
+
+    @app.route("/song-stats", methods=["GET", "POST"])
+    @login_required
+    async def song_stats():
+        if request.method == "POST":
+            form = await request.form
+            action = form.get("action")
+
+            if action == "scan" and bot and bot.is_ready():
+                guild = get_guild()
+                if not guild:
+                    await flash("Bot not connected to guild.", "error")
+                else:
+                    channels = await db.get_monitored_channels()
+                    total_found = 0
+                    for ch_cfg in channels:
+                        channel = guild.get_channel(ch_cfg["channel_id"])
+                        if not channel:
+                            continue
+                        rows = []
+                        try:
+                            async for message in channel.history(limit=None):
+                                if message.author.bot:
+                                    continue
+                                urls = SUNO_URL_PATTERN.findall(message.content)
+                                for url in urls:
+                                    rows.append((
+                                        channel.id,
+                                        message.author.id,
+                                        str(message.author),
+                                        url,
+                                        message.created_at.timestamp(),
+                                    ))
+                        except Exception as e:
+                            await flash(f"Error scanning #{channel.name}: {e}", "error")
+                            continue
+                        if rows:
+                            await db.add_song_posts_bulk(rows)
+                            total_found += len(rows)
+                    await flash(f"Scan complete. {total_found} song(s) found across {len(channels)} channel(s).", "success")
+                    await db.add_audit_log(
+                        event_type="song_scan",
+                        details=f"History scan: {total_found} songs found",
+                        actor=session.get("username", "unknown"),
+                    )
+
+            return redirect(url_for("song_stats"))
+
+        # GET: gather stats
+        guild = get_guild()
+        monitored = await db.get_monitored_channels()
+
+        # Per-channel stats overview
+        channel_totals = await db.get_song_stats_all_channels()
+        channel_map = {}
+        for ct in channel_totals:
+            channel_map[ct["channel_id"]] = ct["count"]
+
+        channel_list = []
+        for ch in monitored:
+            ch_name = f"channel-{ch['channel_id']}"
+            if guild:
+                gch = guild.get_channel(ch["channel_id"])
+                if gch:
+                    ch_name = gch.name
+            channel_list.append({
+                "channel_id": ch["channel_id"],
+                "channel_name": ch_name,
+                "count": channel_map.get(ch["channel_id"], 0),
+            })
+
+        # Selected channel filter
+        filter_channel = request.args.get("channel", type=int)
+        stats = await db.get_song_stats(channel_id=filter_channel)
+
+        return await render_template(
+            "song_stats.html",
+            channel_list=channel_list,
+            stats=stats,
+            filter_channel=filter_channel,
         )
 
     return app
