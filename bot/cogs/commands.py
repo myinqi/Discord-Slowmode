@@ -7,6 +7,7 @@ from discord.ext import commands
 
 SUNO_URL_PATTERN = re.compile(r'https://suno\.com/(?:s|song)/[\w-]+')
 SUNO_PLAYLIST_PATTERN = re.compile(r'https://suno\.com/playlist/[\w-]+')
+SPOTIFY_ALBUM_PATTERN = re.compile(r'https://open\.spotify\.com/album/[\w?=&-]+')
 
 
 class CommandsCog(commands.Cog):
@@ -309,6 +310,7 @@ class CommandsCog(commands.Cog):
                         continue
 
                     urls = SUNO_PLAYLIST_PATTERN.findall(message.content)
+                    urls += SPOTIFY_ALBUM_PATTERN.findall(message.content)
                     if not urls:
                         continue
 
