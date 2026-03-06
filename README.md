@@ -188,8 +188,9 @@ Protokoll aller Aktionen: gelöschte Nachrichten, Konfigurationsänderungen, Ben
 | `/song-stats [#kanal]` | Song-Posting-Statistiken anzeigen (nur für dich sichtbar) |
 | `/user-stats [@user]` | User-Statistiken anzeigen — Songs gesamt, pro Kanal, Durchschnitte (nur für dich sichtbar) |
 | `/user-score` | Song-Highscore/Leaderboard öffentlich im Kanal posten |
+| `/find-song [@user] [title]` | Song suchen: mit User+Titel, nur User (zufällig), nur Titel, oder komplett zufällig (nur für dich sichtbar) |
 
-> Cooldown- und Toggle-Commands können nur von Serverbesitzern und Mitgliedern mit einer **Command Role** genutzt werden. `/random-song`, `/find-list`, `/song-stats`, `/user-stats` und `/user-score` sind für **alle** Servermitglieder verfügbar.
+> Cooldown- und Toggle-Commands können nur von Serverbesitzern und Mitgliedern mit einer **Command Role** genutzt werden. `/random-song`, `/find-list`, `/song-stats`, `/user-stats`, `/user-score` und `/find-song` sind für **alle** Servermitglieder verfügbar.
 
 ---
 

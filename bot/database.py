@@ -561,6 +561,20 @@ class Database:
 
         return stats
 
+    async def find_songs(self, user_id: int = None, limit: int = 1, random: bool = False) -> list[dict]:
+        """Find songs, optionally filtered by user. Can return random results."""
+        where = "WHERE user_id = ?" if user_id else ""
+        params = (user_id,) if user_id else ()
+        order = "ORDER BY RANDOM()" if random else "ORDER BY posted_at DESC"
+        async with self.db.execute(
+            f"SELECT channel_id, user_id, user_name, url, posted_at FROM song_posts {where} {order} LIMIT ?",
+            (*params, limit),
+        ) as cursor:
+            return [
+                {"channel_id": r[0], "user_id": r[1], "user_name": r[2], "url": r[3], "posted_at": r[4]}
+                for r in await cursor.fetchall()
+            ]
+
     async def get_all_users_ranking(self) -> list[dict]:
         """Leaderboard: all users ranked by total songs."""
         async with self.db.execute(

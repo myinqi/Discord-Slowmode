@@ -567,5 +567,124 @@ class CommandsCog(commands.Cog):
             await interaction.followup.send(f"Error: {e}", ephemeral=True)
 
 
+    @app_commands.command(name="find-song", description="Find a song — by user, title, or random")
+    @app_commands.describe(
+        user="Optional: filter by user",
+        title="Optional: search for a title/keyword in the message",
+    )
+    async def find_song(self, interaction: discord.Interaction, user: discord.Member = None, title: str = None):
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            # Case 1: Title search — need to scan channel history
+            if title:
+                search_lower = title.lower()
+                results = []
+                monitored = await self.bot.db.get_monitored_channels()
+
+                for cfg in monitored:
+                    channel = interaction.guild.get_channel(cfg["channel_id"])
+                    if not channel:
+                        continue
+
+                    try:
+                        async for message in channel.history(limit=10000):
+                            if message.author.bot:
+                                continue
+                            if user and message.author.id != user.id:
+                                continue
+                            urls = SUNO_URL_PATTERN.findall(message.content)
+                            if not urls:
+                                continue
+                            if search_lower not in message.content.lower():
+                                continue
+                            for url in urls:
+                                results.append({
+                                    "url": url,
+                                    "author_id": message.author.id,
+                                    "author": str(message.author),
+                                    "posted_at": message.created_at,
+                                    "context": message.content[:150],
+                                    "channel_name": channel.name,
+                                })
+                    except Exception:
+                        continue
+
+                if not results:
+                    msg = f"No songs found for title **\"{title}\"**"
+                    if user:
+                        msg += f" by {user.mention}"
+                    await interaction.followup.send(msg + ".", ephemeral=True)
+                    return
+
+                # Deduplicate by URL
+                seen = set()
+                unique = []
+                for r in results:
+                    if r["url"] not in seen:
+                        seen.add(r["url"])
+                        unique.append(r)
+                results = unique
+
+                header = f"🎵 **{len(results)} song(s) found for \"{title}\""
+                if user:
+                    header += f" by {user.mention}"
+                header += ":**\n\n"
+
+                entries = []
+                for i, r in enumerate(results[:20], 1):
+                    entry = (
+                        f"**{i}.** {r['url']}\n"
+                        f"   by <@{r['author_id']}> in #{r['channel_name']} "
+                        f"({discord.utils.format_dt(r['posted_at'], style='R')})"
+                    )
+                    entries.append(entry)
+
+                if len(results) > 20:
+                    entries.append(f"\n*...and {len(results) - 20} more*")
+
+                chunks = []
+                current = header
+                for entry in entries:
+                    if len(current) + len(entry) + 2 > 1900:
+                        chunks.append(current)
+                        current = ""
+                    current += entry + "\n\n"
+                if current.strip():
+                    chunks.append(current)
+
+                for chunk in chunks:
+                    await interaction.followup.send(chunk, ephemeral=True)
+                return
+
+            # Case 2: User only (no title) — random song from that user via DB
+            # Case 3: No user, no title — random song from anyone via DB
+            songs = await self.bot.db.find_songs(user_id=user.id if user else None, limit=1, random=True)
+
+            if not songs:
+                if user:
+                    await interaction.followup.send(f"No songs found for {user.mention}.", ephemeral=True)
+                else:
+                    await interaction.followup.send("No songs in the database yet.", ephemeral=True)
+                return
+
+            song = songs[0]
+            ch = interaction.guild.get_channel(song["channel_id"])
+            ch_name = f"#{ch.name}" if ch else f"channel-{song['channel_id']}"
+
+            desc = "🎲 **Random Song"
+            if user:
+                desc += f" from {user.mention}"
+            desc += ":**\n\n"
+            desc += f"{song['url']}\n"
+            desc += f"by <@{song['user_id']}> in {ch_name}"
+
+            await interaction.followup.send(desc, ephemeral=True)
+
+        except Exception as e:
+            print(f"[find-song] Error: {e}")
+            await interaction.followup.send(f"Error: {e}", ephemeral=True)
+
+
 async def setup(bot):
     await bot.add_cog(CommandsCog(bot))
