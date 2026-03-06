@@ -647,38 +647,43 @@ def create_app(db: Database, bot=None) -> Quart:
             return redirect(url_for("song_stats"))
 
         # GET: gather stats
-        guild = get_guild()
-        monitored = await db.get_monitored_channels()
+        import traceback
+        try:
+            guild = get_guild()
+            monitored = await db.get_monitored_channels()
 
-        # Per-channel stats overview
-        channel_totals = await db.get_song_stats_all_channels()
-        channel_map = {}
-        for ct in channel_totals:
-            channel_map[ct["channel_id"]] = ct["count"]
+            # Per-channel stats overview
+            channel_totals = await db.get_song_stats_all_channels()
+            channel_map = {}
+            for ct in channel_totals:
+                channel_map[ct["channel_id"]] = ct["count"]
 
-        channel_list = []
-        for ch in monitored:
-            ch_name = f"channel-{ch['channel_id']}"
-            if guild:
-                gch = guild.get_channel(ch["channel_id"])
-                if gch:
-                    ch_name = gch.name
-            channel_list.append({
-                "channel_id": ch["channel_id"],
-                "channel_name": ch_name,
-                "count": channel_map.get(ch["channel_id"], 0),
-            })
+            channel_list = []
+            for ch in monitored:
+                ch_name = f"channel-{ch['channel_id']}"
+                if guild:
+                    gch = guild.get_channel(ch["channel_id"])
+                    if gch:
+                        ch_name = gch.name
+                channel_list.append({
+                    "channel_id": ch["channel_id"],
+                    "channel_name": ch_name,
+                    "count": channel_map.get(ch["channel_id"], 0),
+                })
 
-        # Selected channel filter
-        filter_channel = request.args.get("channel", type=int)
-        stats = await db.get_song_stats(channel_id=filter_channel)
+            # Selected channel filter
+            filter_channel = request.args.get("channel", type=int)
+            stats = await db.get_song_stats(channel_id=filter_channel)
 
-        return await render_template(
-            "song_stats.html",
-            channel_list=channel_list,
-            stats=stats,
-            filter_channel=filter_channel,
-            scan_status=app.scan_status,
-        )
+            return await render_template(
+                "song_stats.html",
+                channel_list=channel_list,
+                stats=stats,
+                filter_channel=filter_channel,
+                scan_status=app.scan_status,
+            )
+        except Exception as e:
+            traceback.print_exc()
+            return f"<pre>Error: {e}\n\n{traceback.format_exc()}</pre>", 500
 
     return app

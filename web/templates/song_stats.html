@@ -91,7 +91,7 @@
             <h3 class="text-white font-semibold">By Month <span class="text-gray-500 text-xs font-normal">(last 12)</span></h3>
         </div>
         <div class="p-5 space-y-2">
-            {% set max_month = stats.by_month | map(attribute='count') | max if stats.by_month else 1 %}
+            {% if stats.by_month %}{% set max_month = stats.by_month | map(attribute='count') | list | max %}{% else %}{% set max_month = 1 %}{% endif %}
             {% for item in stats.by_month %}
             <div class="flex items-center justify-between">
                 <span class="text-gray-300 text-sm">{{ item.label }}</span>
@@ -112,7 +112,7 @@
             <h3 class="text-white font-semibold">By Week <span class="text-gray-500 text-xs font-normal">(last 12)</span></h3>
         </div>
         <div class="p-5 space-y-2">
-            {% set max_week = stats.by_week | map(attribute='count') | max if stats.by_week else 1 %}
+            {% if stats.by_week %}{% set max_week = stats.by_week | map(attribute='count') | list | max %}{% else %}{% set max_week = 1 %}{% endif %}
             {% for item in stats.by_week %}
             <div class="flex items-center justify-between">
                 <span class="text-gray-300 text-sm">{{ item.label }}</span>
@@ -133,7 +133,7 @@
             <h3 class="text-white font-semibold">By Day <span class="text-gray-500 text-xs font-normal">(last 30)</span></h3>
         </div>
         <div class="p-5 space-y-2">
-            {% set max_day = stats.by_day | map(attribute='count') | max if stats.by_day else 1 %}
+            {% if stats.by_day %}{% set max_day = stats.by_day | map(attribute='count') | list | max %}{% else %}{% set max_day = 1 %}{% endif %}
             {% for item in stats.by_day %}
             <div class="flex items-center justify-between">
                 <span class="text-gray-300 text-sm">{{ item.label }}</span>
