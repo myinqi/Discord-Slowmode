@@ -782,6 +782,64 @@ class Database:
 
         return stats
 
+    async def get_reactor_activity(self, channel_id: int = None, granularity: str = "daily",
+                                    days: int = 30) -> dict:
+        """Return reactor counts per day or week for a line chart."""
+        conditions = []
+        params = []
+        if channel_id:
+            conditions.append("channel_id = ?")
+            params.append(channel_id)
+        if days:
+            conditions.append(f"reacted_at >= unixepoch('now', '-{int(days)} days')")
+
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+        if granularity == "weekly":
+            fmt = "'%Y-W%W'"
+        else:
+            fmt = "'%Y-%m-%d'"
+
+        async with self.db.execute(
+            f"SELECT strftime({fmt}, reacted_at, 'unixepoch') as period, "
+            f"COUNT(DISTINCT reactor_user_id) as cnt "
+            f"FROM song_reactions {where} GROUP BY period ORDER BY period ASC",
+            tuple(params),
+        ) as cursor:
+            rows = [{"label": r[0], "count": r[1]} for r in await cursor.fetchall()]
+
+        return {
+            "labels": [r["label"] for r in rows],
+            "values": [r["count"] for r in rows],
+        }
+
+    async def get_top_songs_filtered(self, channel_id: int = None,
+                                      date_from: str = None, date_to: str = None) -> list[dict]:
+        """Top songs by reactions, optionally filtered by date range."""
+        conditions = []
+        params = []
+        if channel_id:
+            conditions.append("channel_id = ?")
+            params.append(channel_id)
+        if date_from:
+            conditions.append("reacted_at >= unixepoch(?)")
+            params.append(date_from)
+        if date_to:
+            conditions.append("reacted_at < unixepoch(?)")
+            params.append(date_to)
+
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+        async with self.db.execute(
+            f"SELECT message_id, song_url, post_author_id, COUNT(*) as cnt "
+            f"FROM song_reactions {where} GROUP BY message_id ORDER BY cnt DESC LIMIT 10",
+            tuple(params),
+        ) as cursor:
+            return [
+                {"message_id": r[0], "song_url": r[1], "post_author_id": r[2], "count": r[3]}
+                for r in await cursor.fetchall()
+            ]
+
     async def get_reaction_channels(self) -> list[dict]:
         """Return channels that have reactions, with counts."""
         async with self.db.execute(

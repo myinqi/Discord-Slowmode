@@ -741,15 +741,69 @@ def create_app(db: Database, bot=None) -> Quart:
             traceback.print_exc()
             return f"<pre>Error: {e}\n\n{traceback.format_exc()}</pre>", 500
 
+    import re as _re
+    _CUSTOM_EMOJI_RE = _re.compile(r'<a?:(\w+):\d+>')
+
+    @app.template_filter('format_emoji')
+    def format_emoji_filter(emoji_str):
+        m = _CUSTOM_EMOJI_RE.match(emoji_str)
+        if m:
+            return f":{m.group(1)}:"
+        return emoji_str
+
     @app.route("/reaction-stats")
     @login_required
     async def reaction_stats():
         import traceback
+        from datetime import datetime, timedelta
         try:
             guild = get_guild()
             filter_channel = request.args.get("channel", type=int)
 
+            # Chart params
+            chart_gran = request.args.get("chart", default="daily")
+            if chart_gran not in ("daily", "weekly"):
+                chart_gran = "daily"
+            chart_range = request.args.get("range", default="30", type=str)
+            range_days = {"7": 7, "30": 30, "90": 90, "all": 0}.get(chart_range, 30)
+
+            # Song date filter params
+            song_date = request.args.get("song_date", default="", type=str)
+            song_period = request.args.get("song_period", default="all", type=str)
+
             stats = await db.get_reaction_stats(channel_id=filter_channel)
+
+            # Reactor activity for chart
+            activity = await db.get_reactor_activity(
+                channel_id=filter_channel,
+                granularity=chart_gran,
+                days=range_days,
+            )
+
+            # Filtered top songs
+            date_from = None
+            date_to = None
+            if song_date and song_period in ("day", "week"):
+                try:
+                    dt = datetime.strptime(song_date, "%Y-%m-%d")
+                    if song_period == "day":
+                        date_from = song_date
+                        date_to = (dt + timedelta(days=1)).strftime("%Y-%m-%d")
+                    elif song_period == "week":
+                        start = dt - timedelta(days=dt.weekday())
+                        date_from = start.strftime("%Y-%m-%d")
+                        date_to = (start + timedelta(days=7)).strftime("%Y-%m-%d")
+                except ValueError:
+                    pass
+
+            if date_from and date_to:
+                filtered_songs = await db.get_top_songs_filtered(
+                    channel_id=filter_channel,
+                    date_from=date_from,
+                    date_to=date_to,
+                )
+            else:
+                filtered_songs = None
 
             # Channel list with reaction counts
             reaction_channels = await db.get_reaction_channels()
@@ -785,6 +839,14 @@ def create_app(db: Database, bot=None) -> Quart:
                 stats=stats,
                 channel_list=channel_list,
                 filter_channel=filter_channel,
+                activity=activity,
+                chart_gran=chart_gran,
+                chart_range=chart_range,
+                filtered_songs=filtered_songs,
+                song_date=song_date,
+                song_period=song_period,
+                date_from=date_from,
+                date_to=date_to,
             )
         except Exception as e:
             traceback.print_exc()

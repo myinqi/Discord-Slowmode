@@ -55,17 +55,50 @@
     </div>
 </div>
 
-<!-- Trend Chart -->
-{% if stats.trend_labels %}
+<!-- Reactor Activity Chart -->
 <div class="bg-discord-dark rounded-xl border border-gray-700/50 mb-6">
-    <div class="px-5 py-4 border-b border-gray-700/50">
-        <h3 class="text-white font-semibold">Trend <span class="text-gray-500 text-xs font-normal">(reactions per month)</span></h3>
+    <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between flex-wrap gap-3">
+        <h3 class="text-white font-semibold">Reactor Activity <span class="text-gray-500 text-xs font-normal">(unique reactors per {{ chart_gran }})</span></h3>
+        <div class="flex items-center gap-2 flex-wrap">
+            <!-- Granularity -->
+            {% set base_params = {} %}
+            {% if filter_channel %}{% set base_params = {'channel': filter_channel} %}{% endif %}
+            <a href="{{ url_for('reaction_stats', chart='daily', range=chart_range, **base_params) }}"
+                class="px-3 py-1 rounded-md text-xs font-medium transition-colors {% if chart_gran == 'daily' %}bg-discord-blurple text-white{% else %}bg-discord-darker text-gray-400 hover:text-white{% endif %}">
+                Daily
+            </a>
+            <a href="{{ url_for('reaction_stats', chart='weekly', range=chart_range, **base_params) }}"
+                class="px-3 py-1 rounded-md text-xs font-medium transition-colors {% if chart_gran == 'weekly' %}bg-discord-blurple text-white{% else %}bg-discord-darker text-gray-400 hover:text-white{% endif %}">
+                Weekly
+            </a>
+            <span class="text-gray-600 mx-1">|</span>
+            <!-- Range -->
+            <a href="{{ url_for('reaction_stats', chart=chart_gran, range='7', **base_params) }}"
+                class="px-3 py-1 rounded-md text-xs font-medium transition-colors {% if chart_range == '7' %}bg-discord-green/20 text-discord-green{% else %}bg-discord-darker text-gray-400 hover:text-white{% endif %}">
+                7d
+            </a>
+            <a href="{{ url_for('reaction_stats', chart=chart_gran, range='30', **base_params) }}"
+                class="px-3 py-1 rounded-md text-xs font-medium transition-colors {% if chart_range == '30' %}bg-discord-green/20 text-discord-green{% else %}bg-discord-darker text-gray-400 hover:text-white{% endif %}">
+                30d
+            </a>
+            <a href="{{ url_for('reaction_stats', chart=chart_gran, range='90', **base_params) }}"
+                class="px-3 py-1 rounded-md text-xs font-medium transition-colors {% if chart_range == '90' %}bg-discord-green/20 text-discord-green{% else %}bg-discord-darker text-gray-400 hover:text-white{% endif %}">
+                90d
+            </a>
+            <a href="{{ url_for('reaction_stats', chart=chart_gran, range='all', **base_params) }}"
+                class="px-3 py-1 rounded-md text-xs font-medium transition-colors {% if chart_range == 'all' %}bg-discord-green/20 text-discord-green{% else %}bg-discord-darker text-gray-400 hover:text-white{% endif %}">
+                All
+            </a>
+        </div>
     </div>
     <div class="p-5">
-        <canvas id="reactionTrendChart" height="120"></canvas>
+        {% if activity.labels %}
+        <canvas id="reactorActivityChart" height="120"></canvas>
+        {% else %}
+        <p class="text-gray-500 text-sm text-center py-4">No activity data for this period.</p>
+        {% endif %}
     </div>
 </div>
-{% endif %}
 
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
@@ -79,7 +112,7 @@
             {% if stats.top_emojis %}{% set max_emoji = stats.top_emojis | map(attribute='count') | list | max %}{% else %}{% set max_emoji = 1 %}{% endif %}
             {% for item in stats.top_emojis %}
             <div class="flex items-center justify-between">
-                <span class="text-2xl">{{ item.emoji }}</span>
+                <span class="text-lg">{{ item.emoji | format_emoji }}</span>
                 <div class="flex items-center gap-3">
                     <div class="w-32 bg-discord-darker rounded-full h-2">
                         <div class="bg-discord-blurple rounded-full h-2" style="width: {{ (item.count / max_emoji * 100) | round(1) }}%"></div>
@@ -96,7 +129,7 @@
     {% if stats.top_reactors %}
     <div class="bg-discord-dark rounded-xl border border-gray-700/50">
         <div class="px-5 py-4 border-b border-gray-700/50">
-            <h3 class="text-white font-semibold">🏆 Top Reactors</h3>
+            <h3 class="text-white font-semibold">Top Reactors</h3>
         </div>
         <div class="p-5 space-y-2">
             {% if stats.top_reactors %}{% set max_reactor = stats.top_reactors | map(attribute='count') | list | max %}{% else %}{% set max_reactor = 1 %}{% endif %}
@@ -124,7 +157,7 @@
     {% if stats.most_reacted_authors %}
     <div class="bg-discord-dark rounded-xl border border-gray-700/50">
         <div class="px-5 py-4 border-b border-gray-700/50">
-            <h3 class="text-white font-semibold">⭐ Most Appreciated Artists</h3>
+            <h3 class="text-white font-semibold">Most Appreciated Artists</h3>
             <p class="text-gray-500 text-xs mt-1">Whose songs get the most reactions</p>
         </div>
         <div class="p-5 space-y-2">
@@ -149,11 +182,11 @@
     </div>
     {% endif %}
 
-    <!-- Top Songs -->
+    <!-- Top Songs (all time) -->
     {% if stats.top_songs %}
     <div class="bg-discord-dark rounded-xl border border-gray-700/50">
         <div class="px-5 py-4 border-b border-gray-700/50">
-            <h3 class="text-white font-semibold">🎵 Most Reacted Songs</h3>
+            <h3 class="text-white font-semibold">Most Reacted Songs <span class="text-gray-500 text-xs font-normal">(all time)</span></h3>
         </div>
         <div class="p-5 space-y-3">
             {% for item in stats.top_songs %}
@@ -170,6 +203,71 @@
         </div>
     </div>
     {% endif %}
+
+    <!-- Top Songs (filtered by date) -->
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">Most Reacted Songs <span class="text-gray-500 text-xs font-normal">(by date)</span></h3>
+        </div>
+        <div class="p-4 border-b border-gray-700/50">
+            <form method="GET" class="flex items-end gap-3 flex-wrap">
+                {% if filter_channel %}<input type="hidden" name="channel" value="{{ filter_channel }}">{% endif %}
+                <input type="hidden" name="chart" value="{{ chart_gran }}">
+                <input type="hidden" name="range" value="{{ chart_range }}">
+                <div>
+                    <label class="text-gray-400 text-xs block mb-1">Date</label>
+                    <input type="date" name="song_date" value="{{ song_date }}"
+                        class="bg-discord-darker border border-gray-600 rounded-md px-3 py-1.5 text-sm text-white focus:border-discord-blurple focus:outline-none">
+                </div>
+                <div>
+                    <label class="text-gray-400 text-xs block mb-1">Period</label>
+                    <select name="song_period"
+                        class="bg-discord-darker border border-gray-600 rounded-md px-3 py-1.5 text-sm text-white focus:border-discord-blurple focus:outline-none">
+                        <option value="day" {% if song_period == 'day' %}selected{% endif %}>Day</option>
+                        <option value="week" {% if song_period == 'week' %}selected{% endif %}>Week</option>
+                    </select>
+                </div>
+                <button type="submit"
+                    class="px-4 py-1.5 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-md text-sm font-medium transition-colors">
+                    Filter
+                </button>
+                {% if filtered_songs is not none %}
+                <a href="{{ url_for('reaction_stats', channel=filter_channel or '', chart=chart_gran, range=chart_range) }}"
+                    class="px-4 py-1.5 bg-discord-darker text-gray-400 hover:text-white rounded-md text-sm font-medium transition-colors border border-gray-600">
+                    Reset
+                </a>
+                {% endif %}
+            </form>
+        </div>
+        <div class="p-5">
+            {% if filtered_songs is not none %}
+                {% if date_from and date_to %}
+                <p class="text-gray-400 text-xs mb-3">
+                    {% if song_period == 'day' %}Showing: {{ date_from }}{% else %}Showing week: {{ date_from }} — {{ date_to }}{% endif %}
+                </p>
+                {% endif %}
+                {% if filtered_songs %}
+                <div class="space-y-3">
+                    {% for item in filtered_songs %}
+                    <div class="bg-discord-darker rounded-lg p-3">
+                        <div class="flex items-center justify-between mb-1">
+                            <span class="text-gray-500 text-xs">
+                                {% if loop.index == 1 %}🥇{% elif loop.index == 2 %}🥈{% elif loop.index == 3 %}🥉{% else %}#{{ loop.index }}{% endif %}
+                                — {{ item.count }} reactions
+                            </span>
+                        </div>
+                        <a href="{{ item.song_url }}" target="_blank" class="text-discord-blurple hover:underline text-sm break-all">{{ item.song_url }}</a>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-gray-500 text-sm text-center py-2">No reactions found for this period.</p>
+                {% endif %}
+            {% else %}
+            <p class="text-gray-500 text-sm text-center py-2">Select a date and period above to filter.</p>
+            {% endif %}
+        </div>
+    </div>
 
     <!-- Reactions by Month -->
     {% if stats.reactions_by_month %}
@@ -196,10 +294,10 @@
 
 </div>
 
-{% if stats.trend_labels %}
+{% if activity.labels %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <script>
-    const ctx = document.getElementById('reactionTrendChart').getContext('2d');
+    const ctx = document.getElementById('reactorActivityChart').getContext('2d');
     const gradient = ctx.createLinearGradient(0, 0, 0, 300);
     gradient.addColorStop(0, 'rgba(87, 242, 135, 0.3)');
     gradient.addColorStop(1, 'rgba(87, 242, 135, 0.0)');
@@ -207,10 +305,10 @@
     new Chart(ctx, {
         type: 'line',
         data: {
-            labels: {{ stats.trend_labels | tojson }},
+            labels: {{ activity.labels | tojson }},
             datasets: [{
-                label: 'Reactions',
-                data: {{ stats.trend_values | tojson }},
+                label: 'Unique Reactors',
+                data: {{ activity.values | tojson }},
                 borderColor: '#57f287',
                 backgroundColor: gradient,
                 borderWidth: 2,
