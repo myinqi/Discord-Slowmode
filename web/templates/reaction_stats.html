@@ -92,7 +92,7 @@
         </div>
     </div>
     <div class="p-5">
-        {% if activity.labels %}
+        {% if activity.counts %}
         <canvas id="reactorActivityChart" height="120"></canvas>
         {% else %}
         <p class="text-gray-500 text-sm text-center py-4">No activity data for this period.</p>
@@ -294,7 +294,7 @@
 
 </div>
 
-{% if activity.labels %}
+{% if activity.counts %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <script>
     const ctx = document.getElementById('reactorActivityChart').getContext('2d');
@@ -308,7 +308,7 @@
             labels: {{ activity.labels | tojson }},
             datasets: [{
                 label: 'Unique Reactors',
-                data: {{ activity.values | tojson }},
+                data: {{ activity.counts | tojson }},
                 borderColor: '#57f287',
                 backgroundColor: gradient,
                 borderWidth: 2,

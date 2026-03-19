@@ -810,7 +810,7 @@ class Database:
 
         return {
             "labels": [r["label"] for r in rows],
-            "values": [r["count"] for r in rows],
+            "counts": [r["count"] for r in rows],
         }
 
     async def get_top_songs_filtered(self, channel_id: int = None,
