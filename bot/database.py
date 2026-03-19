@@ -112,6 +112,30 @@ class Database:
             )
             await self.db.commit()
 
+        # Add message_id column to song_posts if missing
+        async with self.db.execute("PRAGMA table_info(song_posts)") as cursor:
+            sp_columns = [row[1] async for row in cursor]
+        if "message_id" not in sp_columns:
+            await self.db.execute("ALTER TABLE song_posts ADD COLUMN message_id INTEGER")
+            await self.db.commit()
+
+        # Create song_reactions table
+        await self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS song_reactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                channel_id INTEGER NOT NULL,
+                song_url TEXT,
+                post_author_id INTEGER,
+                reactor_user_id INTEGER NOT NULL,
+                reactor_user_name TEXT,
+                emoji TEXT NOT NULL,
+                reacted_at REAL DEFAULT (unixepoch()),
+                UNIQUE(message_id, reactor_user_id, emoji)
+            );
+        """)
+        await self.db.commit()
+
     # --- Settings ---
 
     async def get_setting(self, key: str, default: str = "") -> str:
@@ -407,10 +431,10 @@ class Database:
 
     # --- Song Posts (Statistics) ---
 
-    async def add_song_post(self, channel_id: int, user_id: int, user_name: str, url: str, posted_at: float):
+    async def add_song_post(self, channel_id: int, user_id: int, user_name: str, url: str, posted_at: float, message_id: int = None):
         await self.db.execute(
-            "INSERT OR IGNORE INTO song_posts (channel_id, user_id, user_name, url, posted_at) VALUES (?, ?, ?, ?, ?)",
-            (channel_id, user_id, user_name, url, posted_at),
+            "INSERT OR IGNORE INTO song_posts (channel_id, user_id, user_name, url, posted_at, message_id) VALUES (?, ?, ?, ?, ?, ?)",
+            (channel_id, user_id, user_name, url, posted_at, message_id),
         )
         await self.db.commit()
 
@@ -620,3 +644,147 @@ class Database:
             "SELECT user_id, user_name, COUNT(*) as cnt FROM song_posts GROUP BY user_id ORDER BY cnt DESC"
         ) as cursor:
             return [{"user_id": r[0], "user_name": r[1], "count": r[2]} for r in await cursor.fetchall()]
+
+    # --- Song Reactions ---
+
+    async def add_song_reaction(self, message_id: int, channel_id: int, song_url: str,
+                                 post_author_id: int, reactor_user_id: int,
+                                 reactor_user_name: str, emoji: str):
+        await self.db.execute(
+            "INSERT OR IGNORE INTO song_reactions "
+            "(message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji),
+        )
+        await self.db.commit()
+
+    async def remove_song_reaction(self, message_id: int, reactor_user_id: int, emoji: str):
+        await self.db.execute(
+            "DELETE FROM song_reactions WHERE message_id = ? AND reactor_user_id = ? AND emoji = ?",
+            (message_id, reactor_user_id, emoji),
+        )
+        await self.db.commit()
+
+    async def get_song_post_by_message_id(self, message_id: int) -> dict | None:
+        async with self.db.execute(
+            "SELECT * FROM song_posts WHERE message_id = ?", (message_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_reaction_stats(self, channel_id: int = None) -> dict:
+        """Comprehensive reaction stats, optionally filtered by channel."""
+        where = "WHERE channel_id = ?" if channel_id else ""
+        params = (channel_id,) if channel_id else ()
+
+        stats = {
+            "total_reactions": 0,
+            "unique_reactors": 0,
+            "unique_songs_reacted": 0,
+            "top_emojis": [],
+            "top_reactors": [],
+            "top_songs": [],
+            "most_reacted_authors": [],
+            "reactions_by_month": [],
+            "trend_labels": [],
+            "trend_values": [],
+            "avg_reactions_per_song": 0.0,
+        }
+
+        # Total reactions
+        async with self.db.execute(
+            f"SELECT COUNT(*) FROM song_reactions {where}", params
+        ) as cursor:
+            stats["total_reactions"] = (await cursor.fetchone())[0]
+
+        if stats["total_reactions"] == 0:
+            return stats
+
+        # Unique reactors
+        async with self.db.execute(
+            f"SELECT COUNT(DISTINCT reactor_user_id) FROM song_reactions {where}", params
+        ) as cursor:
+            stats["unique_reactors"] = (await cursor.fetchone())[0]
+
+        # Unique songs reacted
+        async with self.db.execute(
+            f"SELECT COUNT(DISTINCT message_id) FROM song_reactions {where}", params
+        ) as cursor:
+            stats["unique_songs_reacted"] = (await cursor.fetchone())[0]
+
+        # Avg reactions per song
+        if stats["unique_songs_reacted"] > 0:
+            stats["avg_reactions_per_song"] = round(
+                stats["total_reactions"] / stats["unique_songs_reacted"], 1
+            )
+
+        # Top emojis
+        async with self.db.execute(
+            f"SELECT emoji, COUNT(*) as cnt FROM song_reactions {where} GROUP BY emoji ORDER BY cnt DESC LIMIT 15",
+            params,
+        ) as cursor:
+            stats["top_emojis"] = [{"emoji": r[0], "count": r[1]} for r in await cursor.fetchall()]
+
+        # Top reactors
+        async with self.db.execute(
+            f"SELECT reactor_user_id, reactor_user_name, COUNT(*) as cnt "
+            f"FROM song_reactions {where} GROUP BY reactor_user_id ORDER BY cnt DESC LIMIT 10",
+            params,
+        ) as cursor:
+            stats["top_reactors"] = [
+                {"user_id": r[0], "user_name": r[1], "count": r[2]}
+                for r in await cursor.fetchall()
+            ]
+
+        # Top songs (most reactions)
+        async with self.db.execute(
+            f"SELECT message_id, song_url, post_author_id, COUNT(*) as cnt "
+            f"FROM song_reactions {where} GROUP BY message_id ORDER BY cnt DESC LIMIT 10",
+            params,
+        ) as cursor:
+            stats["top_songs"] = [
+                {"message_id": r[0], "song_url": r[1], "post_author_id": r[2], "count": r[3]}
+                for r in await cursor.fetchall()
+            ]
+
+        # Most reacted authors (whose songs get the most reactions)
+        async with self.db.execute(
+            f"SELECT post_author_id, COUNT(*) as cnt "
+            f"FROM song_reactions {where} AND post_author_id IS NOT NULL "
+            f"GROUP BY post_author_id ORDER BY cnt DESC LIMIT 10"
+            if where else
+            "SELECT post_author_id, COUNT(*) as cnt "
+            "FROM song_reactions WHERE post_author_id IS NOT NULL "
+            "GROUP BY post_author_id ORDER BY cnt DESC LIMIT 10",
+            params,
+        ) as cursor:
+            stats["most_reacted_authors"] = [
+                {"user_id": r[0], "count": r[1]} for r in await cursor.fetchall()
+            ]
+
+        # Reactions by month
+        async with self.db.execute(
+            f"SELECT strftime('%Y-%m', reacted_at, 'unixepoch') as ym, COUNT(*) as cnt "
+            f"FROM song_reactions {where} GROUP BY ym ORDER BY ym DESC LIMIT 12",
+            params,
+        ) as cursor:
+            stats["reactions_by_month"] = [{"label": r[0], "count": r[1]} for r in await cursor.fetchall()]
+
+        # Trend (chronological for chart)
+        async with self.db.execute(
+            f"SELECT strftime('%Y-%m', reacted_at, 'unixepoch') as ym, COUNT(*) as cnt "
+            f"FROM song_reactions {where} GROUP BY ym ORDER BY ym ASC LIMIT 24",
+            params,
+        ) as cursor:
+            trend = [{"label": r[0], "count": r[1]} for r in await cursor.fetchall()]
+            stats["trend_labels"] = [t["label"] for t in trend]
+            stats["trend_values"] = [t["count"] for t in trend]
+
+        return stats
+
+    async def get_reaction_channels(self) -> list[dict]:
+        """Return channels that have reactions, with counts."""
+        async with self.db.execute(
+            "SELECT channel_id, COUNT(*) as cnt FROM song_reactions GROUP BY channel_id ORDER BY cnt DESC"
+        ) as cursor:
+            return [{"channel_id": r[0], "count": r[1]} for r in await cursor.fetchall()]

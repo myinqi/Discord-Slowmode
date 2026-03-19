@@ -38,6 +38,7 @@ class SlowmodeCog(commands.Cog):
                     user_name=str(message.author),
                     url=url,
                     posted_at=message.created_at.timestamp(),
+                    message_id=message.id,
                 )
             except Exception:
                 pass
@@ -124,6 +125,87 @@ class SlowmodeCog(commands.Cog):
             details=f"Cooldown active. {time_str} remaining.",
             actor="bot",
         )
+
+
+    @commands.Cog.listener()
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
+        if not payload.guild_id or payload.member.bot:
+            return
+
+        db = self.bot.db
+        channel_config = await db.get_monitored_channel(payload.channel_id)
+        if not channel_config:
+            return
+
+        # Check if this message is a known song post
+        song_post = await db.get_song_post_by_message_id(payload.message_id)
+        if song_post:
+            emoji_str = str(payload.emoji)
+            try:
+                await db.add_song_reaction(
+                    message_id=payload.message_id,
+                    channel_id=payload.channel_id,
+                    song_url=song_post["url"],
+                    post_author_id=song_post["user_id"],
+                    reactor_user_id=payload.user_id,
+                    reactor_user_name=str(payload.member),
+                    emoji=emoji_str,
+                )
+            except Exception:
+                pass
+            return
+
+        # Message not in DB — check if it contains a Suno URL
+        channel = self.bot.get_channel(payload.channel_id)
+        if not channel:
+            return
+        try:
+            message = await channel.fetch_message(payload.message_id)
+        except (discord.NotFound, discord.Forbidden):
+            return
+
+        if message.author.bot:
+            return
+
+        urls = SUNO_URL_PATTERN.findall(message.content)
+        if not urls:
+            return
+
+        # It's a song post — store the reaction
+        emoji_str = str(payload.emoji)
+        for url in urls:
+            try:
+                await db.add_song_reaction(
+                    message_id=payload.message_id,
+                    channel_id=payload.channel_id,
+                    song_url=url,
+                    post_author_id=message.author.id,
+                    reactor_user_id=payload.user_id,
+                    reactor_user_name=str(payload.member),
+                    emoji=emoji_str,
+                )
+            except Exception:
+                pass
+
+    @commands.Cog.listener()
+    async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent):
+        if not payload.guild_id:
+            return
+
+        db = self.bot.db
+        channel_config = await db.get_monitored_channel(payload.channel_id)
+        if not channel_config:
+            return
+
+        emoji_str = str(payload.emoji)
+        try:
+            await db.remove_song_reaction(
+                message_id=payload.message_id,
+                reactor_user_id=payload.user_id,
+                emoji=emoji_str,
+            )
+        except Exception:
+            pass
 
 
 async def setup(bot):

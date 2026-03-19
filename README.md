@@ -168,6 +168,16 @@ Protokoll aller Aktionen: gelöschte Nachrichten, Konfigurationsänderungen, Ben
 - Zeitraum: Erster und letzter Post, Anzahl aktiver Wochen
 - Auch per `/user-stats` Slash-Command verfügbar
 
+### Reaction Stats
+- Live-Tracking aller Emoji-Reaktionen auf Song-Posts in überwachten Kanälen
+- Kanalfilter: Auswahl einzelner Kanäle oder alle zusammen
+- Summary: Gesamtreaktionen, Unique Reactors, Songs mit Reaktionen, Durchschnitt pro Song
+- Top Emojis: Beliebteste Emojis mit Balkendiagramm
+- Top Reactors: Wer reagiert am meisten
+- Most Appreciated Artists: Wessen Songs bekommen die meisten Reaktionen
+- Most Reacted Songs: Meistbewertete Songs mit Links
+- Trendkurve: Reaktionen pro Monat (Chart.js)
+
 ### Settings (Einstellungen)
 - Bot-Name ändern
 - Guild-ID ändern (erfordert Neustart)

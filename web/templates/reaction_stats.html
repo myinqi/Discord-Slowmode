@@ -1,0 +1,257 @@
+{% extends "base.html" %}
+{% block title %}Reaction Statistics{% endblock %}
+{% block content %}
+<h2 class="text-2xl font-bold text-white mb-6">Reaction Statistics</h2>
+
+<!-- Channel Filter -->
+<div class="bg-discord-dark rounded-xl border border-gray-700/50 mb-6">
+    <div class="px-5 py-4 border-b border-gray-700/50">
+        <h3 class="text-white font-semibold">Overview</h3>
+        <p class="text-gray-400 text-sm mt-1">Emoji reactions on song posts in monitored channels. Tracked live from now on.</p>
+    </div>
+    <div class="p-5">
+        {% if channel_list %}
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {% for ch in channel_list %}
+            <a href="{{ url_for('reaction_stats', channel=ch.channel_id) }}"
+                class="bg-discord-darker rounded-lg p-4 hover:border-discord-blurple/50 border border-transparent transition-colors {% if filter_channel == ch.channel_id %}border-discord-blurple{% endif %}">
+                <div class="text-gray-400 text-xs">#{{ ch.channel_name }}</div>
+                <div class="text-white text-2xl font-bold mt-1">{{ ch.count }}</div>
+                <div class="text-gray-500 text-xs">reactions</div>
+            </a>
+            {% endfor %}
+            <a href="{{ url_for('reaction_stats') }}"
+                class="bg-discord-darker rounded-lg p-4 hover:border-discord-blurple/50 border border-transparent transition-colors {% if not filter_channel %}border-discord-blurple{% endif %}">
+                <div class="text-gray-400 text-xs">All Channels</div>
+                <div class="text-white text-2xl font-bold mt-1">{{ stats.total_reactions }}</div>
+                <div class="text-gray-500 text-xs">reactions total</div>
+            </a>
+        </div>
+        {% else %}
+        <p class="text-gray-500 text-sm">No reaction data yet. Reactions will be tracked automatically on song posts.</p>
+        {% endif %}
+    </div>
+</div>
+
+{% if stats.total_reactions > 0 %}
+
+<!-- Summary Cards -->
+<div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-5 text-center">
+        <div class="text-discord-blurple text-2xl font-bold">{{ stats.total_reactions }}</div>
+        <div class="text-gray-500 text-xs mt-1">Total Reactions</div>
+    </div>
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-5 text-center">
+        <div class="text-discord-green text-2xl font-bold">{{ stats.unique_reactors }}</div>
+        <div class="text-gray-500 text-xs mt-1">Unique Reactors</div>
+    </div>
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-5 text-center">
+        <div class="text-discord-yellow text-2xl font-bold">{{ stats.unique_songs_reacted }}</div>
+        <div class="text-gray-500 text-xs mt-1">Songs Reacted</div>
+    </div>
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-5 text-center">
+        <div class="text-purple-400 text-2xl font-bold">{{ stats.avg_reactions_per_song }}</div>
+        <div class="text-gray-500 text-xs mt-1">Avg / Song</div>
+    </div>
+</div>
+
+<!-- Trend Chart -->
+{% if stats.trend_labels %}
+<div class="bg-discord-dark rounded-xl border border-gray-700/50 mb-6">
+    <div class="px-5 py-4 border-b border-gray-700/50">
+        <h3 class="text-white font-semibold">Trend <span class="text-gray-500 text-xs font-normal">(reactions per month)</span></h3>
+    </div>
+    <div class="p-5">
+        <canvas id="reactionTrendChart" height="120"></canvas>
+    </div>
+</div>
+{% endif %}
+
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+    <!-- Top Emojis -->
+    {% if stats.top_emojis %}
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">Top Emojis</h3>
+        </div>
+        <div class="p-5 space-y-2">
+            {% if stats.top_emojis %}{% set max_emoji = stats.top_emojis | map(attribute='count') | list | max %}{% else %}{% set max_emoji = 1 %}{% endif %}
+            {% for item in stats.top_emojis %}
+            <div class="flex items-center justify-between">
+                <span class="text-2xl">{{ item.emoji }}</span>
+                <div class="flex items-center gap-3">
+                    <div class="w-32 bg-discord-darker rounded-full h-2">
+                        <div class="bg-discord-blurple rounded-full h-2" style="width: {{ (item.count / max_emoji * 100) | round(1) }}%"></div>
+                    </div>
+                    <span class="text-white font-medium text-sm w-12 text-right">{{ item.count }}</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Top Reactors -->
+    {% if stats.top_reactors %}
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">🏆 Top Reactors</h3>
+        </div>
+        <div class="p-5 space-y-2">
+            {% if stats.top_reactors %}{% set max_reactor = stats.top_reactors | map(attribute='count') | list | max %}{% else %}{% set max_reactor = 1 %}{% endif %}
+            {% for item in stats.top_reactors %}
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <span class="text-gray-500 text-sm w-6 text-right">
+                        {% if loop.index == 1 %}🥇{% elif loop.index == 2 %}🥈{% elif loop.index == 3 %}🥉{% else %}{{ loop.index }}.{% endif %}
+                    </span>
+                    <span class="text-gray-300 text-sm">{{ item.display_name }}</span>
+                </div>
+                <div class="flex items-center gap-3">
+                    <div class="w-24 bg-discord-darker rounded-full h-2">
+                        <div class="bg-discord-green rounded-full h-2" style="width: {{ (item.count / max_reactor * 100) | round(1) }}%"></div>
+                    </div>
+                    <span class="text-white font-medium text-sm w-12 text-right">{{ item.count }}</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Most Reacted Authors -->
+    {% if stats.most_reacted_authors %}
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">⭐ Most Appreciated Artists</h3>
+            <p class="text-gray-500 text-xs mt-1">Whose songs get the most reactions</p>
+        </div>
+        <div class="p-5 space-y-2">
+            {% if stats.most_reacted_authors %}{% set max_author = stats.most_reacted_authors | map(attribute='count') | list | max %}{% else %}{% set max_author = 1 %}{% endif %}
+            {% for item in stats.most_reacted_authors %}
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <span class="text-gray-500 text-sm w-6 text-right">
+                        {% if loop.index == 1 %}🥇{% elif loop.index == 2 %}🥈{% elif loop.index == 3 %}🥉{% else %}{{ loop.index }}.{% endif %}
+                    </span>
+                    <span class="text-gray-300 text-sm">{{ item.display_name }}</span>
+                </div>
+                <div class="flex items-center gap-3">
+                    <div class="w-24 bg-discord-darker rounded-full h-2">
+                        <div class="bg-discord-yellow rounded-full h-2" style="width: {{ (item.count / max_author * 100) | round(1) }}%"></div>
+                    </div>
+                    <span class="text-white font-medium text-sm w-12 text-right">{{ item.count }}</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Top Songs -->
+    {% if stats.top_songs %}
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">🎵 Most Reacted Songs</h3>
+        </div>
+        <div class="p-5 space-y-3">
+            {% for item in stats.top_songs %}
+            <div class="bg-discord-darker rounded-lg p-3">
+                <div class="flex items-center justify-between mb-1">
+                    <span class="text-gray-500 text-xs">
+                        {% if loop.index == 1 %}🥇{% elif loop.index == 2 %}🥈{% elif loop.index == 3 %}🥉{% else %}#{{ loop.index }}{% endif %}
+                        — {{ item.count }} reactions
+                    </span>
+                </div>
+                <a href="{{ item.song_url }}" target="_blank" class="text-discord-blurple hover:underline text-sm break-all">{{ item.song_url }}</a>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Reactions by Month -->
+    {% if stats.reactions_by_month %}
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">By Month <span class="text-gray-500 text-xs font-normal">(last 12)</span></h3>
+        </div>
+        <div class="p-5 space-y-2">
+            {% if stats.reactions_by_month %}{% set max_rm = stats.reactions_by_month | map(attribute='count') | list | max %}{% else %}{% set max_rm = 1 %}{% endif %}
+            {% for item in stats.reactions_by_month %}
+            <div class="flex items-center justify-between">
+                <span class="text-gray-300 text-sm">{{ item.label }}</span>
+                <div class="flex items-center gap-3">
+                    <div class="w-32 bg-discord-darker rounded-full h-2">
+                        <div class="bg-purple-500 rounded-full h-2" style="width: {{ (item.count / max_rm * 100) | round(1) }}%"></div>
+                    </div>
+                    <span class="text-white font-medium text-sm w-12 text-right">{{ item.count }}</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+</div>
+
+{% if stats.trend_labels %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script>
+    const ctx = document.getElementById('reactionTrendChart').getContext('2d');
+    const gradient = ctx.createLinearGradient(0, 0, 0, 300);
+    gradient.addColorStop(0, 'rgba(87, 242, 135, 0.3)');
+    gradient.addColorStop(1, 'rgba(87, 242, 135, 0.0)');
+
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: {{ stats.trend_labels | tojson }},
+            datasets: [{
+                label: 'Reactions',
+                data: {{ stats.trend_values | tojson }},
+                borderColor: '#57f287',
+                backgroundColor: gradient,
+                borderWidth: 2,
+                pointBackgroundColor: '#57f287',
+                pointRadius: 3,
+                pointHoverRadius: 5,
+                fill: true,
+                tension: 0.3,
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    backgroundColor: '#1e1f22',
+                    titleColor: '#fff',
+                    bodyColor: '#a1a1aa',
+                    borderColor: '#383a40',
+                    borderWidth: 1,
+                }
+            },
+            scales: {
+                x: {
+                    ticks: { color: '#6b7280', maxRotation: 45 },
+                    grid: { color: 'rgba(55, 65, 81, 0.3)' },
+                },
+                y: {
+                    beginAtZero: true,
+                    ticks: { color: '#6b7280', precision: 0 },
+                    grid: { color: 'rgba(55, 65, 81, 0.3)' },
+                }
+            }
+        }
+    });
+</script>
+{% endif %}
+
+{% else %}
+<div class="bg-discord-dark rounded-xl border border-gray-700/50 p-8 text-center">
+    <p class="text-gray-400">No reaction data yet. Emoji reactions on song posts will be tracked automatically from now on.</p>
+</div>
+{% endif %}
+{% endblock %}

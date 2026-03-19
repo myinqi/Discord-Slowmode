@@ -741,4 +741,53 @@ def create_app(db: Database, bot=None) -> Quart:
             traceback.print_exc()
             return f"<pre>Error: {e}\n\n{traceback.format_exc()}</pre>", 500
 
+    @app.route("/reaction-stats")
+    @login_required
+    async def reaction_stats():
+        import traceback
+        try:
+            guild = get_guild()
+            filter_channel = request.args.get("channel", type=int)
+
+            stats = await db.get_reaction_stats(channel_id=filter_channel)
+
+            # Channel list with reaction counts
+            reaction_channels = await db.get_reaction_channels()
+            channel_list = []
+            for rc in reaction_channels:
+                ch_name = f"channel-{rc['channel_id']}"
+                if guild:
+                    ch = guild.get_channel(rc["channel_id"])
+                    if ch:
+                        ch_name = ch.name
+                channel_list.append({
+                    "channel_id": rc["channel_id"],
+                    "channel_name": ch_name,
+                    "count": rc["count"],
+                })
+
+            # Resolve display names for top reactors and most reacted authors
+            if guild:
+                for entry in stats.get("top_reactors", []):
+                    member = guild.get_member(entry["user_id"])
+                    entry["display_name"] = member.display_name if member else (entry["user_name"] or f"User {entry['user_id']}")
+                for entry in stats.get("most_reacted_authors", []):
+                    member = guild.get_member(entry["user_id"])
+                    entry["display_name"] = member.display_name if member else f"User {entry['user_id']}"
+            else:
+                for entry in stats.get("top_reactors", []):
+                    entry["display_name"] = entry["user_name"] or f"User {entry['user_id']}"
+                for entry in stats.get("most_reacted_authors", []):
+                    entry["display_name"] = f"User {entry['user_id']}"
+
+            return await render_template(
+                "reaction_stats.html",
+                stats=stats,
+                channel_list=channel_list,
+                filter_channel=filter_channel,
+            )
+        except Exception as e:
+            traceback.print_exc()
+            return f"<pre>Error: {e}\n\n{traceback.format_exc()}</pre>", 500
+
     return app
