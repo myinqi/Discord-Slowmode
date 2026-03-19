@@ -64,6 +64,39 @@
 
 <!-- Detailed Stats -->
 {% if stats.total > 0 %}
+
+<!-- Averages -->
+<div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-5 text-center">
+        <div class="text-discord-blurple text-2xl font-bold">{{ stats.avg_per_year }}</div>
+        <div class="text-gray-500 text-xs mt-1">Avg / Year</div>
+    </div>
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-5 text-center">
+        <div class="text-discord-green text-2xl font-bold">{{ stats.avg_per_month }}</div>
+        <div class="text-gray-500 text-xs mt-1">Avg / Month</div>
+    </div>
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-5 text-center">
+        <div class="text-discord-yellow text-2xl font-bold">{{ stats.avg_per_week }}</div>
+        <div class="text-gray-500 text-xs mt-1">Avg / Week</div>
+    </div>
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-5 text-center">
+        <div class="text-purple-400 text-2xl font-bold">{{ stats.avg_per_day }}</div>
+        <div class="text-gray-500 text-xs mt-1">Avg / Day</div>
+    </div>
+</div>
+
+<!-- Trend Chart -->
+{% if stats.trend_labels %}
+<div class="bg-discord-dark rounded-xl border border-gray-700/50 mb-6">
+    <div class="px-5 py-4 border-b border-gray-700/50">
+        <h3 class="text-white font-semibold">Trend <span class="text-gray-500 text-xs font-normal">(songs per month)</span></h3>
+    </div>
+    <div class="p-5">
+        <canvas id="trendChart" height="120"></canvas>
+    </div>
+</div>
+{% endif %}
+
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
     <!-- By Year -->
     <div class="bg-discord-dark rounded-xl border border-gray-700/50">
@@ -148,6 +181,60 @@
         </div>
     </div>
 </div>
+
+{% if stats.trend_labels %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script>
+    const ctx = document.getElementById('trendChart').getContext('2d');
+    const gradient = ctx.createLinearGradient(0, 0, 0, 300);
+    gradient.addColorStop(0, 'rgba(88, 101, 242, 0.3)');
+    gradient.addColorStop(1, 'rgba(88, 101, 242, 0.0)');
+
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: {{ stats.trend_labels | tojson }},
+            datasets: [{
+                label: 'Songs',
+                data: {{ stats.trend_values | tojson }},
+                borderColor: '#5865f2',
+                backgroundColor: gradient,
+                borderWidth: 2,
+                pointBackgroundColor: '#5865f2',
+                pointRadius: 3,
+                pointHoverRadius: 5,
+                fill: true,
+                tension: 0.3,
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    backgroundColor: '#1e1f22',
+                    titleColor: '#fff',
+                    bodyColor: '#a1a1aa',
+                    borderColor: '#383a40',
+                    borderWidth: 1,
+                }
+            },
+            scales: {
+                x: {
+                    ticks: { color: '#6b7280', maxRotation: 45 },
+                    grid: { color: 'rgba(55, 65, 81, 0.3)' },
+                },
+                y: {
+                    beginAtZero: true,
+                    ticks: { color: '#6b7280', precision: 0 },
+                    grid: { color: 'rgba(55, 65, 81, 0.3)' },
+                }
+            }
+        }
+    });
+</script>
+{% endif %}
+
 {% else %}
 <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-8 text-center">
     <p class="text-gray-400">No song data yet. Click "Scan History" to import existing posts, or data will be tracked automatically going forward.</p>

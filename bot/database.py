@@ -422,11 +422,15 @@ class Database:
         await self.db.commit()
 
     async def get_song_stats(self, channel_id: int = None) -> dict:
-        """Return song counts grouped by year, month, week, day."""
+        """Return song counts grouped by year, month, week, day + averages + trend data."""
         where = "WHERE channel_id = ?" if channel_id else ""
         params = (channel_id,) if channel_id else ()
 
-        stats = {"total": 0, "by_year": [], "by_month": [], "by_week": [], "by_day": []}
+        stats = {
+            "total": 0, "by_year": [], "by_month": [], "by_week": [], "by_day": [],
+            "avg_per_year": 0.0, "avg_per_month": 0.0, "avg_per_week": 0.0, "avg_per_day": 0.0,
+            "trend_labels": [], "trend_values": [],
+        }
 
         # Total
         async with self.db.execute(
@@ -434,6 +438,9 @@ class Database:
         ) as cursor:
             row = await cursor.fetchone()
             stats["total"] = row[0]
+
+        if stats["total"] == 0:
+            return stats
 
         # By year
         async with self.db.execute(
@@ -462,6 +469,38 @@ class Database:
             f"FROM song_posts {where} GROUP BY yd ORDER BY yd DESC LIMIT 30", params
         ) as cursor:
             stats["by_day"] = [{"label": r[0], "count": r[1]} for r in await cursor.fetchall()]
+
+        # Averages based on distinct time spans
+        if stats["by_year"]:
+            stats["avg_per_year"] = round(stats["total"] / len(stats["by_year"]), 1)
+        if stats["by_month"]:
+            # Count ALL distinct months, not just last 12
+            async with self.db.execute(
+                f"SELECT COUNT(DISTINCT strftime('%Y-%m', posted_at, 'unixepoch')) FROM song_posts {where}", params
+            ) as cursor:
+                n_months = (await cursor.fetchone())[0]
+            stats["avg_per_month"] = round(stats["total"] / max(n_months, 1), 1)
+        # Distinct weeks
+        async with self.db.execute(
+            f"SELECT COUNT(DISTINCT strftime('%Y-%W', posted_at, 'unixepoch')) FROM song_posts {where}", params
+        ) as cursor:
+            n_weeks = (await cursor.fetchone())[0]
+        stats["avg_per_week"] = round(stats["total"] / max(n_weeks, 1), 1)
+        # Distinct days
+        async with self.db.execute(
+            f"SELECT COUNT(DISTINCT strftime('%Y-%m-%d', posted_at, 'unixepoch')) FROM song_posts {where}", params
+        ) as cursor:
+            n_days = (await cursor.fetchone())[0]
+        stats["avg_per_day"] = round(stats["total"] / max(n_days, 1), 1)
+
+        # Trend data: monthly counts chronologically (last 24 months for chart)
+        async with self.db.execute(
+            f"SELECT strftime('%Y-%m', posted_at, 'unixepoch') as ym, COUNT(*) as cnt "
+            f"FROM song_posts {where} GROUP BY ym ORDER BY ym ASC LIMIT 24", params
+        ) as cursor:
+            trend = [{"label": r[0], "count": r[1]} for r in await cursor.fetchall()]
+            stats["trend_labels"] = [t["label"] for t in trend]
+            stats["trend_values"] = [t["count"] for t in trend]
 
         return stats
 
