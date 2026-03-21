@@ -9,7 +9,7 @@
         <div class="bg-discord-dark rounded-xl border border-gray-700/50">
             <div class="px-5 py-4 border-b border-gray-700/50">
                 <h3 class="text-white font-semibold">🏆 Leaderboard</h3>
-                <p class="text-gray-500 text-xs mt-1">Click a user to see details</p>
+                <p class="text-gray-500 text-xs mt-1">Score = 40% Songs + 60% Reactions</p>
             </div>
             <div class="divide-y divide-gray-700/30 max-h-[600px] overflow-y-auto">
                 {% for entry in ranking %}
@@ -19,9 +19,12 @@
                         <span class="text-gray-500 text-sm w-6 text-right">
                             {% if loop.index == 1 %}🥇{% elif loop.index == 2 %}🥈{% elif loop.index == 3 %}🥉{% else %}{{ loop.index }}.{% endif %}
                         </span>
-                        <span class="text-gray-200 text-sm">{{ entry.display_name }}</span>
+                        <div>
+                            <span class="text-gray-200 text-sm">{{ entry.display_name }}</span>
+                            <div class="text-gray-500 text-xs">{{ entry.song_count }} songs · {{ entry.reaction_count }} reactions</div>
+                        </div>
                     </div>
-                    <span class="text-white font-semibold text-sm">{{ entry.count }}</span>
+                    <span class="text-white font-semibold text-sm">{{ entry.score }}</span>
                 </a>
                 {% else %}
                 <div class="px-5 py-8 text-center text-gray-500 text-sm">No song data yet. Run a history scan first.</div>
@@ -40,21 +43,25 @@
                     <h3 class="text-white font-semibold">📊 {{ user_display_name }}</h3>
                 </div>
                 <div class="p-5">
-                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
                         <div class="bg-discord-darker rounded-lg p-4 text-center">
                             <div class="text-white text-2xl font-bold">{{ user_detail.total }}</div>
                             <div class="text-gray-500 text-xs mt-1">Songs Total</div>
                         </div>
                         <div class="bg-discord-darker rounded-lg p-4 text-center">
+                            <div class="text-discord-green text-2xl font-bold">{{ user_detail.unique_reactions }}</div>
+                            <div class="text-gray-500 text-xs mt-1">Unique Reactions</div>
+                        </div>
+                        <div class="bg-discord-darker rounded-lg p-4 text-center">
                             <div class="text-discord-blurple text-2xl font-bold">{{ user_detail.avg_per_week }}</div>
-                            <div class="text-gray-500 text-xs mt-1">Avg / Week</div>
+                            <div class="text-gray-500 text-xs mt-1">Avg Songs / Week</div>
                         </div>
                         <div class="bg-discord-darker rounded-lg p-4 text-center">
-                            <div class="text-discord-green text-2xl font-bold">{{ user_detail.avg_per_month }}</div>
-                            <div class="text-gray-500 text-xs mt-1">Avg / Month</div>
+                            <div class="text-discord-yellow text-2xl font-bold">{{ user_detail.avg_per_month }}</div>
+                            <div class="text-gray-500 text-xs mt-1">Avg Songs / Month</div>
                         </div>
                         <div class="bg-discord-darker rounded-lg p-4 text-center">
-                            <div class="text-discord-yellow text-2xl font-bold">{{ user_detail.active_weeks }}</div>
+                            <div class="text-purple-400 text-2xl font-bold">{{ user_detail.active_weeks }}</div>
                             <div class="text-gray-500 text-xs mt-1">Active Weeks</div>
                         </div>
                     </div>

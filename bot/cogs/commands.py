@@ -547,7 +547,7 @@ class CommandsCog(commands.Cog):
             lines = []
             for i, entry in enumerate(ranking[:20]):
                 prefix = medals[i] if i < 3 else f"**{i+1}.**"
-                lines.append(f"{prefix} <@{entry['user_id']}> — **{entry['count']}** songs")
+                lines.append(f"{prefix} <@{entry['user_id']}> — **{entry['score']}** pts ({entry['song_count']} songs · {entry['reaction_count']} reactions)")
 
             embed = discord.Embed(
                 title="🏆 Song Highscore",

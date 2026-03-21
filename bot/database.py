@@ -555,6 +555,8 @@ class Database:
             "by_weekday": [],
             "top_days": [],
             "active_weeks": 0,
+            "unique_reactions": 0,
+            "total_reactions": 0,
         }
 
         # Total
@@ -622,6 +624,21 @@ class Database:
         ) as cursor:
             stats["active_weeks"] = (await cursor.fetchone())[0]
 
+        # Unique reactions received (distinct reactor-song pairs)
+        async with self.db.execute(
+            "SELECT COUNT(*) FROM "
+            "(SELECT DISTINCT reactor_user_id, message_id FROM song_reactions WHERE post_author_id = ?)",
+            (user_id,),
+        ) as cursor:
+            stats["unique_reactions"] = (await cursor.fetchone())[0]
+
+        # Total reactions received
+        async with self.db.execute(
+            "SELECT COUNT(*) FROM song_reactions WHERE post_author_id = ?",
+            (user_id,),
+        ) as cursor:
+            stats["total_reactions"] = (await cursor.fetchone())[0]
+
         return stats
 
     async def find_songs(self, user_id: int = None, limit: int = 1, random: bool = False) -> list[dict]:
@@ -639,11 +656,38 @@ class Database:
             ]
 
     async def get_all_users_ranking(self) -> list[dict]:
-        """Leaderboard: all users ranked by total songs."""
+        """Leaderboard: all users ranked by weighted score (40% songs, 60% unique reactions)."""
+        # Songs per user
         async with self.db.execute(
-            "SELECT user_id, user_name, COUNT(*) as cnt FROM song_posts GROUP BY user_id ORDER BY cnt DESC"
+            "SELECT user_id, user_name, COUNT(*) as cnt FROM song_posts GROUP BY user_id"
         ) as cursor:
-            return [{"user_id": r[0], "user_name": r[1], "count": r[2]} for r in await cursor.fetchall()]
+            users = {r[0]: {"user_id": r[0], "user_name": r[1], "song_count": r[2], "reaction_count": 0}
+                     for r in await cursor.fetchall()}
+
+        if not users:
+            return []
+
+        # Unique reactions received: count distinct (reactor, song) pairs per author
+        async with self.db.execute(
+            "SELECT post_author_id, COUNT(*) as cnt FROM "
+            "(SELECT DISTINCT post_author_id, reactor_user_id, message_id FROM song_reactions "
+            "WHERE post_author_id IS NOT NULL) GROUP BY post_author_id"
+        ) as cursor:
+            for r in await cursor.fetchall():
+                if r[0] in users:
+                    users[r[0]]["reaction_count"] = r[1]
+
+        # Compute weighted score (normalized 0-100, then weighted)
+        max_songs = max(u["song_count"] for u in users.values()) or 1
+        max_reactions = max(u["reaction_count"] for u in users.values()) or 1
+
+        for u in users.values():
+            song_norm = u["song_count"] / max_songs * 100
+            react_norm = u["reaction_count"] / max_reactions * 100
+            u["score"] = round(0.4 * song_norm + 0.6 * react_norm, 1)
+
+        ranking = sorted(users.values(), key=lambda x: x["score"], reverse=True)
+        return ranking
 
     # --- Song Reactions ---
 
