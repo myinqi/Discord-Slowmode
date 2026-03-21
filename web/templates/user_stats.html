@@ -145,6 +145,57 @@
                 {% endif %}
             </div>
 
+            <!-- Reactions Breakdown -->
+            {% if user_detail.reactions_by_month or user_detail.reactions_by_weekday %}
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Reactions by Month -->
+                {% if user_detail.reactions_by_month %}
+                <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+                    <div class="px-5 py-4 border-b border-gray-700/50">
+                        <h3 class="text-white font-semibold">Reactions by Month <span class="text-gray-500 text-xs font-normal">(last 12)</span></h3>
+                    </div>
+                    <div class="p-5 space-y-2">
+                        {% set max_rm = user_detail.reactions_by_month | map(attribute='count') | list | max %}
+                        {% for item in user_detail.reactions_by_month %}
+                        <div class="flex items-center justify-between">
+                            <span class="text-gray-300 text-sm">{{ item.label }}</span>
+                            <div class="flex items-center gap-3">
+                                <div class="w-24 bg-discord-darker rounded-full h-2">
+                                    <div class="bg-purple-500 rounded-full h-2" style="width: {{ (item.count / max_rm * 100) | round(1) }}%"></div>
+                                </div>
+                                <span class="text-white font-medium text-sm w-8 text-right">{{ item.count }}</span>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- Reactions by Weekday -->
+                {% if user_detail.reactions_by_weekday %}
+                <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+                    <div class="px-5 py-4 border-b border-gray-700/50">
+                        <h3 class="text-white font-semibold">Reactions by Weekday</h3>
+                    </div>
+                    <div class="p-5 space-y-2">
+                        {% set max_rwd = user_detail.reactions_by_weekday | map(attribute='count') | list | max %}
+                        {% for item in user_detail.reactions_by_weekday %}
+                        <div class="flex items-center justify-between">
+                            <span class="text-gray-300 text-sm font-medium">{{ item.label }}</span>
+                            <div class="flex items-center gap-3">
+                                <div class="w-24 bg-discord-darker rounded-full h-2">
+                                    <div class="bg-pink-500 rounded-full h-2" style="width: {{ (item.count / max_rwd * 100) | round(1) }}%"></div>
+                                </div>
+                                <span class="text-white font-medium text-sm w-8 text-right">{{ item.count }}</span>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
+
             <!-- Top Posting Days -->
             {% if user_detail.top_days %}
             <div class="bg-discord-dark rounded-xl border border-gray-700/50">

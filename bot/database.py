@@ -557,6 +557,8 @@ class Database:
             "active_weeks": 0,
             "unique_reactions": 0,
             "total_reactions": 0,
+            "reactions_by_month": [],
+            "reactions_by_weekday": [],
         }
 
         # Total
@@ -638,6 +640,28 @@ class Database:
             (user_id,),
         ) as cursor:
             stats["total_reactions"] = (await cursor.fetchone())[0]
+
+        # Reactions by month (unique reactor-song pairs, last 12 months)
+        async with self.db.execute(
+            "SELECT ym, COUNT(*) as cnt FROM "
+            "(SELECT DISTINCT reactor_user_id, message_id, strftime('%Y-%m', reacted_at, 'unixepoch') as ym "
+            "FROM song_reactions WHERE post_author_id = ?) GROUP BY ym ORDER BY ym DESC LIMIT 12",
+            (user_id,),
+        ) as cursor:
+            stats["reactions_by_month"] = [{"label": r[0], "count": r[1]} for r in await cursor.fetchall()]
+
+        # Reactions by weekday (unique reactor-song pairs)
+        weekday_names = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"]
+        async with self.db.execute(
+            "SELECT wd, COUNT(*) as cnt FROM "
+            "(SELECT DISTINCT reactor_user_id, message_id, strftime('%w', reacted_at, 'unixepoch') as wd "
+            "FROM song_reactions WHERE post_author_id = ?) GROUP BY wd ORDER BY wd",
+            (user_id,),
+        ) as cursor:
+            stats["reactions_by_weekday"] = [
+                {"label": weekday_names[int(r[0])], "day_num": int(r[0]), "count": r[1]}
+                for r in await cursor.fetchall()
+            ]
 
         return stats
 
