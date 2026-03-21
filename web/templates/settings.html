@@ -21,6 +21,17 @@
                     class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple focus:ring-1 focus:ring-discord-blurple">
                 <p class="text-xs text-gray-500 mt-1">The Discord server ID the bot operates on. Requires restart to take effect.</p>
             </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-300 mb-1">/new Command — Channel</label>
+                <select name="new_command_channel"
+                    class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple focus:ring-1 focus:ring-discord-blurple">
+                    <option value="">— Not configured —</option>
+                    {% for ch in channel_options %}
+                    <option value="{{ ch.id }}" {% if new_command_channel == ch.id|string %}selected{% endif %}>#{{ ch.name }}</option>
+                    {% endfor %}
+                </select>
+                <p class="text-xs text-gray-500 mt-1">Channel scanned by the <code>/new</code> command. Shows songs from the last 3 days the user hasn't reacted to.</p>
+            </div>
             <button type="submit"
                 class="px-5 py-2.5 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg font-medium transition-colors">
                 Save Settings

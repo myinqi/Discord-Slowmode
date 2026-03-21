@@ -848,6 +848,41 @@ class Database:
 
         return stats
 
+    async def get_unseen_songs(self, channel_id: int, user_id: int) -> list[dict]:
+        """Return songs from last 3 days in channel that user hasn't reacted to, oldest first."""
+        async with self.db.execute(
+            """
+            SELECT sp.message_id, sp.url, sp.user_id, sp.posted_at,
+                   COALESCE(r.unique_cnt, 0) as unique_cnt,
+                   COALESCE(r.total_cnt, 0) as total_cnt,
+                   r.title
+            FROM song_posts sp
+            LEFT JOIN (
+                SELECT message_id,
+                       COUNT(DISTINCT reactor_user_id) as unique_cnt,
+                       COUNT(*) as total_cnt,
+                       MAX(song_title) as title
+                FROM song_reactions
+                GROUP BY message_id
+            ) r ON sp.message_id = r.message_id
+            WHERE sp.channel_id = ?
+              AND sp.posted_at >= unixepoch('now', '-3 days')
+              AND sp.message_id NOT IN (
+                  SELECT message_id FROM song_reactions WHERE reactor_user_id = ?
+              )
+            ORDER BY sp.posted_at ASC
+            """,
+            (channel_id, user_id),
+        ) as cursor:
+            return [
+                {
+                    "message_id": r[0], "song_url": r[1], "post_author_id": r[2],
+                    "posted_at": r[3], "unique_count": r[4], "total_count": r[5],
+                    "song_title": r[6],
+                }
+                for r in await cursor.fetchall()
+            ]
+
     async def get_top_songs(self, channel_id: int = None, days: int = 0) -> list[dict]:
         """Return top songs ranked by unique reactions (distinct reactors per song)."""
         conditions = []

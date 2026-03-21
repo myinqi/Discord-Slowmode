@@ -203,8 +203,9 @@ Protokoll aller Aktionen: gelöschte Nachrichten, Konfigurationsänderungen, Ben
 | `/talk [translate] <text>` | Bot spricht im Kanal: *<username> says: <text>* (optional mit Übersetzung) |
 | `/translate <to> <text>` | Text übersetzen (nur für dich sichtbar) |
 | `/top <period>` | Most Reacted Songs Top 10 mit Titel, Interpret, Reaktionen und Cover (nur für dich sichtbar) |
+| `/new` | Songs der letzten 3 Tage anzeigen, auf die du noch nicht reagiert hast — mit Titel, Interpret, Reaktionen, Link und Cover (nur für dich sichtbar) |
 
-> Cooldown- und Toggle-Commands können nur von Serverbesitzern und Mitgliedern mit einer **Command Role** genutzt werden. `/random-song`, `/find-list`, `/song-stats`, `/user-stats`, `/user-score`, `/find-song`, `/talk`, `/translate` und `/top` sind für **alle** Servermitglieder verfügbar.
+> Cooldown- und Toggle-Commands können nur von Serverbesitzern und Mitgliedern mit einer **Command Role** genutzt werden. `/random-song`, `/find-list`, `/song-stats`, `/user-stats`, `/user-score`, `/find-song`, `/talk`, `/translate`, `/top` und `/new` sind für **alle** Servermitglieder verfügbar.
 
 ---
 

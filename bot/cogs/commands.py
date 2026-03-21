@@ -635,6 +635,78 @@ class CommandsCog(commands.Cog):
             print(f"[top] Error: {e}")
             await interaction.followup.send(f"Error: {e}", ephemeral=True)
 
+    @app_commands.command(name="new", description="Show songs from the last 3 days you haven't reacted to yet")
+    async def new_songs_cmd(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            channel_id_str = await self.bot.db.get_setting("new_command_channel")
+            if not channel_id_str:
+                await interaction.followup.send(
+                    "The `/new` command is not configured yet. An admin needs to set the channel in **Settings** on the web interface.",
+                    ephemeral=True,
+                )
+                return
+
+            channel_id = int(channel_id_str)
+            songs = await self.bot.db.get_unseen_songs(channel_id, interaction.user.id)
+
+            if not songs:
+                await interaction.followup.send("You're all caught up! No new unreacted songs in the last 3 days.", ephemeral=True)
+                return
+
+            bot_name = await self.bot.db.get_setting("bot_name") or "Slowmode Bot"
+            guild = interaction.guild
+
+            lines = []
+            first_url = None
+            for i, song in enumerate(songs):
+                # Resolve author name
+                author_name = f"User {song['post_author_id']}"
+                if guild and song.get("post_author_id"):
+                    member = guild.get_member(song["post_author_id"])
+                    if member:
+                        author_name = member.display_name
+
+                title = song.get("song_title") or "Unknown Title"
+                url = song.get("song_url", "")
+                unique = song["unique_count"]
+                total = song["total_count"]
+
+                if first_url is None:
+                    first_url = url
+
+                lines.append(
+                    f"**{i+1}.** **[{title}]({url})**\n"
+                    f"ㅤby **{author_name}** — {unique} unique reactions ({total} total)"
+                )
+
+            # Discord embed description limit is 4096 chars — split if needed
+            description = "\n\n".join(lines)
+            if len(description) > 4096:
+                description = description[:4090] + "\n…"
+
+            embed = discord.Embed(
+                title=f"🆕 Unreacted Songs ({len(songs)})",
+                description=description,
+                color=discord.Color.green(),
+            )
+
+            # Set thumbnail from first song cover image
+            if first_url:
+                song_id_match = re.search(r'suno\.com/(?:s|song)/([\w-]+)', first_url)
+                if song_id_match:
+                    embed.set_thumbnail(url=f"https://cdn2.suno.ai/image_{song_id_match.group(1)}.jpeg")
+
+            embed.set_footer(text=f"{bot_name} • Last 3 days")
+            embed.timestamp = discord.utils.utcnow()
+
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+        except Exception as e:
+            print(f"[new] Error: {e}")
+            await interaction.followup.send(f"Error: {e}", ephemeral=True)
+
     @app_commands.command(name="find-song", description="Find a song — by user, title, or random")
     @app_commands.describe(
         user="Optional: filter by user",
