@@ -672,10 +672,18 @@ class Database:
             row = await cursor.fetchone()
             return dict(row) if row else None
 
-    async def get_reaction_stats(self, channel_id: int = None) -> dict:
-        """Comprehensive reaction stats, optionally filtered by channel."""
-        where = "WHERE channel_id = ?" if channel_id else ""
-        params = (channel_id,) if channel_id else ()
+    async def get_reaction_stats(self, channel_id: int = None, days: int = 0) -> dict:
+        """Comprehensive reaction stats, optionally filtered by channel and time range."""
+        conditions = []
+        params = []
+        if channel_id:
+            conditions.append("channel_id = ?")
+            params.append(channel_id)
+        if days:
+            conditions.append(f"reacted_at >= unixepoch('now', '-{int(days)} days')")
+
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        params = tuple(params)
 
         stats = {
             "total_reactions": 0,
@@ -685,9 +693,6 @@ class Database:
             "top_reactors": [],
             "top_songs": [],
             "most_reacted_authors": [],
-            "reactions_by_month": [],
-            "trend_labels": [],
-            "trend_values": [],
             "avg_reactions_per_song": 0.0,
         }
 
@@ -727,7 +732,7 @@ class Database:
 
         # Top reactors
         async with self.db.execute(
-            f"SELECT reactor_user_id, reactor_user_name, COUNT(*) as cnt "
+            f"SELECT reactor_user_id, reactor_user_name, COUNT(DISTINCT message_id) as cnt "
             f"FROM song_reactions {where} GROUP BY reactor_user_id ORDER BY cnt DESC LIMIT 10",
             params,
         ) as cursor:
@@ -748,37 +753,18 @@ class Database:
             ]
 
         # Most reacted authors (whose songs get the most reactions)
+        author_conditions = list(conditions) if conditions else []
+        author_conditions.append("post_author_id IS NOT NULL")
+        author_where = "WHERE " + " AND ".join(author_conditions)
         async with self.db.execute(
             f"SELECT post_author_id, COUNT(*) as cnt "
-            f"FROM song_reactions {where} AND post_author_id IS NOT NULL "
-            f"GROUP BY post_author_id ORDER BY cnt DESC LIMIT 10"
-            if where else
-            "SELECT post_author_id, COUNT(*) as cnt "
-            "FROM song_reactions WHERE post_author_id IS NOT NULL "
-            "GROUP BY post_author_id ORDER BY cnt DESC LIMIT 10",
+            f"FROM song_reactions {author_where} "
+            f"GROUP BY post_author_id ORDER BY cnt DESC LIMIT 10",
             params,
         ) as cursor:
             stats["most_reacted_authors"] = [
                 {"user_id": r[0], "count": r[1]} for r in await cursor.fetchall()
             ]
-
-        # Reactions by month
-        async with self.db.execute(
-            f"SELECT strftime('%Y-%m', reacted_at, 'unixepoch') as ym, COUNT(*) as cnt "
-            f"FROM song_reactions {where} GROUP BY ym ORDER BY ym DESC LIMIT 12",
-            params,
-        ) as cursor:
-            stats["reactions_by_month"] = [{"label": r[0], "count": r[1]} for r in await cursor.fetchall()]
-
-        # Trend (chronological for chart)
-        async with self.db.execute(
-            f"SELECT strftime('%Y-%m', reacted_at, 'unixepoch') as ym, COUNT(*) as cnt "
-            f"FROM song_reactions {where} GROUP BY ym ORDER BY ym ASC LIMIT 24",
-            params,
-        ) as cursor:
-            trend = [{"label": r[0], "count": r[1]} for r in await cursor.fetchall()]
-            stats["trend_labels"] = [t["label"] for t in trend]
-            stats["trend_values"] = [t["count"] for t in trend]
 
         return stats
 
