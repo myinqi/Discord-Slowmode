@@ -867,12 +867,13 @@ class Database:
             ) r ON sp.message_id = r.message_id
             WHERE sp.channel_id = ?
               AND sp.posted_at >= unixepoch('now', '-3 days')
+              AND sp.user_id != ?
               AND sp.message_id NOT IN (
                   SELECT message_id FROM song_reactions WHERE reactor_user_id = ?
               )
             ORDER BY sp.posted_at ASC
             """,
-            (channel_id, user_id),
+            (channel_id, user_id, user_id),
         ) as cursor:
             return [
                 {
