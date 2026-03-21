@@ -216,18 +216,26 @@
     {% endif %}
 
     <!-- Top Songs -->
-    {% if stats.top_songs %}
     <div class="bg-discord-dark rounded-xl border border-gray-700/50">
-        <div class="px-5 py-4 border-b border-gray-700/50">
-            <h3 class="text-white font-semibold">Most Reacted Songs <span class="text-gray-500 text-xs font-normal">({% if chart_range == '1' %}today{% elif chart_range == 'all' %}all time{% else %}last {{ chart_range }}d{% endif %})</span></h3>
+        <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between flex-wrap gap-3">
+            <h3 class="text-white font-semibold">🎵 Most Reacted Songs <span class="text-gray-500 text-xs font-normal">({% if songs_range == '1' %}today{% elif songs_range == 'all' %}all time{% else %}last {{ songs_range }}d{% endif %}, unique reactions)</span></h3>
+            <div class="flex gap-1">
+                {% for val, label in [('1', 'Today'), ('7', '7d'), ('30', '30d'), ('90', '90d'), ('all', 'All')] %}
+                <a href="{{ url_for('reaction_stats', channel=filter_channel, range=chart_range, chart=chart_gran, songs_range=val) }}"
+                    class="px-3 py-1 rounded-lg text-xs font-medium transition-colors {% if songs_range == val %}bg-discord-blurple text-white{% else %}bg-discord-darker text-gray-400 hover:text-white{% endif %}">
+                    {{ label }}
+                </a>
+                {% endfor %}
+            </div>
         </div>
         <div class="p-5 space-y-3">
-            {% for item in stats.top_songs %}
+            {% if top_songs %}
+            {% for item in top_songs %}
             <div class="bg-discord-darker rounded-lg p-3">
                 <div class="flex items-center justify-between mb-1">
                     <span class="text-gray-500 text-xs">
                         {% if loop.index == 1 %}🥇{% elif loop.index == 2 %}🥈{% elif loop.index == 3 %}🥉{% else %}#{{ loop.index }}{% endif %}
-                        — {{ item.count }} reactions
+                        — {{ item.unique_count }} unique reactions ({{ item.total_count }} total)
                     </span>
                 </div>
                 {% if item.song_title %}
@@ -237,9 +245,11 @@
                 <a href="{{ item.song_url }}" target="_blank" class="text-discord-blurple hover:underline text-xs break-all mt-1 inline-block">{{ item.song_url }}</a>
             </div>
             {% endfor %}
+            {% else %}
+            <div class="text-gray-500 text-sm text-center py-4">No reactions in this time range.</div>
+            {% endif %}
         </div>
     </div>
-    {% endif %}
 
 </div>
 

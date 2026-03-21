@@ -832,17 +832,6 @@ class Database:
                 for r in await cursor.fetchall()
             ]
 
-        # Top songs (most reactions)
-        async with self.db.execute(
-            f"SELECT message_id, song_url, post_author_id, COUNT(*) as cnt, MAX(song_title) as title "
-            f"FROM song_reactions {where} GROUP BY message_id ORDER BY cnt DESC LIMIT 10",
-            params,
-        ) as cursor:
-            stats["top_songs"] = [
-                {"message_id": r[0], "song_url": r[1], "post_author_id": r[2], "count": r[3], "song_title": r[4]}
-                for r in await cursor.fetchall()
-            ]
-
         # Most reacted authors (whose songs get the most reactions)
         author_conditions = list(conditions) if conditions else []
         author_conditions.append("post_author_id IS NOT NULL")
@@ -858,6 +847,33 @@ class Database:
             ]
 
         return stats
+
+    async def get_top_songs(self, channel_id: int = None, days: int = 0) -> list[dict]:
+        """Return top songs ranked by unique reactions (distinct reactors per song)."""
+        conditions = []
+        params = []
+        if channel_id:
+            conditions.append("channel_id = ?")
+            params.append(channel_id)
+        if days:
+            conditions.append(f"reacted_at >= unixepoch('now', '-{int(days)} days')")
+
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+        async with self.db.execute(
+            f"SELECT message_id, song_url, post_author_id, "
+            f"COUNT(DISTINCT reactor_user_id) as unique_cnt, COUNT(*) as total_cnt, "
+            f"MAX(song_title) as title "
+            f"FROM song_reactions {where} GROUP BY message_id ORDER BY unique_cnt DESC LIMIT 10",
+            tuple(params),
+        ) as cursor:
+            return [
+                {
+                    "message_id": r[0], "song_url": r[1], "post_author_id": r[2],
+                    "unique_count": r[3], "total_count": r[4], "song_title": r[5],
+                }
+                for r in await cursor.fetchall()
+            ]
 
     async def get_reactor_activity(self, channel_id: int = None, granularity: str = "daily",
                                     days: int = 30) -> dict:

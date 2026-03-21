@@ -839,6 +839,11 @@ def create_app(db: Database, bot=None) -> Quart:
                 days=range_days,
             )
 
+            # Most Reacted Songs — independent time filter
+            songs_range = request.args.get("songs_range", default="30", type=str)
+            songs_days = {"1": 1, "7": 7, "30": 30, "90": 90, "all": 0}.get(songs_range, 30)
+            top_songs = await db.get_top_songs(channel_id=filter_channel, days=songs_days)
+
             # Channel list with reaction counts
             reaction_channels = await db.get_reaction_channels()
             channel_list = []
@@ -862,7 +867,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 for entry in stats.get("most_reacted_authors", []):
                     member = guild.get_member(entry["user_id"])
                     entry["display_name"] = member.display_name if member else f"User {entry['user_id']}"
-                for entry in stats.get("top_songs", []):
+                for entry in top_songs:
                     if entry.get("post_author_id"):
                         member = guild.get_member(entry["post_author_id"])
                         entry["author_name"] = member.display_name if member else f"User {entry['post_author_id']}"
@@ -873,7 +878,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     entry["display_name"] = entry["user_name"] or f"User {entry['user_id']}"
                 for entry in stats.get("most_reacted_authors", []):
                     entry["display_name"] = f"User {entry['user_id']}"
-                for entry in stats.get("top_songs", []):
+                for entry in top_songs:
                     entry["author_name"] = f"User {entry.get('post_author_id', '?')}"
 
             return await render_template(
@@ -885,6 +890,8 @@ def create_app(db: Database, bot=None) -> Quart:
                 chart_gran=chart_gran,
                 chart_range=chart_range,
                 title_scan_status=app.title_scan_status,
+                top_songs=top_songs,
+                songs_range=songs_range,
             )
         except Exception as e:
             traceback.print_exc()
