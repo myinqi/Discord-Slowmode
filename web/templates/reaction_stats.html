@@ -201,7 +201,11 @@
                         — {{ item.count }} reactions
                     </span>
                 </div>
-                <a href="{{ item.song_url }}" target="_blank" class="text-discord-blurple hover:underline text-sm break-all">{{ item.song_url }}</a>
+                {% if item.song_title %}
+                <div class="text-white text-sm font-medium">{{ item.song_title }}</div>
+                {% endif %}
+                <div class="text-gray-400 text-xs mt-0.5">by {{ item.author_name }}</div>
+                <a href="{{ item.song_url }}" target="_blank" class="text-discord-blurple hover:underline text-xs break-all mt-1 inline-block">{{ item.song_url }}</a>
             </div>
             {% endfor %}
         </div>

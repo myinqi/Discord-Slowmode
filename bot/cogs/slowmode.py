@@ -137,10 +137,26 @@ class SlowmodeCog(commands.Cog):
         if not channel_config:
             return
 
+        # Helper: extract song title from message embeds
+        def _extract_title(msg):
+            for embed in msg.embeds:
+                if embed.title:
+                    return embed.title
+            return None
+
         # Check if this message is a known song post
         song_post = await db.get_song_post_by_message_id(payload.message_id)
         if song_post:
             emoji_str = str(payload.emoji)
+            # Try to get song title from the message embed
+            song_title = None
+            channel = self.bot.get_channel(payload.channel_id)
+            if channel:
+                try:
+                    message = await channel.fetch_message(payload.message_id)
+                    song_title = _extract_title(message)
+                except (discord.NotFound, discord.Forbidden):
+                    pass
             try:
                 await db.add_song_reaction(
                     message_id=payload.message_id,
@@ -150,6 +166,7 @@ class SlowmodeCog(commands.Cog):
                     reactor_user_id=payload.user_id,
                     reactor_user_name=str(payload.member),
                     emoji=emoji_str,
+                    song_title=song_title,
                 )
             except Exception:
                 pass
@@ -173,6 +190,7 @@ class SlowmodeCog(commands.Cog):
 
         # It's a song post — store the reaction
         emoji_str = str(payload.emoji)
+        song_title = _extract_title(message)
         for url in urls:
             try:
                 await db.add_song_reaction(
@@ -183,6 +201,7 @@ class SlowmodeCog(commands.Cog):
                     reactor_user_id=payload.user_id,
                     reactor_user_name=str(payload.member),
                     emoji=emoji_str,
+                    song_title=song_title,
                 )
             except Exception:
                 pass

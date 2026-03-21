@@ -791,7 +791,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     "count": rc["count"],
                 })
 
-            # Resolve display names for top reactors and most reacted authors
+            # Resolve display names for top reactors, most reacted authors, and top songs
             if guild:
                 for entry in stats.get("top_reactors", []):
                     member = guild.get_member(entry["user_id"])
@@ -799,11 +799,19 @@ def create_app(db: Database, bot=None) -> Quart:
                 for entry in stats.get("most_reacted_authors", []):
                     member = guild.get_member(entry["user_id"])
                     entry["display_name"] = member.display_name if member else f"User {entry['user_id']}"
+                for entry in stats.get("top_songs", []):
+                    if entry.get("post_author_id"):
+                        member = guild.get_member(entry["post_author_id"])
+                        entry["author_name"] = member.display_name if member else f"User {entry['post_author_id']}"
+                    else:
+                        entry["author_name"] = "Unknown"
             else:
                 for entry in stats.get("top_reactors", []):
                     entry["display_name"] = entry["user_name"] or f"User {entry['user_id']}"
                 for entry in stats.get("most_reacted_authors", []):
                     entry["display_name"] = f"User {entry['user_id']}"
+                for entry in stats.get("top_songs", []):
+                    entry["author_name"] = f"User {entry.get('post_author_id', '?')}"
 
             return await render_template(
                 "reaction_stats.html",

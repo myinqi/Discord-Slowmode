@@ -131,10 +131,18 @@ class Database:
                 reactor_user_name TEXT,
                 emoji TEXT NOT NULL,
                 reacted_at REAL DEFAULT (unixepoch()),
+                song_title TEXT,
                 UNIQUE(message_id, reactor_user_id, emoji)
             );
         """)
         await self.db.commit()
+
+        # Add song_title column to song_reactions if missing
+        async with self.db.execute("PRAGMA table_info(song_reactions)") as cursor:
+            sr_columns = [row[1] async for row in cursor]
+        if "song_title" not in sr_columns:
+            await self.db.execute("ALTER TABLE song_reactions ADD COLUMN song_title TEXT")
+            await self.db.commit()
 
     # --- Settings ---
 
@@ -717,12 +725,12 @@ class Database:
 
     async def add_song_reaction(self, message_id: int, channel_id: int, song_url: str,
                                  post_author_id: int, reactor_user_id: int,
-                                 reactor_user_name: str, emoji: str):
+                                 reactor_user_name: str, emoji: str, song_title: str = None):
         await self.db.execute(
             "INSERT OR IGNORE INTO song_reactions "
-            "(message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji),
+            "(message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji, song_title) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji, song_title),
         )
         await self.db.commit()
 
@@ -811,12 +819,12 @@ class Database:
 
         # Top songs (most reactions)
         async with self.db.execute(
-            f"SELECT message_id, song_url, post_author_id, COUNT(*) as cnt "
+            f"SELECT message_id, song_url, post_author_id, COUNT(*) as cnt, MAX(song_title) as title "
             f"FROM song_reactions {where} GROUP BY message_id ORDER BY cnt DESC LIMIT 10",
             params,
         ) as cursor:
             stats["top_songs"] = [
-                {"message_id": r[0], "song_url": r[1], "post_author_id": r[2], "count": r[3]}
+                {"message_id": r[0], "song_url": r[1], "post_author_id": r[2], "count": r[3], "song_title": r[4]}
                 for r in await cursor.fetchall()
             ]
 
