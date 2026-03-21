@@ -852,28 +852,27 @@ class Database:
         """Return songs from last 3 days in channel that user hasn't reacted to, oldest first."""
         async with self.db.execute(
             """
-            SELECT sp.message_id, sp.url, sp.user_id, sp.posted_at,
+            SELECT sp.id, sp.url, sp.user_id, sp.posted_at,
                    COALESCE(r.unique_cnt, 0) as unique_cnt,
                    COALESCE(r.total_cnt, 0) as total_cnt,
                    r.title
             FROM song_posts sp
             LEFT JOIN (
-                SELECT message_id,
+                SELECT song_url,
                        COUNT(DISTINCT reactor_user_id) as unique_cnt,
                        COUNT(*) as total_cnt,
-                       MAX(song_title) as title
+                       MAX(song_title) as title,
+                       GROUP_CONCAT(DISTINCT reactor_user_id) as reactors
                 FROM song_reactions
-                GROUP BY message_id
-            ) r ON sp.message_id = r.message_id
+                GROUP BY song_url
+            ) r ON sp.url = r.url
             WHERE sp.channel_id = ?
               AND sp.posted_at >= unixepoch('now', '-2 days')
               AND sp.user_id != ?
-              AND sp.message_id NOT IN (
-                  SELECT message_id FROM song_reactions WHERE reactor_user_id = ?
-              )
+              AND (r.reactors IS NULL OR r.reactors NOT LIKE ? || ',%' AND r.reactors NOT LIKE '%,' || ? || ',%' AND r.reactors NOT LIKE '%,' || ?)
             ORDER BY sp.posted_at ASC
             """,
-            (channel_id, user_id, user_id),
+            (channel_id, user_id, user_id, user_id, user_id),
         ) as cursor:
             return [
                 {
