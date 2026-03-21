@@ -19,6 +19,7 @@ def create_app(db: Database, bot=None) -> Quart:
     app.db = db
     app.bot = bot
     app.scan_status = {"running": False, "progress": "", "result": ""}
+    app.title_scan_status = {"running": False, "progress": "", "result": ""}
 
     @app.template_filter("timestamp_to_date")
     def timestamp_to_date(ts):
@@ -751,10 +752,72 @@ def create_app(db: Database, bot=None) -> Quart:
             return f":{m.group(1)}:"
         return emoji_str
 
-    @app.route("/reaction-stats")
+    async def _run_title_scan():
+        """Background task to fetch song titles from Discord embeds for reactions missing them."""
+        import discord as _discord
+        app.title_scan_status["running"] = True
+        app.title_scan_status["progress"] = "Starting title scan..."
+        app.title_scan_status["result"] = ""
+        try:
+            guild = get_guild()
+            if not guild:
+                app.title_scan_status["result"] = "Bot not connected to guild."
+                return
+
+            missing = await db.get_reactions_missing_titles()
+            total = len(missing)
+            updated = 0
+            skipped = 0
+
+            for i, item in enumerate(missing):
+                if (i + 1) % 10 == 0 or i == 0:
+                    app.title_scan_status["progress"] = f"Fetching titles... {i+1}/{total} messages"
+
+                channel = guild.get_channel(item["channel_id"])
+                if not channel:
+                    skipped += 1
+                    continue
+
+                try:
+                    message = await channel.fetch_message(item["message_id"])
+                    title = None
+                    for embed in message.embeds:
+                        if embed.title:
+                            title = embed.title
+                            break
+                    if title:
+                        await db.update_song_title(item["message_id"], title)
+                        updated += 1
+                    else:
+                        skipped += 1
+                except (_discord.NotFound, _discord.Forbidden):
+                    skipped += 1
+                except Exception:
+                    skipped += 1
+
+            app.title_scan_status["result"] = f"Done. {updated} titles updated, {skipped} skipped (of {total} messages)."
+        except Exception as e:
+            app.title_scan_status["result"] = f"Title scan failed: {e}"
+        finally:
+            app.title_scan_status["running"] = False
+            app.title_scan_status["progress"] = ""
+
+    @app.route("/reaction-stats", methods=["GET", "POST"])
     @login_required
     async def reaction_stats():
         import traceback
+
+        if request.method == "POST":
+            form = await request.form
+            action = form.get("action")
+            if action == "refresh_titles":
+                if app.title_scan_status["running"]:
+                    pass  # already running
+                elif bot and bot.is_ready():
+                    import asyncio
+                    asyncio.get_event_loop().create_task(_run_title_scan())
+                return redirect(url_for("reaction_stats"))
+
         try:
             guild = get_guild()
             filter_channel = request.args.get("channel", type=int)
@@ -821,6 +884,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 activity=activity,
                 chart_gran=chart_gran,
                 chart_range=chart_range,
+                title_scan_status=app.title_scan_status,
             )
         except Exception as e:
             traceback.print_exc()

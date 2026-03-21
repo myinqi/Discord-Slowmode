@@ -734,6 +734,21 @@ class Database:
         )
         await self.db.commit()
 
+    async def get_reactions_missing_titles(self) -> list[dict]:
+        """Return distinct (message_id, channel_id) pairs where song_title is NULL."""
+        async with self.db.execute(
+            "SELECT DISTINCT message_id, channel_id FROM song_reactions WHERE song_title IS NULL"
+        ) as cursor:
+            return [{"message_id": r[0], "channel_id": r[1]} for r in await cursor.fetchall()]
+
+    async def update_song_title(self, message_id: int, song_title: str):
+        """Set song_title for all reactions on a given message."""
+        await self.db.execute(
+            "UPDATE song_reactions SET song_title = ? WHERE message_id = ? AND song_title IS NULL",
+            (song_title, message_id),
+        )
+        await self.db.commit()
+
     async def remove_song_reaction(self, message_id: int, reactor_user_id: int, emoji: str):
         await self.db.execute(
             "DELETE FROM song_reactions WHERE message_id = ? AND reactor_user_id = ? AND emoji = ?",
