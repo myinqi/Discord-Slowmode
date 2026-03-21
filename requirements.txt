@@ -5,3 +5,4 @@ bcrypt==4.1.2
 python-dotenv==1.0.1
 hypercorn==0.16.0
 itsdangerous==2.1.2
+deep-translator==1.11.4

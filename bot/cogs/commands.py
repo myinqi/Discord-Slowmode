@@ -696,12 +696,27 @@ class CommandsCog(commands.Cog):
 
 
     @app_commands.command(name="talk", description="Let the bot speak for you in the current channel")
-    @app_commands.describe(text="The message the bot should say")
-    async def talk(self, interaction: discord.Interaction, text: str):
-        # Acknowledge ephemeral so only the command user sees the slash command
+    @app_commands.describe(
+        text="The message the bot should say",
+        translate="Translate output to a language, e.g. de, en, fr, es, ja, ...",
+    )
+    async def talk(self, interaction: discord.Interaction, text: str, translate: str = None):
         await interaction.response.send_message("Message sent!", ephemeral=True)
-        # Send the public message as italic with the user's display name
-        await interaction.channel.send(f"*{interaction.user.display_name} says: {text}*")
+
+        output = text
+        if translate:
+            try:
+                import asyncio
+                from deep_translator import GoogleTranslator
+                loop = asyncio.get_event_loop()
+                output = await loop.run_in_executor(
+                    None, lambda: GoogleTranslator(source="auto", target=translate.lower()).translate(text)
+                )
+            except Exception as e:
+                await interaction.followup.send(f"Translation failed: {e}", ephemeral=True)
+                return
+
+        await interaction.channel.send(f"*{interaction.user.display_name} says: {output}*")
 
 
 async def setup(bot):
