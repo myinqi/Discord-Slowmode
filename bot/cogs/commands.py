@@ -615,7 +615,7 @@ class CommandsCog(commands.Cog):
                 )
 
             embed = discord.Embed(
-                title="🎵 Most Reacted Songs",
+                title=f"🎵 Most Reacted Songs ({period_label})",
                 description="\n\n".join(lines),
                 color=discord.Color.blurple(),
             )
