@@ -745,67 +745,61 @@ class CommandsCog(commands.Cog):
             await interaction.followup.send(f"Translation failed: {e}", ephemeral=True)
 
 
+class TranslateLanguageSelect(discord.ui.Select):
+    """Dropdown to pick target language for message translation."""
+
+    def __init__(self, original_text: str, author_name: str):
+        self.original_text = original_text
+        self.author_name = author_name
+        options = [
+            discord.SelectOption(label="English", value="en", emoji="🇬🇧"),
+            discord.SelectOption(label="German", value="de", emoji="🇩🇪"),
+            discord.SelectOption(label="Portuguese", value="pt", emoji="🇵🇹"),
+            discord.SelectOption(label="Spanish", value="es", emoji="🇪🇸"),
+            discord.SelectOption(label="Italian", value="it", emoji="🇮🇹"),
+            discord.SelectOption(label="Russian", value="ru", emoji="🇷🇺"),
+            discord.SelectOption(label="Norwegian", value="no", emoji="🇳🇴"),
+            discord.SelectOption(label="French", value="fr", emoji="🇫🇷"),
+            discord.SelectOption(label="Japanese", value="ja", emoji="🇯🇵"),
+        ]
+        super().__init__(placeholder="Select target language...", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        target = self.values[0]
+        await interaction.response.defer(ephemeral=True)
+        try:
+            import asyncio
+            from deep_translator import GoogleTranslator
+            loop = asyncio.get_event_loop()
+            translated = await loop.run_in_executor(
+                None, lambda: GoogleTranslator(source="auto", target=target).translate(self.original_text)
+            )
+            label = [o.label for o in self.options if o.value == target][0]
+            await interaction.followup.send(
+                f"**Translation** → {label} (`{target}`) of {self.author_name}'s message:\n\n{translated}",
+                ephemeral=True,
+            )
+        except Exception as e:
+            await interaction.followup.send(f"Translation failed: {e}", ephemeral=True)
+
+
+class TranslateView(discord.ui.View):
+    def __init__(self, original_text: str, author_name: str):
+        super().__init__(timeout=60)
+        self.add_item(TranslateLanguageSelect(original_text, author_name))
+
+
 async def setup(bot):
     cog = CommandsCog(bot)
 
-    # Message context menu: right-click → Apps → Translate to English
-    @app_commands.context_menu(name="Translate to English")
-    async def translate_to_en(interaction: discord.Interaction, message: discord.Message):
-        await _translate_context(interaction, message, "en")
+    @app_commands.context_menu(name="Translate Message")
+    async def translate_message(interaction: discord.Interaction, message: discord.Message):
+        text = message.content
+        if not text:
+            await interaction.response.send_message("This message has no text content to translate.", ephemeral=True)
+            return
+        view = TranslateView(text, message.author.display_name)
+        await interaction.response.send_message("Select a language to translate to:", view=view, ephemeral=True)
 
-    # Message context menu: right-click → Apps → Translate to German
-    @app_commands.context_menu(name="Translate to German")
-    async def translate_to_de(interaction: discord.Interaction, message: discord.Message):
-        await _translate_context(interaction, message, "de")
-
-    @app_commands.context_menu(name="Translate to Portuguese")
-    async def translate_to_pt(interaction: discord.Interaction, message: discord.Message):
-        await _translate_context(interaction, message, "pt")
-
-    @app_commands.context_menu(name="Translate to Spanish")
-    async def translate_to_es(interaction: discord.Interaction, message: discord.Message):
-        await _translate_context(interaction, message, "es")
-
-    @app_commands.context_menu(name="Translate to Italian")
-    async def translate_to_it(interaction: discord.Interaction, message: discord.Message):
-        await _translate_context(interaction, message, "it")
-
-    @app_commands.context_menu(name="Translate to Russian")
-    async def translate_to_ru(interaction: discord.Interaction, message: discord.Message):
-        await _translate_context(interaction, message, "ru")
-
-    @app_commands.context_menu(name="Translate to Norwegian")
-    async def translate_to_no(interaction: discord.Interaction, message: discord.Message):
-        await _translate_context(interaction, message, "no")
-
-    bot.tree.add_command(translate_to_en)
-    bot.tree.add_command(translate_to_de)
-    bot.tree.add_command(translate_to_pt)
-    bot.tree.add_command(translate_to_es)
-    bot.tree.add_command(translate_to_it)
-    bot.tree.add_command(translate_to_ru)
-    bot.tree.add_command(translate_to_no)
-
+    bot.tree.add_command(translate_message)
     await bot.add_cog(cog)
-
-
-async def _translate_context(interaction: discord.Interaction, message: discord.Message, target: str):
-    text = message.content
-    if not text:
-        await interaction.response.send_message("This message has no text content to translate.", ephemeral=True)
-        return
-
-    await interaction.response.defer(ephemeral=True)
-    try:
-        import asyncio
-        from deep_translator import GoogleTranslator
-        loop = asyncio.get_event_loop()
-        translated = await loop.run_in_executor(
-            None, lambda: GoogleTranslator(source="auto", target=target).translate(text)
-        )
-        await interaction.followup.send(
-            f"**Translation** (`{target}`) of {message.author.display_name}'s message:\n\n{translated}",
-            ephemeral=True,
-        )
-    except Exception as e:
-        await interaction.followup.send(f"Translation failed: {e}", ephemeral=True)
