@@ -865,7 +865,7 @@ class Database:
                        GROUP_CONCAT(DISTINCT reactor_user_id) as reactors
                 FROM song_reactions
                 GROUP BY song_url
-            ) r ON sp.url = r.url
+            ) r ON sp.url = r.song_url
             WHERE sp.channel_id = ?
               AND sp.posted_at >= unixepoch('now', '-2 days')
               AND sp.user_id != ?
