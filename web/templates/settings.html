@@ -30,7 +30,7 @@
                     <option value="{{ ch.id }}" {% if new_command_channel == ch.id|string %}selected{% endif %}>#{{ ch.name }}</option>
                     {% endfor %}
                 </select>
-                <p class="text-xs text-gray-500 mt-1">Channel scanned by the <code>/new</code> command. Shows songs from the last 3 days the user hasn't reacted to.</p>
+                <p class="text-xs text-gray-500 mt-1">Channel scanned by the <code>/new</code> command. Shows songs from the last 2 days the user hasn't reacted to.</p>
             </div>
             <button type="submit"
                 class="px-5 py-2.5 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg font-medium transition-colors">

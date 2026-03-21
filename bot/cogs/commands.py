@@ -652,7 +652,7 @@ class CommandsCog(commands.Cog):
             songs = await self.bot.db.get_unseen_songs(channel_id, interaction.user.id)
 
             if not songs:
-                await interaction.followup.send("You're all caught up! No new unreacted songs in the last 3 days.", ephemeral=True)
+                await interaction.followup.send("You're all caught up! No new unreacted songs in the last 2 days.", ephemeral=True)
                 return
 
             bot_name = await self.bot.db.get_setting("bot_name") or "Slowmode Bot"
@@ -698,7 +698,7 @@ class CommandsCog(commands.Cog):
                 if song_id_match:
                     embed.set_thumbnail(url=f"https://cdn2.suno.ai/image_{song_id_match.group(1)}.jpeg")
 
-            embed.set_footer(text=f"{bot_name} • Last 3 days")
+            embed.set_footer(text=f"{bot_name} • Last 2 days")
             embed.timestamp = discord.utils.utcnow()
 
             await interaction.followup.send(embed=embed, ephemeral=True)

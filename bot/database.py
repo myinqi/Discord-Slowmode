@@ -866,7 +866,7 @@ class Database:
                 GROUP BY message_id
             ) r ON sp.message_id = r.message_id
             WHERE sp.channel_id = ?
-              AND sp.posted_at >= unixepoch('now', '-3 days')
+              AND sp.posted_at >= unixepoch('now', '-2 days')
               AND sp.user_id != ?
               AND sp.message_id NOT IN (
                   SELECT message_id FROM song_reactions WHERE reactor_user_id = ?
