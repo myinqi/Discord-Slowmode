@@ -758,8 +758,33 @@ async def setup(bot):
     async def translate_to_de(interaction: discord.Interaction, message: discord.Message):
         await _translate_context(interaction, message, "de")
 
+    @app_commands.context_menu(name="Translate to Portuguese")
+    async def translate_to_pt(interaction: discord.Interaction, message: discord.Message):
+        await _translate_context(interaction, message, "pt")
+
+    @app_commands.context_menu(name="Translate to Spanish")
+    async def translate_to_es(interaction: discord.Interaction, message: discord.Message):
+        await _translate_context(interaction, message, "es")
+
+    @app_commands.context_menu(name="Translate to Italian")
+    async def translate_to_it(interaction: discord.Interaction, message: discord.Message):
+        await _translate_context(interaction, message, "it")
+
+    @app_commands.context_menu(name="Translate to Russian")
+    async def translate_to_ru(interaction: discord.Interaction, message: discord.Message):
+        await _translate_context(interaction, message, "ru")
+
+    @app_commands.context_menu(name="Translate to Norwegian")
+    async def translate_to_no(interaction: discord.Interaction, message: discord.Message):
+        await _translate_context(interaction, message, "no")
+
     bot.tree.add_command(translate_to_en)
     bot.tree.add_command(translate_to_de)
+    bot.tree.add_command(translate_to_pt)
+    bot.tree.add_command(translate_to_es)
+    bot.tree.add_command(translate_to_it)
+    bot.tree.add_command(translate_to_ru)
+    bot.tree.add_command(translate_to_no)
 
     await bot.add_cog(cog)
 
