@@ -173,10 +173,11 @@ Protokoll aller Aktionen: gelöschte Nachrichten, Konfigurationsänderungen, Ben
 - Kanalfilter: Auswahl einzelner Kanäle oder alle zusammen
 - Summary: Gesamtreaktionen, Unique Reactors, Songs mit Reaktionen, Durchschnitt pro Song
 - Top Emojis: Beliebteste Emojis mit Balkendiagramm
-- Top Reactors: Wer reagiert am meisten
+- Top Reactors: Wer reagiert am meisten (Unique Songs)
 - Most Appreciated Artists: Wessen Songs bekommen die meisten Reaktionen
-- Most Reacted Songs: Meistbewertete Songs mit Links
-- Trendkurve: Reaktionen pro Monat (Chart.js)
+- Most Reacted Songs: Meistbewertete Songs mit Titel + Interpret + Links, gefiltert nach Zeitraum (Today, 7d, 30d, 90d, All)
+- Trendkurve: Unique Reactors pro Tag/Woche (Chart.js)
+- "Refresh Titles" Button zum Nachholen von Songtiteln aus Discord-Embeds
 
 ### Settings (Einstellungen)
 - Bot-Name ändern
@@ -199,8 +200,11 @@ Protokoll aller Aktionen: gelöschte Nachrichten, Konfigurationsänderungen, Ben
 | `/user-stats [@user]` | User-Statistiken anzeigen — Songs gesamt, pro Kanal, Durchschnitte (nur für dich sichtbar) |
 | `/user-score` | Song-Highscore/Leaderboard öffentlich im Kanal posten |
 | `/find-song [@user] [title]` | Song suchen: mit User+Titel, nur User (zufällig), nur Titel, oder komplett zufällig (nur für dich sichtbar) |
+| `/talk [translate] <text>` | Bot spricht im Kanal: *<username> says: <text>* (optional mit Übersetzung) |
+| `/translate <to> <text>` | Text übersetzen (nur für dich sichtbar) |
+| `/top <period>` | Most Reacted Songs Top 10 mit Titel, Interpret, Reaktionen und Cover (nur für dich sichtbar) |
 
-> Cooldown- und Toggle-Commands können nur von Serverbesitzern und Mitgliedern mit einer **Command Role** genutzt werden. `/random-song`, `/find-list`, `/song-stats`, `/user-stats`, `/user-score` und `/find-song` sind für **alle** Servermitglieder verfügbar.
+> Cooldown- und Toggle-Commands können nur von Serverbesitzern und Mitgliedern mit einer **Command Role** genutzt werden. `/random-song`, `/find-list`, `/song-stats`, `/user-stats`, `/user-score`, `/find-song`, `/talk`, `/translate` und `/top` sind für **alle** Servermitglieder verfügbar.
 
 ---
 
