@@ -567,6 +567,74 @@ class CommandsCog(commands.Cog):
             await interaction.followup.send(f"Error: {e}", ephemeral=True)
 
 
+    @app_commands.command(name="top", description="Show the most reacted songs (only visible to you)")
+    @app_commands.describe(
+        period="Time range: today, 7, 30, 90, or all (default: 30)",
+    )
+    @app_commands.choices(period=[
+        app_commands.Choice(name="Today", value="1"),
+        app_commands.Choice(name="Last 7 days", value="7"),
+        app_commands.Choice(name="Last 30 days", value="30"),
+        app_commands.Choice(name="Last 90 days", value="90"),
+        app_commands.Choice(name="All time", value="all"),
+    ])
+    async def top_songs_cmd(self, interaction: discord.Interaction, period: str = "30"):
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            days = {"1": 1, "7": 7, "30": 30, "90": 90, "all": 0}.get(period, 30)
+            top_songs = await self.bot.db.get_top_songs(days=days)
+
+            if not top_songs:
+                await interaction.followup.send("No reacted songs found for this period.", ephemeral=True)
+                return
+
+            bot_name = await self.bot.db.get_setting("bot_name") or "Slowmode Bot"
+            guild = interaction.guild
+            period_label = {"1": "Today", "7": "Last 7 days", "30": "Last 30 days", "90": "Last 90 days", "all": "All time"}.get(period, "Last 30 days")
+
+            medals = ["🥇", "🥈", "🥉"]
+            lines = []
+            for i, song in enumerate(top_songs):
+                prefix = medals[i] if i < 3 else f"**{i+1}.**"
+                # Resolve author name
+                author_name = f"User {song['post_author_id']}"
+                if guild and song.get("post_author_id"):
+                    member = guild.get_member(song["post_author_id"])
+                    if member:
+                        author_name = member.display_name
+
+                title = song.get("song_title") or "Unknown Title"
+                url = song.get("song_url", "")
+                unique = song["unique_count"]
+                total = song["total_count"]
+
+                lines.append(
+                    f"{prefix} **[{title}]({url})**\n"
+                    f"ㅤby **{author_name}** — {unique} unique reactions ({total} total)"
+                )
+
+            embed = discord.Embed(
+                title="🎵 Most Reacted Songs",
+                description="\n\n".join(lines),
+                color=discord.Color.blurple(),
+            )
+
+            # Set thumbnail from top song cover image
+            top_url = top_songs[0].get("song_url", "")
+            song_id_match = re.search(r'suno\.com/(?:s|song)/([\w-]+)', top_url)
+            if song_id_match:
+                embed.set_thumbnail(url=f"https://cdn2.suno.ai/image_{song_id_match.group(1)}.jpeg")
+
+            embed.set_footer(text=f"{bot_name} • {period_label}")
+            embed.timestamp = discord.utils.utcnow()
+
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+        except Exception as e:
+            print(f"[top] Error: {e}")
+            await interaction.followup.send(f"Error: {e}", ephemeral=True)
+
     @app_commands.command(name="find-song", description="Find a song — by user, title, or random")
     @app_commands.describe(
         user="Optional: filter by user",
