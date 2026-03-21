@@ -697,10 +697,14 @@ class CommandsCog(commands.Cog):
 
     @app_commands.command(name="talk", description="Let the bot speak for you in the current channel")
     @app_commands.describe(
+        translate="Translate output to a language, e.g. de, en, fr, es, no, ja (leave empty for no translation)",
         text="The message the bot should say",
-        translate="Translate output to a language, e.g. de, en, fr, es, ja, ...",
     )
-    async def talk(self, interaction: discord.Interaction, text: str, translate: str = None):
+    async def talk(self, interaction: discord.Interaction, translate: str = None, text: str = None):
+        if not text:
+            await interaction.response.send_message("Please provide a text to say.", ephemeral=True)
+            return
+
         await interaction.response.send_message("Message sent!", ephemeral=True)
 
         output = text
@@ -721,10 +725,10 @@ class CommandsCog(commands.Cog):
 
     @app_commands.command(name="translate", description="Translate a message (only you can see the result)")
     @app_commands.describe(
+        to="Target language code, e.g. en, de, fr, es, no, ja",
         text="The text to translate",
-        to="Target language code, e.g. en, de, fr, es, no, ja, ...",
     )
-    async def translate_cmd(self, interaction: discord.Interaction, text: str, to: str = "en"):
+    async def translate_cmd(self, interaction: discord.Interaction, to: str, text: str):
         await interaction.response.defer(ephemeral=True)
         try:
             import asyncio
