@@ -695,5 +695,14 @@ class CommandsCog(commands.Cog):
             await interaction.followup.send(f"Error: {e}", ephemeral=True)
 
 
+    @app_commands.command(name="talk", description="Let the bot speak for you in the current channel")
+    @app_commands.describe(text="The message the bot should say")
+    async def talk(self, interaction: discord.Interaction, text: str):
+        # Acknowledge ephemeral so only the command user sees the slash command
+        await interaction.response.send_message("Message sent!", ephemeral=True)
+        # Send the public message as italic with the user's display name
+        await interaction.channel.send(f"*{interaction.user.display_name} says: {text}*")
+
+
 async def setup(bot):
     await bot.add_cog(CommandsCog(bot))
