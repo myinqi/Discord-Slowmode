@@ -822,7 +822,7 @@ def create_app(db: Database, bot=None) -> Quart:
         """Background task to backfill reactions from Discord message history."""
         import discord as _discord
         app.reaction_scan_status["running"] = True
-        app.reaction_scan_status["progress"] = "Starting reaction scan..."
+        app.reaction_scan_status["progress"] = "Loading already-scanned messages..."
         app.reaction_scan_status["result"] = ""
         try:
             guild = get_guild()
@@ -830,9 +830,13 @@ def create_app(db: Database, bot=None) -> Quart:
                 app.reaction_scan_status["result"] = "Bot not connected to guild."
                 return
 
+            # Pre-load message IDs that already have reactions in DB — skip them entirely
+            scanned_ids = await db.get_scanned_reaction_message_ids()
+
             channels = await db.get_monitored_channels()
             total_added = 0
             total_messages = 0
+            skipped = 0
 
             for i, ch_cfg in enumerate(channels):
                 channel = guild.get_channel(ch_cfg["channel_id"])
@@ -848,15 +852,10 @@ def create_app(db: Database, bot=None) -> Quart:
                         if message.author.bot:
                             continue
                         msg_count += 1
-                        if msg_count % 200 == 0:
-                            # Flush batch periodically
-                            if batch:
-                                await db.add_song_reactions_bulk(batch)
-                                total_added += len(batch)
-                                batch = []
+                        if msg_count % 500 == 0:
                             app.reaction_scan_status["progress"] = (
                                 f"Scanning #{channel.name} ({i+1}/{len(channels)})... "
-                                f"{msg_count} messages, {total_added} reactions added"
+                                f"{msg_count} msgs, {total_added} reactions, {skipped} skipped"
                             )
 
                         urls = SUNO_URL_PATTERN.findall(message.content)
@@ -864,6 +863,11 @@ def create_app(db: Database, bot=None) -> Quart:
                             continue
 
                         if not message.reactions:
+                            continue
+
+                        # Skip messages already fully scanned
+                        if message.id in scanned_ids:
+                            skipped += 1
                             continue
 
                         total_messages += 1
@@ -886,26 +890,34 @@ def create_app(db: Database, bot=None) -> Quart:
                                             message.id, channel.id, url,
                                             message.author.id, user.id,
                                             str(user), emoji_str, song_title,
+                                            message.created_at.timestamp(),
                                         ))
                             except (_discord.Forbidden, _discord.HTTPException):
                                 pass
+
+                        # Flush batch when large enough
+                        if len(batch) >= 500:
+                            await db.add_song_reactions_bulk(batch)
+                            total_added += len(batch)
+                            batch = []
 
                     # Flush remaining batch
                     if batch:
                         await db.add_song_reactions_bulk(batch)
                         total_added += len(batch)
+                        batch = []
 
                 except Exception as e:
                     app.reaction_scan_status["progress"] = f"Error scanning #{channel.name}: {e}"
                     continue
 
             app.reaction_scan_status["result"] = (
-                f"Done. {total_added} reactions processed across {total_messages} song messages "
-                f"in {len(channels)} channel(s). Duplicates were ignored."
+                f"Done. {total_added} reactions added, {skipped} messages skipped (already scanned), "
+                f"{total_messages} new song messages processed in {len(channels)} channel(s)."
             )
             await db.add_audit_log(
                 event_type="reaction_scan",
-                details=f"Reaction scan: {total_added} reactions processed from {total_messages} messages",
+                details=f"Reaction scan: {total_added} reactions from {total_messages} messages, {skipped} skipped",
                 actor="system",
             )
         except Exception as e:
@@ -958,10 +970,8 @@ def create_app(db: Database, bot=None) -> Quart:
                 days=range_days,
             )
 
-            # Most Reacted Songs — independent time filter
-            songs_range = request.args.get("songs_range", default="30", type=str)
-            songs_days = {"1": 1, "7": 7, "30": 30, "90": 90, "all": 0}.get(songs_range, 30)
-            top_songs = await db.get_top_songs(channel_id=filter_channel, days=songs_days)
+            # Most Reacted Songs — uses same central time filter
+            top_songs = await db.get_top_songs(channel_id=filter_channel, days=range_days)
 
             # Channel list with reaction counts
             reaction_channels = await db.get_reaction_channels()
@@ -1011,7 +1021,6 @@ def create_app(db: Database, bot=None) -> Quart:
                 title_scan_status=app.title_scan_status,
                 reaction_scan_status=app.reaction_scan_status,
                 top_songs=top_songs,
-                songs_range=songs_range,
             )
         except Exception as e:
             traceback.print_exc()

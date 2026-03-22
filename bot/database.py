@@ -727,30 +727,51 @@ class Database:
 
     async def add_song_reaction(self, message_id: int, channel_id: int, song_url: str,
                                  post_author_id: int, reactor_user_id: int,
-                                 reactor_user_name: str, emoji: str, song_title: str = None):
-        await self.db.execute(
-            "INSERT INTO song_reactions "
-            "(message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji, song_title) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(message_id, reactor_user_id, emoji) DO UPDATE SET "
-            "song_title = COALESCE(song_reactions.song_title, excluded.song_title), "
-            "song_url = COALESCE(song_reactions.song_url, excluded.song_url)",
-            (message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji, song_title),
-        )
+                                 reactor_user_name: str, emoji: str, song_title: str = None,
+                                 reacted_at: float = None):
+        if reacted_at is not None:
+            await self.db.execute(
+                "INSERT INTO song_reactions "
+                "(message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji, song_title, reacted_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(message_id, reactor_user_id, emoji) DO UPDATE SET "
+                "song_title = COALESCE(song_reactions.song_title, excluded.song_title), "
+                "song_url = COALESCE(song_reactions.song_url, excluded.song_url), "
+                "reacted_at = MIN(song_reactions.reacted_at, excluded.reacted_at)",
+                (message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji, song_title, reacted_at),
+            )
+        else:
+            await self.db.execute(
+                "INSERT INTO song_reactions "
+                "(message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji, song_title) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(message_id, reactor_user_id, emoji) DO UPDATE SET "
+                "song_title = COALESCE(song_reactions.song_title, excluded.song_title), "
+                "song_url = COALESCE(song_reactions.song_url, excluded.song_url)",
+                (message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji, song_title),
+            )
         await self.db.commit()
 
     async def add_song_reactions_bulk(self, rows: list[tuple]):
-        """Bulk insert reactions. Rows: (message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji, song_title)"""
+        """Bulk insert reactions. Rows: (message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji, song_title, reacted_at)"""
         await self.db.executemany(
             "INSERT INTO song_reactions "
-            "(message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji, song_title) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "(message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji, song_title, reacted_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(message_id, reactor_user_id, emoji) DO UPDATE SET "
             "song_title = COALESCE(song_reactions.song_title, excluded.song_title), "
-            "song_url = COALESCE(song_reactions.song_url, excluded.song_url)",
+            "song_url = COALESCE(song_reactions.song_url, excluded.song_url), "
+            "reacted_at = MIN(song_reactions.reacted_at, excluded.reacted_at)",
             rows,
         )
         await self.db.commit()
+
+    async def get_scanned_reaction_message_ids(self) -> set[int]:
+        """Return set of message_ids that already have reactions in the DB."""
+        async with self.db.execute(
+            "SELECT DISTINCT message_id FROM song_reactions"
+        ) as cursor:
+            return {r[0] async for r in cursor}
 
     async def get_reactions_missing_titles(self) -> list[dict]:
         """Return distinct (message_id, channel_id) pairs where song_title is NULL."""

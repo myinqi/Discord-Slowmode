@@ -113,14 +113,38 @@
     </div>
 </div>
 
+<!-- Central Time Filter -->
+{% set base_params = {} %}
+{% if filter_channel %}{% set base_params = {'channel': filter_channel} %}{% endif %}
+<div class="flex items-center gap-2 flex-wrap mb-6">
+    <span class="text-gray-400 text-sm font-medium mr-1">Period:</span>
+    <a href="{{ url_for('reaction_stats', chart=chart_gran, range='1', **base_params) }}"
+        class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors {% if chart_range == '1' %}bg-discord-green/20 text-discord-green border border-discord-green/30{% else %}bg-discord-darker text-gray-400 hover:text-white border border-transparent{% endif %}">
+        Today
+    </a>
+    <a href="{{ url_for('reaction_stats', chart=chart_gran, range='7', **base_params) }}"
+        class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors {% if chart_range == '7' %}bg-discord-green/20 text-discord-green border border-discord-green/30{% else %}bg-discord-darker text-gray-400 hover:text-white border border-transparent{% endif %}">
+        7d
+    </a>
+    <a href="{{ url_for('reaction_stats', chart=chart_gran, range='30', **base_params) }}"
+        class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors {% if chart_range == '30' %}bg-discord-green/20 text-discord-green border border-discord-green/30{% else %}bg-discord-darker text-gray-400 hover:text-white border border-transparent{% endif %}">
+        30d
+    </a>
+    <a href="{{ url_for('reaction_stats', chart=chart_gran, range='90', **base_params) }}"
+        class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors {% if chart_range == '90' %}bg-discord-green/20 text-discord-green border border-discord-green/30{% else %}bg-discord-darker text-gray-400 hover:text-white border border-transparent{% endif %}">
+        90d
+    </a>
+    <a href="{{ url_for('reaction_stats', chart=chart_gran, range='all', **base_params) }}"
+        class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors {% if chart_range == 'all' %}bg-discord-green/20 text-discord-green border border-discord-green/30{% else %}bg-discord-darker text-gray-400 hover:text-white border border-transparent{% endif %}">
+        All
+    </a>
+</div>
+
 <!-- Reactor Activity Chart -->
 <div class="bg-discord-dark rounded-xl border border-gray-700/50 mb-6">
     <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between flex-wrap gap-3">
         <h3 class="text-white font-semibold">Reactor Activity <span class="text-gray-500 text-xs font-normal">(unique reactors per {{ chart_gran }})</span></h3>
-        <div class="flex items-center gap-2 flex-wrap">
-            <!-- Granularity -->
-            {% set base_params = {} %}
-            {% if filter_channel %}{% set base_params = {'channel': filter_channel} %}{% endif %}
+        <div class="flex items-center gap-2">
             <a href="{{ url_for('reaction_stats', chart='daily', range=chart_range, **base_params) }}"
                 class="px-3 py-1 rounded-md text-xs font-medium transition-colors {% if chart_gran == 'daily' %}bg-discord-blurple text-white{% else %}bg-discord-darker text-gray-400 hover:text-white{% endif %}">
                 Daily
@@ -128,28 +152,6 @@
             <a href="{{ url_for('reaction_stats', chart='weekly', range=chart_range, **base_params) }}"
                 class="px-3 py-1 rounded-md text-xs font-medium transition-colors {% if chart_gran == 'weekly' %}bg-discord-blurple text-white{% else %}bg-discord-darker text-gray-400 hover:text-white{% endif %}">
                 Weekly
-            </a>
-            <span class="text-gray-600 mx-1">|</span>
-            <!-- Range -->
-            <a href="{{ url_for('reaction_stats', chart=chart_gran, range='1', **base_params) }}"
-                class="px-3 py-1 rounded-md text-xs font-medium transition-colors {% if chart_range == '1' %}bg-discord-green/20 text-discord-green{% else %}bg-discord-darker text-gray-400 hover:text-white{% endif %}">
-                Today
-            </a>
-            <a href="{{ url_for('reaction_stats', chart=chart_gran, range='7', **base_params) }}"
-                class="px-3 py-1 rounded-md text-xs font-medium transition-colors {% if chart_range == '7' %}bg-discord-green/20 text-discord-green{% else %}bg-discord-darker text-gray-400 hover:text-white{% endif %}">
-                7d
-            </a>
-            <a href="{{ url_for('reaction_stats', chart=chart_gran, range='30', **base_params) }}"
-                class="px-3 py-1 rounded-md text-xs font-medium transition-colors {% if chart_range == '30' %}bg-discord-green/20 text-discord-green{% else %}bg-discord-darker text-gray-400 hover:text-white{% endif %}">
-                30d
-            </a>
-            <a href="{{ url_for('reaction_stats', chart=chart_gran, range='90', **base_params) }}"
-                class="px-3 py-1 rounded-md text-xs font-medium transition-colors {% if chart_range == '90' %}bg-discord-green/20 text-discord-green{% else %}bg-discord-darker text-gray-400 hover:text-white{% endif %}">
-                90d
-            </a>
-            <a href="{{ url_for('reaction_stats', chart=chart_gran, range='all', **base_params) }}"
-                class="px-3 py-1 rounded-md text-xs font-medium transition-colors {% if chart_range == 'all' %}bg-discord-green/20 text-discord-green{% else %}bg-discord-darker text-gray-400 hover:text-white{% endif %}">
-                All
             </a>
         </div>
     </div>
@@ -246,16 +248,9 @@
 
     <!-- Top Songs -->
     <div class="bg-discord-dark rounded-xl border border-gray-700/50">
-        <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between flex-wrap gap-3">
-            <h3 class="text-white font-semibold">🎵 Most Reacted Songs <span class="text-gray-500 text-xs font-normal">({% if songs_range == '1' %}today{% elif songs_range == 'all' %}all time{% else %}last {{ songs_range }}d{% endif %}, unique reactions)</span></h3>
-            <div class="flex gap-1">
-                {% for val, label in [('1', 'Today'), ('7', '7d'), ('30', '30d'), ('90', '90d'), ('all', 'All')] %}
-                <a href="{{ url_for('reaction_stats', channel=filter_channel, range=chart_range, chart=chart_gran, songs_range=val) }}"
-                    class="px-3 py-1 rounded-lg text-xs font-medium transition-colors {% if songs_range == val %}bg-discord-blurple text-white{% else %}bg-discord-darker text-gray-400 hover:text-white{% endif %}">
-                    {{ label }}
-                </a>
-                {% endfor %}
-            </div>
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">Most Reacted Songs</h3>
+            <p class="text-gray-500 text-xs mt-1">By unique reactions</p>
         </div>
         <div class="p-5 space-y-3">
             {% if top_songs %}
