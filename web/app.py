@@ -20,6 +20,7 @@ def create_app(db: Database, bot=None) -> Quart:
     app.bot = bot
     app.scan_status = {"running": False, "progress": "", "result": ""}
     app.title_scan_status = {"running": False, "progress": "", "result": ""}
+    app.reaction_scan_status = {"running": False, "progress": "", "result": ""}
 
     @app.template_filter("timestamp_to_date")
     def timestamp_to_date(ts):
@@ -817,6 +818,102 @@ def create_app(db: Database, bot=None) -> Quart:
             app.title_scan_status["running"] = False
             app.title_scan_status["progress"] = ""
 
+    async def _run_reaction_scan():
+        """Background task to backfill reactions from Discord message history."""
+        import discord as _discord
+        app.reaction_scan_status["running"] = True
+        app.reaction_scan_status["progress"] = "Starting reaction scan..."
+        app.reaction_scan_status["result"] = ""
+        try:
+            guild = get_guild()
+            if not guild:
+                app.reaction_scan_status["result"] = "Bot not connected to guild."
+                return
+
+            channels = await db.get_monitored_channels()
+            total_added = 0
+            total_messages = 0
+
+            for i, ch_cfg in enumerate(channels):
+                channel = guild.get_channel(ch_cfg["channel_id"])
+                if not channel:
+                    continue
+
+                app.reaction_scan_status["progress"] = f"Scanning #{channel.name} ({i+1}/{len(channels)})..."
+                msg_count = 0
+
+                try:
+                    batch = []
+                    async for message in channel.history(limit=None):
+                        if message.author.bot:
+                            continue
+                        msg_count += 1
+                        if msg_count % 200 == 0:
+                            # Flush batch periodically
+                            if batch:
+                                await db.add_song_reactions_bulk(batch)
+                                total_added += len(batch)
+                                batch = []
+                            app.reaction_scan_status["progress"] = (
+                                f"Scanning #{channel.name} ({i+1}/{len(channels)})... "
+                                f"{msg_count} messages, {total_added} reactions added"
+                            )
+
+                        urls = SUNO_URL_PATTERN.findall(message.content)
+                        if not urls:
+                            continue
+
+                        if not message.reactions:
+                            continue
+
+                        total_messages += 1
+                        # Extract title from embed
+                        song_title = None
+                        for embed in message.embeds:
+                            if embed.title:
+                                song_title = embed.title
+                                break
+
+                        # Fetch all reactions on this message
+                        for reaction in message.reactions:
+                            emoji_str = str(reaction.emoji)
+                            try:
+                                async for user in reaction.users():
+                                    if user.bot:
+                                        continue
+                                    for url in urls:
+                                        batch.append((
+                                            message.id, channel.id, url,
+                                            message.author.id, user.id,
+                                            str(user), emoji_str, song_title,
+                                        ))
+                            except (_discord.Forbidden, _discord.HTTPException):
+                                pass
+
+                    # Flush remaining batch
+                    if batch:
+                        await db.add_song_reactions_bulk(batch)
+                        total_added += len(batch)
+
+                except Exception as e:
+                    app.reaction_scan_status["progress"] = f"Error scanning #{channel.name}: {e}"
+                    continue
+
+            app.reaction_scan_status["result"] = (
+                f"Done. {total_added} reactions processed across {total_messages} song messages "
+                f"in {len(channels)} channel(s). Duplicates were ignored."
+            )
+            await db.add_audit_log(
+                event_type="reaction_scan",
+                details=f"Reaction scan: {total_added} reactions processed from {total_messages} messages",
+                actor="system",
+            )
+        except Exception as e:
+            app.reaction_scan_status["result"] = f"Reaction scan failed: {e}"
+        finally:
+            app.reaction_scan_status["running"] = False
+            app.reaction_scan_status["progress"] = ""
+
     @app.route("/reaction-stats", methods=["GET", "POST"])
     @login_required
     async def reaction_stats():
@@ -831,6 +928,13 @@ def create_app(db: Database, bot=None) -> Quart:
                 elif bot and bot.is_ready():
                     import asyncio
                     asyncio.get_event_loop().create_task(_run_title_scan())
+                return redirect(url_for("reaction_stats"))
+            elif action == "scan_reactions":
+                if app.reaction_scan_status["running"]:
+                    pass  # already running
+                elif bot and bot.is_ready():
+                    import asyncio
+                    asyncio.get_event_loop().create_task(_run_reaction_scan())
                 return redirect(url_for("reaction_stats"))
 
         try:
@@ -905,6 +1009,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 chart_gran=chart_gran,
                 chart_range=chart_range,
                 title_scan_status=app.title_scan_status,
+                reaction_scan_status=app.reaction_scan_status,
                 top_songs=top_songs,
                 songs_range=songs_range,
             )

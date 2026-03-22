@@ -729,10 +729,26 @@ class Database:
                                  post_author_id: int, reactor_user_id: int,
                                  reactor_user_name: str, emoji: str, song_title: str = None):
         await self.db.execute(
-            "INSERT OR IGNORE INTO song_reactions "
+            "INSERT INTO song_reactions "
             "(message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji, song_title) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(message_id, reactor_user_id, emoji) DO UPDATE SET "
+            "song_title = COALESCE(song_reactions.song_title, excluded.song_title), "
+            "song_url = COALESCE(song_reactions.song_url, excluded.song_url)",
             (message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji, song_title),
+        )
+        await self.db.commit()
+
+    async def add_song_reactions_bulk(self, rows: list[tuple]):
+        """Bulk insert reactions. Rows: (message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji, song_title)"""
+        await self.db.executemany(
+            "INSERT INTO song_reactions "
+            "(message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji, song_title) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(message_id, reactor_user_id, emoji) DO UPDATE SET "
+            "song_title = COALESCE(song_reactions.song_title, excluded.song_title), "
+            "song_url = COALESCE(song_reactions.song_url, excluded.song_url)",
+            rows,
         )
         await self.db.commit()
 
