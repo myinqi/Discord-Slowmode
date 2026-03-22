@@ -855,18 +855,13 @@ class Database:
         async with self.db.execute(
             """
             SELECT sp.id, sp.url, sp.user_id, sp.posted_at,
-                   COALESCE(rc.unique_cnt, 0) as unique_cnt,
-                   COALESCE(rc.total_cnt, 0) as total_cnt,
-                   rc.title
+                   (SELECT COUNT(DISTINCT sr2.reactor_user_id) FROM song_reactions sr2
+                    WHERE sr2.message_id = sp.message_id OR sr2.song_url = sp.url) as unique_cnt,
+                   (SELECT COUNT(*) FROM song_reactions sr3
+                    WHERE sr3.message_id = sp.message_id OR sr3.song_url = sp.url) as total_cnt,
+                   (SELECT MAX(sr4.song_title) FROM song_reactions sr4
+                    WHERE sr4.message_id = sp.message_id OR sr4.song_url = sp.url) as title
             FROM song_posts sp
-            LEFT JOIN (
-                SELECT message_id,
-                       COUNT(DISTINCT reactor_user_id) as unique_cnt,
-                       COUNT(*) as total_cnt,
-                       MAX(song_title) as title
-                FROM song_reactions
-                GROUP BY message_id
-            ) rc ON rc.message_id = sp.message_id
             WHERE sp.channel_id = ?
               AND sp.posted_at >= unixepoch('now', '-2 days')
               AND sp.user_id != ?
