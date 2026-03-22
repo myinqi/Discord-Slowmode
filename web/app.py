@@ -953,22 +953,12 @@ def create_app(db: Database, bot=None) -> Quart:
             guild = get_guild()
             filter_channel = request.args.get("channel", type=int)
 
-            # Chart params
-            chart_gran = request.args.get("chart", default="daily")
-            if chart_gran not in ("daily", "weekly"):
-                chart_gran = "daily"
+            # Time filter
             chart_range = request.args.get("range", default="30", type=str)
             range_days = {"1": 1, "7": 7, "30": 30, "90": 90, "all": 0}.get(chart_range, 30)
 
             # All stats use the same time filter
             stats = await db.get_reaction_stats(channel_id=filter_channel, days=range_days)
-
-            # Reactor activity for chart
-            activity = await db.get_reactor_activity(
-                channel_id=filter_channel,
-                granularity=chart_gran,
-                days=range_days,
-            )
 
             # Most Reacted Songs — uses same central time filter
             top_songs = await db.get_top_songs(channel_id=filter_channel, days=range_days)
@@ -1015,8 +1005,6 @@ def create_app(db: Database, bot=None) -> Quart:
                 stats=stats,
                 channel_list=channel_list,
                 filter_channel=filter_channel,
-                activity=activity,
-                chart_gran=chart_gran,
                 chart_range=chart_range,
                 title_scan_status=app.title_scan_status,
                 reaction_scan_status=app.reaction_scan_status,

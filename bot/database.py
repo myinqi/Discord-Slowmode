@@ -853,33 +853,42 @@ class Database:
                 stats["total_reactions"] / stats["unique_songs_reacted"], 1
             )
 
-        # Top emojis
+        # --- All-time stats (only channel filter, no time filter) ---
+        alltime_conditions = []
+        alltime_params = []
+        if channel_id:
+            alltime_conditions.append("channel_id = ?")
+            alltime_params.append(channel_id)
+        alltime_where = ("WHERE " + " AND ".join(alltime_conditions)) if alltime_conditions else ""
+        alltime_params = tuple(alltime_params)
+
+        # Top emojis (all-time)
         async with self.db.execute(
-            f"SELECT emoji, COUNT(*) as cnt FROM song_reactions {where} GROUP BY emoji ORDER BY cnt DESC LIMIT 15",
-            params,
+            f"SELECT emoji, COUNT(*) as cnt FROM song_reactions {alltime_where} GROUP BY emoji ORDER BY cnt DESC LIMIT 15",
+            alltime_params,
         ) as cursor:
             stats["top_emojis"] = [{"emoji": r[0], "count": r[1]} for r in await cursor.fetchall()]
 
-        # Top reactors
+        # Top reactors (all-time)
         async with self.db.execute(
             f"SELECT reactor_user_id, reactor_user_name, COUNT(DISTINCT message_id) as cnt "
-            f"FROM song_reactions {where} GROUP BY reactor_user_id ORDER BY cnt DESC LIMIT 10",
-            params,
+            f"FROM song_reactions {alltime_where} GROUP BY reactor_user_id ORDER BY cnt DESC LIMIT 10",
+            alltime_params,
         ) as cursor:
             stats["top_reactors"] = [
                 {"user_id": r[0], "user_name": r[1], "count": r[2]}
                 for r in await cursor.fetchall()
             ]
 
-        # Most reacted authors (whose songs get the most reactions)
-        author_conditions = list(conditions) if conditions else []
+        # Most reacted authors (all-time)
+        author_conditions = list(alltime_conditions)
         author_conditions.append("post_author_id IS NOT NULL")
         author_where = "WHERE " + " AND ".join(author_conditions)
         async with self.db.execute(
             f"SELECT post_author_id, COUNT(*) as cnt "
             f"FROM song_reactions {author_where} "
             f"GROUP BY post_author_id ORDER BY cnt DESC LIMIT 10",
-            params,
+            alltime_params,
         ) as cursor:
             stats["most_reacted_authors"] = [
                 {"user_id": r[0], "count": r[1]} for r in await cursor.fetchall()
@@ -921,22 +930,24 @@ class Database:
             ]
 
     async def get_top_songs(self, channel_id: int = None, days: int = 0) -> list[dict]:
-        """Return top songs ranked by unique reactions (distinct reactors per song)."""
+        """Return top songs ranked by unique reactions. Filters by song posting date (not reaction date)."""
         conditions = []
         params = []
         if channel_id:
-            conditions.append("channel_id = ?")
+            conditions.append("sp.channel_id = ?")
             params.append(channel_id)
         if days:
-            conditions.append(f"reacted_at >= unixepoch('now', '-{int(days)} days')")
+            conditions.append(f"sp.posted_at >= unixepoch('now', '-{int(days)} days')")
 
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
         async with self.db.execute(
-            f"SELECT message_id, song_url, post_author_id, "
-            f"COUNT(DISTINCT reactor_user_id) as unique_cnt, COUNT(*) as total_cnt, "
-            f"MAX(song_title) as title "
-            f"FROM song_reactions {where} GROUP BY message_id ORDER BY unique_cnt DESC LIMIT 10",
+            f"SELECT sr.message_id, sr.song_url, sr.post_author_id, "
+            f"COUNT(DISTINCT sr.reactor_user_id) as unique_cnt, COUNT(*) as total_cnt, "
+            f"MAX(sr.song_title) as title "
+            f"FROM song_reactions sr "
+            f"JOIN song_posts sp ON sp.message_id = sr.message_id "
+            f"{where} GROUP BY sr.message_id ORDER BY unique_cnt DESC LIMIT 10",
             tuple(params),
         ) as cursor:
             return [

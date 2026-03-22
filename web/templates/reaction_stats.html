@@ -118,50 +118,26 @@
 {% if filter_channel %}{% set base_params = {'channel': filter_channel} %}{% endif %}
 <div class="flex items-center gap-2 flex-wrap mb-6">
     <span class="text-gray-400 text-sm font-medium mr-1">Period:</span>
-    <a href="{{ url_for('reaction_stats', chart=chart_gran, range='1', **base_params) }}"
+    <a href="{{ url_for('reaction_stats', range='1', **base_params) }}"
         class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors {% if chart_range == '1' %}bg-discord-green/20 text-discord-green border border-discord-green/30{% else %}bg-discord-darker text-gray-400 hover:text-white border border-transparent{% endif %}">
         Today
     </a>
-    <a href="{{ url_for('reaction_stats', chart=chart_gran, range='7', **base_params) }}"
+    <a href="{{ url_for('reaction_stats', range='7', **base_params) }}"
         class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors {% if chart_range == '7' %}bg-discord-green/20 text-discord-green border border-discord-green/30{% else %}bg-discord-darker text-gray-400 hover:text-white border border-transparent{% endif %}">
         7d
     </a>
-    <a href="{{ url_for('reaction_stats', chart=chart_gran, range='30', **base_params) }}"
+    <a href="{{ url_for('reaction_stats', range='30', **base_params) }}"
         class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors {% if chart_range == '30' %}bg-discord-green/20 text-discord-green border border-discord-green/30{% else %}bg-discord-darker text-gray-400 hover:text-white border border-transparent{% endif %}">
         30d
     </a>
-    <a href="{{ url_for('reaction_stats', chart=chart_gran, range='90', **base_params) }}"
+    <a href="{{ url_for('reaction_stats', range='90', **base_params) }}"
         class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors {% if chart_range == '90' %}bg-discord-green/20 text-discord-green border border-discord-green/30{% else %}bg-discord-darker text-gray-400 hover:text-white border border-transparent{% endif %}">
         90d
     </a>
-    <a href="{{ url_for('reaction_stats', chart=chart_gran, range='all', **base_params) }}"
+    <a href="{{ url_for('reaction_stats', range='all', **base_params) }}"
         class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors {% if chart_range == 'all' %}bg-discord-green/20 text-discord-green border border-discord-green/30{% else %}bg-discord-darker text-gray-400 hover:text-white border border-transparent{% endif %}">
         All
     </a>
-</div>
-
-<!-- Reactor Activity Chart -->
-<div class="bg-discord-dark rounded-xl border border-gray-700/50 mb-6">
-    <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between flex-wrap gap-3">
-        <h3 class="text-white font-semibold">Reactor Activity <span class="text-gray-500 text-xs font-normal">(unique reactors per {{ chart_gran }})</span></h3>
-        <div class="flex items-center gap-2">
-            <a href="{{ url_for('reaction_stats', chart='daily', range=chart_range, **base_params) }}"
-                class="px-3 py-1 rounded-md text-xs font-medium transition-colors {% if chart_gran == 'daily' %}bg-discord-blurple text-white{% else %}bg-discord-darker text-gray-400 hover:text-white{% endif %}">
-                Daily
-            </a>
-            <a href="{{ url_for('reaction_stats', chart='weekly', range=chart_range, **base_params) }}"
-                class="px-3 py-1 rounded-md text-xs font-medium transition-colors {% if chart_gran == 'weekly' %}bg-discord-blurple text-white{% else %}bg-discord-darker text-gray-400 hover:text-white{% endif %}">
-                Weekly
-            </a>
-        </div>
-    </div>
-    <div class="p-5">
-        {% if activity.counts %}
-        <canvas id="reactorActivityChart" height="120"></canvas>
-        {% else %}
-        <p class="text-gray-500 text-sm text-center py-4">No activity data for this period.</p>
-        {% endif %}
-    </div>
 </div>
 
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -171,6 +147,7 @@
     <div class="bg-discord-dark rounded-xl border border-gray-700/50">
         <div class="px-5 py-4 border-b border-gray-700/50">
             <h3 class="text-white font-semibold">Top Emojis</h3>
+            <p class="text-gray-500 text-xs mt-1">All time</p>
         </div>
         <div class="p-5 space-y-2">
             {% if stats.top_emojis %}{% set max_emoji = stats.top_emojis | map(attribute='count') | list | max %}{% else %}{% set max_emoji = 1 %}{% endif %}
@@ -194,6 +171,7 @@
     <div class="bg-discord-dark rounded-xl border border-gray-700/50">
         <div class="px-5 py-4 border-b border-gray-700/50">
             <h3 class="text-white font-semibold">Top Reactors</h3>
+            <p class="text-gray-500 text-xs mt-1">All time</p>
         </div>
         <div class="p-5 space-y-2">
             {% if stats.top_reactors %}{% set max_reactor = stats.top_reactors | map(attribute='count') | list | max %}{% else %}{% set max_reactor = 1 %}{% endif %}
@@ -222,7 +200,7 @@
     <div class="bg-discord-dark rounded-xl border border-gray-700/50">
         <div class="px-5 py-4 border-b border-gray-700/50">
             <h3 class="text-white font-semibold">Most Appreciated Artists</h3>
-            <p class="text-gray-500 text-xs mt-1">Whose songs get the most reactions</p>
+            <p class="text-gray-500 text-xs mt-1">Whose songs get the most reactions — all time</p>
         </div>
         <div class="p-5 space-y-2">
             {% if stats.most_reacted_authors %}{% set max_author = stats.most_reacted_authors | map(attribute='count') | list | max %}{% else %}{% set max_author = 1 %}{% endif %}
@@ -277,58 +255,6 @@
 
 </div>
 
-{% if activity.counts %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
-<script>
-    const ctx = document.getElementById('reactorActivityChart').getContext('2d');
-    const gradient = ctx.createLinearGradient(0, 0, 0, 300);
-    gradient.addColorStop(0, 'rgba(87, 242, 135, 0.3)');
-    gradient.addColorStop(1, 'rgba(87, 242, 135, 0.0)');
-
-    new Chart(ctx, {
-        type: 'line',
-        data: {
-            labels: {{ activity.labels | tojson }},
-            datasets: [{
-                label: 'Unique Reactors',
-                data: {{ activity.counts | tojson }},
-                borderColor: '#57f287',
-                backgroundColor: gradient,
-                borderWidth: 2,
-                pointBackgroundColor: '#57f287',
-                pointRadius: 3,
-                pointHoverRadius: 5,
-                fill: true,
-                tension: 0.3,
-            }]
-        },
-        options: {
-            responsive: true,
-            plugins: {
-                legend: { display: false },
-                tooltip: {
-                    backgroundColor: '#1e1f22',
-                    titleColor: '#fff',
-                    bodyColor: '#a1a1aa',
-                    borderColor: '#383a40',
-                    borderWidth: 1,
-                }
-            },
-            scales: {
-                x: {
-                    ticks: { color: '#6b7280', maxRotation: 45 },
-                    grid: { color: 'rgba(55, 65, 81, 0.3)' },
-                },
-                y: {
-                    beginAtZero: true,
-                    ticks: { color: '#6b7280', precision: 0 },
-                    grid: { color: 'rgba(55, 65, 81, 0.3)' },
-                }
-            }
-        }
-    });
-</script>
-{% endif %}
 
 {% else %}
 <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-8 text-center">
