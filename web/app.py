@@ -626,6 +626,7 @@ def create_app(db: Database, bot=None) -> Quart:
                                 str(message.author),
                                 url,
                                 message.created_at.timestamp(),
+                                message.id,
                             ))
                 except Exception as e:
                     app.scan_status["progress"] = f"Error scanning #{channel.name}: {e}"

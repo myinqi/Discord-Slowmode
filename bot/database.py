@@ -441,14 +441,16 @@ class Database:
 
     async def add_song_post(self, channel_id: int, user_id: int, user_name: str, url: str, posted_at: float, message_id: int = None):
         await self.db.execute(
-            "INSERT OR IGNORE INTO song_posts (channel_id, user_id, user_name, url, posted_at, message_id) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO song_posts (channel_id, user_id, user_name, url, posted_at, message_id) VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(channel_id, url) DO UPDATE SET message_id = COALESCE(song_posts.message_id, excluded.message_id)",
             (channel_id, user_id, user_name, url, posted_at, message_id),
         )
         await self.db.commit()
 
     async def add_song_posts_bulk(self, rows: list[tuple]):
         await self.db.executemany(
-            "INSERT OR IGNORE INTO song_posts (channel_id, user_id, user_name, url, posted_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO song_posts (channel_id, user_id, user_name, url, posted_at, message_id) VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(channel_id, url) DO UPDATE SET message_id = COALESCE(song_posts.message_id, excluded.message_id)",
             rows,
         )
         await self.db.commit()
@@ -849,30 +851,33 @@ class Database:
         return stats
 
     async def get_unseen_songs(self, channel_id: int, user_id: int) -> list[dict]:
-        """Return songs from last 3 days in channel that user hasn't reacted to, oldest first."""
+        """Return songs from last 2 days in channel that user hasn't reacted to, oldest first."""
         async with self.db.execute(
             """
             SELECT sp.id, sp.url, sp.user_id, sp.posted_at,
-                   COALESCE(r.unique_cnt, 0) as unique_cnt,
-                   COALESCE(r.total_cnt, 0) as total_cnt,
-                   r.title
+                   COALESCE(rc.unique_cnt, 0) as unique_cnt,
+                   COALESCE(rc.total_cnt, 0) as total_cnt,
+                   rc.title
             FROM song_posts sp
             LEFT JOIN (
-                SELECT song_url,
+                SELECT message_id,
                        COUNT(DISTINCT reactor_user_id) as unique_cnt,
                        COUNT(*) as total_cnt,
-                       MAX(song_title) as title,
-                       GROUP_CONCAT(DISTINCT reactor_user_id) as reactors
+                       MAX(song_title) as title
                 FROM song_reactions
-                GROUP BY song_url
-            ) r ON sp.url = r.song_url
+                GROUP BY message_id
+            ) rc ON rc.message_id = sp.message_id
             WHERE sp.channel_id = ?
               AND sp.posted_at >= unixepoch('now', '-2 days')
               AND sp.user_id != ?
-              AND (r.reactors IS NULL OR r.reactors NOT LIKE ? || ',%' AND r.reactors NOT LIKE '%,' || ? || ',%' AND r.reactors NOT LIKE '%,' || ?)
+              AND NOT EXISTS (
+                  SELECT 1 FROM song_reactions sr
+                  WHERE sr.reactor_user_id = ?
+                  AND (sr.message_id = sp.message_id OR sr.song_url = sp.url)
+              )
             ORDER BY sp.posted_at ASC
             """,
-            (channel_id, user_id, user_id, user_id, user_id),
+            (channel_id, user_id, user_id),
         ) as cursor:
             return [
                 {
