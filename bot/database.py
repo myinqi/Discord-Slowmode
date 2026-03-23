@@ -906,7 +906,8 @@ class Database:
                    (SELECT COUNT(*) FROM song_reactions sr3
                     WHERE sr3.message_id = sp.message_id OR sr3.song_url = sp.url) as total_cnt,
                    (SELECT MAX(sr4.song_title) FROM song_reactions sr4
-                    WHERE sr4.message_id = sp.message_id OR sr4.song_url = sp.url) as title
+                    WHERE sr4.message_id = sp.message_id OR sr4.song_url = sp.url) as title,
+                   sp.message_id, sp.channel_id
             FROM song_posts sp
             WHERE sp.channel_id = ?
               AND sp.posted_at >= unixepoch('now', '-2 days')
@@ -922,12 +923,21 @@ class Database:
         ) as cursor:
             return [
                 {
-                    "message_id": r[0], "song_url": r[1], "post_author_id": r[2],
+                    "song_post_id": r[0], "song_url": r[1], "post_author_id": r[2],
                     "posted_at": r[3], "unique_count": r[4], "total_count": r[5],
-                    "song_title": r[6],
+                    "song_title": r[6], "message_id": r[7], "channel_id": r[8],
                 }
                 for r in await cursor.fetchall()
             ]
+
+    async def get_user_top_emojis(self, user_id: int, limit: int = 4) -> list[str]:
+        """Return the user's most frequently used reaction emojis."""
+        async with self.db.execute(
+            "SELECT emoji, COUNT(*) as cnt FROM song_reactions "
+            "WHERE reactor_user_id = ? GROUP BY emoji ORDER BY cnt DESC LIMIT ?",
+            (user_id, limit),
+        ) as cursor:
+            return [r[0] for r in await cursor.fetchall()]
 
     async def get_top_songs(self, channel_id: int = None, days: int = 0) -> list[dict]:
         """Return top songs ranked by unique reactions. Filters by song posting date (not reaction date)."""

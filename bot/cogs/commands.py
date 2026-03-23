@@ -9,6 +9,144 @@ SUNO_URL_PATTERN = re.compile(r'https://suno\.com/(?:s|song)/[\w-]+')
 SUNO_PLAYLIST_PATTERN = re.compile(r'https://suno\.com/playlist/[\w-]+')
 SPOTIFY_ALBUM_PATTERN = re.compile(r'https://open\.spotify\.com/album/[\w?=&-]+')
 
+DEFAULT_REACTION_EMOJIS = ["👍", "❤️", "🔥", "🎵"]
+
+
+class NewSongCarouselView(discord.ui.View):
+    """Carousel view for /new — shows one song at a time with emoji reaction buttons."""
+
+    def __init__(self, bot, songs: list[dict], user: discord.Member, guild: discord.Guild, bot_name: str):
+        super().__init__(timeout=600)
+        self.bot = bot
+        self.songs = songs
+        self.user = user
+        self.guild = guild
+        self.bot_name = bot_name
+        self.index = 0
+        self.emoji_list: list[str] = []
+
+    async def setup_emojis(self):
+        """Load user's most-used emojis and build initial buttons."""
+        user_emojis = await self.bot.db.get_user_top_emojis(self.user.id, limit=4)
+        for e in DEFAULT_REACTION_EMOJIS:
+            if e not in user_emojis and len(user_emojis) < 4:
+                user_emojis.append(e)
+        self.emoji_list = user_emojis[:4]
+        self._rebuild_buttons()
+
+    def _rebuild_buttons(self):
+        self.clear_items()
+        song = self.songs[self.index]
+
+        # Row 1: emoji reaction buttons
+        for emoji_str in self.emoji_list:
+            btn = discord.ui.Button(style=discord.ButtonStyle.secondary, emoji=emoji_str, row=0)
+            btn.callback = self._make_emoji_callback(emoji_str)
+            self.add_item(btn)
+
+        # Row 2: skip + jump link
+        skip_btn = discord.ui.Button(label="Skip", emoji="⏭️", style=discord.ButtonStyle.secondary, row=1)
+        skip_btn.callback = self._skip_callback
+        self.add_item(skip_btn)
+
+        if song.get("message_id") and song.get("channel_id") and self.guild:
+            jump_url = f"https://discord.com/channels/{self.guild.id}/{song['channel_id']}/{song['message_id']}"
+            self.add_item(discord.ui.Button(
+                label="Im Kanal öffnen", emoji="🔗",
+                style=discord.ButtonStyle.link, url=jump_url, row=1,
+            ))
+
+    def build_embed(self) -> discord.Embed:
+        song = self.songs[self.index]
+        title = song.get("song_title") or "Unknown Title"
+        url = song.get("song_url", "")
+        unique = song["unique_count"]
+        total = song["total_count"]
+
+        author_name = f"User {song['post_author_id']}"
+        if self.guild and song.get("post_author_id"):
+            member = self.guild.get_member(song["post_author_id"])
+            if member:
+                author_name = member.display_name
+
+        embed = discord.Embed(
+            title=f"🆕 Song {self.index + 1} von {len(self.songs)}",
+            color=discord.Color.green(),
+        )
+        embed.add_field(
+            name=title,
+            value=(
+                f"by **{author_name}** — {unique} unique reactions ({total} total)\n"
+                f"[▶ Listen on Suno]({url})"
+            ),
+            inline=False,
+        )
+
+        song_id_match = re.search(r'suno\.com/(?:s|song)/([\w-]+)', url)
+        if song_id_match:
+            embed.set_thumbnail(url=f"https://cdn2.suno.ai/image_{song_id_match.group(1)}.jpeg")
+
+        embed.set_footer(text=f"{self.bot_name} • React or skip to continue")
+        embed.timestamp = discord.utils.utcnow()
+        return embed
+
+    def _build_done_embed(self) -> discord.Embed:
+        embed = discord.Embed(
+            title="✅ All caught up!",
+            description=f"You've gone through all {len(self.songs)} songs.",
+            color=discord.Color.green(),
+        )
+        embed.set_footer(text=self.bot_name)
+        embed.timestamp = discord.utils.utcnow()
+        return embed
+
+    def _make_emoji_callback(self, emoji_str: str):
+        async def callback(interaction: discord.Interaction):
+            if interaction.user.id != self.user.id:
+                await interaction.response.send_message("This is not your session.", ephemeral=True)
+                return
+
+            song = self.songs[self.index]
+            try:
+                await self.bot.db.add_song_reaction(
+                    message_id=song["message_id"],
+                    channel_id=song["channel_id"],
+                    song_url=song["song_url"],
+                    post_author_id=song["post_author_id"],
+                    reactor_user_id=self.user.id,
+                    reactor_user_name=str(self.user),
+                    emoji=emoji_str,
+                    song_title=song.get("song_title"),
+                )
+            except Exception as e:
+                print(f"[new carousel] Error saving reaction: {e}")
+
+            self.index += 1
+            if self.index < len(self.songs):
+                self._rebuild_buttons()
+                await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            else:
+                await interaction.response.edit_message(embed=self._build_done_embed(), view=None)
+                self.stop()
+
+        return callback
+
+    async def _skip_callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user.id:
+            await interaction.response.send_message("This is not your session.", ephemeral=True)
+            return
+
+        self.index += 1
+        if self.index < len(self.songs):
+            self._rebuild_buttons()
+            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        else:
+            await interaction.response.edit_message(embed=self._build_done_embed(), view=None)
+            self.stop()
+
+    async def on_timeout(self):
+        pass
+
 
 class CommandsCog(commands.Cog):
     def __init__(self, bot):
@@ -635,7 +773,7 @@ class CommandsCog(commands.Cog):
             print(f"[top] Error: {e}")
             await interaction.followup.send(f"Error: {e}", ephemeral=True)
 
-    @app_commands.command(name="new", description="Show songs from the last 3 days you haven't reacted to yet")
+    @app_commands.command(name="new", description="Show songs from the last 2 days you haven't reacted to yet")
     async def new_songs_cmd(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
@@ -650,59 +788,25 @@ class CommandsCog(commands.Cog):
 
             channel_id = int(channel_id_str)
             songs = await self.bot.db.get_unseen_songs(channel_id, interaction.user.id)
-            songs = [s for s in songs if s.get("song_title")]
+            songs = [s for s in songs if s.get("song_title") and s.get("message_id")]
 
             if not songs:
                 await interaction.followup.send("You're all caught up! No new unreacted songs in the last 2 days.", ephemeral=True)
                 return
 
             bot_name = await self.bot.db.get_setting("bot_name") or "Slowmode Bot"
-            guild = interaction.guild
 
-            lines = []
-            first_url = None
-            for i, song in enumerate(songs):
-                # Resolve author name
-                author_name = f"User {song['post_author_id']}"
-                if guild and song.get("post_author_id"):
-                    member = guild.get_member(song["post_author_id"])
-                    if member:
-                        author_name = member.display_name
-
-                title = song.get("song_title") or "Unknown Title"
-                url = song.get("song_url", "")
-                unique = song["unique_count"]
-                total = song["total_count"]
-
-                if first_url is None:
-                    first_url = url
-
-                lines.append(
-                    f"**{i+1}.** **[{title}]({url})**\n"
-                    f"ㅤby **{author_name}** — {unique} unique reactions ({total} total)"
-                )
-
-            # Discord embed description limit is 4096 chars — split if needed
-            description = "\n\n".join(lines)
-            if len(description) > 4096:
-                description = description[:4090] + "\n…"
-
-            embed = discord.Embed(
-                title=f"🆕 Unreacted Songs ({len(songs)})",
-                description=description,
-                color=discord.Color.green(),
+            view = NewSongCarouselView(
+                bot=self.bot,
+                songs=songs,
+                user=interaction.user,
+                guild=interaction.guild,
+                bot_name=bot_name,
             )
+            await view.setup_emojis()
+            embed = view.build_embed()
 
-            # Set thumbnail from first song cover image
-            if first_url:
-                song_id_match = re.search(r'suno\.com/(?:s|song)/([\w-]+)', first_url)
-                if song_id_match:
-                    embed.set_thumbnail(url=f"https://cdn2.suno.ai/image_{song_id_match.group(1)}.jpeg")
-
-            embed.set_footer(text=f"{bot_name} • Last 2 days")
-            embed.timestamp = discord.utils.utcnow()
-
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
         except Exception as e:
             print(f"[new] Error: {e}")
