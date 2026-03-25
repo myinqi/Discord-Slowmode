@@ -788,7 +788,7 @@ class CommandsCog(commands.Cog):
 
             channel_id = int(channel_id_str)
             songs = await self.bot.db.get_unseen_songs(channel_id, interaction.user.id)
-            songs = [s for s in songs if s.get("song_title") and s.get("message_id")]
+            songs = [s for s in songs if s.get("message_id")]
 
             if not songs:
                 await interaction.followup.send("You're all caught up! No new unreacted songs in the last 2 days.", ephemeral=True)

@@ -118,6 +118,9 @@ class Database:
         if "message_id" not in sp_columns:
             await self.db.execute("ALTER TABLE song_posts ADD COLUMN message_id INTEGER")
             await self.db.commit()
+        if "song_title" not in sp_columns:
+            await self.db.execute("ALTER TABLE song_posts ADD COLUMN song_title TEXT")
+            await self.db.commit()
 
         # Create song_reactions table
         await self.db.executescript("""
@@ -439,11 +442,13 @@ class Database:
 
     # --- Song Posts (Statistics) ---
 
-    async def add_song_post(self, channel_id: int, user_id: int, user_name: str, url: str, posted_at: float, message_id: int = None):
+    async def add_song_post(self, channel_id: int, user_id: int, user_name: str, url: str, posted_at: float, message_id: int = None, song_title: str = None):
         await self.db.execute(
-            "INSERT INTO song_posts (channel_id, user_id, user_name, url, posted_at, message_id) VALUES (?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(channel_id, url) DO UPDATE SET message_id = COALESCE(song_posts.message_id, excluded.message_id)",
-            (channel_id, user_id, user_name, url, posted_at, message_id),
+            "INSERT INTO song_posts (channel_id, user_id, user_name, url, posted_at, message_id, song_title) VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(channel_id, url) DO UPDATE SET "
+            "message_id = COALESCE(song_posts.message_id, excluded.message_id), "
+            "song_title = COALESCE(song_posts.song_title, excluded.song_title)",
+            (channel_id, user_id, user_name, url, posted_at, message_id, song_title),
         )
         await self.db.commit()
 
@@ -905,8 +910,11 @@ class Database:
                     WHERE sr2.message_id = sp.message_id OR sr2.song_url = sp.url) as unique_cnt,
                    (SELECT COUNT(*) FROM song_reactions sr3
                     WHERE sr3.message_id = sp.message_id OR sr3.song_url = sp.url) as total_cnt,
-                   (SELECT MAX(sr4.song_title) FROM song_reactions sr4
-                    WHERE sr4.message_id = sp.message_id OR sr4.song_url = sp.url) as title,
+                   COALESCE(
+                       (SELECT MAX(sr4.song_title) FROM song_reactions sr4
+                        WHERE sr4.message_id = sp.message_id OR sr4.song_url = sp.url),
+                       sp.song_title
+                   ) as title,
                    sp.message_id, sp.channel_id
             FROM song_posts sp
             WHERE sp.channel_id = ?

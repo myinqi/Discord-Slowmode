@@ -30,18 +30,26 @@ class SlowmodeCog(commands.Cog):
 
         # Track Suno song URLs for statistics
         suno_urls = SUNO_URL_PATTERN.findall(message.content)
-        for url in suno_urls:
-            try:
-                await db.add_song_post(
-                    channel_id=message.channel.id,
-                    user_id=message.author.id,
-                    user_name=str(message.author),
-                    url=url,
-                    posted_at=message.created_at.timestamp(),
-                    message_id=message.id,
-                )
-            except Exception:
-                pass
+        if suno_urls:
+            # Extract song title from embed
+            song_title = None
+            for embed in message.embeds:
+                if embed.title:
+                    song_title = embed.title
+                    break
+            for url in suno_urls:
+                try:
+                    await db.add_song_post(
+                        channel_id=message.channel.id,
+                        user_id=message.author.id,
+                        user_name=str(message.author),
+                        url=url,
+                        posted_at=message.created_at.timestamp(),
+                        message_id=message.id,
+                        song_title=song_title,
+                    )
+                except Exception:
+                    pass
 
         cooldown_minutes = channel_config["cooldown_minutes"]
         if cooldown_minutes <= 0:
