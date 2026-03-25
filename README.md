@@ -183,6 +183,14 @@ Protokoll aller Aktionen: gelöschte Nachrichten, Konfigurationsänderungen, Ben
 - "Refresh Titles" Button zum Nachholen von Songtiteln aus Discord-Embeds
 - "Delete All Reactions" Button zum Zurücksetzen aller Reaktionsdaten (mit Bestätigungsdialog)
 
+### Image Posting
+- Kategorien anlegen und verwalten (erstellen/löschen)
+- Bilder hochladen mit Titel (max. 30 Zeichen), Beschreibung (max. 400 Zeichen) und Kategorie
+- Unterstützte Formate: PNG, JPEG, GIF, WebP
+- Galerie-Ansicht mit Kategorie-Filter
+- Bilder einzeln löschen oder ganze Kategorien (inkl. aller Bilder) entfernen
+- Über `/imageposting` Slash-Command im Discord-Kanal posten
+
 ### Settings (Einstellungen)
 - Bot-Name ändern
 - Guild-ID ändern (erfordert Neustart)
@@ -208,8 +216,9 @@ Protokoll aller Aktionen: gelöschte Nachrichten, Konfigurationsänderungen, Ben
 | `/translate <to> <text>` | Text übersetzen (nur für dich sichtbar) |
 | `/top <period>` | Most Reacted Songs Top 10 mit Titel, Interpret, Reaktionen und Cover (nur für dich sichtbar) |
 | `/new` | Karussell-Modus: Songs der letzten 2 Tage einzeln durchblättern, auf die du noch nicht reagiert hast — mit dynamischen Emoji-Buttons (deine meistgenutzten), Skip, und "Im Kanal öffnen" Jump-Link (nur für dich sichtbar) |
+| `/imageposting <kategorie> [titel]` | Bild aus der Bibliothek im Kanal posten: Kategorie (Pflicht) + Titel (optional, sonst zufällig). Autocomplete für beide Parameter. Postet erst das Bild, dann die Beschreibung (sichtbar für alle) |
 
-> Cooldown- und Toggle-Commands können nur von Serverbesitzern und Mitgliedern mit einer **Command Role** genutzt werden. `/random-song`, `/find-list`, `/song-stats`, `/user-stats`, `/user-score`, `/find-song`, `/talk`, `/translate`, `/top` und `/new` sind für **alle** Servermitglieder verfügbar.
+> Cooldown- und Toggle-Commands können nur von Serverbesitzern und Mitgliedern mit einer **Command Role** genutzt werden. `/random-song`, `/find-list`, `/song-stats`, `/user-stats`, `/user-score`, `/find-song`, `/talk`, `/translate`, `/top`, `/new` und `/imageposting` sind für **alle** Servermitglieder verfügbar.
 
 ### /new Karussell-Details
 

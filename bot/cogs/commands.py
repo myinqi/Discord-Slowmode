@@ -990,6 +990,85 @@ class CommandsCog(commands.Cog):
             await interaction.followup.send(f"Translation failed: {e}", ephemeral=True)
 
 
+    @app_commands.command(name="imageposting", description="Post an image from the library to the current channel")
+    @app_commands.describe(
+        category="Category to pick from (required)",
+        title="Image title (optional — random from category if not provided)",
+    )
+    async def imageposting_cmd(self, interaction: discord.Interaction, category: str, title: str = None):
+        await interaction.response.defer()
+
+        try:
+            cat = await self.bot.db.get_image_category_by_name(category)
+            if not cat:
+                await interaction.followup.send(f"Category `{category}` not found.", ephemeral=True)
+                return
+
+            if title:
+                image = await self.bot.db.get_image_post_by_title(title, cat["id"])
+                if not image:
+                    await interaction.followup.send(
+                        f"No image with title `{title}` found in category `{category}`.", ephemeral=True
+                    )
+                    return
+            else:
+                image = await self.bot.db.get_random_image_post(cat["id"])
+                if not image:
+                    await interaction.followup.send(
+                        f"No images in category `{category}`.", ephemeral=True
+                    )
+                    return
+
+            import os
+            upload_dir = os.path.join(os.path.dirname(self.bot.db.db_path), "uploads")
+            filepath = os.path.join(upload_dir, image["filename"])
+
+            if not os.path.exists(filepath):
+                await interaction.followup.send("Image file not found on disk.", ephemeral=True)
+                return
+
+            file = discord.File(filepath, filename=image["filename"])
+            description = image.get("description") or ""
+
+            await interaction.followup.send(file=file)
+            if description:
+                await interaction.channel.send(description)
+
+        except Exception as e:
+            print(f"[imageposting] Error: {e}")
+            await interaction.followup.send(f"Error: {e}", ephemeral=True)
+
+    @imageposting_cmd.autocomplete("category")
+    async def _imageposting_category_ac(self, interaction: discord.Interaction, current: str):
+        categories = await self.bot.db.get_image_categories()
+        return [
+            app_commands.Choice(name=c["name"], value=c["name"])
+            for c in categories if current.lower() in c["name"].lower()
+        ][:25]
+
+    @imageposting_cmd.autocomplete("title")
+    async def _imageposting_title_ac(self, interaction: discord.Interaction, current: str):
+        # Try to get the category from the already-filled options
+        cat_name = None
+        for opt in interaction.data.get("options", []):
+            if opt["name"] == "category":
+                cat_name = opt.get("value")
+                break
+
+        if not cat_name:
+            return []
+
+        cat = await self.bot.db.get_image_category_by_name(cat_name)
+        if not cat:
+            return []
+
+        images = await self.bot.db.get_image_posts(category_id=cat["id"])
+        return [
+            app_commands.Choice(name=img["title"], value=img["title"])
+            for img in images if current.lower() in img["title"].lower()
+        ][:25]
+
+
 class TranslateLanguageSelect(discord.ui.Select):
     """Dropdown to pick target language for message translation."""
 

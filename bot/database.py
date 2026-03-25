@@ -147,6 +147,24 @@ class Database:
             await self.db.execute("ALTER TABLE song_reactions ADD COLUMN song_title TEXT")
             await self.db.commit()
 
+        # Create image_categories and image_posts tables
+        await self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS image_categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE
+            );
+            CREATE TABLE IF NOT EXISTS image_posts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                description TEXT,
+                category_id INTEGER NOT NULL,
+                filename TEXT NOT NULL,
+                uploaded_at REAL DEFAULT (unixepoch()),
+                FOREIGN KEY (category_id) REFERENCES image_categories(id)
+            );
+        """)
+        await self.db.commit()
+
     # --- Settings ---
 
     async def get_setting(self, key: str, default: str = "") -> str:
@@ -1056,3 +1074,93 @@ class Database:
             "SELECT channel_id, COUNT(*) as cnt FROM song_reactions GROUP BY channel_id ORDER BY cnt DESC"
         ) as cursor:
             return [{"channel_id": r[0], "count": r[1]} for r in await cursor.fetchall()]
+
+    # --- Image Posting ---
+
+    async def get_image_categories(self) -> list[dict]:
+        async with self.db.execute("SELECT * FROM image_categories ORDER BY name") as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def add_image_category(self, name: str) -> int:
+        cursor = await self.db.execute(
+            "INSERT INTO image_categories (name) VALUES (?)", (name,)
+        )
+        await self.db.commit()
+        return cursor.lastrowid
+
+    async def delete_image_category(self, category_id: int):
+        await self.db.execute("DELETE FROM image_posts WHERE category_id = ?", (category_id,))
+        await self.db.execute("DELETE FROM image_categories WHERE id = ?", (category_id,))
+        await self.db.commit()
+
+    async def add_image_post(self, title: str, description: str, category_id: int, filename: str) -> int:
+        cursor = await self.db.execute(
+            "INSERT INTO image_posts (title, description, category_id, filename) VALUES (?, ?, ?, ?)",
+            (title, description, category_id, filename),
+        )
+        await self.db.commit()
+        return cursor.lastrowid
+
+    async def get_image_posts(self, category_id: int = None) -> list[dict]:
+        if category_id:
+            query = """
+                SELECT ip.*, ic.name as category_name
+                FROM image_posts ip JOIN image_categories ic ON ip.category_id = ic.id
+                WHERE ip.category_id = ? ORDER BY ip.uploaded_at DESC
+            """
+            params = (category_id,)
+        else:
+            query = """
+                SELECT ip.*, ic.name as category_name
+                FROM image_posts ip JOIN image_categories ic ON ip.category_id = ic.id
+                ORDER BY ip.uploaded_at DESC
+            """
+            params = ()
+        async with self.db.execute(query, params) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def get_image_post(self, image_id: int) -> dict | None:
+        async with self.db.execute(
+            "SELECT ip.*, ic.name as category_name FROM image_posts ip "
+            "JOIN image_categories ic ON ip.category_id = ic.id WHERE ip.id = ?",
+            (image_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_image_post_by_title(self, title: str, category_id: int) -> dict | None:
+        async with self.db.execute(
+            "SELECT ip.*, ic.name as category_name FROM image_posts ip "
+            "JOIN image_categories ic ON ip.category_id = ic.id "
+            "WHERE ip.title = ? AND ip.category_id = ?",
+            (title, category_id),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_random_image_post(self, category_id: int) -> dict | None:
+        async with self.db.execute(
+            "SELECT ip.*, ic.name as category_name FROM image_posts ip "
+            "JOIN image_categories ic ON ip.category_id = ic.id "
+            "WHERE ip.category_id = ? ORDER BY RANDOM() LIMIT 1",
+            (category_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def delete_image_post(self, image_id: int) -> str | None:
+        """Delete an image post. Returns the filename for cleanup."""
+        async with self.db.execute("SELECT filename FROM image_posts WHERE id = ?", (image_id,)) as cursor:
+            row = await cursor.fetchone()
+        if row:
+            await self.db.execute("DELETE FROM image_posts WHERE id = ?", (image_id,))
+            await self.db.commit()
+            return row["filename"]
+        return None
+
+    async def get_image_category_by_name(self, name: str) -> dict | None:
+        async with self.db.execute(
+            "SELECT * FROM image_categories WHERE name = ? COLLATE NOCASE", (name,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None

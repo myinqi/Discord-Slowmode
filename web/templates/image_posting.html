@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}Image Posting{% endblock %}
+{% block content %}
+<h2 class="text-2xl font-bold text-white mb-6">Image Posting</h2>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <!-- Left Column: Categories + Upload -->
+    <div class="space-y-6">
+        <!-- Categories -->
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            <div class="px-5 py-4 border-b border-gray-700/50">
+                <h3 class="text-white font-semibold">Categories</h3>
+            </div>
+            <div class="p-5">
+                <form method="POST" class="flex gap-2 mb-4">
+                    <input type="hidden" name="action" value="add_category">
+                    <input type="text" name="category_name" placeholder="New category name" required maxlength="50"
+                        class="flex-1 bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                    <button type="submit"
+                        class="px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg font-medium text-sm transition-colors">
+                        Add
+                    </button>
+                </form>
+                {% if categories %}
+                <div class="space-y-2">
+                    {% for cat in categories %}
+                    <div class="flex items-center justify-between bg-discord-darker rounded-lg px-4 py-3">
+                        <a href="{{ url_for('image_posting', category=cat.id) }}"
+                            class="text-gray-200 text-sm hover:text-white transition-colors {% if filter_category == cat.id %}text-discord-blurple font-semibold{% endif %}">
+                            {{ cat.name }}
+                            <span class="text-gray-500 text-xs ml-1">({{ cat.count }})</span>
+                        </a>
+                        <form method="POST" onsubmit="return confirm('Delete category &quot;{{ cat.name }}&quot; and all its images?');">
+                            <input type="hidden" name="action" value="delete_category">
+                            <input type="hidden" name="category_id" value="{{ cat.id }}">
+                            <button type="submit" class="text-gray-500 hover:text-discord-red text-sm transition-colors">Delete</button>
+                        </form>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-gray-500 text-sm">No categories yet. Create one above.</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Upload Form -->
+        {% if categories %}
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            <div class="px-5 py-4 border-b border-gray-700/50">
+                <h3 class="text-white font-semibold">Upload Image</h3>
+            </div>
+            <div class="p-5">
+                <form method="POST" enctype="multipart/form-data" class="space-y-4">
+                    <input type="hidden" name="action" value="upload_image">
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">Category</label>
+                        <select name="category_id" required
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                            {% for cat in categories %}
+                            <option value="{{ cat.id }}" {% if filter_category == cat.id %}selected{% endif %}>{{ cat.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">Title (max 30 characters)</label>
+                        <input type="text" name="title" required maxlength="30" placeholder="Image title"
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">Description (max 400 characters)</label>
+                        <textarea name="description" maxlength="400" rows="3" placeholder="Short description..."
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none resize-none"></textarea>
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">Image</label>
+                        <input type="file" name="image" required accept="image/png,image/jpeg,image/gif,image/webp"
+                            class="w-full text-gray-400 text-sm file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-discord-blurple file:text-white hover:file:bg-discord-blurple/80 file:cursor-pointer file:transition-colors">
+                    </div>
+                    <button type="submit"
+                        class="w-full px-4 py-2 bg-discord-green/80 hover:bg-discord-green/60 text-white rounded-lg font-medium text-sm transition-colors">
+                        Upload
+                    </button>
+                </form>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Right Column: Image Gallery -->
+    <div class="lg:col-span-2">
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between">
+                <h3 class="text-white font-semibold">
+                    {% if filter_category_name %}Images in "{{ filter_category_name }}"{% else %}All Images{% endif %}
+                    <span class="text-gray-500 text-sm font-normal ml-2">({{ images|length }})</span>
+                </h3>
+                {% if filter_category %}
+                <a href="{{ url_for('image_posting') }}" class="text-gray-400 hover:text-white text-sm transition-colors">Show All</a>
+                {% endif %}
+            </div>
+            <div class="p-5">
+                {% if images %}
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {% for img in images %}
+                    <div class="bg-discord-darker rounded-lg overflow-hidden border border-gray-700/30">
+                        <div class="aspect-video bg-black flex items-center justify-center">
+                            <img src="{{ url_for('uploaded_image', filename=img.filename) }}" alt="{{ img.title }}"
+                                class="max-h-full max-w-full object-contain">
+                        </div>
+                        <div class="p-4">
+                            <div class="flex items-start justify-between gap-2">
+                                <div class="min-w-0">
+                                    <h4 class="text-white font-semibold text-sm truncate">{{ img.title }}</h4>
+                                    <span class="text-discord-blurple text-xs">{{ img.category_name }}</span>
+                                </div>
+                                <form method="POST" onsubmit="return confirm('Delete this image?');">
+                                    <input type="hidden" name="action" value="delete_image">
+                                    <input type="hidden" name="image_id" value="{{ img.id }}">
+                                    <button type="submit" class="text-gray-500 hover:text-discord-red text-xs transition-colors shrink-0">Delete</button>
+                                </form>
+                            </div>
+                            {% if img.description %}
+                            <p class="text-gray-400 text-xs mt-2 line-clamp-3">{{ img.description }}</p>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-gray-500 text-sm text-center py-8">No images uploaded yet.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,4 +1,5 @@
 import asyncio
+import os
 import re
 import functools
 import math
@@ -1024,6 +1025,111 @@ def create_app(db: Database, bot=None) -> Quart:
                 title_scan_status=app.title_scan_status,
                 reaction_scan_status=app.reaction_scan_status,
                 top_songs=top_songs,
+            )
+        except Exception as e:
+            traceback.print_exc()
+            return f"<pre>Error: {e}\n\n{traceback.format_exc()}</pre>", 500
+
+    # --- Image Posting ---
+
+    UPLOAD_DIR = os.path.join(os.path.dirname(db.db_path), "uploads")
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
+
+    @app.route("/uploads/<filename>")
+    @login_required
+    async def uploaded_image(filename):
+        from quart import send_from_directory
+        return await send_from_directory(UPLOAD_DIR, filename)
+
+    @app.route("/image-posting", methods=["GET", "POST"])
+    @login_required
+    async def image_posting():
+        if request.method == "POST":
+            form = await request.form
+            action = form.get("action")
+
+            if action == "add_category":
+                name = form.get("category_name", "").strip()
+                if name:
+                    try:
+                        await db.add_image_category(name)
+                    except Exception:
+                        await flash("Category already exists.", "error")
+                return redirect(url_for("image_posting"))
+
+            elif action == "delete_category":
+                cat_id = int(form.get("category_id", 0))
+                # Delete associated files
+                images = await db.get_image_posts(category_id=cat_id)
+                for img in images:
+                    filepath = os.path.join(UPLOAD_DIR, img["filename"])
+                    if os.path.exists(filepath):
+                        os.remove(filepath)
+                await db.delete_image_category(cat_id)
+                return redirect(url_for("image_posting"))
+
+            elif action == "upload_image":
+                files = await request.files
+                image_file = files.get("image")
+                title = form.get("title", "").strip()[:30]
+                description = form.get("description", "").strip()[:400]
+                category_id = int(form.get("category_id", 0))
+
+                if not image_file or not title or not category_id:
+                    await flash("Title, category and image are required.", "error")
+                    return redirect(url_for("image_posting"))
+
+                ext = image_file.filename.rsplit(".", 1)[-1].lower() if "." in image_file.filename else ""
+                if ext not in ALLOWED_EXTENSIONS:
+                    await flash(f"Invalid file type. Allowed: {', '.join(ALLOWED_EXTENSIONS)}", "error")
+                    return redirect(url_for("image_posting"))
+
+                import uuid
+                filename = f"{uuid.uuid4().hex}.{ext}"
+                filepath = os.path.join(UPLOAD_DIR, filename)
+                await image_file.save(filepath)
+
+                await db.add_image_post(title, description, category_id, filename)
+                return redirect(url_for("image_posting", category=category_id))
+
+            elif action == "delete_image":
+                image_id = int(form.get("image_id", 0))
+                filename = await db.delete_image_post(image_id)
+                if filename:
+                    filepath = os.path.join(UPLOAD_DIR, filename)
+                    if os.path.exists(filepath):
+                        os.remove(filepath)
+                return redirect(request.referrer or url_for("image_posting"))
+
+        # GET
+        import traceback
+        try:
+            categories = await db.get_image_categories()
+            # Add image count per category
+            all_images = await db.get_image_posts()
+            cat_counts = {}
+            for img in all_images:
+                cat_counts[img["category_id"]] = cat_counts.get(img["category_id"], 0) + 1
+            for cat in categories:
+                cat["count"] = cat_counts.get(cat["id"], 0)
+
+            filter_category = request.args.get("category", type=int)
+            filter_category_name = None
+            if filter_category:
+                for cat in categories:
+                    if cat["id"] == filter_category:
+                        filter_category_name = cat["name"]
+                        break
+
+            images = await db.get_image_posts(category_id=filter_category)
+
+            return await render_template(
+                "image_posting.html",
+                categories=categories,
+                images=images,
+                filter_category=filter_category,
+                filter_category_name=filter_category_name,
             )
         except Exception as e:
             traceback.print_exc()
