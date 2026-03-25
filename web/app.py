@@ -665,6 +665,9 @@ def create_app(db: Database, bot=None) -> Quart:
                     await flash("Scan started in the background. Refresh this page to see progress.", "success")
                 else:
                     await flash("Bot is not ready.", "error")
+            elif action == "delete_all_songs":
+                count = await db.delete_all_songs()
+                print(f"[song-stats] Deleted all {count} song posts")
 
             return redirect(url_for("song_stats"))
 
@@ -708,9 +711,17 @@ def create_app(db: Database, bot=None) -> Quart:
             traceback.print_exc()
             return f"<pre>Error: {e}\n\n{traceback.format_exc()}</pre>", 500
 
-    @app.route("/user-stats")
+    @app.route("/user-stats", methods=["GET", "POST"])
     @login_required
     async def user_stats():
+        if request.method == "POST":
+            form = await request.form
+            action = form.get("action")
+            if action == "delete_all_songs":
+                count = await db.delete_all_songs()
+                print(f"[user-stats] Deleted all {count} song posts")
+            return redirect(url_for("user_stats"))
+
         import traceback
         try:
             guild = get_guild()
@@ -947,6 +958,10 @@ def create_app(db: Database, bot=None) -> Quart:
                 elif bot and bot.is_ready():
                     import asyncio
                     asyncio.get_event_loop().create_task(_run_reaction_scan())
+                return redirect(url_for("reaction_stats"))
+            elif action == "delete_all_reactions":
+                count = await db.delete_all_reactions()
+                print(f"[reaction-stats] Deleted all {count} reactions")
                 return redirect(url_for("reaction_stats"))
 
         try:

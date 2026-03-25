@@ -39,6 +39,13 @@
                 </button>
                 {% endif %}
             </form>
+            <form method="POST" onsubmit="return confirm('Are you sure you want to delete ALL reactions? This cannot be undone.');">
+                <input type="hidden" name="action" value="delete_all_reactions">
+                <button type="submit"
+                    class="px-4 py-2 bg-red-600 hover:bg-red-600/80 text-white rounded-lg font-medium transition-colors text-sm">
+                    Delete All Reactions
+                </button>
+            </form>
         </div>
     </div>
     {% if reaction_scan_status.running %}

@@ -10,20 +10,29 @@
             <h3 class="text-white font-semibold">Overview</h3>
             <p class="text-gray-400 text-sm mt-1">Total songs tracked per monitored channel. Use "Scan History" to import older posts.</p>
         </div>
-        <form method="POST">
-            <input type="hidden" name="action" value="scan">
-            {% if scan_status.running %}
-            <button type="button" disabled
-                class="px-4 py-2 bg-gray-600 text-gray-300 rounded-lg font-medium text-sm cursor-not-allowed">
-                Scanning...
-            </button>
-            {% else %}
-            <button type="submit"
-                class="px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg font-medium transition-colors text-sm">
-                Scan History
-            </button>
-            {% endif %}
-        </form>
+        <div class="flex gap-2 flex-wrap">
+            <form method="POST">
+                <input type="hidden" name="action" value="scan">
+                {% if scan_status.running %}
+                <button type="button" disabled
+                    class="px-4 py-2 bg-gray-600 text-gray-300 rounded-lg font-medium text-sm cursor-not-allowed">
+                    Scanning...
+                </button>
+                {% else %}
+                <button type="submit"
+                    class="px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg font-medium transition-colors text-sm">
+                    Scan History
+                </button>
+                {% endif %}
+            </form>
+            <form method="POST" onsubmit="return confirm('Are you sure you want to delete ALL song data? This cannot be undone.');">
+                <input type="hidden" name="action" value="delete_all_songs">
+                <button type="submit"
+                    class="px-4 py-2 bg-red-600 hover:bg-red-600/80 text-white rounded-lg font-medium transition-colors text-sm">
+                    Delete All Songs
+                </button>
+            </form>
+        </div>
     </div>
     {% if scan_status.running %}
     <div class="px-5 py-3 border-b border-gray-700/50 bg-discord-blurple/10">

@@ -159,25 +159,29 @@ Protokoll aller Aktionen: gelöschte Nachrichten, Konfigurationsänderungen, Ben
 - Aufschlüsselung nach Jahr, Monat, Woche und Tag mit Balkendiagrammen
 - Filter nach einzelnem Kanal oder alle Kanäle zusammen
 - "Scan History" Button zum Importieren aller bisherigen Song-Posts aus der Kanalhistorie
-- Neue Songs werden automatisch in Echtzeit erfasst
+- "Delete All Songs" Button zum Zurücksetzen aller Song-Daten (mit Bestätigungsdialog)
+- Neue Songs werden automatisch in Echtzeit erfasst (inkl. Songtitel aus Embed)
 
 ### User Stats
 - Leaderboard: Rangliste aller Nutzer nach Anzahl geposteter Songs
 - Detailansicht pro User: Songs gesamt, Songs pro Kanal, Durchschnitt pro Woche/Monat
 - Aktivste Wochentage und Top Posting Days
 - Zeitraum: Erster und letzter Post, Anzahl aktiver Wochen
+- "Delete All Song Data" Button zum Zurücksetzen (mit Bestätigungsdialog)
 - Auch per `/user-stats` Slash-Command verfügbar
 
 ### Reaction Stats
 - Live-Tracking aller Emoji-Reaktionen auf Song-Posts in überwachten Kanälen
 - Kanalfilter: Auswahl einzelner Kanäle oder alle zusammen
+- Zentraler Zeitfilter (Today, 7d, 30d, 90d, All) für Summary Cards und Most Reacted Songs
 - Summary: Gesamtreaktionen, Unique Reactors, Songs mit Reaktionen, Durchschnitt pro Song
-- Top Emojis: Beliebteste Emojis mit Balkendiagramm
-- Top Reactors: Wer reagiert am meisten (Unique Songs)
-- Most Appreciated Artists: Wessen Songs bekommen die meisten Reaktionen
-- Most Reacted Songs: Meistbewertete Songs mit Titel + Interpret + Links, gefiltert nach Zeitraum (Today, 7d, 30d, 90d, All)
-- Trendkurve: Unique Reactors pro Tag/Woche (Chart.js)
+- Top Emojis: Beliebteste Emojis mit Balkendiagramm (immer All-Time)
+- Top Reactors: Wer reagiert am meisten (immer All-Time)
+- Most Appreciated Artists: Wessen Songs bekommen die meisten Reaktionen (immer All-Time)
+- Most Reacted Songs: Meistbewertete Songs mit Titel + Interpret + Links, gefiltert nach Posting-Datum
+- "Scan Reactions" Button zum Importieren aller Reaktionen aus der Kanalhistorie (optimiert: bereits gescannte Nachrichten werden übersprungen)
 - "Refresh Titles" Button zum Nachholen von Songtiteln aus Discord-Embeds
+- "Delete All Reactions" Button zum Zurücksetzen aller Reaktionsdaten (mit Bestätigungsdialog)
 
 ### Settings (Einstellungen)
 - Bot-Name ändern
@@ -203,9 +207,20 @@ Protokoll aller Aktionen: gelöschte Nachrichten, Konfigurationsänderungen, Ben
 | `/talk [translate] <text>` | Bot spricht im Kanal: *<username> says: <text>* (optional mit Übersetzung) |
 | `/translate <to> <text>` | Text übersetzen (nur für dich sichtbar) |
 | `/top <period>` | Most Reacted Songs Top 10 mit Titel, Interpret, Reaktionen und Cover (nur für dich sichtbar) |
-| `/new` | Songs der letzten 2 Tage anzeigen, auf die du noch nicht reagiert hast — mit Titel, Interpret, Reaktionen, Link und Cover (nur für dich sichtbar) |
+| `/new` | Karussell-Modus: Songs der letzten 2 Tage einzeln durchblättern, auf die du noch nicht reagiert hast — mit dynamischen Emoji-Buttons (deine meistgenutzten), Skip, und "Im Kanal öffnen" Jump-Link (nur für dich sichtbar) |
 
 > Cooldown- und Toggle-Commands können nur von Serverbesitzern und Mitgliedern mit einer **Command Role** genutzt werden. `/random-song`, `/find-list`, `/song-stats`, `/user-stats`, `/user-score`, `/find-song`, `/talk`, `/translate`, `/top` und `/new` sind für **alle** Servermitglieder verfügbar.
+
+### /new Karussell-Details
+
+Der `/new`-Command zeigt ungehörte Songs **einen nach dem anderen** im Karussell-Modus:
+
+- **Emoji-Buttons** (Row 1): Dynamisch aus deinen meistverwendeten Emojis, Fallback: 👍 ❤️ 🔥 🎵
+- **Skip-Button**: Überspringt den Song nur für diese Session — beim nächsten `/new` taucht er wieder auf
+- **"Im Kanal öffnen"**: Jump-Link zum Original-Post im Song-Kanal, um dort selbst zu reagieren
+- Emoji-Klick speichert die Reaktion in der Datenbank unter deiner User-ID → Song verschwindet aus zukünftigen `/new`-Aufrufen
+- Songs ohne bisherige Reaktionen werden ebenfalls angezeigt
+- Timeout: 10 Minuten Inaktivität
 
 ---
 

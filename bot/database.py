@@ -800,6 +800,22 @@ class Database:
         )
         await self.db.commit()
 
+    async def delete_all_reactions(self) -> int:
+        """Delete all rows from song_reactions. Returns number of deleted rows."""
+        async with self.db.execute("SELECT COUNT(*) FROM song_reactions") as cursor:
+            count = (await cursor.fetchone())[0]
+        await self.db.execute("DELETE FROM song_reactions")
+        await self.db.commit()
+        return count
+
+    async def delete_all_songs(self) -> int:
+        """Delete all rows from song_posts. Returns number of deleted rows."""
+        async with self.db.execute("SELECT COUNT(*) FROM song_posts") as cursor:
+            count = (await cursor.fetchone())[0]
+        await self.db.execute("DELETE FROM song_posts")
+        await self.db.commit()
+        return count
+
     async def get_song_post_by_message_id(self, message_id: int) -> dict | None:
         async with self.db.execute(
             "SELECT * FROM song_posts WHERE message_id = ?", (message_id,)
