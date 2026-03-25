@@ -826,6 +826,11 @@ class Database:
         await self.db.commit()
         return count
 
+    async def delete_song_posts_by_message_id(self, message_id: int):
+        """Remove song_posts entries for a deleted message."""
+        await self.db.execute("DELETE FROM song_posts WHERE message_id = ?", (message_id,))
+        await self.db.commit()
+
     async def delete_all_songs(self) -> int:
         """Delete all rows from song_posts. Returns number of deleted rows."""
         async with self.db.execute("SELECT COUNT(*) FROM song_posts") as cursor:

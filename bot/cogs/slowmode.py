@@ -96,6 +96,12 @@ class SlowmodeCog(commands.Cog):
         except discord.NotFound:
             return
 
+        # Clean up song_posts entry so deleted songs don't appear in /new
+        try:
+            await self.bot.db.delete_song_posts_by_message_id(message.id)
+        except Exception:
+            pass
+
         hours = remaining_seconds / 3600
         if hours >= 1:
             hours_int = math.ceil(hours)
