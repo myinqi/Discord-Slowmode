@@ -151,6 +151,11 @@ Protokoll aller Aktionen: gelöschte Nachrichten, Konfigurationsänderungen, Ben
 - `/party` Karussell zum Durchhören aller eingereichten Songs mit "Listen", "Heard" und "Next" Buttons
 - Songs werden als "gehört" markiert und aus der aktiven Liste entfernt
 - `/party-reset` zum Zurücksetzen der Playlist (nur Admin/Mod/Owner)
+- **Web-Interface** ("Party Playlist" Seite):
+  - Songs per Suno-URL einreichen (Titel wird automatisch ausgelesen)
+  - Komplette Playlist mit Thumbnails, Status-Filter (All/Remaining/Heard), Fortschrittsbalken
+  - "Now Playing" Player-Card mit Listen-Link und Heard-Button
+  - Songs einzeln löschen oder komplette Playlist zurücksetzen
 
 ### Playlist Search
 - Kanäle definieren, in denen Suno-Playlist-Links gepostet werden

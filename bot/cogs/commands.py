@@ -1315,6 +1315,8 @@ class CommandsCog(commands.Cog):
 
     @app_commands.command(name="party", description="Start the Listening Party carousel — browse and listen to submitted songs")
     async def party_carousel(self, interaction: discord.Interaction):
+        if not await self._permission_check(interaction):
+            return
         await interaction.response.defer(ephemeral=True)
         try:
             songs = await self.bot.db.party_get_unheard_songs()

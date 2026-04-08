@@ -5,6 +5,7 @@ import functools
 import math
 import time
 import bcrypt
+import aiohttp
 from quart import Quart, render_template, request, redirect, url_for, session, flash
 from bot.database import Database
 
@@ -1130,6 +1131,103 @@ def create_app(db: Database, bot=None) -> Quart:
                 images=images,
                 filter_category=filter_category,
                 filter_category_name=filter_category_name,
+            )
+        except Exception as e:
+            traceback.print_exc()
+            return f"<pre>Error: {e}\n\n{traceback.format_exc()}</pre>", 500
+
+    # --- Party Playlist ---
+
+    async def _fetch_suno_title(url: str) -> str | None:
+        """Fetch song title from a Suno URL via Open Graph meta tags."""
+        try:
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return None
+                    html = await resp.text()
+                    match = re.search(r'<meta\s+property=["\']og:title["\']\s+content=["\']([^"\']+)["\']', html)
+                    if not match:
+                        match = re.search(r'<meta\s+content=["\']([^"\']+)["\']\s+property=["\']og:title["\']', html)
+                    if match:
+                        return match.group(1).strip()
+                    match = re.search(r'<title>([^<]+)</title>', html)
+                    if match:
+                        title = match.group(1).strip()
+                        title = re.sub(r'\s*[|\-–]\s*Suno$', '', title).strip()
+                        return title if title else None
+        except Exception:
+            pass
+        return None
+
+    @app.route("/party-playlist", methods=["GET", "POST"])
+    @login_required
+    async def party_playlist():
+        if request.method == "POST":
+            form = await request.form
+            action = form.get("action")
+
+            if action == "submit_song":
+                url = form.get("url", "").strip()
+                if not SUNO_URL_PATTERN.search(url):
+                    await flash("Invalid URL. Please provide a valid Suno song link.", "error")
+                    return redirect(url_for("party_playlist"))
+                song_title = await _fetch_suno_title(url)
+                username = session.get("username", "Web User")
+                await db.party_submit_song(
+                    user_id=0,
+                    user_name=username,
+                    url=url,
+                    song_title=song_title,
+                )
+                return redirect(url_for("party_playlist"))
+
+            elif action == "mark_heard":
+                song_id = int(form.get("song_id", 0))
+                await db.party_mark_heard(song_id)
+                return redirect(request.referrer or url_for("party_playlist"))
+
+            elif action == "delete_song":
+                song_id = int(form.get("song_id", 0))
+                await db.db.execute("DELETE FROM party_playlist WHERE id = ?", (song_id,))
+                await db.db.commit()
+                return redirect(request.referrer or url_for("party_playlist"))
+
+            elif action == "reset":
+                await db.party_reset()
+                return redirect(url_for("party_playlist"))
+
+        # GET
+        import traceback
+        try:
+            songs = await db.party_get_all_songs()
+
+            # Extract suno_id for thumbnails
+            for song in songs:
+                m = re.search(r'suno\.com/(?:s|song)/([\w-]+)', song.get("url", ""))
+                song["suno_id"] = m.group(1) if m else None
+
+            heard_count = sum(1 for s in songs if s["heard"])
+            unheard_count = len(songs) - heard_count
+            unheard_songs = [s for s in songs if not s["heard"]]
+
+            filter_status = request.args.get("filter")
+            if filter_status == "heard":
+                display_songs = [s for s in songs if s["heard"]]
+            elif filter_status == "unheard":
+                display_songs = [s for s in songs if not s["heard"]]
+            else:
+                display_songs = songs
+                filter_status = None
+
+            return await render_template(
+                "party_playlist.html",
+                songs=songs,
+                display_songs=display_songs,
+                unheard_songs=unheard_songs,
+                heard_count=heard_count,
+                unheard_count=unheard_count,
+                filter_status=filter_status,
             )
         except Exception as e:
             traceback.print_exc()
