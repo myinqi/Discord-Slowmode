@@ -147,6 +147,10 @@ Protokoll aller Aktionen: gelöschte Nachrichten, Konfigurationsänderungen, Ben
 - Zeitraum in Stunden konfigurieren (wie weit zurück nach Songs gesucht wird)
 - Per `/random-song` Slash-Command wird ein zufälliger Suno-Song aus dem Zeitraum in den Output-Kanal gepostet
 - Unterstützte URL-Formate: `https://suno.com/s/...` und `https://suno.com/song/...`
+- **Party Playlist**: User können bis zu 2 Songs per `/party-submit` einreichen
+- `/party` Karussell zum Durchhören aller eingereichten Songs mit "Listen", "Heard" und "Next" Buttons
+- Songs werden als "gehört" markiert und aus der aktiven Liste entfernt
+- `/party-reset` zum Zurücksetzen der Playlist (nur Admin/Mod/Owner)
 
 ### Playlist Search
 - Kanäle definieren, in denen Suno-Playlist-Links gepostet werden
@@ -217,8 +221,14 @@ Protokoll aller Aktionen: gelöschte Nachrichten, Konfigurationsänderungen, Ben
 | `/top <period>` | Most Reacted Songs Top 10 mit Titel, Interpret, Reaktionen und Cover (nur für dich sichtbar) |
 | `/new` | Karussell-Modus: Songs der letzten 2 Tage einzeln durchblättern, auf die du noch nicht reagiert hast — mit dynamischen Emoji-Buttons (deine meistgenutzten), Skip, und "Im Kanal öffnen" Jump-Link (nur für dich sichtbar) |
 | `/imageposting <kategorie> [titel]` | Bild aus der Bibliothek im Kanal posten: Kategorie (Pflicht) + Titel (optional, sonst zufällig). Autocomplete für beide Parameter. Postet erst das Bild, dann die Beschreibung (sichtbar für alle) |
+| `/party` | Karussell-Modus: Eingereichte Party-Songs einzeln durchhören mit Listen-Link, Heard-Button und Next-Button (nur für dich sichtbar) |
+| `/party-submit <url>` | Suno-Song zur Listening-Party-Playlist einreichen (max. 2 pro User, nur für dich sichtbar) |
+| `/party-songs` | Eigene eingereichte Songs anzeigen mit Status und ID (nur für dich sichtbar) |
+| `/party-remove <song_id>` | Eigenen Song aus der Playlist entfernen (ID aus `/party-songs`, nur für dich sichtbar) |
+| `/party-list` | Alle eingereichten Songs aller User auflisten (nur für dich sichtbar) |
+| `/party-reset` | Party-Playlist zurücksetzen — nur für Admin/Mod/Owner |
 
-> Cooldown- und Toggle-Commands können nur von Serverbesitzern und Mitgliedern mit einer **Command Role** genutzt werden. `/random-song`, `/find-list`, `/song-stats`, `/user-stats`, `/user-score`, `/find-song`, `/talk`, `/translate`, `/top`, `/new` und `/imageposting` sind für **alle** Servermitglieder verfügbar.
+> Cooldown- und Toggle-Commands können nur von Serverbesitzern und Mitgliedern mit einer **Command Role** genutzt werden. `/party-reset` erfordert ebenfalls Command-Berechtigung. Alle anderen Commands sind für **alle** Servermitglieder verfügbar.
 
 ### /new Karussell-Details
 

@@ -148,6 +148,119 @@ class NewSongCarouselView(discord.ui.View):
         pass
 
 
+class PartyCarouselView(discord.ui.View):
+    """Carousel view for /party — browse party playlist songs one at a time."""
+
+    def __init__(self, bot, songs: list[dict], user: discord.Member, guild: discord.Guild, bot_name: str):
+        super().__init__(timeout=600)
+        self.bot = bot
+        self.songs = songs
+        self.user = user
+        self.guild = guild
+        self.bot_name = bot_name
+        self.index = 0
+        self._rebuild_buttons()
+
+    def _rebuild_buttons(self):
+        self.clear_items()
+        song = self.songs[self.index]
+        url = song.get("url", "")
+
+        # Row 0: Listen link
+        self.add_item(discord.ui.Button(
+            label="Listen on Suno", emoji="▶️",
+            style=discord.ButtonStyle.link, url=url, row=0,
+        ))
+
+        # Row 1: Heard + Next
+        heard_btn = discord.ui.Button(label="Heard ✅", style=discord.ButtonStyle.success, row=1)
+        heard_btn.callback = self._heard_callback
+        self.add_item(heard_btn)
+
+        next_btn = discord.ui.Button(label="Next Song ⏭️", style=discord.ButtonStyle.secondary, row=1)
+        next_btn.callback = self._next_callback
+        self.add_item(next_btn)
+
+    def build_embed(self) -> discord.Embed:
+        song = self.songs[self.index]
+        title = song.get("song_title") or "Unknown Title"
+        url = song.get("url", "")
+        submitter_name = song.get("user_name") or f"User {song['user_id']}"
+        if self.guild:
+            member = self.guild.get_member(song["user_id"])
+            if member:
+                submitter_name = member.display_name
+
+        unheard = sum(1 for s in self.songs if not s.get("_heard"))
+        embed = discord.Embed(
+            title=f"🎧 Party Song {self.index + 1} von {len(self.songs)}",
+            description=f"**{unheard}** songs remaining",
+            color=discord.Color.purple(),
+        )
+        embed.add_field(
+            name=title,
+            value=f"Submitted by **{submitter_name}**\n[▶ Listen on Suno]({url})",
+            inline=False,
+        )
+
+        song_id_match = re.search(r'suno\.com/(?:s|song)/([\w-]+)', url)
+        if song_id_match:
+            embed.set_thumbnail(url=f"https://cdn2.suno.ai/image_{song_id_match.group(1)}.jpeg")
+
+        embed.set_footer(text=f"{self.bot_name} • Listening Party")
+        embed.timestamp = discord.utils.utcnow()
+        return embed
+
+    def _build_done_embed(self) -> discord.Embed:
+        total = len(self.songs)
+        heard = sum(1 for s in self.songs if s.get("_heard"))
+        embed = discord.Embed(
+            title="🎉 Listening Party Complete!",
+            description=f"All **{heard}** of **{total}** songs have been listened to!",
+            color=discord.Color.green(),
+        )
+        embed.set_footer(text=self.bot_name)
+        embed.timestamp = discord.utils.utcnow()
+        return embed
+
+    def _find_next_unheard(self) -> bool:
+        """Advance index to the next unheard song. Returns False if all heard."""
+        start = self.index
+        for _ in range(len(self.songs)):
+            self.index = (self.index + 1) % len(self.songs)
+            if not self.songs[self.index].get("_heard"):
+                return True
+            if self.index == start:
+                break
+        return not all(s.get("_heard") for s in self.songs)
+
+    async def _heard_callback(self, interaction: discord.Interaction):
+        song = self.songs[self.index]
+        song["_heard"] = True
+        try:
+            await self.bot.db.party_mark_heard(song["id"])
+        except Exception as e:
+            print(f"[party] Error marking heard: {e}")
+
+        if self._find_next_unheard():
+            self._rebuild_buttons()
+            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        else:
+            await interaction.response.edit_message(embed=self._build_done_embed(), view=None)
+            self.stop()
+
+    async def _next_callback(self, interaction: discord.Interaction):
+        if self._find_next_unheard():
+            self._rebuild_buttons()
+            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        else:
+            await interaction.response.edit_message(embed=self._build_done_embed(), view=None)
+            self.stop()
+
+    async def on_timeout(self):
+        pass
+
+
 class CommandsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -1067,6 +1180,140 @@ class CommandsCog(commands.Cog):
             app_commands.Choice(name=img["title"], value=img["title"])
             for img in images if current.lower() in img["title"].lower()
         ][:25]
+
+
+    # --- Listening Party Playlist Commands ---
+
+    @app_commands.command(name="party-submit", description="Submit a song to the Listening Party playlist (max 2 per user)")
+    @app_commands.describe(url="Suno song URL to submit")
+    async def party_submit(self, interaction: discord.Interaction, url: str):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            if not SUNO_URL_PATTERN.search(url):
+                await interaction.followup.send("Invalid URL. Please provide a valid Suno song link.", ephemeral=True)
+                return
+
+            count = await self.bot.db.party_get_user_song_count(interaction.user.id)
+            if count >= 2:
+                await interaction.followup.send("You have already submitted 2 songs. Remove one first with `/party-remove`.", ephemeral=True)
+                return
+
+            # Try to extract song title from the URL embed
+            song_title = None
+            await self.bot.db.party_submit_song(
+                user_id=interaction.user.id,
+                user_name=str(interaction.user),
+                url=url,
+                song_title=song_title,
+            )
+            await interaction.followup.send(
+                f"✅ Song submitted! ({count + 1}/2)\n{url}",
+                ephemeral=True,
+            )
+        except Exception as e:
+            print(f"[party-submit] Error: {e}")
+            await interaction.followup.send(f"Error: {e}", ephemeral=True)
+
+    @app_commands.command(name="party-songs", description="View your submitted songs for the Listening Party")
+    async def party_songs(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            songs = await self.bot.db.party_get_user_songs(interaction.user.id)
+            if not songs:
+                await interaction.followup.send("You haven't submitted any songs yet. Use `/party-submit` to add one.", ephemeral=True)
+                return
+
+            embed = discord.Embed(
+                title="🎵 Your Party Songs",
+                color=discord.Color.purple(),
+            )
+            for i, song in enumerate(songs, 1):
+                title = song.get("song_title") or "Unknown Title"
+                status = "✅ Heard" if song["heard"] else "⏳ Pending"
+                embed.add_field(
+                    name=f"Song {i} — {status}",
+                    value=f"[{title}]({song['url']})\nID: `{song['id']}`",
+                    inline=False,
+                )
+            embed.set_footer(text=f"{len(songs)}/2 slots used")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"Error: {e}", ephemeral=True)
+
+    @app_commands.command(name="party-remove", description="Remove one of your submitted songs from the Listening Party playlist")
+    @app_commands.describe(song_id="ID of the song to remove (shown in /party-songs)")
+    async def party_remove(self, interaction: discord.Interaction, song_id: int):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            removed = await self.bot.db.party_remove_song(song_id, interaction.user.id)
+            if removed:
+                await interaction.followup.send(f"✅ Song `{song_id}` removed from the playlist.", ephemeral=True)
+            else:
+                await interaction.followup.send("Song not found or it doesn't belong to you.", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"Error: {e}", ephemeral=True)
+
+    @app_commands.command(name="party-list", description="List all submitted songs for the Listening Party")
+    async def party_list(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            songs = await self.bot.db.party_get_all_songs()
+            if not songs:
+                await interaction.followup.send("The party playlist is empty. Submit songs with `/party-submit`!", ephemeral=True)
+                return
+
+            embed = discord.Embed(
+                title="🎶 Listening Party Playlist",
+                description=f"**{len(songs)}** songs submitted",
+                color=discord.Color.purple(),
+            )
+            for i, song in enumerate(songs, 1):
+                title = song.get("song_title") or "Unknown Title"
+                submitter = song.get("user_name") or f"User {song['user_id']}"
+                if interaction.guild:
+                    member = interaction.guild.get_member(song["user_id"])
+                    if member:
+                        submitter = member.display_name
+                status = "✅" if song["heard"] else "⏳"
+                embed.add_field(
+                    name=f"{status} {i}. {title}",
+                    value=f"by **{submitter}** — [Listen]({song['url']})",
+                    inline=False,
+                )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"Error: {e}", ephemeral=True)
+
+    @app_commands.command(name="party", description="Start the Listening Party carousel — browse and listen to submitted songs")
+    async def party_carousel(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            songs = await self.bot.db.party_get_unheard_songs()
+            if not songs:
+                all_songs = await self.bot.db.party_get_all_songs()
+                if all_songs:
+                    await interaction.followup.send("🎉 All songs have been listened to! Use `/party-reset` to start a new round.", ephemeral=True)
+                else:
+                    await interaction.followup.send("The party playlist is empty. Submit songs with `/party-submit`!", ephemeral=True)
+                return
+
+            bot_name = await self.bot.db.get_setting("bot_name") or "Slowmode Bot"
+            view = PartyCarouselView(self.bot, songs, interaction.user, interaction.guild, bot_name)
+            await interaction.followup.send(embed=view.build_embed(), view=view, ephemeral=True)
+        except Exception as e:
+            print(f"[party] Error: {e}")
+            await interaction.followup.send(f"Error: {e}", ephemeral=True)
+
+    @app_commands.command(name="party-reset", description="Reset the Listening Party playlist (Admin/Mod only)")
+    async def party_reset(self, interaction: discord.Interaction):
+        if not await self._permission_check(interaction):
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            count = await self.bot.db.party_reset()
+            await interaction.followup.send(f"🗑️ Party playlist cleared. {count} songs removed.", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"Error: {e}", ephemeral=True)
 
 
 class TranslateLanguageSelect(discord.ui.Select):

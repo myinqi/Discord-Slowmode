@@ -147,6 +147,20 @@ class Database:
             await self.db.execute("ALTER TABLE song_reactions ADD COLUMN song_title TEXT")
             await self.db.commit()
 
+        # Create party_playlist table
+        await self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS party_playlist (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                user_name TEXT,
+                url TEXT NOT NULL,
+                song_title TEXT,
+                submitted_at REAL DEFAULT (unixepoch()),
+                heard INTEGER DEFAULT 0
+            );
+        """)
+        await self.db.commit()
+
         # Create image_categories and image_posts tables
         await self.db.executescript("""
             CREATE TABLE IF NOT EXISTS image_categories (
@@ -1169,3 +1183,61 @@ class Database:
         ) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None
+
+    # --- Party Playlist ---
+
+    async def party_submit_song(self, user_id: int, user_name: str, url: str, song_title: str = None) -> int:
+        cursor = await self.db.execute(
+            "INSERT INTO party_playlist (user_id, user_name, url, song_title) VALUES (?, ?, ?, ?)",
+            (user_id, user_name, url, song_title),
+        )
+        await self.db.commit()
+        return cursor.lastrowid
+
+    async def party_get_user_songs(self, user_id: int) -> list[dict]:
+        async with self.db.execute(
+            "SELECT * FROM party_playlist WHERE user_id = ? ORDER BY submitted_at", (user_id,)
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def party_get_user_song_count(self, user_id: int) -> int:
+        async with self.db.execute(
+            "SELECT COUNT(*) FROM party_playlist WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            return (await cursor.fetchone())[0]
+
+    async def party_remove_song(self, song_id: int, user_id: int) -> bool:
+        """Remove a song from the playlist. Returns True if deleted."""
+        async with self.db.execute(
+            "SELECT id FROM party_playlist WHERE id = ? AND user_id = ?", (song_id, user_id)
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row:
+            await self.db.execute("DELETE FROM party_playlist WHERE id = ?", (song_id,))
+            await self.db.commit()
+            return True
+        return False
+
+    async def party_get_all_songs(self) -> list[dict]:
+        async with self.db.execute(
+            "SELECT * FROM party_playlist ORDER BY submitted_at"
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def party_get_unheard_songs(self) -> list[dict]:
+        async with self.db.execute(
+            "SELECT * FROM party_playlist WHERE heard = 0 ORDER BY RANDOM()"
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def party_mark_heard(self, song_id: int):
+        await self.db.execute("UPDATE party_playlist SET heard = 1 WHERE id = ?", (song_id,))
+        await self.db.commit()
+
+    async def party_reset(self) -> int:
+        """Delete all songs from the party playlist. Returns count."""
+        async with self.db.execute("SELECT COUNT(*) FROM party_playlist") as cursor:
+            count = (await cursor.fetchone())[0]
+        await self.db.execute("DELETE FROM party_playlist")
+        await self.db.commit()
+        return count
