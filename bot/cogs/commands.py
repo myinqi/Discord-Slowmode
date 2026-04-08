@@ -1,6 +1,7 @@
 import re
 import random
 from datetime import datetime, timedelta, timezone
+import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -1184,12 +1185,35 @@ class CommandsCog(commands.Cog):
 
     # --- Listening Party Playlist Commands ---
 
+    @staticmethod
+    async def _fetch_suno_title(url: str) -> str | None:
+        """Fetch song title from a Suno URL via Open Graph meta tags."""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return None
+                    html = await resp.text()
+                    # Try og:title first
+                    match = re.search(r'<meta\s+property=["\']og:title["\']\s+content=["\']([^"\']+)["\']', html)
+                    if not match:
+                        match = re.search(r'<meta\s+content=["\']([^"\']+)["\']\s+property=["\']og:title["\']', html)
+                    if match:
+                        return match.group(1).strip()
+                    # Fallback to <title>
+                    match = re.search(r'<title>([^<]+)</title>', html)
+                    if match:
+                        title = match.group(1).strip()
+                        # Suno titles often end with " | Suno" — strip that
+                        title = re.sub(r'\s*[|\-–]\s*Suno$', '', title).strip()
+                        return title if title else None
+        except Exception:
+            pass
+        return None
+
     @app_commands.command(name="party-submit", description="Submit a song to the Listening Party playlist (max 2 per user)")
-    @app_commands.describe(
-        url="Suno song URL to submit",
-        title="Song title (optional — shown in the playlist)",
-    )
-    async def party_submit(self, interaction: discord.Interaction, url: str, title: str = None):
+    @app_commands.describe(url="Suno song URL to submit")
+    async def party_submit(self, interaction: discord.Interaction, url: str):
         await interaction.response.defer(ephemeral=True)
         try:
             if not SUNO_URL_PATTERN.search(url):
@@ -1200,6 +1224,9 @@ class CommandsCog(commands.Cog):
             if count >= 2:
                 await interaction.followup.send("You have already submitted 2 songs. Remove one first with `/party-remove`.", ephemeral=True)
                 return
+
+            # Auto-fetch song title from Suno page
+            title = await self._fetch_suno_title(url)
 
             await self.bot.db.party_submit_song(
                 user_id=interaction.user.id,
