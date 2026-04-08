@@ -72,9 +72,11 @@
                 {% set song = unheard_songs[0] %}
                 <div id="current-song" data-index="0">
                     <div class="flex items-center gap-3 mb-3">
-                        <img id="player-thumb" src="https://cdn2.suno.ai/image_{{ song.suno_id }}.jpeg" alt=""
+                        {% if song.image_url %}
+                        <img id="player-thumb" src="{{ song.image_url }}" alt=""
                             class="w-16 h-16 rounded-lg object-cover bg-discord-darker"
                             onerror="this.style.display='none'">
+                        {% endif %}
                         <div class="min-w-0 flex-1">
                             <h4 id="player-title" class="text-white font-semibold text-sm truncate">{{ song.song_title or 'Unknown Title' }}</h4>
                             <p id="player-submitter" class="text-gray-400 text-xs">by {{ song.user_name }}</p>
@@ -142,13 +144,13 @@
                     {% for song in display_songs %}
                     <div class="flex items-center gap-4 bg-discord-darker rounded-lg px-4 py-3 {% if song.heard %}opacity-60{% endif %}">
                         <!-- Thumbnail -->
-                        {% if song.suno_id %}
-                        <img src="https://cdn2.suno.ai/image_{{ song.suno_id }}.jpeg" alt=""
+                        {% if song.image_url %}
+                        <img src="{{ song.image_url }}" alt=""
                             class="w-12 h-12 rounded-lg object-cover bg-black shrink-0"
-                            onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 48 48%22><rect fill=%22%23333%22 width=%2248%22 height=%2248%22/><text x=%2224%22 y=%2230%22 text-anchor=%22middle%22 fill=%22%23666%22 font-size=%2220%22>🎵</text></svg>'">
+                            onerror="this.parentElement.innerHTML='<div class=\'w-12 h-12 rounded-lg bg-discord-dark flex items-center justify-center shrink-0\'><span class=\'text-gray-500 text-lg\'>&#127925;</span></div>'">
                         {% else %}
                         <div class="w-12 h-12 rounded-lg bg-discord-dark flex items-center justify-center shrink-0">
-                            <span class="text-gray-500 text-lg">🎵</span>
+                            <span class="text-gray-500 text-lg">&#127925;</span>
                         </div>
                         {% endif %}
 

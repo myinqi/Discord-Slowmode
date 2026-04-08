@@ -1138,28 +1138,33 @@ def create_app(db: Database, bot=None) -> Quart:
 
     # --- Party Playlist ---
 
-    async def _fetch_suno_info(url: str) -> tuple[str | None, str | None]:
-        """Fetch song title and artist from a Suno URL. Returns (title, artist)."""
+    async def _fetch_suno_info(url: str) -> tuple[str | None, str | None, str | None]:
+        """Fetch song title, artist and image from a Suno URL. Returns (title, artist, image_url)."""
         try:
             async with aiohttp.ClientSession() as sess:
                 async with sess.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status != 200:
-                        return None, None
+                        return None, None, None
                     html = await resp.text()
+                    # Extract og:image
+                    image_url = None
+                    img_match = re.search(r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']', html)
+                    if not img_match:
+                        img_match = re.search(r'<meta\s+content=["\']([^"\']+)["\']\s+property=["\']og:image["\']', html)
+                    if img_match:
+                        image_url = img_match.group(1).strip()
                     # <title> format: "Song Title by Artist Name | Suno"
                     match = re.search(r'<title>([^<]+)</title>', html)
                     if match:
                         raw = match.group(1).strip()
-                        # Strip " | Suno" suffix
-                        raw = re.sub(r'\s*[|\-–]\s*Suno$', '', raw).strip()
-                        # Split "Title by Artist"
+                        raw = re.sub(r'\s*[|\-\u2013]\s*Suno$', '', raw).strip()
                         by_match = re.search(r'^(.+?)\s+by\s+(.+)$', raw)
                         if by_match:
-                            return by_match.group(1).strip(), by_match.group(2).strip()
-                        return raw, None
+                            return by_match.group(1).strip(), by_match.group(2).strip(), image_url
+                        return raw, None, image_url
         except Exception:
             pass
-        return None, None
+        return None, None, None
 
     @app.route("/party-playlist", methods=["GET", "POST"])
     @login_required
@@ -1173,12 +1178,13 @@ def create_app(db: Database, bot=None) -> Quart:
                 if not SUNO_URL_PATTERN.search(url):
                     await flash("Invalid URL. Please provide a valid Suno song link.", "error")
                     return redirect(url_for("party_playlist"))
-                song_title, artist = await _fetch_suno_info(url)
+                song_title, artist, image_url = await _fetch_suno_info(url)
                 await db.party_submit_song(
                     user_id=0,
                     user_name=artist or "Unknown Artist",
                     url=url,
                     song_title=song_title,
+                    image_url=image_url,
                 )
                 return redirect(url_for("party_playlist"))
 
@@ -1201,11 +1207,6 @@ def create_app(db: Database, bot=None) -> Quart:
         import traceback
         try:
             songs = await db.party_get_all_songs()
-
-            # Extract suno_id for thumbnails
-            for song in songs:
-                m = re.search(r'suno\.com/(?:s|song)/([\w-]+)', song.get("url", ""))
-                song["suno_id"] = m.group(1) if m else None
 
             heard_count = sum(1 for s in songs if s["heard"])
             unheard_count = len(songs) - heard_count

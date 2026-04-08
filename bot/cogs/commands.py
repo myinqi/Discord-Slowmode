@@ -1186,14 +1186,21 @@ class CommandsCog(commands.Cog):
     # --- Listening Party Playlist Commands ---
 
     @staticmethod
-    async def _fetch_suno_info(url: str) -> tuple[str | None, str | None]:
-        """Fetch song title and artist from a Suno URL. Returns (title, artist)."""
+    async def _fetch_suno_info(url: str) -> tuple[str | None, str | None, str | None]:
+        """Fetch song title, artist and image from a Suno URL. Returns (title, artist, image_url)."""
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status != 200:
-                        return None, None
+                        return None, None, None
                     html = await resp.text()
+                    # Extract og:image
+                    image_url = None
+                    img_match = re.search(r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']', html)
+                    if not img_match:
+                        img_match = re.search(r'<meta\s+content=["\']([^"\']+)["\']\s+property=["\']og:image["\']', html)
+                    if img_match:
+                        image_url = img_match.group(1).strip()
                     # <title> format: "Song Title by Artist Name | Suno"
                     match = re.search(r'<title>([^<]+)</title>', html)
                     if match:
@@ -1201,11 +1208,11 @@ class CommandsCog(commands.Cog):
                         raw = re.sub(r'\s*[|\-–]\s*Suno$', '', raw).strip()
                         by_match = re.search(r'^(.+?)\s+by\s+(.+)$', raw)
                         if by_match:
-                            return by_match.group(1).strip(), by_match.group(2).strip()
-                        return raw, None
+                            return by_match.group(1).strip(), by_match.group(2).strip(), image_url
+                        return raw, None, image_url
         except Exception:
             pass
-        return None, None
+        return None, None, None
 
     @app_commands.command(name="party-submit", description="Submit a song to the Listening Party playlist (max 2 per user)")
     @app_commands.describe(url="Suno song URL to submit")
@@ -1221,14 +1228,15 @@ class CommandsCog(commands.Cog):
                 await interaction.followup.send("You have already submitted 2 songs. Remove one first with `/party-remove`.", ephemeral=True)
                 return
 
-            # Auto-fetch song title and artist from Suno page
-            title, artist = await self._fetch_suno_info(url)
+            # Auto-fetch song title, artist and cover image from Suno page
+            title, artist, image_url = await self._fetch_suno_info(url)
 
             await self.bot.db.party_submit_song(
                 user_id=interaction.user.id,
                 user_name=artist or str(interaction.user),
                 url=url,
                 song_title=title,
+                image_url=image_url,
             )
             display = f"**{title}**" if title else url
             if artist:
