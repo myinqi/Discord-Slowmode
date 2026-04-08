@@ -1186,30 +1186,26 @@ class CommandsCog(commands.Cog):
     # --- Listening Party Playlist Commands ---
 
     @staticmethod
-    async def _fetch_suno_title(url: str) -> str | None:
-        """Fetch song title from a Suno URL via Open Graph meta tags."""
+    async def _fetch_suno_info(url: str) -> tuple[str | None, str | None]:
+        """Fetch song title and artist from a Suno URL. Returns (title, artist)."""
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status != 200:
-                        return None
+                        return None, None
                     html = await resp.text()
-                    # Try og:title first
-                    match = re.search(r'<meta\s+property=["\']og:title["\']\s+content=["\']([^"\']+)["\']', html)
-                    if not match:
-                        match = re.search(r'<meta\s+content=["\']([^"\']+)["\']\s+property=["\']og:title["\']', html)
-                    if match:
-                        return match.group(1).strip()
-                    # Fallback to <title>
+                    # <title> format: "Song Title by Artist Name | Suno"
                     match = re.search(r'<title>([^<]+)</title>', html)
                     if match:
-                        title = match.group(1).strip()
-                        # Suno titles often end with " | Suno" — strip that
-                        title = re.sub(r'\s*[|\-–]\s*Suno$', '', title).strip()
-                        return title if title else None
+                        raw = match.group(1).strip()
+                        raw = re.sub(r'\s*[|\-–]\s*Suno$', '', raw).strip()
+                        by_match = re.search(r'^(.+?)\s+by\s+(.+)$', raw)
+                        if by_match:
+                            return by_match.group(1).strip(), by_match.group(2).strip()
+                        return raw, None
         except Exception:
             pass
-        return None
+        return None, None
 
     @app_commands.command(name="party-submit", description="Submit a song to the Listening Party playlist (max 2 per user)")
     @app_commands.describe(url="Suno song URL to submit")
@@ -1225,16 +1221,19 @@ class CommandsCog(commands.Cog):
                 await interaction.followup.send("You have already submitted 2 songs. Remove one first with `/party-remove`.", ephemeral=True)
                 return
 
-            # Auto-fetch song title from Suno page
-            title = await self._fetch_suno_title(url)
+            # Auto-fetch song title and artist from Suno page
+            title, artist = await self._fetch_suno_info(url)
 
             await self.bot.db.party_submit_song(
                 user_id=interaction.user.id,
-                user_name=str(interaction.user),
+                user_name=artist or str(interaction.user),
                 url=url,
                 song_title=title,
             )
-            display = f"**{title}**\n{url}" if title else url
+            display = f"**{title}**" if title else url
+            if artist:
+                display += f" by **{artist}**"
+            display += f"\n{url}"
             await interaction.followup.send(
                 f"✅ Song submitted! ({count + 1}/2)\n{display}",
                 ephemeral=True,

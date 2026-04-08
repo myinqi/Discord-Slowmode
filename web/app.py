@@ -1138,27 +1138,28 @@ def create_app(db: Database, bot=None) -> Quart:
 
     # --- Party Playlist ---
 
-    async def _fetch_suno_title(url: str) -> str | None:
-        """Fetch song title from a Suno URL via Open Graph meta tags."""
+    async def _fetch_suno_info(url: str) -> tuple[str | None, str | None]:
+        """Fetch song title and artist from a Suno URL. Returns (title, artist)."""
         try:
             async with aiohttp.ClientSession() as sess:
                 async with sess.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status != 200:
-                        return None
+                        return None, None
                     html = await resp.text()
-                    match = re.search(r'<meta\s+property=["\']og:title["\']\s+content=["\']([^"\']+)["\']', html)
-                    if not match:
-                        match = re.search(r'<meta\s+content=["\']([^"\']+)["\']\s+property=["\']og:title["\']', html)
-                    if match:
-                        return match.group(1).strip()
+                    # <title> format: "Song Title by Artist Name | Suno"
                     match = re.search(r'<title>([^<]+)</title>', html)
                     if match:
-                        title = match.group(1).strip()
-                        title = re.sub(r'\s*[|\-–]\s*Suno$', '', title).strip()
-                        return title if title else None
+                        raw = match.group(1).strip()
+                        # Strip " | Suno" suffix
+                        raw = re.sub(r'\s*[|\-–]\s*Suno$', '', raw).strip()
+                        # Split "Title by Artist"
+                        by_match = re.search(r'^(.+?)\s+by\s+(.+)$', raw)
+                        if by_match:
+                            return by_match.group(1).strip(), by_match.group(2).strip()
+                        return raw, None
         except Exception:
             pass
-        return None
+        return None, None
 
     @app.route("/party-playlist", methods=["GET", "POST"])
     @login_required
@@ -1172,11 +1173,10 @@ def create_app(db: Database, bot=None) -> Quart:
                 if not SUNO_URL_PATTERN.search(url):
                     await flash("Invalid URL. Please provide a valid Suno song link.", "error")
                     return redirect(url_for("party_playlist"))
-                song_title = await _fetch_suno_title(url)
-                username = session.get("username", "Web User")
+                song_title, artist = await _fetch_suno_info(url)
                 await db.party_submit_song(
                     user_id=0,
-                    user_name=username,
+                    user_name=artist or "Unknown Artist",
                     url=url,
                     song_title=song_title,
                 )
