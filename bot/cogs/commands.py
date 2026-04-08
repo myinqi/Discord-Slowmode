@@ -1185,8 +1185,11 @@ class CommandsCog(commands.Cog):
     # --- Listening Party Playlist Commands ---
 
     @app_commands.command(name="party-submit", description="Submit a song to the Listening Party playlist (max 2 per user)")
-    @app_commands.describe(url="Suno song URL to submit")
-    async def party_submit(self, interaction: discord.Interaction, url: str):
+    @app_commands.describe(
+        url="Suno song URL to submit",
+        title="Song title (optional — shown in the playlist)",
+    )
+    async def party_submit(self, interaction: discord.Interaction, url: str, title: str = None):
         await interaction.response.defer(ephemeral=True)
         try:
             if not SUNO_URL_PATTERN.search(url):
@@ -1198,16 +1201,15 @@ class CommandsCog(commands.Cog):
                 await interaction.followup.send("You have already submitted 2 songs. Remove one first with `/party-remove`.", ephemeral=True)
                 return
 
-            # Try to extract song title from the URL embed
-            song_title = None
             await self.bot.db.party_submit_song(
                 user_id=interaction.user.id,
                 user_name=str(interaction.user),
                 url=url,
-                song_title=song_title,
+                song_title=title,
             )
+            display = f"**{title}**\n{url}" if title else url
             await interaction.followup.send(
-                f"✅ Song submitted! ({count + 1}/2)\n{url}",
+                f"✅ Song submitted! ({count + 1}/2)\n{display}",
                 ephemeral=True,
             )
         except Exception as e:
