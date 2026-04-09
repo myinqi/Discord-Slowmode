@@ -140,15 +140,18 @@ def create_app(db: Database, bot=None) -> Quart:
             guild_id = form.get("guild_id", "").strip()
             new_channel = form.get("new_command_channel", "").strip()
 
+            party_max_songs = form.get("party_max_songs", "2").strip()
+
             if bot_name:
                 await db.set_setting("bot_name", bot_name)
             if guild_id:
                 await db.set_setting("guild_id", guild_id)
             await db.set_setting("new_command_channel", new_channel)
+            await db.set_setting("party_max_songs", party_max_songs)
 
             await db.add_audit_log(
                 event_type="settings_changed",
-                details=f"Bot name: {bot_name}, Guild ID: {guild_id}, /new channel: {new_channel}",
+                details=f"Bot name: {bot_name}, Guild ID: {guild_id}, /new channel: {new_channel}, party_max_songs: {party_max_songs}",
                 actor=session.get("username", "unknown"),
             )
             await flash("Settings saved.", "success")
@@ -157,6 +160,7 @@ def create_app(db: Database, bot=None) -> Quart:
         bot_name = await db.get_setting("bot_name") or "Slowmode Bot"
         guild_id = await db.get_setting("guild_id") or ""
         new_command_channel = await db.get_setting("new_command_channel") or ""
+        party_max_songs = await db.get_setting("party_max_songs") or "2"
         monitored = await db.get_monitored_channels()
         guild = get_guild()
         channel_options = []
@@ -168,7 +172,8 @@ def create_app(db: Database, bot=None) -> Quart:
                     ch_name = gch.name
             channel_options.append({"id": ch["channel_id"], "name": ch_name})
         return await render_template("settings.html", bot_name=bot_name, guild_id=guild_id,
-                                     new_command_channel=new_command_channel, channel_options=channel_options)
+                                     new_command_channel=new_command_channel, channel_options=channel_options,
+                                     party_max_songs=party_max_songs)
 
     @app.route("/channels", methods=["GET", "POST"])
     @login_required

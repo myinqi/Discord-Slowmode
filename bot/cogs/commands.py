@@ -1223,9 +1223,10 @@ class CommandsCog(commands.Cog):
                 await interaction.followup.send("Invalid URL. Please provide a valid Suno song link.", ephemeral=True)
                 return
 
+            max_songs = int(await self.bot.db.get_setting("party_max_songs") or "2")
             count = await self.bot.db.party_get_user_song_count(interaction.user.id)
-            if count >= 2:
-                await interaction.followup.send("You have already submitted 2 songs. Remove one first with `/party-remove`.", ephemeral=True)
+            if count >= max_songs:
+                await interaction.followup.send(f"You have already submitted {max_songs} songs. Remove one first with `/party-remove`.", ephemeral=True)
                 return
 
             # Auto-fetch song title, artist and cover image from Suno page
@@ -1243,7 +1244,7 @@ class CommandsCog(commands.Cog):
                 display += f" by **{artist}**"
             display += f"\n{url}"
             await interaction.followup.send(
-                f"✅ Song submitted! ({count + 1}/2)\n{display}",
+                f"✅ Song submitted! ({count + 1}/{max_songs})\n{display}",
                 ephemeral=True,
             )
         except Exception as e:

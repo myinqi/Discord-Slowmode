@@ -32,6 +32,12 @@
                 </select>
                 <p class="text-xs text-gray-500 mt-1">Channel scanned by the <code>/new</code> command. Shows songs from the last 2 days the user hasn't reacted to.</p>
             </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-300 mb-1">Party Playlist — Max Songs per User</label>
+                <input type="number" name="party_max_songs" value="{{ party_max_songs }}" min="1" max="50" required
+                    class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple focus:ring-1 focus:ring-discord-blurple">
+                <p class="text-xs text-gray-500 mt-1">Maximum number of songs each user can submit to a Listening Party playlist. Default: 2.</p>
+            </div>
             <button type="submit"
                 class="px-5 py-2.5 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg font-medium transition-colors">
                 Save Settings

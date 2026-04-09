@@ -66,48 +66,74 @@
         {% if unheard_songs %}
         <div class="bg-discord-dark rounded-xl border border-purple-500/30" id="player-card">
             <div class="px-5 py-4 border-b border-gray-700/50">
-                <h3 class="text-white font-semibold">▶️ Now Playing</h3>
+                <h3 class="text-white font-semibold">&#9654;&#65039; Now Playing</h3>
             </div>
-            <div class="p-5" id="player-content">
-                {% set song = unheard_songs[0] %}
-                <div id="current-song" data-index="0">
-                    <div class="flex items-center gap-3 mb-3">
-                        {% if song.image_url %}
-                        <img id="player-thumb" src="{{ song.image_url }}" alt=""
-                            class="w-16 h-16 rounded-lg object-cover bg-discord-darker"
-                            onerror="this.style.display='none'">
-                        {% endif %}
-                        <div class="min-w-0 flex-1">
-                            <h4 id="player-title" class="text-white font-semibold text-sm truncate">{{ song.song_title or 'Unknown Title' }}</h4>
-                            <p id="player-submitter" class="text-gray-400 text-xs">by {{ song.user_name }}</p>
-                        </div>
+            <div class="p-5">
+                <div class="flex items-center gap-3 mb-3">
+                    <img id="player-thumb" src="" alt=""
+                        class="w-16 h-16 rounded-lg object-cover bg-discord-darker"
+                        onerror="this.style.display='none'">
+                    <div class="min-w-0 flex-1">
+                        <h4 id="player-title" class="text-white font-semibold text-sm truncate"></h4>
+                        <p id="player-submitter" class="text-gray-400 text-xs"></p>
                     </div>
-                    <div class="flex gap-2">
-                        <a id="player-link" href="{{ song.url }}" target="_blank"
-                            class="flex-1 px-3 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg font-medium text-sm text-center transition-colors">
-                            🎵 Listen
-                        </a>
-                        <form method="POST" class="flex-1">
-                            <input type="hidden" name="action" value="mark_heard">
-                            <input type="hidden" name="song_id" id="heard-song-id" value="{{ song.id }}">
-                            <button type="submit"
-                                class="w-full px-3 py-2 bg-green-600/80 hover:bg-green-600/60 text-white rounded-lg font-medium text-sm transition-colors">
-                                ✅ Heard
-                            </button>
-                        </form>
-                    </div>
-                    {% if unheard_songs|length > 1 %}
-                    <div class="mt-2 text-center">
-                        <span class="text-gray-500 text-xs" id="player-counter">Song 1 of {{ unheard_songs|length }} remaining</span>
-                    </div>
-                    {% endif %}
+                </div>
+                <div class="flex gap-2 mb-2">
+                    <a id="player-link" href="#" target="_blank"
+                        class="flex-1 px-3 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg font-medium text-sm text-center transition-colors">
+                        &#127925; Listen
+                    </a>
+                    <form method="POST" class="flex-1" id="heard-form">
+                        <input type="hidden" name="action" value="mark_heard">
+                        <input type="hidden" name="song_id" id="heard-song-id" value="">
+                        <button type="submit"
+                            class="w-full px-3 py-2 bg-green-600/80 hover:bg-green-600/60 text-white rounded-lg font-medium text-sm transition-colors">
+                            &#10004;&#65039; Heard
+                        </button>
+                    </form>
+                </div>
+                <div class="flex gap-2">
+                    <button id="btn-prev" onclick="playerNav(-1)"
+                        class="flex-1 px-3 py-1.5 bg-discord-darker hover:bg-gray-600 text-gray-300 rounded-lg text-sm font-medium transition-colors">
+                        &#9664; Prev
+                    </button>
+                    <button id="btn-next" onclick="playerNav(1)"
+                        class="flex-1 px-3 py-1.5 bg-discord-darker hover:bg-gray-600 text-gray-300 rounded-lg text-sm font-medium transition-colors">
+                        Next &#9654;
+                    </button>
+                </div>
+                <div class="mt-2 text-center">
+                    <span class="text-gray-500 text-xs" id="player-counter"></span>
                 </div>
             </div>
         </div>
+        <script>
+            const partySongs = {{ unheard_songs | tojson }};
+            let playerIdx = 0;
+            function renderPlayer() {
+                const s = partySongs[playerIdx];
+                const thumb = document.getElementById('player-thumb');
+                if (s.image_url) { thumb.src = s.image_url; thumb.style.display = ''; }
+                else { thumb.style.display = 'none'; }
+                document.getElementById('player-title').textContent = s.song_title || 'Unknown Title';
+                document.getElementById('player-submitter').textContent = 'by ' + (s.user_name || 'Unknown');
+                document.getElementById('player-link').href = s.url;
+                document.getElementById('heard-song-id').value = s.id;
+                document.getElementById('player-counter').textContent =
+                    'Song ' + (playerIdx + 1) + ' of ' + partySongs.length + ' remaining';
+                document.getElementById('btn-prev').disabled = (partySongs.length <= 1);
+                document.getElementById('btn-next').disabled = (partySongs.length <= 1);
+            }
+            function playerNav(dir) {
+                playerIdx = (playerIdx + dir + partySongs.length) % partySongs.length;
+                renderPlayer();
+            }
+            renderPlayer();
+        </script>
         {% elif songs %}
         <div class="bg-discord-dark rounded-xl border border-green-500/30">
             <div class="p-5 text-center">
-                <span class="text-3xl">🎉</span>
+                <span class="text-3xl">&#127881;</span>
                 <p class="text-white font-semibold mt-2">All songs heard!</p>
                 <p class="text-gray-400 text-sm">Use Reset to start a new round.</p>
             </div>
