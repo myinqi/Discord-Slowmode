@@ -1,4 +1,6 @@
 import re
+import time
+import math
 import random
 from datetime import datetime, timedelta, timezone
 import aiohttp
@@ -410,6 +412,55 @@ class CommandsCog(commands.Cog):
         )
 
         await interaction.response.send_message(msg, ephemeral=True)
+
+    @app_commands.command(name="timer", description="Show your remaining cooldown timers")
+    async def timer(self, interaction: discord.Interaction):
+        monitored = await self.bot.db.get_monitored_channels()
+        active_timers = []
+
+        for ch in monitored:
+            cooldown_minutes = ch["cooldown_minutes"]
+            if cooldown_minutes <= 0 or not ch.get("enabled", True):
+                continue
+
+            record = await self.bot.db.get_cooldown_record(interaction.user.id, ch["channel_id"])
+            if not record:
+                continue
+
+            elapsed = time.time() - record["timestamp"]
+            remaining = (cooldown_minutes * 60) - elapsed
+            if remaining <= 0:
+                continue
+
+            # Format remaining time
+            if remaining >= 3600:
+                hours = math.ceil(remaining / 3600)
+                time_str = f"{hours}h"
+            elif remaining >= 60:
+                mins = math.ceil(remaining / 60)
+                time_str = f"{mins}min"
+            else:
+                secs = math.ceil(remaining)
+                time_str = f"{secs}s"
+
+            # Resolve channel name
+            guild_ch = interaction.guild.get_channel(ch["channel_id"]) if interaction.guild else None
+            ch_name = f"#{guild_ch.name}" if guild_ch else f"#channel-{ch['channel_id']}"
+
+            active_timers.append(f"**{ch_name}** — {time_str} remaining")
+
+        if active_timers:
+            bot_name = await self.bot.db.get_setting("bot_name") or "Slowmode Bot"
+            embed = discord.Embed(
+                title="⏱️ Your Active Cooldowns",
+                description="\n".join(active_timers),
+                color=discord.Color.orange(),
+            )
+            embed.set_footer(text=bot_name)
+            embed.timestamp = discord.utils.utcnow()
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        else:
+            await interaction.response.send_message("✅ You have no active cooldowns.", ephemeral=True)
 
     @app_commands.command(name="cooldown-toggle", description="Enable or disable monitoring for a channel")
     @app_commands.describe(channel="The channel to toggle", enabled="Enable or disable")
