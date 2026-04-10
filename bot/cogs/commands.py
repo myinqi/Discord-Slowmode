@@ -1337,7 +1337,7 @@ class CommandsCog(commands.Cog):
             if removed:
                 await interaction.followup.send(f"✅ Song `{song_id}` removed from the playlist.", ephemeral=True)
             else:
-                await interaction.followup.send("Song not found or it doesn't belong to you.", ephemeral=True)
+                await interaction.followup.send("Song not found or it doesn't belong to you. Use `/party-songs` to see your songs and their IDs.", ephemeral=True)
         except Exception as e:
             await interaction.followup.send(f"Error: {e}", ephemeral=True)
 
