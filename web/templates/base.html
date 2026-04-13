@@ -32,63 +32,76 @@
         .sidebar-link { transition: background-color 0.15s ease; }
         .sidebar-link:hover { background-color: rgba(88, 101, 242, 0.2); }
         .sidebar-link.active { background-color: rgba(88, 101, 242, 0.3); border-left: 3px solid #5865f2; }
+        .sidebar { transition: width 0.2s ease; overflow: hidden; }
+        .sidebar.collapsed { width: 3.5rem; }
+        .sidebar.collapsed .sidebar-label,
+        .sidebar.collapsed .sidebar-header-text,
+        .sidebar.collapsed .sidebar-footer-content { display: none; }
+        .sidebar.collapsed .sidebar-link span.sidebar-icon { margin-right: 0; }
+        .sidebar.collapsed .sidebar-link { justify-content: center; padding-left: 0; padding-right: 0; }
+        .sidebar.collapsed .sidebar-header { justify-content: center; }
+        .sidebar.collapsed .sidebar-header img { margin: 0; }
+        .sidebar.collapsed .sidebar-toggle { justify-content: center; }
     </style>
 </head>
 <body class="h-full dark">
     {% if session.get('user_id') and request.endpoint not in ('login', 'change_password') %}
     <div class="flex h-full">
         <!-- Sidebar -->
-        <aside class="w-64 bg-discord-dark flex flex-col border-r border-gray-700/50 min-h-screen">
+        <aside id="sidebar" class="sidebar w-64 bg-discord-dark flex flex-col border-r border-gray-700/50 min-h-screen">
             <div class="p-4 border-b border-gray-700/50">
-                <h1 class="text-white font-bold text-lg flex items-center gap-2"><img src="{{ url_for('static', filename='Bot_icon_small.png') }}" alt="Bot" class="w-6 h-6 rounded"> Corax Bot</h1>
-                <p class="text-gray-400 text-xs mt-1">Admin Panel</p>
+                <h1 class="sidebar-header text-white font-bold text-lg flex items-center gap-2"><img src="{{ url_for('static', filename='Bot_icon_small.png') }}" alt="Bot" class="w-6 h-6 rounded"> <span class="sidebar-header-text">Corax Bot</span></h1>
+                <p class="text-gray-400 text-xs mt-1 sidebar-header-text">Admin Panel</p>
             </div>
             <nav class="flex-1 p-3 space-y-1">
                 <a href="{{ url_for('dashboard') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'dashboard' %}active{% endif %}">
-                    <span class="mr-3">📊</span> Dashboard
+                    <span class="sidebar-icon mr-3">📊</span><span class="sidebar-label">Dashboard</span>
                 </a>
                 <a href="{{ url_for('channels') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'channels' %}active{% endif %}">
-                    <span class="mr-3">📢</span> Channels
+                    <span class="sidebar-icon mr-3">📢</span><span class="sidebar-label">Channels</span>
                 </a>
                 <a href="{{ url_for('roles') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'roles' %}active{% endif %}">
-                    <span class="mr-3">🛡️</span> Roles
+                    <span class="sidebar-icon mr-3">🛡️</span><span class="sidebar-label">Roles</span>
                 </a>
                 <a href="{{ url_for('users') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'users' %}active{% endif %}">
-                    <span class="mr-3">👥</span> Users
+                    <span class="sidebar-icon mr-3">👥</span><span class="sidebar-label">Users</span>
                 </a>
                 <a href="{{ url_for('party_playlist') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'party_playlist' %}active{% endif %}">
-                    <span class="mr-3">🎧</span> Party Playlist
+                    <span class="sidebar-icon mr-3">🎧</span><span class="sidebar-label">Party Playlist</span>
                 </a>
                 <a href="{{ url_for('listening_party') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'listening_party' %}active{% endif %}">
-                    <span class="mr-3">🎵</span> Listening Party
+                    <span class="sidebar-icon mr-3">🎵</span><span class="sidebar-label">Listening Party</span>
                 </a>
                 <a href="{{ url_for('playlist_search') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'playlist_search' %}active{% endif %}">
-                    <span class="mr-3">🔍</span> Playlist Search
+                    <span class="sidebar-icon mr-3">🔍</span><span class="sidebar-label">Playlist Search</span>
                 </a>
                 <a href="{{ url_for('song_stats') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'song_stats' %}active{% endif %}">
-                    <span class="mr-3">📈</span> Song Stats
+                    <span class="sidebar-icon mr-3">📈</span><span class="sidebar-label">Song Stats</span>
                 </a>
                 <a href="{{ url_for('user_stats') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'user_stats' %}active{% endif %}">
-                    <span class="mr-3">👤</span> User Stats
+                    <span class="sidebar-icon mr-3">👤</span><span class="sidebar-label">User Stats</span>
                 </a>
                 <a href="{{ url_for('reaction_stats') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'reaction_stats' %}active{% endif %}">
-                    <span class="mr-3">💬</span> Reaction Stats
+                    <span class="sidebar-icon mr-3">💬</span><span class="sidebar-label">Reaction Stats</span>
                 </a>
                 <a href="{{ url_for('image_posting') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'image_posting' %}active{% endif %}">
-                    <span class="mr-3">🖼️</span> Image Posting
+                    <span class="sidebar-icon mr-3">🖼️</span><span class="sidebar-label">Image Posting</span>
                 </a>
                 <a href="{{ url_for('audit') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'audit' %}active{% endif %}">
-                    <span class="mr-3">📋</span> Audit Log
+                    <span class="sidebar-icon mr-3">📋</span><span class="sidebar-label">Audit Log</span>
                 </a>
                 <a href="{{ url_for('settings') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'settings' %}active{% endif %}">
-                    <span class="mr-3">⚙️</span> Settings
+                    <span class="sidebar-icon mr-3">⚙️</span><span class="sidebar-label">Settings</span>
                 </a>
             </nav>
             <div class="p-3 border-t border-gray-700/50">
-                <div class="flex items-center justify-between">
+                <div class="sidebar-footer-content flex items-center justify-between mb-2">
                     <span class="text-gray-400 text-sm">{{ session.get('username', '') }}</span>
                     <a href="{{ url_for('logout') }}" class="text-gray-500 hover:text-discord-red text-sm">Logout</a>
                 </div>
+                <button onclick="toggleSidebar()" class="sidebar-toggle w-full flex items-center justify-center px-2 py-1.5 rounded-md text-gray-400 hover:text-white hover:bg-discord-lighter transition-colors text-sm" title="Toggle sidebar">
+                    <span id="toggle-icon">◀</span>
+                </button>
             </div>
         </aside>
 
@@ -126,5 +139,30 @@
         {% block fullcontent %}{% endblock %}
     </div>
     {% endif %}
+    <script>
+        function toggleSidebar() {
+            var sb = document.getElementById('sidebar');
+            if (!sb) return;
+            sb.classList.toggle('collapsed');
+            var icon = document.getElementById('toggle-icon');
+            if (sb.classList.contains('collapsed')) {
+                icon.textContent = '▶';
+                localStorage.setItem('sidebar-collapsed', '1');
+            } else {
+                icon.textContent = '◀';
+                localStorage.setItem('sidebar-collapsed', '0');
+            }
+        }
+        (function() {
+            if (localStorage.getItem('sidebar-collapsed') === '1') {
+                var sb = document.getElementById('sidebar');
+                if (sb) {
+                    sb.classList.add('collapsed');
+                    var icon = document.getElementById('toggle-icon');
+                    if (icon) icon.textContent = '▶';
+                }
+            }
+        })();
+    </script>
 </body>
 </html>
