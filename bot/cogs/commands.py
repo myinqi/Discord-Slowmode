@@ -1408,8 +1408,6 @@ class CommandsCog(commands.Cog):
     @app_commands.command(name="poll-create", description="Create and post a new poll")
     @app_commands.describe(channel="Channel or forum to post the poll in")
     async def poll_create(self, interaction: discord.Interaction, channel: discord.abc.GuildChannel = None):
-        if not await self._permission_check(interaction):
-            return
         target = channel or interaction.channel
         if not isinstance(target, (discord.TextChannel, discord.ForumChannel, discord.VoiceChannel, discord.Thread)):
             await interaction.response.send_message("Please select a text, voice, or forum channel.", ephemeral=True)
