@@ -1405,6 +1405,154 @@ class CommandsCog(commands.Cog):
         except Exception as e:
             await interaction.followup.send(f"Error: {e}", ephemeral=True)
 
+    @app_commands.command(name="poll-create", description="Create and post a new poll")
+    @app_commands.describe(channel="Channel to post the poll in")
+    async def poll_create(self, interaction: discord.Interaction, channel: discord.TextChannel = None):
+        if not await self._permission_check(interaction):
+            return
+        target = channel or interaction.channel
+        modal = PollOptionsModal(self.bot, target)
+        await interaction.response.send_modal(modal)
+
+    @app_commands.command(name="poll-edit", description="Edit an existing poll")
+    async def poll_edit(self, interaction: discord.Interaction):
+        if not await self._permission_check(interaction):
+            return
+        polls = await self.bot.db.get_all_polls()
+        active_polls = [p for p in polls if p["active"]]
+        if not active_polls:
+            await interaction.response.send_message("No active polls to edit.", ephemeral=True)
+            return
+        view = PollSelectView(self.bot, active_polls)
+        await interaction.response.send_message("Select a poll to edit:", view=view, ephemeral=True)
+
+
+NUMBER_EMOJIS = ["1\u20e3", "2\u20e3", "3\u20e3", "4\u20e3", "5\u20e3", "6\u20e3", "7\u20e3", "8\u20e3", "9\u20e3", "\U0001F51F"]
+
+
+class PollOptionsModal(discord.ui.Modal, title="Create Poll"):
+    """Modal for creating a poll via slash command."""
+
+    poll_title = discord.ui.TextInput(label="Title", placeholder="What should we play next?", max_length=100)
+    description = discord.ui.TextInput(label="Description (optional)", placeholder="Optional context...", required=False, style=discord.TextStyle.paragraph)
+    options = discord.ui.TextInput(label="Options (one per line, 2-10)", placeholder="Option 1\nOption 2\nOption 3", style=discord.TextStyle.paragraph)
+
+    def __init__(self, bot, channel: discord.TextChannel):
+        super().__init__()
+        self.bot = bot
+        self.target_channel = channel
+
+    async def on_submit(self, interaction: discord.Interaction):
+        import json
+        options_list = [o.strip() for o in self.options.value.split("\n") if o.strip()]
+        if len(options_list) < 2:
+            await interaction.response.send_message("At least 2 options are required.", ephemeral=True)
+            return
+        if len(options_list) > 10:
+            await interaction.response.send_message("Maximum 10 options allowed.", ephemeral=True)
+            return
+
+        poll_id = await self.bot.db.create_poll(
+            str(self.poll_title.value).strip(),
+            str(self.description.value or "").strip(),
+            json.dumps(options_list),
+        )
+
+        options_text = "\n".join(f"{NUMBER_EMOJIS[i]}  {opt}" for i, opt in enumerate(options_list))
+        desc = str(self.description.value or "").strip()
+        embed = discord.Embed(
+            title=f"\U0001F4CA {self.poll_title.value}",
+            description=f"{desc}\n\n{options_text}" if desc else options_text,
+            color=discord.Color.blue(),
+        )
+        bot_name = await self.bot.db.get_setting("bot_name") or "Slowmode Bot"
+        embed.set_footer(text=f"{bot_name} — Poll")
+        msg = await self.target_channel.send(embed=embed)
+        for i in range(len(options_list)):
+            await msg.add_reaction(NUMBER_EMOJIS[i])
+        await self.bot.db.update_poll_message(poll_id, self.target_channel.id, msg.id)
+        await interaction.response.send_message(f"Poll #{poll_id} posted to #{self.target_channel.name}!", ephemeral=True)
+
+
+class PollEditModal(discord.ui.Modal, title="Edit Poll"):
+    """Modal for editing an existing poll."""
+
+    poll_title = discord.ui.TextInput(label="Title", max_length=100)
+    description = discord.ui.TextInput(label="Description (optional)", required=False, style=discord.TextStyle.paragraph)
+    options = discord.ui.TextInput(label="Options (one per line, 2-10)", style=discord.TextStyle.paragraph)
+
+    def __init__(self, bot, poll_id: int, old_title: str, old_desc: str, old_options: list):
+        super().__init__()
+        self.bot = bot
+        self.poll_id = poll_id
+        self.poll_title.default = old_title
+        self.description.default = old_desc or ""
+        self.options.default = "\n".join(old_options)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        import json
+        options_list = [o.strip() for o in self.options.value.split("\n") if o.strip()]
+        if len(options_list) < 2:
+            await interaction.response.send_message("At least 2 options are required.", ephemeral=True)
+            return
+        if len(options_list) > 10:
+            await interaction.response.send_message("Maximum 10 options allowed.", ephemeral=True)
+            return
+
+        await self.bot.db.update_poll(
+            self.poll_id,
+            str(self.poll_title.value).strip(),
+            str(self.description.value or "").strip(),
+            json.dumps(options_list),
+        )
+
+        poll = await self.bot.db.get_poll(self.poll_id)
+        if poll and poll.get("message_id") and poll.get("channel_id"):
+            try:
+                guild = interaction.guild
+                channel = guild.get_channel(poll["channel_id"])
+                if channel:
+                    msg = await channel.fetch_message(poll["message_id"])
+                    options_text = "\n".join(f"{NUMBER_EMOJIS[i]}  {opt}" for i, opt in enumerate(options_list))
+                    desc = str(self.description.value or "").strip()
+                    embed = discord.Embed(
+                        title=f"\U0001F4CA {self.poll_title.value}",
+                        description=f"{desc}\n\n{options_text}" if desc else options_text,
+                        color=discord.Color.blue(),
+                    )
+                    bot_name = await self.bot.db.get_setting("bot_name") or "Slowmode Bot"
+                    embed.set_footer(text=f"{bot_name} — Poll")
+                    await msg.edit(embed=embed)
+            except Exception:
+                pass
+
+        await interaction.response.send_message(f"Poll #{self.poll_id} updated.", ephemeral=True)
+
+
+class PollSelectView(discord.ui.View):
+    """View with a dropdown to select a poll for editing."""
+
+    def __init__(self, bot, polls: list):
+        super().__init__(timeout=120)
+        self.bot = bot
+        select = discord.ui.Select(placeholder="Select a poll to edit...")
+        for p in polls[:25]:
+            label = f"#{p['id']}: {p['title'][:80]}"
+            select.add_option(label=label, value=str(p["id"]))
+        select.callback = self.select_callback
+        self.add_item(select)
+
+    async def select_callback(self, interaction: discord.Interaction):
+        import json
+        poll_id = int(interaction.data["values"][0])
+        poll = await self.bot.db.get_poll(poll_id)
+        if not poll:
+            await interaction.response.send_message("Poll not found.", ephemeral=True)
+            return
+        options_list = json.loads(poll["options"])
+        modal = PollEditModal(self.bot, poll_id, poll["title"], poll["description"], options_list)
+        await interaction.response.send_modal(modal)
+
 
 class TranslateLanguageSelect(discord.ui.Select):
     """Dropdown to pick target language for message translation."""

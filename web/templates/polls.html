@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}Polls{% endblock %}
+{% block content %}
+<h2 class="text-2xl font-bold text-white mb-6">📊 Polls</h2>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <!-- Left Column: Create Poll -->
+    <div class="space-y-6">
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            <div class="px-5 py-4 border-b border-gray-700/50">
+                <h3 class="text-white font-semibold" id="form-title">Create Poll</h3>
+            </div>
+            <div class="p-5">
+                <form method="POST" enctype="multipart/form-data" id="poll-form" class="space-y-4">
+                    <input type="hidden" name="action" value="create" id="form-action">
+                    <input type="hidden" name="poll_id" value="" id="form-poll-id">
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">Title *</label>
+                        <input type="text" name="title" id="form-title-input" required maxlength="100"
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none"
+                            placeholder="What should we play next?">
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">Description</label>
+                        <textarea name="description" id="form-desc-input" rows="2"
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none resize-none"
+                            placeholder="Optional description..."></textarea>
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">Options * <span class="text-gray-600">(one per line, 2–10)</span></label>
+                        <textarea name="options" id="form-options-input" rows="5" required
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none resize-none"
+                            placeholder="Option 1&#10;Option 2&#10;Option 3"></textarea>
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">Image <span class="text-gray-600">(optional)</span></label>
+                        <input type="file" name="image" accept="image/*"
+                            class="w-full text-gray-400 text-sm file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-sm file:bg-discord-blurple/20 file:text-discord-blurple hover:file:bg-discord-blurple/40 file:cursor-pointer">
+                    </div>
+                    <div class="flex gap-2">
+                        <button type="submit"
+                            class="flex-1 px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg font-medium text-sm transition-colors"
+                            id="form-submit-btn">
+                            Create Poll
+                        </button>
+                        <button type="button" onclick="resetForm()" id="form-cancel-btn"
+                            class="px-4 py-2 bg-gray-600/30 hover:bg-gray-600/50 text-gray-300 rounded-lg font-medium text-sm transition-colors hidden">
+                            Cancel
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Right Column: Poll List -->
+    <div class="lg:col-span-2 space-y-4">
+        {% if polls %}
+        {% for poll in polls %}
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50 {% if not poll.active %}opacity-60{% endif %}">
+            <div class="p-5">
+                <div class="flex items-start justify-between gap-4">
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-2 mb-1">
+                            {% if poll.active %}
+                            <span class="inline-block w-2 h-2 bg-green-400 rounded-full"></span>
+                            <span class="text-green-400 text-xs">Active</span>
+                            {% else %}
+                            <span class="inline-block w-2 h-2 bg-gray-500 rounded-full"></span>
+                            <span class="text-gray-500 text-xs">Closed</span>
+                            {% endif %}
+                            {% if poll.message_id %}
+                            <span class="text-gray-600 text-xs">• Posted</span>
+                            {% endif %}
+                            <span class="text-gray-600 text-xs">• #{{ poll.id }}</span>
+                        </div>
+                        <h4 class="text-white font-semibold text-lg mb-1">{{ poll.title }}</h4>
+                        {% if poll.description %}
+                        <p class="text-gray-400 text-sm mb-3">{{ poll.description }}</p>
+                        {% endif %}
+                        <div class="space-y-1.5">
+                            {% for opt in poll.options_list %}
+                            <div class="flex items-center gap-2 text-sm">
+                                <span class="text-gray-500 font-mono text-xs w-5 text-center">{{ loop.index }}.</span>
+                                <span class="text-gray-300">{{ opt }}</span>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% if poll.image_filename %}
+                    <img src="{{ url_for('uploaded_image', filename=poll.image_filename) }}" alt=""
+                        class="w-24 h-24 rounded-lg object-cover shrink-0">
+                    {% endif %}
+                </div>
+
+                <!-- Actions -->
+                <div class="flex flex-wrap items-center gap-2 mt-4 pt-4 border-t border-gray-700/50">
+                    <button onclick="editPoll({{ poll.id }}, {{ poll.title|tojson }}, {{ poll.description|tojson }}, {{ poll.options_list|tojson }})"
+                        class="px-3 py-1.5 bg-discord-blurple/20 hover:bg-discord-blurple/40 text-discord-blurple rounded-lg text-xs font-medium transition-colors">
+                        Edit
+                    </button>
+                    {% if poll.active %}
+                    <form method="POST" class="flex items-center gap-2">
+                        <input type="hidden" name="action" value="post">
+                        <input type="hidden" name="poll_id" value="{{ poll.id }}">
+                        <select name="channel_id" required
+                            class="bg-discord-darker border border-gray-600 rounded-lg px-2 py-1.5 text-white text-xs focus:border-discord-blurple focus:outline-none">
+                            <option value="">Channel...</option>
+                            {% for ch in text_channels %}
+                            <option value="{{ ch.id }}">#{{ ch.name }}</option>
+                            {% endfor %}
+                        </select>
+                        <button type="submit"
+                            class="px-3 py-1.5 bg-purple-600/20 hover:bg-purple-600/40 text-purple-400 rounded-lg text-xs font-medium transition-colors">
+                            Post
+                        </button>
+                    </form>
+                    <form method="POST">
+                        <input type="hidden" name="action" value="close">
+                        <input type="hidden" name="poll_id" value="{{ poll.id }}">
+                        <button type="submit"
+                            class="px-3 py-1.5 bg-yellow-600/20 hover:bg-yellow-600/40 text-yellow-400 rounded-lg text-xs font-medium transition-colors">
+                            Close
+                        </button>
+                    </form>
+                    {% endif %}
+                    <form method="POST" onsubmit="return confirm('Delete this poll?')">
+                        <input type="hidden" name="action" value="delete">
+                        <input type="hidden" name="poll_id" value="{{ poll.id }}">
+                        <button type="submit"
+                            class="px-3 py-1.5 bg-discord-red/20 hover:bg-discord-red/40 text-red-300 rounded-lg text-xs font-medium transition-colors">
+                            Delete
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+        {% else %}
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-8">
+            <p class="text-gray-500 text-sm text-center">No polls yet. Create one!</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+function editPoll(id, title, desc, options) {
+    document.getElementById('form-title').textContent = 'Edit Poll #' + id;
+    document.getElementById('form-action').value = 'edit';
+    document.getElementById('form-poll-id').value = id;
+    document.getElementById('form-title-input').value = title;
+    document.getElementById('form-desc-input').value = desc || '';
+    document.getElementById('form-options-input').value = options.join('\n');
+    document.getElementById('form-submit-btn').textContent = 'Save Changes';
+    document.getElementById('form-cancel-btn').classList.remove('hidden');
+    document.getElementById('form-title').scrollIntoView({ behavior: 'smooth' });
+}
+function resetForm() {
+    document.getElementById('form-title').textContent = 'Create Poll';
+    document.getElementById('form-action').value = 'create';
+    document.getElementById('form-poll-id').value = '';
+    document.getElementById('form-title-input').value = '';
+    document.getElementById('form-desc-input').value = '';
+    document.getElementById('form-options-input').value = '';
+    document.getElementById('form-submit-btn').textContent = 'Create Poll';
+    document.getElementById('form-cancel-btn').classList.add('hidden');
+}
+</script>
+{% endblock %}

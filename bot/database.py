@@ -173,6 +173,22 @@ class Database:
             await self.db.execute("ALTER TABLE party_playlist ADD COLUMN duration_seconds REAL")
             await self.db.commit()
 
+        # Create polls table
+        await self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS polls (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                description TEXT,
+                options TEXT NOT NULL DEFAULT '[]',
+                image_filename TEXT,
+                channel_id INTEGER,
+                message_id INTEGER,
+                created_at REAL DEFAULT (unixepoch()),
+                active INTEGER DEFAULT 1
+            );
+        """)
+        await self.db.commit()
+
         # Create image_categories and image_posts tables
         await self.db.executescript("""
             CREATE TABLE IF NOT EXISTS image_categories (
@@ -1253,3 +1269,55 @@ class Database:
         await self.db.execute("DELETE FROM party_playlist")
         await self.db.commit()
         return count
+
+    # --- Polls ---
+
+    async def create_poll(self, title: str, description: str, options: str, image_filename: str = None) -> int:
+        cursor = await self.db.execute(
+            "INSERT INTO polls (title, description, options, image_filename) VALUES (?, ?, ?, ?)",
+            (title, description, options, image_filename),
+        )
+        await self.db.commit()
+        return cursor.lastrowid
+
+    async def get_poll(self, poll_id: int) -> Optional[dict]:
+        async with self.db.execute("SELECT * FROM polls WHERE id = ?", (poll_id,)) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_all_polls(self) -> list[dict]:
+        async with self.db.execute("SELECT * FROM polls ORDER BY created_at DESC") as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def update_poll(self, poll_id: int, title: str, description: str, options: str, image_filename: str = None):
+        if image_filename is not None:
+            await self.db.execute(
+                "UPDATE polls SET title = ?, description = ?, options = ?, image_filename = ? WHERE id = ?",
+                (title, description, options, image_filename, poll_id),
+            )
+        else:
+            await self.db.execute(
+                "UPDATE polls SET title = ?, description = ?, options = ? WHERE id = ?",
+                (title, description, options, poll_id),
+            )
+        await self.db.commit()
+
+    async def update_poll_message(self, poll_id: int, channel_id: int, message_id: int):
+        await self.db.execute(
+            "UPDATE polls SET channel_id = ?, message_id = ?, active = 1 WHERE id = ?",
+            (channel_id, message_id, poll_id),
+        )
+        await self.db.commit()
+
+    async def close_poll(self, poll_id: int):
+        await self.db.execute("UPDATE polls SET active = 0 WHERE id = ?", (poll_id,))
+        await self.db.commit()
+
+    async def delete_poll(self, poll_id: int) -> Optional[str]:
+        """Delete a poll. Returns image_filename if any."""
+        async with self.db.execute("SELECT image_filename FROM polls WHERE id = ?", (poll_id,)) as cursor:
+            row = await cursor.fetchone()
+            filename = row["image_filename"] if row else None
+        await self.db.execute("DELETE FROM polls WHERE id = ?", (poll_id,))
+        await self.db.commit()
+        return filename

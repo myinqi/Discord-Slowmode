@@ -1230,6 +1230,151 @@ def create_app(db: Database, bot=None) -> Quart:
             traceback.print_exc()
             return f"<pre>Error: {e}\n\n{traceback.format_exc()}</pre>", 500
 
+    # --- Polls ---
+
+    NUMBER_EMOJIS = ["1\u20e3", "2\u20e3", "3\u20e3", "4\u20e3", "5\u20e3", "6\u20e3", "7\u20e3", "8\u20e3", "9\u20e3", "\U0001F51F"]
+
+    @app.route("/polls", methods=["GET", "POST"])
+    @login_required
+    async def polls():
+        import json as _json
+        if request.method == "POST":
+            form = await request.form
+            action = form.get("action", "")
+
+            if action == "create":
+                title = form.get("title", "").strip()
+                description = form.get("description", "").strip()
+                raw_options = form.get("options", "").strip()
+                options_list = [o.strip() for o in raw_options.split("\n") if o.strip()]
+                if not title:
+                    await flash("Title is required.", "error")
+                    return redirect(url_for("polls"))
+                if len(options_list) < 2:
+                    await flash("At least 2 options are required.", "error")
+                    return redirect(url_for("polls"))
+                if len(options_list) > 10:
+                    await flash("Maximum 10 options allowed.", "error")
+                    return redirect(url_for("polls"))
+
+                image_filename = None
+                files = await request.files
+                image_file = files.get("image")
+                if image_file and image_file.filename:
+                    ext = image_file.filename.rsplit(".", 1)[-1].lower()
+                    if ext in ALLOWED_EXTENSIONS:
+                        import uuid
+                        image_filename = f"poll_{uuid.uuid4().hex}.{ext}"
+                        filepath = os.path.join(UPLOAD_DIR, image_filename)
+                        await image_file.save(filepath)
+
+                poll_id = await db.create_poll(title, description, _json.dumps(options_list), image_filename)
+                await flash(f"Poll #{poll_id} created.", "success")
+                return redirect(url_for("polls"))
+
+            elif action == "edit":
+                poll_id = int(form.get("poll_id", 0))
+                title = form.get("title", "").strip()
+                description = form.get("description", "").strip()
+                raw_options = form.get("options", "").strip()
+                options_list = [o.strip() for o in raw_options.split("\n") if o.strip()]
+                if not title or len(options_list) < 2:
+                    await flash("Title and at least 2 options are required.", "error")
+                    return redirect(url_for("polls"))
+                if len(options_list) > 10:
+                    await flash("Maximum 10 options allowed.", "error")
+                    return redirect(url_for("polls"))
+
+                image_filename = None
+                files = await request.files
+                image_file = files.get("image")
+                if image_file and image_file.filename:
+                    ext = image_file.filename.rsplit(".", 1)[-1].lower()
+                    if ext in ALLOWED_EXTENSIONS:
+                        import uuid
+                        image_filename = f"poll_{uuid.uuid4().hex}.{ext}"
+                        filepath = os.path.join(UPLOAD_DIR, image_filename)
+                        await image_file.save(filepath)
+                        # Remove old image
+                        old_poll = await db.get_poll(poll_id)
+                        if old_poll and old_poll.get("image_filename"):
+                            old_path = os.path.join(UPLOAD_DIR, old_poll["image_filename"])
+                            if os.path.exists(old_path):
+                                os.remove(old_path)
+
+                await db.update_poll(poll_id, title, description, _json.dumps(options_list), image_filename)
+                await flash("Poll updated.", "success")
+                return redirect(url_for("polls"))
+
+            elif action == "delete":
+                poll_id = int(form.get("poll_id", 0))
+                filename = await db.delete_poll(poll_id)
+                if filename:
+                    filepath = os.path.join(UPLOAD_DIR, filename)
+                    if os.path.exists(filepath):
+                        os.remove(filepath)
+                await flash("Poll deleted.", "success")
+                return redirect(url_for("polls"))
+
+            elif action == "post":
+                poll_id = int(form.get("poll_id", 0))
+                channel_id_str = form.get("channel_id", "").strip()
+                poll = await db.get_poll(poll_id)
+                if not poll:
+                    await flash("Poll not found.", "error")
+                    return redirect(url_for("polls"))
+                if not channel_id_str:
+                    await flash("No channel selected.", "error")
+                    return redirect(url_for("polls"))
+                guild = get_guild()
+                if not guild:
+                    await flash("Bot is not connected.", "error")
+                    return redirect(url_for("polls"))
+                channel = guild.get_channel(int(channel_id_str))
+                if not channel:
+                    await flash("Channel not found.", "error")
+                    return redirect(url_for("polls"))
+
+                import discord
+                options_list = _json.loads(poll["options"])
+                options_text = "\n".join(f"{NUMBER_EMOJIS[i]}  {opt}" for i, opt in enumerate(options_list))
+                embed = discord.Embed(
+                    title=f"\U0001F4CA {poll['title']}",
+                    description=f"{poll['description']}\n\n{options_text}" if poll["description"] else options_text,
+                    color=discord.Color.blue(),
+                )
+                if poll.get("image_filename"):
+                    image_url = f"{request.host_url}uploads/{poll['image_filename']}"
+                    embed.set_image(url=image_url)
+                bot_name = await db.get_setting("bot_name") or "Slowmode Bot"
+                embed.set_footer(text=f"{bot_name} — Poll")
+                try:
+                    msg = await channel.send(embed=embed)
+                    for i in range(len(options_list)):
+                        await msg.add_reaction(NUMBER_EMOJIS[i])
+                    await db.update_poll_message(poll_id, channel.id, msg.id)
+                    await flash(f"Poll posted to #{channel.name}.", "success")
+                except Exception as post_err:
+                    await flash(f"Failed to post: {post_err}", "error")
+                return redirect(url_for("polls"))
+
+            elif action == "close":
+                poll_id = int(form.get("poll_id", 0))
+                await db.close_poll(poll_id)
+                await flash("Poll closed.", "success")
+                return redirect(url_for("polls"))
+
+        # GET
+        all_polls = await db.get_all_polls()
+        for p in all_polls:
+            p["options_list"] = _json.loads(p["options"])
+        guild = get_guild()
+        text_channels = []
+        if guild:
+            for ch in sorted(guild.text_channels, key=lambda c: c.position):
+                text_channels.append({"id": ch.id, "name": ch.name})
+        return await render_template("polls.html", polls=all_polls, text_channels=text_channels)
+
     # --- Party Playlist ---
 
     async def _fetch_suno_info(url: str) -> tuple[str | None, str | None, str | None]:
