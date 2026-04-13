@@ -1198,10 +1198,10 @@ class Database:
 
     # --- Party Playlist ---
 
-    async def party_submit_song(self, user_id: int, user_name: str, url: str, song_title: str = None, image_url: str = None, duration_seconds: float = None) -> int:
+    async def party_submit_song(self, user_id: int, user_name: str, url: str, song_title: str = None, image_url: str = None) -> int:
         cursor = await self.db.execute(
-            "INSERT INTO party_playlist (user_id, user_name, url, song_title, image_url, duration_seconds) VALUES (?, ?, ?, ?, ?, ?)",
-            (user_id, user_name, url, song_title, image_url, duration_seconds),
+            "INSERT INTO party_playlist (user_id, user_name, url, song_title, image_url) VALUES (?, ?, ?, ?, ?)",
+            (user_id, user_name, url, song_title, image_url),
         )
         await self.db.commit()
         return cursor.lastrowid

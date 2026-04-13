@@ -1154,41 +1154,16 @@ def create_app(db: Database, bot=None) -> Quart:
 
     # --- Party Playlist ---
 
-    async def _fetch_suno_duration(url: str) -> float | None:
-        """Extract song_id from Suno URL, fetch MP3 from CDN, return duration in seconds."""
-        try:
-            import tempfile
-            from mutagen.mp3 import MP3
-            # Extract song ID from URL
-            m = re.search(r'suno\.com/(?:s|song)/([\w-]+)', url)
-            if not m:
-                return None
-            song_id = m.group(1)
-            mp3_url = f"https://cdn1.suno.ai/{song_id}.mp3"
-            async with aiohttp.ClientSession() as sess:
-                async with sess.get(mp3_url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                    if resp.status != 200:
-                        return None
-                    data = await resp.read()
-            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=True) as tmp:
-                tmp.write(data)
-                tmp.flush()
-                audio = MP3(tmp.name)
-                return round(audio.info.length, 1)
-        except Exception as e:
-            print(f"[duration] Error fetching duration for {url}: {e}")
-            return None
-
-    async def _fetch_suno_info(url: str) -> tuple[str | None, str | None, str | None, float | None]:
-        """Fetch song title, artist, image and duration from a Suno URL. Returns (title, artist, image_url, duration)."""
-        title, artist, image_url, duration = None, None, None, None
+    async def _fetch_suno_info(url: str) -> tuple[str | None, str | None, str | None]:
+        """Fetch song title, artist and image from a Suno URL. Returns (title, artist, image_url)."""
         try:
             async with aiohttp.ClientSession() as sess:
                 async with sess.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status != 200:
-                        return None, None, None, None
+                        return None, None, None
                     html = await resp.text()
                     # Extract og:image
+                    image_url = None
                     img_match = re.search(r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']', html)
                     if not img_match:
                         img_match = re.search(r'<meta\s+content=["\']([^"\']+)["\']\s+property=["\']og:image["\']', html)
@@ -1201,14 +1176,11 @@ def create_app(db: Database, bot=None) -> Quart:
                         raw = re.sub(r'\s*[|\-\u2013]\s*Suno$', '', raw).strip()
                         by_match = re.search(r'^(.+?)\s+by\s+(.+)$', raw)
                         if by_match:
-                            title, artist = by_match.group(1).strip(), by_match.group(2).strip()
-                        else:
-                            title = raw
+                            return by_match.group(1).strip(), by_match.group(2).strip(), image_url
+                        return raw, None, image_url
         except Exception:
             pass
-        # Fetch duration from CDN MP3
-        duration = await _fetch_suno_duration(url)
-        return title, artist, image_url, duration
+        return None, None, None
 
     @app.route("/party-playlist", methods=["GET", "POST"])
     @login_required
@@ -1222,14 +1194,13 @@ def create_app(db: Database, bot=None) -> Quart:
                 if not SUNO_URL_PATTERN.search(url):
                     await flash("Invalid URL. Please provide a valid Suno song link.", "error")
                     return redirect(url_for("party_playlist"))
-                song_title, artist, image_url, duration = await _fetch_suno_info(url)
+                song_title, artist, image_url = await _fetch_suno_info(url)
                 await db.party_submit_song(
                     user_id=0,
                     user_name=artist or "Unknown Artist",
                     url=url,
                     song_title=song_title,
                     image_url=image_url,
-                    duration_seconds=duration,
                 )
                 return redirect(url_for("party_playlist"))
 
@@ -1297,17 +1268,6 @@ def create_app(db: Database, bot=None) -> Quart:
             unheard_count = len(songs) - heard_count
             unheard_songs = [s for s in songs if not s["heard"]]
 
-            # Total duration
-            total_secs = sum(s.get("duration_seconds") or 0 for s in songs)
-            total_mins = int(total_secs // 60)
-            total_rem_secs = int(total_secs % 60)
-            if total_mins >= 60:
-                total_duration_fmt = f"{total_mins // 60}h {total_mins % 60:02d}m"
-            elif total_secs > 0:
-                total_duration_fmt = f"{total_mins}:{total_rem_secs:02d}"
-            else:
-                total_duration_fmt = "—"
-
             filter_status = request.args.get("filter")
             if filter_status == "heard":
                 display_songs = [s for s in songs if s["heard"]]
@@ -1325,7 +1285,6 @@ def create_app(db: Database, bot=None) -> Quart:
                 heard_count=heard_count,
                 unheard_count=unheard_count,
                 filter_status=filter_status,
-                total_duration_fmt=total_duration_fmt,
             )
         except Exception as e:
             traceback.print_exc()
