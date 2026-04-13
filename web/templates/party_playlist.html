@@ -45,6 +45,10 @@
                     <span class="text-gray-400">Remaining</span>
                     <span class="text-yellow-400 font-medium">{{ unheard_count }}</span>
                 </div>
+                <div class="flex justify-between text-sm">
+                    <span class="text-gray-400">Total Duration</span>
+                    <span class="text-white font-medium">{{ total_duration_fmt }}</span>
+                </div>
                 {% if songs|length > 0 %}
                 <div class="w-full bg-discord-darker rounded-full h-2 mt-2">
                     <div class="bg-green-500 h-2 rounded-full transition-all" style="width: {{ (heard_count / songs|length * 100) if songs|length > 0 else 0 }}%"></div>
@@ -124,7 +128,13 @@
                 if (s.image_url) { thumb.src = s.image_url; thumb.style.display = ''; }
                 else { thumb.style.display = 'none'; }
                 document.getElementById('player-title').textContent = s.song_title || 'Unknown Title';
-                document.getElementById('player-submitter').textContent = 'by ' + (s.user_name || 'Unknown');
+                var sub = 'by ' + (s.user_name || 'Unknown');
+                if (s.duration_seconds) {
+                    var m = Math.floor(s.duration_seconds / 60);
+                    var sec = Math.floor(s.duration_seconds % 60);
+                    sub += ' · ' + m + ':' + (sec < 10 ? '0' : '') + sec;
+                }
+                document.getElementById('player-submitter').textContent = sub;
                 document.getElementById('player-link').href = s.url;
                 document.getElementById('heard-song-id').value = s.id;
                 document.getElementById('post-song-id').value = s.id;
@@ -201,7 +211,7 @@
                                     {{ song.song_title or 'Unknown Title' }}
                                 </a>
                             </div>
-                            <p class="text-gray-500 text-xs mt-0.5">by {{ song.user_name }}</p>
+                            <p class="text-gray-500 text-xs mt-0.5">by {{ song.user_name }}{% if song.duration_seconds %} · {{ '%d:%02d' | format((song.duration_seconds // 60) | int, (song.duration_seconds % 60) | int) }}{% endif %}</p>
                         </div>
 
                         <!-- Actions -->

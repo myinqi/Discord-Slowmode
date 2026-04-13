@@ -157,7 +157,8 @@ class Database:
                 song_title TEXT,
                 submitted_at REAL DEFAULT (unixepoch()),
                 heard INTEGER DEFAULT 0,
-                image_url TEXT
+                image_url TEXT,
+                duration_seconds REAL
             );
         """)
         await self.db.commit()
@@ -167,6 +168,9 @@ class Database:
             pp_columns = [row[1] async for row in cursor]
         if "image_url" not in pp_columns:
             await self.db.execute("ALTER TABLE party_playlist ADD COLUMN image_url TEXT")
+            await self.db.commit()
+        if "duration_seconds" not in pp_columns:
+            await self.db.execute("ALTER TABLE party_playlist ADD COLUMN duration_seconds REAL")
             await self.db.commit()
 
         # Create image_categories and image_posts tables
@@ -1194,10 +1198,10 @@ class Database:
 
     # --- Party Playlist ---
 
-    async def party_submit_song(self, user_id: int, user_name: str, url: str, song_title: str = None, image_url: str = None) -> int:
+    async def party_submit_song(self, user_id: int, user_name: str, url: str, song_title: str = None, image_url: str = None, duration_seconds: float = None) -> int:
         cursor = await self.db.execute(
-            "INSERT INTO party_playlist (user_id, user_name, url, song_title, image_url) VALUES (?, ?, ?, ?, ?)",
-            (user_id, user_name, url, song_title, image_url),
+            "INSERT INTO party_playlist (user_id, user_name, url, song_title, image_url, duration_seconds) VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, user_name, url, song_title, image_url, duration_seconds),
         )
         await self.db.commit()
         return cursor.lastrowid

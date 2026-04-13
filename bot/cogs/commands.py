@@ -1237,16 +1237,41 @@ class CommandsCog(commands.Cog):
     # --- Listening Party Playlist Commands ---
 
     @staticmethod
-    async def _fetch_suno_info(url: str) -> tuple[str | None, str | None, str | None]:
-        """Fetch song title, artist and image from a Suno URL. Returns (title, artist, image_url)."""
+    async def _fetch_suno_duration(url: str) -> float | None:
+        """Extract song_id from Suno URL, fetch MP3 from CDN, return duration in seconds."""
+        try:
+            import tempfile
+            from mutagen.mp3 import MP3
+            m = re.search(r'suno\.com/(?:s|song)/([\w-]+)', url)
+            if not m:
+                return None
+            song_id = m.group(1)
+            mp3_url = f"https://cdn1.suno.ai/{song_id}.mp3"
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(mp3_url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    if resp.status != 200:
+                        return None
+                    data = await resp.read()
+            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=True) as tmp:
+                tmp.write(data)
+                tmp.flush()
+                audio = MP3(tmp.name)
+                return round(audio.info.length, 1)
+        except Exception as e:
+            print(f"[duration] Error fetching duration for {url}: {e}")
+            return None
+
+    @staticmethod
+    async def _fetch_suno_info(url: str) -> tuple[str | None, str | None, str | None, float | None]:
+        """Fetch song title, artist, image and duration from a Suno URL. Returns (title, artist, image_url, duration)."""
+        title, artist, image_url = None, None, None
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status != 200:
-                        return None, None, None
+                        return None, None, None, None
                     html = await resp.text()
                     # Extract og:image
-                    image_url = None
                     img_match = re.search(r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']', html)
                     if not img_match:
                         img_match = re.search(r'<meta\s+content=["\']([^"\']+)["\']\s+property=["\']og:image["\']', html)
@@ -1259,11 +1284,13 @@ class CommandsCog(commands.Cog):
                         raw = re.sub(r'\s*[|\-–]\s*Suno$', '', raw).strip()
                         by_match = re.search(r'^(.+?)\s+by\s+(.+)$', raw)
                         if by_match:
-                            return by_match.group(1).strip(), by_match.group(2).strip(), image_url
-                        return raw, None, image_url
+                            title, artist = by_match.group(1).strip(), by_match.group(2).strip()
+                        else:
+                            title = raw
         except Exception:
             pass
-        return None, None, None
+        duration = await CommandsCog._fetch_suno_duration(url)
+        return title, artist, image_url, duration
 
     @app_commands.command(name="party-submit", description="Submit a song to the Listening Party playlist (max 2 per user)")
     @app_commands.describe(url="Suno song URL to submit")
@@ -1280,8 +1307,8 @@ class CommandsCog(commands.Cog):
                 await interaction.followup.send(f"You have already submitted {max_songs} songs. Remove one first with `/party-remove`.", ephemeral=True)
                 return
 
-            # Auto-fetch song title, artist and cover image from Suno page
-            title, artist, image_url = await self._fetch_suno_info(url)
+            # Auto-fetch song title, artist, cover image and duration from Suno page
+            title, artist, image_url, duration = await self._fetch_suno_info(url)
 
             await self.bot.db.party_submit_song(
                 user_id=interaction.user.id,
@@ -1289,6 +1316,7 @@ class CommandsCog(commands.Cog):
                 url=url,
                 song_title=title,
                 image_url=image_url,
+                duration_seconds=duration,
             )
             display = f"**{title}**" if title else url
             if artist:
