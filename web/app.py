@@ -1344,19 +1344,25 @@ def create_app(db: Database, bot=None) -> Quart:
                     description=f"{poll['description']}\n\n{options_text}" if poll["description"] else options_text,
                     color=discord.Color.blue(),
                 )
+                file = None
                 if poll.get("image_filename"):
-                    image_url = f"{request.host_url}uploads/{poll['image_filename']}"
-                    embed.set_image(url=image_url)
+                    filepath = os.path.join(UPLOAD_DIR, poll["image_filename"])
+                    if os.path.exists(filepath):
+                        file = discord.File(filepath, filename=poll["image_filename"])
+                        embed.set_image(url=f"attachment://{poll['image_filename']}")
                 bot_name = await db.get_setting("bot_name") or "Slowmode Bot"
                 embed.set_footer(text=f"{bot_name} — Poll")
                 try:
+                    send_kwargs = {"embed": embed}
+                    if file:
+                        send_kwargs["file"] = file
                     if isinstance(channel, discord.ForumChannel):
                         thread, msg = await channel.create_thread(
                             name=f"\U0001F4CA {poll['title']}",
-                            embed=embed,
+                            **send_kwargs,
                         )
                     else:
-                        msg = await channel.send(embed=embed)
+                        msg = await channel.send(**send_kwargs)
                     for i in range(len(options_list)):
                         await msg.add_reaction(NUMBER_EMOJIS[i])
                     await db.update_poll_message(poll_id, channel.id, msg.id)
