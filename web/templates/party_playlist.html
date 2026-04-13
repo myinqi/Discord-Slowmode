@@ -1,7 +1,17 @@
 {% extends "base.html" %}
 {% block title %}Party Playlist{% endblock %}
 {% block content %}
-<h2 class="text-2xl font-bold text-white mb-6">🎧 Listening Party Playlist</h2>
+<div class="flex items-center justify-between mb-6">
+    <h2 class="text-2xl font-bold text-white">🎧 Listening Party Playlist</h2>
+    <label class="flex items-center gap-2 cursor-pointer select-none" title="Automatically post songs to channel when clicking Listen">
+        <span class="text-gray-400 text-xs">Auto-Post</span>
+        <div class="relative">
+            <input type="checkbox" id="auto-post-toggle" class="sr-only peer" onchange="localStorage.setItem('auto-post', this.checked ? '1' : '0')">
+            <div class="w-9 h-5 bg-gray-600 rounded-full peer peer-checked:bg-purple-600 transition-colors"></div>
+            <div class="absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-4"></div>
+        </div>
+    </label>
+</div>
 
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
     <!-- Left Column: Submit + Controls -->
@@ -120,7 +130,8 @@
                 </div>
                 <div class="flex gap-2 mb-2">
                     <a id="player-link" href="#" target="_blank"
-                        class="flex-1 px-3 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg font-medium text-sm text-center transition-colors">
+                        class="flex-1 px-3 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg font-medium text-sm text-center transition-colors"
+                        onclick="autoPostSong(document.getElementById('post-song-id').value)">
                         &#127925; Listen
                     </a>
                     <form method="POST" class="flex-1" id="heard-form">
@@ -247,7 +258,8 @@
                         <!-- Actions -->
                         <div class="flex items-center gap-2 shrink-0">
                             <a href="{{ song.url }}" target="_blank"
-                                class="px-3 py-1.5 bg-discord-blurple/20 hover:bg-discord-blurple/40 text-discord-blurple rounded-lg text-xs font-medium transition-colors">
+                                class="px-3 py-1.5 bg-discord-blurple/20 hover:bg-discord-blurple/40 text-discord-blurple rounded-lg text-xs font-medium transition-colors"
+                                onclick="autoPostSong('{{ song.id }}')">
                                 Listen
                             </a>
                             <button onclick="copyUrl(this, '{{ song.url }}')" title="Copy URL"
@@ -294,6 +306,18 @@
     </div>
 </div>
 <script>
+(function() {
+    var t = document.getElementById('auto-post-toggle');
+    if (t && localStorage.getItem('auto-post') === '1') t.checked = true;
+})();
+function autoPostSong(songId) {
+    var toggle = document.getElementById('auto-post-toggle');
+    if (!toggle || !toggle.checked) return;
+    var form = new FormData();
+    form.append('action', 'post_song');
+    form.append('song_id', songId);
+    fetch(window.location.pathname, { method: 'POST', body: form });
+}
 function copyUrl(btn, url) {
     var ta = document.createElement('textarea');
     ta.value = url;
