@@ -1379,7 +1379,8 @@ def create_app(db: Database, bot=None) -> Quart:
         if guild:
             for ch in sorted(guild.text_channels, key=lambda c: c.position):
                 text_channels.append({"id": ch.id, "name": ch.name})
-            for ch in sorted(guild.forum_channels, key=lambda c: c.position):
+            import discord as _disc
+            for ch in sorted([c for c in guild.channels if isinstance(c, _disc.ForumChannel)], key=lambda c: c.position):
                 text_channels.append({"id": ch.id, "name": f"\U0001F4AC {ch.name}"})
         return await render_template("polls.html", polls=all_polls, text_channels=text_channels)
 
