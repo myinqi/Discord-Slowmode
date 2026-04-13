@@ -1248,8 +1248,11 @@ def create_app(db: Database, bot=None) -> Quart:
                     embed.set_thumbnail(url=song["image_url"])
                 bot_name = await db.get_setting("bot_name") or "Slowmode Bot"
                 embed.set_footer(text=f"{bot_name} — Listening Party")
-                await channel.send(embed=embed)
-                await flash(f"Posted \"{title}\" to #{channel.name}.", "success")
+                try:
+                    await channel.send(embed=embed)
+                    await flash(f"Posted \"{title}\" to #{channel.name}.", "success")
+                except Exception as post_err:
+                    await flash(f"Failed to post to #{channel.name}: {post_err}", "error")
                 return redirect(url_for("party_playlist"))
 
             elif action == "reset":
