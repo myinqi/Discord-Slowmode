@@ -1255,6 +1255,48 @@ def create_app(db: Database, bot=None) -> Quart:
                     await flash(f"Failed to post to #{channel.name}: {post_err}", "error")
                 return redirect(url_for("party_playlist"))
 
+            elif action == "save_playlist_url":
+                playlist_url = form.get("playlist_url", "").strip()
+                await db.set_setting("party_playlist_url", playlist_url)
+                if playlist_url:
+                    await flash("Playlist URL saved.", "success")
+                else:
+                    await flash("Playlist URL cleared.", "success")
+                return redirect(url_for("party_playlist"))
+
+            elif action == "post_playlist_url":
+                playlist_url = await db.get_setting("party_playlist_url")
+                if not playlist_url:
+                    await flash("No playlist URL set.", "error")
+                    return redirect(url_for("party_playlist"))
+                channel_id_str = await db.get_setting("party_voice_channel")
+                if not channel_id_str:
+                    await flash("No post channel configured. Set it in Settings.", "error")
+                    return redirect(url_for("party_playlist"))
+                guild = get_guild()
+                if not guild:
+                    await flash("Bot is not connected to the guild.", "error")
+                    return redirect(url_for("party_playlist"))
+                channel = guild.get_channel(int(channel_id_str))
+                if not channel:
+                    await flash("Configured channel not found.", "error")
+                    return redirect(url_for("party_playlist"))
+                import discord
+                embed = discord.Embed(
+                    title="\U0001F3B6 Listening Party Playlist",
+                    url=playlist_url,
+                    description=f"Check out the full playlist and give it a like!\n{playlist_url}",
+                    color=discord.Color.purple(),
+                )
+                bot_name = await db.get_setting("bot_name") or "Slowmode Bot"
+                embed.set_footer(text=f"{bot_name} — Listening Party")
+                try:
+                    await channel.send(embed=embed)
+                    await flash(f"Playlist posted to #{channel.name}.", "success")
+                except Exception as post_err:
+                    await flash(f"Failed to post to #{channel.name}: {post_err}", "error")
+                return redirect(url_for("party_playlist"))
+
             elif action == "reset":
                 await db.party_reset()
                 return redirect(url_for("party_playlist"))
@@ -1263,6 +1305,7 @@ def create_app(db: Database, bot=None) -> Quart:
         import traceback
         try:
             songs = await db.party_get_all_songs()
+            party_playlist_url = await db.get_setting("party_playlist_url") or ""
 
             heard_count = sum(1 for s in songs if s["heard"])
             unheard_count = len(songs) - heard_count
@@ -1285,6 +1328,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 heard_count=heard_count,
                 unheard_count=unheard_count,
                 filter_status=filter_status,
+                party_playlist_url=party_playlist_url,
             )
         except Exception as e:
             traceback.print_exc()
