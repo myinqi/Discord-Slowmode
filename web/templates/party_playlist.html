@@ -295,12 +295,18 @@
 </div>
 <script>
 function copyUrl(btn, url) {
-    navigator.clipboard.writeText(url).then(function() {
-        var orig = btn.innerHTML;
-        btn.innerHTML = '&#10003;';
-        btn.classList.add('text-green-400');
-        setTimeout(function() { btn.innerHTML = orig; btn.classList.remove('text-green-400'); }, 1500);
-    });
+    var ta = document.createElement('textarea');
+    ta.value = url;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch(e) {}
+    document.body.removeChild(ta);
+    var orig = btn.innerHTML;
+    btn.innerHTML = '&#10003;';
+    btn.classList.add('text-green-400');
+    setTimeout(function() { btn.innerHTML = orig; btn.classList.remove('text-green-400'); }, 1500);
 }
 </script>
 {% endblock %}
