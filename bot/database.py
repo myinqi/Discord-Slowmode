@@ -184,10 +184,18 @@ class Database:
                 channel_id INTEGER,
                 message_id INTEGER,
                 created_at REAL DEFAULT (unixepoch()),
-                active INTEGER DEFAULT 1
+                active INTEGER DEFAULT 1,
+                creator_id INTEGER
             );
         """)
         await self.db.commit()
+
+        # Add creator_id column to polls if missing
+        async with self.db.execute("PRAGMA table_info(polls)") as cursor:
+            poll_columns = [row[1] async for row in cursor]
+        if "creator_id" not in poll_columns:
+            await self.db.execute("ALTER TABLE polls ADD COLUMN creator_id INTEGER")
+            await self.db.commit()
 
         # Create image_categories and image_posts tables
         await self.db.executescript("""
@@ -1272,10 +1280,10 @@ class Database:
 
     # --- Polls ---
 
-    async def create_poll(self, title: str, description: str, options: str, image_filename: str = None) -> int:
+    async def create_poll(self, title: str, description: str, options: str, image_filename: str = None, creator_id: int = None) -> int:
         cursor = await self.db.execute(
-            "INSERT INTO polls (title, description, options, image_filename) VALUES (?, ?, ?, ?)",
-            (title, description, options, image_filename),
+            "INSERT INTO polls (title, description, options, image_filename, creator_id) VALUES (?, ?, ?, ?, ?)",
+            (title, description, options, image_filename, creator_id),
         )
         await self.db.commit()
         return cursor.lastrowid

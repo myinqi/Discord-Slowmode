@@ -1414,17 +1414,19 @@ class CommandsCog(commands.Cog):
         if not isinstance(target, (discord.TextChannel, discord.ForumChannel, discord.VoiceChannel, discord.Thread)):
             await interaction.response.send_message("Please select a text, voice, or forum channel.", ephemeral=True)
             return
-        modal = PollOptionsModal(self.bot, target)
+        modal = PollOptionsModal(self.bot, target, creator_id=interaction.user.id)
         await interaction.response.send_modal(modal)
 
     @app_commands.command(name="poll-edit", description="Edit an existing poll")
     async def poll_edit(self, interaction: discord.Interaction):
-        if not await self._permission_check(interaction):
-            return
+        is_admin = await self._has_command_permission(interaction)
         polls = await self.bot.db.get_all_polls()
-        active_polls = [p for p in polls if p["active"]]
+        if is_admin:
+            active_polls = [p for p in polls if p["active"]]
+        else:
+            active_polls = [p for p in polls if p["active"] and p.get("creator_id") == interaction.user.id]
         if not active_polls:
-            await interaction.response.send_message("No active polls to edit.", ephemeral=True)
+            await interaction.response.send_message("No polls available for you to edit.", ephemeral=True)
             return
         view = PollSelectView(self.bot, active_polls)
         await interaction.response.send_message("Select a poll to edit:", view=view, ephemeral=True)
@@ -1440,10 +1442,11 @@ class PollOptionsModal(discord.ui.Modal, title="Create Poll"):
     description = discord.ui.TextInput(label="Description (optional)", placeholder="Optional context...", required=False, style=discord.TextStyle.paragraph)
     options = discord.ui.TextInput(label="Options (one per line, 2-10)", placeholder="Option 1\nOption 2\nOption 3", style=discord.TextStyle.paragraph)
 
-    def __init__(self, bot, channel: discord.TextChannel):
+    def __init__(self, bot, channel, creator_id: int = None):
         super().__init__()
         self.bot = bot
         self.target_channel = channel
+        self.creator_id = creator_id
 
     async def on_submit(self, interaction: discord.Interaction):
         import json
@@ -1459,6 +1462,7 @@ class PollOptionsModal(discord.ui.Modal, title="Create Poll"):
             str(self.poll_title.value).strip(),
             str(self.description.value or "").strip(),
             json.dumps(options_list),
+            creator_id=self.creator_id,
         )
 
         options_text = "\n".join(f"{NUMBER_EMOJIS[i]}  {opt}" for i, opt in enumerate(options_list))
