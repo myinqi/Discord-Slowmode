@@ -141,6 +141,7 @@ def create_app(db: Database, bot=None) -> Quart:
             new_channel = form.get("new_command_channel", "").strip()
 
             party_max_songs = form.get("party_max_songs", "2").strip()
+            party_voice_channel = form.get("party_voice_channel", "").strip()
 
             if bot_name:
                 await db.set_setting("bot_name", bot_name)
@@ -148,10 +149,11 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.set_setting("guild_id", guild_id)
             await db.set_setting("new_command_channel", new_channel)
             await db.set_setting("party_max_songs", party_max_songs)
+            await db.set_setting("party_voice_channel", party_voice_channel)
 
             await db.add_audit_log(
                 event_type="settings_changed",
-                details=f"Bot name: {bot_name}, Guild ID: {guild_id}, /new channel: {new_channel}, party_max_songs: {party_max_songs}",
+                details=f"Bot name: {bot_name}, Guild ID: {guild_id}, /new channel: {new_channel}, party_max_songs: {party_max_songs}, party_voice_channel: {party_voice_channel}",
                 actor=session.get("username", "unknown"),
             )
             await flash("Settings saved.", "success")
@@ -161,6 +163,7 @@ def create_app(db: Database, bot=None) -> Quart:
         guild_id = await db.get_setting("guild_id") or ""
         new_command_channel = await db.get_setting("new_command_channel") or ""
         party_max_songs = await db.get_setting("party_max_songs") or "2"
+        party_voice_channel = await db.get_setting("party_voice_channel") or ""
         monitored = await db.get_monitored_channels()
         guild = get_guild()
         channel_options = []
@@ -171,9 +174,15 @@ def create_app(db: Database, bot=None) -> Quart:
                 if gch:
                     ch_name = gch.name
             channel_options.append({"id": ch["channel_id"], "name": ch_name})
+        # All text channels for party voice channel selection
+        all_text_channels = []
+        if guild:
+            for ch in sorted(guild.text_channels, key=lambda c: c.position):
+                all_text_channels.append({"id": ch.id, "name": ch.name})
         return await render_template("settings.html", bot_name=bot_name, guild_id=guild_id,
                                      new_command_channel=new_command_channel, channel_options=channel_options,
-                                     party_max_songs=party_max_songs)
+                                     party_max_songs=party_max_songs, party_voice_channel=party_voice_channel,
+                                     all_text_channels=all_text_channels)
 
     @app.route("/channels", methods=["GET", "POST"])
     @login_required
@@ -1203,6 +1212,43 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.db.execute("DELETE FROM party_playlist WHERE id = ?", (song_id,))
                 await db.db.commit()
                 return redirect(request.referrer or url_for("party_playlist"))
+
+            elif action == "post_song":
+                song_id = int(form.get("song_id", 0))
+                channel_id_str = await db.get_setting("party_voice_channel")
+                if not channel_id_str:
+                    await flash("No post channel configured. Set it in Settings.", "error")
+                    return redirect(url_for("party_playlist"))
+                guild = get_guild()
+                if not guild:
+                    await flash("Bot is not connected to the guild.", "error")
+                    return redirect(url_for("party_playlist"))
+                channel = guild.get_channel(int(channel_id_str))
+                if not channel:
+                    await flash("Configured channel not found.", "error")
+                    return redirect(url_for("party_playlist"))
+                # Fetch song from DB
+                songs = await db.party_get_all_songs()
+                song = next((s for s in songs if s["id"] == song_id), None)
+                if not song:
+                    await flash("Song not found.", "error")
+                    return redirect(url_for("party_playlist"))
+                title = song.get("song_title") or "Unknown Title"
+                artist = song.get("user_name") or "Unknown Artist"
+                import discord
+                embed = discord.Embed(
+                    title=title,
+                    url=song["url"],
+                    description=f"by **{artist}**",
+                    color=discord.Color.purple(),
+                )
+                if song.get("image_url"):
+                    embed.set_thumbnail(url=song["image_url"])
+                bot_name = await db.get_setting("bot_name") or "Slowmode Bot"
+                embed.set_footer(text=f"{bot_name} — Listening Party")
+                await channel.send(embed=embed)
+                await flash(f"Posted \"{title}\" to #{channel.name}.", "success")
+                return redirect(url_for("party_playlist"))
 
             elif action == "reset":
                 await db.party_reset()
