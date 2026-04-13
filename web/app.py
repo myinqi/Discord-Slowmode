@@ -174,11 +174,13 @@ def create_app(db: Database, bot=None) -> Quart:
                 if gch:
                     ch_name = gch.name
             channel_options.append({"id": ch["channel_id"], "name": ch_name})
-        # All text channels for party voice channel selection
+        # All text + voice channels for party post channel selection
         all_text_channels = []
         if guild:
             for ch in sorted(guild.text_channels, key=lambda c: c.position):
                 all_text_channels.append({"id": ch.id, "name": ch.name})
+            for ch in sorted(guild.voice_channels, key=lambda c: c.position):
+                all_text_channels.append({"id": ch.id, "name": f"🔊 {ch.name}"})
         return await render_template("settings.html", bot_name=bot_name, guild_id=guild_id,
                                      new_command_channel=new_command_channel, channel_options=channel_options,
                                      party_max_songs=party_max_songs, party_voice_channel=party_voice_channel,
