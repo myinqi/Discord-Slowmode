@@ -1458,33 +1458,37 @@ class PollOptionsModal(discord.ui.Modal, title="Create Poll"):
             await interaction.response.send_message("Maximum 10 options allowed.", ephemeral=True)
             return
 
-        poll_id = await self.bot.db.create_poll(
-            str(self.poll_title.value).strip(),
-            str(self.description.value or "").strip(),
-            json.dumps(options_list),
-            creator_id=self.creator_id,
-        )
-
-        options_text = "\n".join(f"{NUMBER_EMOJIS[i]}  {opt}" for i, opt in enumerate(options_list))
-        desc = str(self.description.value or "").strip()
-        embed = discord.Embed(
-            title=f"\U0001F4CA {self.poll_title.value}",
-            description=f"{desc}\n\n{options_text}" if desc else options_text,
-            color=discord.Color.blue(),
-        )
-        bot_name = await self.bot.db.get_setting("bot_name") or "Slowmode Bot"
-        embed.set_footer(text=f"{bot_name} — Poll")
-        if isinstance(self.target_channel, discord.ForumChannel):
-            thread, msg = await self.target_channel.create_thread(
-                name=f"\U0001F4CA {self.poll_title.value}",
-                embed=embed,
+        await interaction.response.defer(ephemeral=True)
+        try:
+            poll_id = await self.bot.db.create_poll(
+                str(self.poll_title.value).strip(),
+                str(self.description.value or "").strip(),
+                json.dumps(options_list),
+                creator_id=self.creator_id,
             )
-        else:
-            msg = await self.target_channel.send(embed=embed)
-        for i in range(len(options_list)):
-            await msg.add_reaction(NUMBER_EMOJIS[i])
-        await self.bot.db.update_poll_message(poll_id, self.target_channel.id, msg.id)
-        await interaction.response.send_message(f"Poll #{poll_id} posted to #{self.target_channel.name}!", ephemeral=True)
+
+            options_text = "\n".join(f"{NUMBER_EMOJIS[i]}  {opt}" for i, opt in enumerate(options_list))
+            desc = str(self.description.value or "").strip()
+            embed = discord.Embed(
+                title=f"\U0001F4CA {self.poll_title.value}",
+                description=f"{desc}\n\n{options_text}" if desc else options_text,
+                color=discord.Color.blue(),
+            )
+            bot_name = await self.bot.db.get_setting("bot_name") or "Slowmode Bot"
+            embed.set_footer(text=f"{bot_name} — Poll")
+            if isinstance(self.target_channel, discord.ForumChannel):
+                thread, msg = await self.target_channel.create_thread(
+                    name=f"\U0001F4CA {self.poll_title.value}",
+                    embed=embed,
+                )
+            else:
+                msg = await self.target_channel.send(embed=embed)
+            for i in range(len(options_list)):
+                await msg.add_reaction(NUMBER_EMOJIS[i])
+            await self.bot.db.update_poll_message(poll_id, self.target_channel.id, msg.id)
+            await interaction.followup.send(f"Poll #{poll_id} posted to #{self.target_channel.name}!", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"Error creating poll: {e}", ephemeral=True)
 
 
 class PollEditModal(discord.ui.Modal, title="Edit Poll"):
@@ -1512,34 +1516,38 @@ class PollEditModal(discord.ui.Modal, title="Edit Poll"):
             await interaction.response.send_message("Maximum 10 options allowed.", ephemeral=True)
             return
 
-        await self.bot.db.update_poll(
-            self.poll_id,
-            str(self.poll_title.value).strip(),
-            str(self.description.value or "").strip(),
-            json.dumps(options_list),
-        )
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await self.bot.db.update_poll(
+                self.poll_id,
+                str(self.poll_title.value).strip(),
+                str(self.description.value or "").strip(),
+                json.dumps(options_list),
+            )
 
-        poll = await self.bot.db.get_poll(self.poll_id)
-        if poll and poll.get("message_id") and poll.get("channel_id"):
-            try:
-                guild = interaction.guild
-                channel = guild.get_channel(poll["channel_id"])
-                if channel:
-                    msg = await channel.fetch_message(poll["message_id"])
-                    options_text = "\n".join(f"{NUMBER_EMOJIS[i]}  {opt}" for i, opt in enumerate(options_list))
-                    desc = str(self.description.value or "").strip()
-                    embed = discord.Embed(
-                        title=f"\U0001F4CA {self.poll_title.value}",
-                        description=f"{desc}\n\n{options_text}" if desc else options_text,
-                        color=discord.Color.blue(),
-                    )
-                    bot_name = await self.bot.db.get_setting("bot_name") or "Slowmode Bot"
-                    embed.set_footer(text=f"{bot_name} — Poll")
-                    await msg.edit(embed=embed)
-            except Exception:
-                pass
+            poll = await self.bot.db.get_poll(self.poll_id)
+            if poll and poll.get("message_id") and poll.get("channel_id"):
+                try:
+                    guild = interaction.guild
+                    channel = guild.get_channel(poll["channel_id"]) or guild.get_thread(poll["channel_id"])
+                    if channel:
+                        msg = await channel.fetch_message(poll["message_id"])
+                        options_text = "\n".join(f"{NUMBER_EMOJIS[i]}  {opt}" for i, opt in enumerate(options_list))
+                        desc = str(self.description.value or "").strip()
+                        embed = discord.Embed(
+                            title=f"\U0001F4CA {self.poll_title.value}",
+                            description=f"{desc}\n\n{options_text}" if desc else options_text,
+                            color=discord.Color.blue(),
+                        )
+                        bot_name = await self.bot.db.get_setting("bot_name") or "Slowmode Bot"
+                        embed.set_footer(text=f"{bot_name} — Poll")
+                        await msg.edit(embed=embed)
+                except Exception:
+                    pass
 
-        await interaction.response.send_message(f"Poll #{self.poll_id} updated.", ephemeral=True)
+            await interaction.followup.send(f"Poll #{self.poll_id} updated.", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"Error updating poll: {e}", ephemeral=True)
 
 
 class PollSelectView(discord.ui.View):
