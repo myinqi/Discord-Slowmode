@@ -1349,7 +1349,13 @@ def create_app(db: Database, bot=None) -> Quart:
                 bot_name = await db.get_setting("bot_name") or "Slowmode Bot"
                 embed.set_footer(text=f"{bot_name} — Poll")
                 try:
-                    msg = await channel.send(embed=embed)
+                    if isinstance(channel, discord.ForumChannel):
+                        thread, msg = await channel.create_thread(
+                            name=f"\U0001F4CA {poll['title']}",
+                            embed=embed,
+                        )
+                    else:
+                        msg = await channel.send(embed=embed)
                     for i in range(len(options_list)):
                         await msg.add_reaction(NUMBER_EMOJIS[i])
                     await db.update_poll_message(poll_id, channel.id, msg.id)
@@ -1373,6 +1379,8 @@ def create_app(db: Database, bot=None) -> Quart:
         if guild:
             for ch in sorted(guild.text_channels, key=lambda c: c.position):
                 text_channels.append({"id": ch.id, "name": ch.name})
+            for ch in sorted(guild.forum_channels, key=lambda c: c.position):
+                text_channels.append({"id": ch.id, "name": f"\U0001F4AC {ch.name}"})
         return await render_template("polls.html", polls=all_polls, text_channels=text_channels)
 
     # --- Party Playlist ---

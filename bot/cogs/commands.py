@@ -1406,11 +1406,14 @@ class CommandsCog(commands.Cog):
             await interaction.followup.send(f"Error: {e}", ephemeral=True)
 
     @app_commands.command(name="poll-create", description="Create and post a new poll")
-    @app_commands.describe(channel="Channel to post the poll in")
-    async def poll_create(self, interaction: discord.Interaction, channel: discord.TextChannel = None):
+    @app_commands.describe(channel="Channel or forum to post the poll in")
+    async def poll_create(self, interaction: discord.Interaction, channel: discord.abc.GuildChannel = None):
         if not await self._permission_check(interaction):
             return
         target = channel or interaction.channel
+        if not isinstance(target, (discord.TextChannel, discord.ForumChannel, discord.VoiceChannel, discord.Thread)):
+            await interaction.response.send_message("Please select a text, voice, or forum channel.", ephemeral=True)
+            return
         modal = PollOptionsModal(self.bot, target)
         await interaction.response.send_modal(modal)
 
@@ -1467,7 +1470,13 @@ class PollOptionsModal(discord.ui.Modal, title="Create Poll"):
         )
         bot_name = await self.bot.db.get_setting("bot_name") or "Slowmode Bot"
         embed.set_footer(text=f"{bot_name} — Poll")
-        msg = await self.target_channel.send(embed=embed)
+        if isinstance(self.target_channel, discord.ForumChannel):
+            thread, msg = await self.target_channel.create_thread(
+                name=f"\U0001F4CA {self.poll_title.value}",
+                embed=embed,
+            )
+        else:
+            msg = await self.target_channel.send(embed=embed)
         for i in range(len(options_list)):
             await msg.add_reaction(NUMBER_EMOJIS[i])
         await self.bot.db.update_poll_message(poll_id, self.target_channel.id, msg.id)
