@@ -136,6 +136,57 @@ def create_app(db: Database, bot=None) -> Quart:
     async def settings():
         if request.method == "POST":
             form = await request.form
+            action = form.get("action", "")
+
+            if action == "lp_add":
+                input_channel_id = form.get("input_channel_id", "").strip()
+                output_channel_id = form.get("output_channel_id", "").strip()
+                time_range = int(form.get("time_range_hours", "24"))
+                if not input_channel_id.isdigit() or not output_channel_id.isdigit():
+                    await flash("Invalid channel ID.", "error")
+                else:
+                    input_channel_id = int(input_channel_id)
+                    output_channel_id = int(output_channel_id)
+                    monitored = await db.get_monitored_channel(input_channel_id)
+                    if not monitored:
+                        await flash("Input channel must be a monitored channel.", "error")
+                    elif input_channel_id == output_channel_id:
+                        await flash("Input and output channel must be different.", "error")
+                    else:
+                        await db.add_listening_party_config(input_channel_id, output_channel_id, time_range)
+                        await db.add_audit_log(
+                            event_type="listening_party_added",
+                            channel_id=input_channel_id,
+                            details=f"Listening party config added: input={input_channel_id}, output={output_channel_id}, range={time_range}h",
+                            actor=session.get("username", "unknown"),
+                        )
+                        await flash("Listening party config added.", "success")
+                return redirect(url_for("settings"))
+
+            elif action == "lp_update":
+                config_id = int(form.get("config_id", "0"))
+                output_channel_id = int(form.get("output_channel_id", "0"))
+                time_range = int(form.get("time_range_hours", "24"))
+                await db.update_listening_party_config(config_id, output_channel_id, time_range)
+                await db.add_audit_log(
+                    event_type="listening_party_updated",
+                    details=f"Config {config_id} updated: output={output_channel_id}, range={time_range}h",
+                    actor=session.get("username", "unknown"),
+                )
+                await flash("Config updated.", "success")
+                return redirect(url_for("settings"))
+
+            elif action == "lp_remove":
+                config_id = int(form.get("config_id", "0"))
+                await db.remove_listening_party_config(config_id)
+                await db.add_audit_log(
+                    event_type="listening_party_removed",
+                    details=f"Config {config_id} removed",
+                    actor=session.get("username", "unknown"),
+                )
+                await flash("Config removed.", "success")
+                return redirect(url_for("settings"))
+
             bot_name = form.get("bot_name", "").strip()
             guild_id = form.get("guild_id", "").strip()
             new_channel = form.get("new_command_channel", "").strip()
@@ -181,10 +232,37 @@ def create_app(db: Database, bot=None) -> Quart:
                 all_text_channels.append({"id": ch.id, "name": ch.name})
             for ch in sorted(guild.voice_channels, key=lambda c: c.position):
                 all_text_channels.append({"id": ch.id, "name": f"🔊 {ch.name}"})
+        # Enrich monitored channels with names for LP config form
+        for ch in monitored:
+            ch["channel_name"] = f"channel-{ch['channel_id']}"
+            if guild:
+                gch = guild.get_channel(ch["channel_id"])
+                if gch:
+                    ch["channel_name"] = gch.name
+        # Listening party configs
+        lp_configs = await db.get_listening_party_configs()
+        available_output_channels = []
+        if guild:
+            for ch in guild.text_channels:
+                available_output_channels.append({"id": ch.id, "name": ch.name})
+        for cfg in lp_configs:
+            cfg["input_name"] = f"channel-{cfg['input_channel_id']}"
+            cfg["output_name"] = f"channel-{cfg['output_channel_id']}"
+            if guild:
+                inch = guild.get_channel(cfg["input_channel_id"])
+                if inch:
+                    cfg["input_name"] = inch.name
+                outch = guild.get_channel(cfg["output_channel_id"])
+                if outch:
+                    cfg["output_name"] = outch.name
+
         return await render_template("settings.html", bot_name=bot_name, guild_id=guild_id,
                                      new_command_channel=new_command_channel, channel_options=channel_options,
                                      party_max_songs=party_max_songs, party_voice_channel=party_voice_channel,
-                                     all_text_channels=all_text_channels)
+                                     all_text_channels=all_text_channels,
+                                     monitored_channels=monitored,
+                                     available_output_channels=available_output_channels,
+                                     lp_configs=lp_configs)
 
     @app.route("/channels", methods=["GET", "POST"])
     @login_required
