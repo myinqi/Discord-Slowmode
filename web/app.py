@@ -1330,12 +1330,13 @@ def create_app(db: Database, bot=None) -> Quart:
                 if not guild:
                     await flash("Bot is not connected.", "error")
                     return redirect(url_for("polls"))
-                channel = guild.get_channel(int(channel_id_str))
+                import discord
+                ch_id = int(channel_id_str)
+                channel = guild.get_channel(ch_id) or guild.get_thread(ch_id)
                 if not channel:
                     await flash("Channel not found.", "error")
                     return redirect(url_for("polls"))
 
-                import discord
                 options_list = _json.loads(poll["options"])
                 options_text = "\n".join(f"{NUMBER_EMOJIS[i]}  {opt}" for i, opt in enumerate(options_list))
                 embed = discord.Embed(
@@ -1382,6 +1383,9 @@ def create_app(db: Database, bot=None) -> Quart:
             import discord as _disc
             for ch in sorted([c for c in guild.channels if isinstance(c, _disc.ForumChannel)], key=lambda c: c.position):
                 text_channels.append({"id": ch.id, "name": f"\U0001F4AC {ch.name}"})
+                for thread in sorted(ch.threads, key=lambda t: t.created_at or t.id, reverse=True):
+                    if not thread.archived:
+                        text_channels.append({"id": thread.id, "name": f"  \u2514 {thread.name}"})
         return await render_template("polls.html", polls=all_polls, text_channels=text_channels)
 
     # --- Party Playlist ---

@@ -1539,12 +1539,13 @@ class PollEditModal(discord.ui.Modal, title="Edit Poll"):
 
 
 class PollSelectView(discord.ui.View):
-    """View with a dropdown to select a poll for editing."""
+    """View with a dropdown to select a poll, then Edit/Delete buttons."""
 
     def __init__(self, bot, polls: list):
         super().__init__(timeout=120)
         self.bot = bot
-        select = discord.ui.Select(placeholder="Select a poll to edit...")
+        self.selected_poll_id = None
+        select = discord.ui.Select(placeholder="Select a poll...")
         for p in polls[:25]:
             label = f"#{p['id']}: {p['title'][:80]}"
             select.add_option(label=label, value=str(p["id"]))
@@ -1558,9 +1559,63 @@ class PollSelectView(discord.ui.View):
         if not poll:
             await interaction.response.send_message("Poll not found.", ephemeral=True)
             return
+        self.selected_poll_id = poll_id
         options_list = json.loads(poll["options"])
-        modal = PollEditModal(self.bot, poll_id, poll["title"], poll["description"], options_list)
+        options_preview = "\n".join(f"{i+1}. {o}" for i, o in enumerate(options_list))
+        action_view = PollActionView(self.bot, poll_id, poll["title"], poll.get("description", ""), options_list)
+        await interaction.response.edit_message(
+            content=f"**#{poll_id}: {poll['title']}**\n{options_preview}\n\nChoose an action:",
+            view=action_view,
+        )
+
+
+class PollActionView(discord.ui.View):
+    """Edit or Delete buttons for a selected poll."""
+
+    def __init__(self, bot, poll_id: int, title: str, desc: str, options_list: list):
+        super().__init__(timeout=120)
+        self.bot = bot
+        self.poll_id = poll_id
+        self.title = title
+        self.desc = desc
+        self.options_list = options_list
+
+    @discord.ui.button(label="Edit", style=discord.ButtonStyle.primary)
+    async def edit_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = PollEditModal(self.bot, self.poll_id, self.title, self.desc, self.options_list)
         await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="Delete", style=discord.ButtonStyle.danger)
+    async def delete_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        confirm_view = PollDeleteConfirmView(self.bot, self.poll_id)
+        await interaction.response.edit_message(
+            content=f"Are you sure you want to delete poll **#{self.poll_id}: {self.title}**?",
+            view=confirm_view,
+        )
+
+
+class PollDeleteConfirmView(discord.ui.View):
+    """Confirmation view for deleting a poll."""
+
+    def __init__(self, bot, poll_id: int):
+        super().__init__(timeout=60)
+        self.bot = bot
+        self.poll_id = poll_id
+
+    @discord.ui.button(label="Yes, delete", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        import os
+        filename = await self.bot.db.delete_poll(self.poll_id)
+        if filename:
+            upload_dir = os.path.join(os.path.dirname(self.bot.db.db_path), "uploads")
+            filepath = os.path.join(upload_dir, filename)
+            if os.path.exists(filepath):
+                os.remove(filepath)
+        await interaction.response.edit_message(content=f"Poll #{self.poll_id} deleted.", view=None)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Deletion cancelled.", view=None)
 
 
 class TranslateLanguageSelect(discord.ui.Select):
