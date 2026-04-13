@@ -1258,6 +1258,22 @@ def create_app(db: Database, bot=None) -> Quart:
             elif action == "save_playlist_url":
                 playlist_url = form.get("playlist_url", "").strip()
                 await db.set_setting("party_playlist_url", playlist_url)
+                # Try to fetch playlist cover image
+                playlist_image = ""
+                if playlist_url:
+                    try:
+                        async with aiohttp.ClientSession() as sess:
+                            async with sess.get(playlist_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                                if resp.status == 200:
+                                    html = await resp.text()
+                                    img_match = re.search(r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\'>]+)["\']', html)
+                                    if not img_match:
+                                        img_match = re.search(r'<meta\s+content=["\']([^"\'>]+)["\']\s+property=["\']og:image["\']', html)
+                                    if img_match:
+                                        playlist_image = img_match.group(1).strip()
+                    except Exception:
+                        pass
+                await db.set_setting("party_playlist_image", playlist_image)
                 if playlist_url:
                     await flash("Playlist URL saved.", "success")
                 else:
@@ -1288,8 +1304,11 @@ def create_app(db: Database, bot=None) -> Quart:
                     description=f"Check out the full playlist and give it a like!\n{playlist_url}",
                     color=discord.Color.purple(),
                 )
+                playlist_image = await db.get_setting("party_playlist_image")
+                if playlist_image:
+                    embed.set_thumbnail(url=playlist_image)
                 bot_name = await db.get_setting("bot_name") or "Slowmode Bot"
-                embed.set_footer(text=f"{bot_name} — Listening Party")
+                embed.set_footer(text=f"{bot_name} \u2014 Listening Party")
                 try:
                     await channel.send(embed=embed)
                     await flash(f"Playlist posted to #{channel.name}.", "success")
@@ -1299,6 +1318,8 @@ def create_app(db: Database, bot=None) -> Quart:
 
             elif action == "reset":
                 await db.party_reset()
+                await db.set_setting("party_playlist_url", "")
+                await db.set_setting("party_playlist_image", "")
                 return redirect(url_for("party_playlist"))
 
         # GET
