@@ -1429,7 +1429,7 @@ class CommandsCog(commands.Cog):
         view = PollSelectView(self.bot, active_polls)
         await interaction.response.send_message("Select a poll to edit:", view=view, ephemeral=True)
 
-    @app.command(name="twitch-playlist", description="Show the current Twitch radio playlist")
+    @app_commands.command(name="twitch-playlist", description="Show the current Twitch radio playlist")
     async def twitch_playlist(self, interaction: discord.Interaction):
         from datetime import datetime, timezone
         songs = await self.bot.db.get_all_radio_songs(active_only=True)
