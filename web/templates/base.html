@@ -87,6 +87,11 @@
                 <a href="{{ url_for('polls') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'polls' %}active{% endif %}">
                     <span class="sidebar-icon mr-3">📊</span><span class="sidebar-label">Polls</span>
                 </a>
+                {% if session.get('is_admin') %}
+                <a href="{{ url_for('radio_admin') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'radio_admin' %}active{% endif %}">
+                    <span class="sidebar-icon mr-3">📻</span><span class="sidebar-label">Radio</span>
+                </a>
+                {% endif %}
                 <a href="{{ url_for('audit') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'audit' %}active{% endif %}">
                     <span class="sidebar-icon mr-3">📋</span><span class="sidebar-label">Audit Log</span>
                 </a>

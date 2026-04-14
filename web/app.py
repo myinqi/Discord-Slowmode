@@ -45,6 +45,21 @@ def create_app(db: Database, bot=None) -> Quart:
             return await f(*args, **kwargs)
         return decorated
 
+    def admin_required(f):
+        @functools.wraps(f)
+        async def decorated(*args, **kwargs):
+            if "user_id" not in session:
+                return redirect(url_for("login"))
+            user = await db.get_web_user_by_id(session["user_id"])
+            if not user:
+                session.clear()
+                return redirect(url_for("login"))
+            if not user.get("is_admin"):
+                await flash("Admin access required.", "error")
+                return redirect(url_for("dashboard"))
+            return await f(*args, **kwargs)
+        return decorated
+
     def hash_password(password: str) -> str:
         return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
@@ -69,6 +84,7 @@ def create_app(db: Database, bot=None) -> Quart:
             if user and check_password(password, user["password_hash"]):
                 session["user_id"] = user["id"]
                 session["username"] = user["username"]
+                session["is_admin"] = bool(user.get("is_admin"))
                 if user["must_change_password"]:
                     return redirect(url_for("change_password"))
                 return redirect(url_for("dashboard"))
@@ -1394,7 +1410,7 @@ def create_app(db: Database, bot=None) -> Quart:
                         text_channels.append({"id": thread.id, "name": f"  \u2514 {thread.name}"})
         return await render_template("polls.html", polls=all_polls, text_channels=text_channels)
 
-    # --- Party Playlist ---
+    # --- Shared helpers ---
 
     async def _fetch_suno_info(url: str) -> tuple[str | None, str | None, str | None]:
         """Fetch song title, artist and image from a Suno URL. Returns (title, artist, image_url)."""
@@ -1423,6 +1439,314 @@ def create_app(db: Database, bot=None) -> Quart:
         except Exception:
             pass
         return None, None, None
+
+    # --- Radio ---
+
+    RADIO_UPLOAD_DIR = os.path.join(os.path.dirname(db.db_path), "radio")
+    os.makedirs(RADIO_UPLOAD_DIR, exist_ok=True)
+
+    RIGHTS_DECLARATION_TEXT = (
+        "I hereby confirm that I am the creator or rights holder of this audio track "
+        "and grant a non-exclusive streaming license for a period of 14 days from the "
+        "date of upload. This license covers live streaming on Twitch and the storage of "
+        "VODs (Video on Demand) that include this track. After 14 days, the file will be "
+        "automatically deleted from the server."
+    )
+
+    MAX_UPLOAD_SIZE_MB = 20
+    MAX_DURATION_SEC = 360
+    MAX_BITRATE_KBPS = 320
+    MAX_UPLOADS_PER_IP = 3
+
+    async def _validate_mp3(filepath: str) -> dict:
+        """Validate an MP3 file. Returns dict with info or 'error' key."""
+        import asyncio, mimetypes, json as _json
+        # MIME type check
+        mime, _ = mimetypes.guess_type(filepath)
+        if mime not in ("audio/mpeg", "audio/mp3"):
+            return {"error": "Invalid file type. Only MP3 files are allowed."}
+        # File size
+        size = os.path.getsize(filepath)
+        if size > MAX_UPLOAD_SIZE_MB * 1024 * 1024:
+            return {"error": f"File too large. Maximum {MAX_UPLOAD_SIZE_MB}MB."}
+        # ffprobe
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ffprobe", "-v", "quiet", "-print_format", "json",
+                "-show_format", "-show_streams", filepath,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+            if proc.returncode != 0:
+                return {"error": "Not a valid audio file."}
+            info = _json.loads(stdout)
+            fmt = info.get("format", {})
+            duration = float(fmt.get("duration", 0))
+            bitrate = int(fmt.get("bit_rate", 0)) // 1000
+            # Check for audio stream
+            has_audio = any(s.get("codec_type") == "audio" for s in info.get("streams", []))
+            if not has_audio:
+                return {"error": "No audio stream found in file."}
+            if duration > MAX_DURATION_SEC:
+                return {"error": f"Track too long. Maximum {MAX_DURATION_SEC // 60} minutes."}
+            if duration < 5:
+                return {"error": "Track too short. Minimum 5 seconds."}
+            return {"duration": round(duration, 1), "bitrate": min(bitrate, MAX_BITRATE_KBPS), "size": size}
+        except FileNotFoundError:
+            return {"error": "Audio validation unavailable (ffprobe not found)."}
+        except Exception as e:
+            return {"error": f"Validation failed: {e}"}
+
+    @app.route("/radio/upload", methods=["GET", "POST"])
+    async def radio_upload():
+        # Check if uploads are enabled
+        upload_enabled = await db.get_setting("radio_upload_enabled")
+        if upload_enabled == "0":
+            return await render_template("radio_upload.html", closed=True)
+
+        if request.method == "POST":
+            import hashlib, uuid, time, json as _json
+            form = await request.form
+            suno_url = form.get("suno_url", "").strip()
+            rights_agreed = form.get("rights_agreed")
+
+            if not rights_agreed:
+                await flash("You must agree to the streaming rights declaration.", "error")
+                return redirect(url_for("radio_upload"))
+
+            if not suno_url:
+                await flash("Please provide the Suno URL.", "error")
+                return redirect(url_for("radio_upload"))
+
+            # Rate limiting
+            client_ip = request.headers.get("X-Forwarded-For", request.remote_addr) or "unknown"
+            upload_count = await db.count_radio_uploads_by_ip(client_ip)
+            if upload_count >= MAX_UPLOADS_PER_IP:
+                await flash("Upload limit reached. Please try again later.", "error")
+                return redirect(url_for("radio_upload"))
+
+            # Get file
+            files = await request.files
+            mp3_file = files.get("mp3_file")
+            if not mp3_file or not mp3_file.filename:
+                await flash("Please select an MP3 file.", "error")
+                return redirect(url_for("radio_upload"))
+
+            if not mp3_file.filename.lower().endswith(".mp3"):
+                await flash("Only .mp3 files are accepted.", "error")
+                return redirect(url_for("radio_upload"))
+
+            # Honeypot check
+            if form.get("website", ""):
+                return redirect(url_for("radio_upload"))
+
+            # Save temp file for validation
+            original_filename = mp3_file.filename
+            unique_name = f"radio_{uuid.uuid4().hex}.mp3"
+            filepath = os.path.join(RADIO_UPLOAD_DIR, unique_name)
+            await mp3_file.save(filepath)
+
+            # Validate
+            result = await _validate_mp3(filepath)
+            if "error" in result:
+                os.remove(filepath)
+                await flash(result["error"], "error")
+                return redirect(url_for("radio_upload"))
+
+            # Fetch Suno metadata
+            title, artist, _ = await _fetch_suno_info(suno_url)
+            if not title:
+                os.remove(filepath)
+                await flash("Could not fetch song info from the Suno URL.", "error")
+                return redirect(url_for("radio_upload"))
+            artist = artist or "Unknown Artist"
+
+            # Generate rights hash
+            rights_hash = hashlib.sha256(
+                f"{RIGHTS_DECLARATION_TEXT}|{time.time()}|{client_ip}|{original_filename}|{suno_url}".encode()
+            ).hexdigest()
+
+            song_id = await db.add_radio_song(
+                title=title, artist=artist, suno_url=suno_url,
+                filename=unique_name, original_filename=original_filename,
+                file_size=result["size"], duration=result["duration"],
+                bitrate=result["bitrate"], uploaded_by_ip=client_ip,
+                rights_declaration=RIGHTS_DECLARATION_TEXT, rights_hash=rights_hash,
+            )
+            await flash(f"'{title}' by {artist} uploaded successfully! (#{song_id})", "success")
+            return redirect(url_for("radio_upload"))
+
+        return await render_template("radio_upload.html", closed=False, rights_text=RIGHTS_DECLARATION_TEXT)
+
+    @app.route("/radio", methods=["GET", "POST"])
+    @admin_required
+    async def radio_admin():
+        import json as _json
+        if request.method == "POST":
+            form = await request.form
+            action = form.get("action", "")
+
+            if action == "delete_song":
+                song_id = int(form.get("song_id", 0))
+                filename = await db.delete_radio_song(song_id)
+                if filename:
+                    filepath = os.path.join(RADIO_UPLOAD_DIR, filename)
+                    if os.path.exists(filepath):
+                        os.remove(filepath)
+                await flash("Song deleted.", "success")
+
+            elif action == "move_up":
+                await db.move_radio_song(int(form.get("song_id", 0)), "up")
+
+            elif action == "move_down":
+                await db.move_radio_song(int(form.get("song_id", 0)), "down")
+
+            elif action == "save_config":
+                twitch_key = form.get("twitch_key", "").strip()
+                stream_url = form.get("stream_url", "").strip()
+                upload_enabled = "1" if form.get("upload_enabled") else "0"
+                post_channel_id = form.get("post_channel_id", "").strip()
+
+                # Only update key if not masked placeholder
+                if twitch_key and not twitch_key.startswith("****"):
+                    await db.set_setting("radio_twitch_key", twitch_key)
+                if stream_url:
+                    await db.set_setting("radio_stream_url", stream_url)
+                await db.set_setting("radio_upload_enabled", upload_enabled)
+                if post_channel_id:
+                    await db.set_setting("radio_post_channel_id", post_channel_id)
+
+                # Background upload
+                files = await request.files
+                bg_file = files.get("background")
+                if bg_file and bg_file.filename:
+                    ext = bg_file.filename.rsplit(".", 1)[-1].lower()
+                    allowed_bg = {"png", "jpg", "jpeg", "gif", "webp", "mp4", "webm"}
+                    if ext in allowed_bg:
+                        import uuid
+                        bg_type = "video" if ext in ("mp4", "webm") else "image"
+                        bg_name = f"radio_bg_{uuid.uuid4().hex}.{ext}"
+                        bg_path = os.path.join(RADIO_UPLOAD_DIR, bg_name)
+                        await bg_file.save(bg_path)
+                        # Remove old background
+                        old_bg = await db.get_setting("radio_background_filename")
+                        if old_bg:
+                            old_path = os.path.join(RADIO_UPLOAD_DIR, old_bg)
+                            if os.path.exists(old_path):
+                                os.remove(old_path)
+                        await db.set_setting("radio_background_filename", bg_name)
+                        await db.set_setting("radio_background_type", bg_type)
+
+                await flash("Configuration saved.", "success")
+
+            elif action == "post_upload_url":
+                ch_id = form.get("post_channel_id_select", "")
+                guild = get_guild()
+                if guild and ch_id:
+                    channel = guild.get_channel(int(ch_id)) or guild.get_thread(int(ch_id))
+                    if channel:
+                        import discord
+                        base_url = str(request.host_url).rstrip("/")
+                        embed = discord.Embed(
+                            title="\U0001F3B5 Song Upload",
+                            description=f"Submit your track for the stream!\n\n**[Upload here]({base_url}/radio/upload)**",
+                            color=discord.Color.green(),
+                        )
+                        await channel.send(embed=embed)
+                        await flash(f"Upload link posted to #{channel.name}.", "success")
+
+            elif action == "post_stream_url":
+                ch_id = form.get("post_channel_id_select", "")
+                stream_url = await db.get_setting("radio_stream_url") or ""
+                guild = get_guild()
+                if guild and ch_id and stream_url:
+                    channel = guild.get_channel(int(ch_id)) or guild.get_thread(int(ch_id))
+                    if channel:
+                        import discord
+                        embed = discord.Embed(
+                            title="\U0001F4FA Live Stream",
+                            description=f"Watch the stream now!\n\n**[Tune in]({stream_url})**",
+                            color=discord.Color.purple(),
+                        )
+                        await channel.send(embed=embed)
+                        await flash(f"Stream link posted to #{channel.name}.", "success")
+
+            return redirect(url_for("radio_admin"))
+
+        # GET
+        songs = await db.get_all_radio_songs(active_only=False)
+        twitch_key = await db.get_setting("radio_twitch_key") or ""
+        masked_key = f"****{twitch_key[-4:]}" if len(twitch_key) > 4 else ""
+        stream_url = await db.get_setting("radio_stream_url") or ""
+        upload_enabled = await db.get_setting("radio_upload_enabled") or "1"
+        bg_filename = await db.get_setting("radio_background_filename") or ""
+        bg_type = await db.get_setting("radio_background_type") or "image"
+
+        guild = get_guild()
+        text_channels = []
+        if guild:
+            for ch in sorted(guild.text_channels, key=lambda c: c.position):
+                text_channels.append({"id": ch.id, "name": ch.name})
+
+        return await render_template(
+            "radio.html",
+            songs=songs, masked_key=masked_key, stream_url=stream_url,
+            upload_enabled=upload_enabled, bg_filename=bg_filename, bg_type=bg_type,
+            text_channels=text_channels,
+        )
+
+    @app.route("/radio/files/<filename>")
+    async def radio_file(filename):
+        from quart import send_from_directory
+        return await send_from_directory(RADIO_UPLOAD_DIR, filename)
+
+    from bot.stream_manager import StreamManager
+    stream_manager = StreamManager(db, RADIO_UPLOAD_DIR)
+
+    @app.route("/radio/stream/status")
+    @admin_required
+    async def radio_stream_status():
+        from quart import jsonify
+        return jsonify(await stream_manager.get_status())
+
+    @app.route("/radio/stream/<action>", methods=["POST"])
+    @admin_required
+    async def radio_stream_action(action):
+        from quart import jsonify
+        if action == "start":
+            result = await stream_manager.start()
+        elif action == "stop":
+            result = await stream_manager.stop()
+        elif action == "next":
+            result = await stream_manager.skip_next()
+        elif action == "prev":
+            result = await stream_manager.skip_prev()
+        else:
+            result = {"error": "Unknown action."}
+        return jsonify(result)
+
+    # --- Auto-cleanup task ---
+
+    async def _radio_cleanup_loop():
+        """Periodically delete expired radio songs (every hour)."""
+        while True:
+            try:
+                await asyncio.sleep(3600)
+                filenames = await db.cleanup_expired_radio_songs()
+                for fn in filenames:
+                    filepath = os.path.join(RADIO_UPLOAD_DIR, fn)
+                    if os.path.exists(filepath):
+                        os.remove(filepath)
+                if filenames:
+                    print(f"[radio] Cleaned up {len(filenames)} expired songs.")
+            except Exception as e:
+                print(f"[radio] Cleanup error: {e}")
+
+    @app.before_serving
+    async def start_cleanup_task():
+        app.radio_cleanup_task = asyncio.create_task(_radio_cleanup_loop())
+
+    # --- Party Playlist ---
 
     @app.route("/party-playlist", methods=["GET", "POST"])
     @login_required

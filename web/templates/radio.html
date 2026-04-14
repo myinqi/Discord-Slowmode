@@ -1,0 +1,217 @@
+{% extends "base.html" %}
+{% block title %}Radio{% endblock %}
+{% block content %}
+<h2 class="text-2xl font-bold text-white mb-6">📻 Radio Stream Manager</h2>
+
+<div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+    <!-- Left: Config + Controls -->
+    <div class="space-y-6">
+        <!-- Stream Config -->
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            <div class="px-5 py-4 border-b border-gray-700/50">
+                <h3 class="text-white font-semibold">Stream Configuration</h3>
+            </div>
+            <div class="p-5">
+                <form method="POST" enctype="multipart/form-data" class="space-y-4">
+                    <input type="hidden" name="action" value="save_config">
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">Twitch Stream Key</label>
+                        <input type="password" name="twitch_key" value="{{ masked_key }}"
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none"
+                            placeholder="live_xxxxxxxxxx">
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">Twitch Stream URL</label>
+                        <input type="url" name="stream_url" value="{{ stream_url }}"
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none"
+                            placeholder="https://twitch.tv/yourchannel">
+                    </div>
+                    <div>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" name="upload_enabled" value="1"
+                                {% if upload_enabled != '0' %}checked{% endif %}
+                                class="w-4 h-4 rounded border-gray-600 bg-discord-darker text-discord-blurple focus:ring-discord-blurple">
+                            <span class="text-gray-300 text-sm">Upload form enabled</span>
+                        </label>
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">Background (image or video)</label>
+                        <input type="file" name="background" accept="image/*,video/mp4,video/webm"
+                            class="w-full text-gray-400 text-sm file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-sm file:bg-discord-blurple/20 file:text-discord-blurple hover:file:bg-discord-blurple/40 file:cursor-pointer">
+                        {% if bg_filename %}
+                        <p class="text-gray-500 text-xs mt-1">Current: {{ bg_filename }} ({{ bg_type }})</p>
+                        {% endif %}
+                    </div>
+                    <button type="submit"
+                        class="w-full px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg font-medium text-sm transition-colors">
+                        Save Config
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Stream Controls -->
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            <div class="px-5 py-4 border-b border-gray-700/50">
+                <h3 class="text-white font-semibold">Stream Controls</h3>
+            </div>
+            <div class="p-5">
+                <div id="stream-status" class="mb-4">
+                    <div class="flex items-center gap-2 mb-2">
+                        <span class="inline-block w-2 h-2 bg-gray-500 rounded-full" id="status-dot"></span>
+                        <span class="text-gray-400 text-sm" id="status-text">Offline</span>
+                    </div>
+                    <p class="text-gray-500 text-xs" id="now-playing">—</p>
+                </div>
+                <div class="grid grid-cols-4 gap-2">
+                    <button onclick="streamAction('prev')"
+                        class="px-3 py-2 bg-gray-600/30 hover:bg-gray-600/50 text-gray-300 rounded-lg text-sm transition-colors" title="Previous">
+                        ⏮
+                    </button>
+                    <button onclick="streamAction('start')" id="btn-play"
+                        class="px-3 py-2 bg-green-600/30 hover:bg-green-600/50 text-green-400 rounded-lg text-sm transition-colors" title="Start">
+                        ▶️
+                    </button>
+                    <button onclick="streamAction('stop')" id="btn-stop"
+                        class="px-3 py-2 bg-red-600/30 hover:bg-red-600/50 text-red-400 rounded-lg text-sm transition-colors" title="Stop">
+                        ⏹
+                    </button>
+                    <button onclick="streamAction('next')"
+                        class="px-3 py-2 bg-gray-600/30 hover:bg-gray-600/50 text-gray-300 rounded-lg text-sm transition-colors" title="Next">
+                        ⏭
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Post Links -->
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            <div class="px-5 py-4 border-b border-gray-700/50">
+                <h3 class="text-white font-semibold">Post to Discord</h3>
+            </div>
+            <div class="p-5 space-y-3">
+                <select id="post-channel-select"
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                    <option value="">Select channel...</option>
+                    {% for ch in text_channels %}
+                    <option value="{{ ch.id }}">#{{ ch.name }}</option>
+                    {% endfor %}
+                </select>
+                <div class="grid grid-cols-2 gap-2">
+                    <form method="POST">
+                        <input type="hidden" name="action" value="post_upload_url">
+                        <input type="hidden" name="post_channel_id_select" value="" class="post-ch-input">
+                        <button type="submit"
+                            class="w-full px-3 py-2 bg-green-600/20 hover:bg-green-600/40 text-green-400 rounded-lg text-xs font-medium transition-colors">
+                            🎵 Post Upload Link
+                        </button>
+                    </form>
+                    <form method="POST">
+                        <input type="hidden" name="action" value="post_stream_url">
+                        <input type="hidden" name="post_channel_id_select" value="" class="post-ch-input">
+                        <button type="submit"
+                            class="w-full px-3 py-2 bg-purple-600/20 hover:bg-purple-600/40 text-purple-400 rounded-lg text-xs font-medium transition-colors">
+                            📺 Post Stream Link
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Right: Song List -->
+    <div class="xl:col-span-2">
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between">
+                <h3 class="text-white font-semibold">Playlist <span class="text-gray-500 text-sm font-normal">({{ songs|length }} songs)</span></h3>
+            </div>
+            <div class="divide-y divide-gray-700/30">
+                {% if songs %}
+                {% for song in songs %}
+                <div class="px-5 py-3 flex items-center gap-4 hover:bg-gray-700/10">
+                    <span class="text-gray-500 text-xs font-mono w-6 text-center">{{ loop.index }}</span>
+                    <div class="flex-1 min-w-0">
+                        <p class="text-white text-sm font-medium truncate">{{ song.title }}</p>
+                        <p class="text-gray-400 text-xs truncate">{{ song.artist }} — {{ "%.1f"|format(song.duration / 60) }} min{% if song.suno_url %} · <a href="{{ song.suno_url }}" target="_blank" class="text-discord-blurple hover:underline">Suno</a>{% endif %}</p>
+                        <p class="text-gray-600 text-xs">
+                            Expires: {{ song.expires_at|int|timestamp_to_date }}
+                            · IP: {{ song.uploaded_by_ip }}
+                            · Hash: <code class="text-gray-500">{{ song.rights_hash[:12] }}…</code>
+                        </p>
+                    </div>
+                    <div class="flex items-center gap-1 shrink-0">
+                        <form method="POST" class="inline">
+                            <input type="hidden" name="action" value="move_up">
+                            <input type="hidden" name="song_id" value="{{ song.id }}">
+                            <button type="submit" class="p-1.5 text-gray-400 hover:text-white transition-colors" title="Move up">▲</button>
+                        </form>
+                        <form method="POST" class="inline">
+                            <input type="hidden" name="action" value="move_down">
+                            <input type="hidden" name="song_id" value="{{ song.id }}">
+                            <button type="submit" class="p-1.5 text-gray-400 hover:text-white transition-colors" title="Move down">▼</button>
+                        </form>
+                        <form method="POST" class="inline" onsubmit="return confirm('Delete this song?')">
+                            <input type="hidden" name="action" value="delete_song">
+                            <input type="hidden" name="song_id" value="{{ song.id }}">
+                            <button type="submit" class="p-1.5 text-red-400 hover:text-red-300 transition-colors" title="Delete">✕</button>
+                        </form>
+                    </div>
+                </div>
+                {% endfor %}
+                {% else %}
+                <div class="p-8 text-center">
+                    <p class="text-gray-500 text-sm">No songs in the playlist yet.</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Sync channel select to hidden form inputs
+document.getElementById('post-channel-select').addEventListener('change', function() {
+    document.querySelectorAll('.post-ch-input').forEach(el => el.value = this.value);
+});
+
+async function streamAction(action) {
+    try {
+        const resp = await fetch('/radio/stream/' + action, { method: 'POST' });
+        const data = await resp.json();
+        updateStatus(data);
+    } catch (e) {
+        console.error('Stream action failed:', e);
+    }
+}
+
+function updateStatus(data) {
+    const dot = document.getElementById('status-dot');
+    const text = document.getElementById('status-text');
+    const np = document.getElementById('now-playing');
+    if (data.running) {
+        dot.className = 'inline-block w-2 h-2 bg-green-400 rounded-full animate-pulse';
+        text.textContent = 'Live';
+        text.className = 'text-green-400 text-sm';
+        if (data.current_song) {
+            np.textContent = '♪ ' + data.current_song.title + ' — ' + data.current_song.artist;
+        }
+    } else {
+        dot.className = 'inline-block w-2 h-2 bg-gray-500 rounded-full';
+        text.textContent = 'Offline';
+        text.className = 'text-gray-400 text-sm';
+        np.textContent = '—';
+    }
+}
+
+// Poll status every 5 seconds
+async function pollStatus() {
+    try {
+        const resp = await fetch('/radio/stream/status');
+        const data = await resp.json();
+        updateStatus(data);
+    } catch (e) {}
+}
+setInterval(pollStatus, 5000);
+pollStatus();
+</script>
+{% endblock %}

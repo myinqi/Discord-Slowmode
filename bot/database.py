@@ -197,6 +197,30 @@ class Database:
             await self.db.execute("ALTER TABLE polls ADD COLUMN creator_id INTEGER")
             await self.db.commit()
 
+        # Create radio_songs table
+        await self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS radio_songs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                artist TEXT NOT NULL,
+                suno_url TEXT,
+                filename TEXT NOT NULL,
+                original_filename TEXT,
+                file_size INTEGER,
+                duration REAL,
+                bitrate INTEGER,
+                uploaded_by_ip TEXT,
+                uploaded_at REAL DEFAULT (unixepoch()),
+                expires_at REAL,
+                rights_declaration TEXT NOT NULL,
+                rights_hash TEXT NOT NULL,
+                rights_agreed_at REAL,
+                position INTEGER DEFAULT 0,
+                active INTEGER DEFAULT 1
+            );
+        """)
+        await self.db.commit()
+
         # Create image_categories and image_posts tables
         await self.db.executescript("""
             CREATE TABLE IF NOT EXISTS image_categories (
@@ -1329,3 +1353,98 @@ class Database:
         await self.db.execute("DELETE FROM polls WHERE id = ?", (poll_id,))
         await self.db.commit()
         return filename
+
+    # --- Radio Songs ---
+
+    async def add_radio_song(
+        self, title: str, artist: str, suno_url: str, filename: str,
+        original_filename: str, file_size: int, duration: float, bitrate: int,
+        uploaded_by_ip: str, rights_declaration: str, rights_hash: str,
+    ) -> int:
+        import time
+        expires_at = time.time() + 14 * 86400
+        # Set position to max+1
+        async with self.db.execute("SELECT COALESCE(MAX(position), 0) FROM radio_songs") as cursor:
+            max_pos = (await cursor.fetchone())[0]
+        cursor = await self.db.execute(
+            """INSERT INTO radio_songs
+               (title, artist, suno_url, filename, original_filename, file_size,
+                duration, bitrate, uploaded_by_ip, expires_at,
+                rights_declaration, rights_hash, rights_agreed_at, position)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (title, artist, suno_url, filename, original_filename, file_size,
+             duration, bitrate, uploaded_by_ip, expires_at,
+             rights_declaration, rights_hash, time.time(), max_pos + 1),
+        )
+        await self.db.commit()
+        return cursor.lastrowid
+
+    async def get_radio_song(self, song_id: int) -> Optional[dict]:
+        async with self.db.execute("SELECT * FROM radio_songs WHERE id = ?", (song_id,)) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_all_radio_songs(self, active_only: bool = True) -> list[dict]:
+        if active_only:
+            sql = "SELECT * FROM radio_songs WHERE active = 1 ORDER BY position ASC"
+        else:
+            sql = "SELECT * FROM radio_songs ORDER BY position ASC"
+        async with self.db.execute(sql) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def delete_radio_song(self, song_id: int) -> Optional[str]:
+        """Delete a radio song. Returns filename for file cleanup."""
+        async with self.db.execute("SELECT filename FROM radio_songs WHERE id = ?", (song_id,)) as cursor:
+            row = await cursor.fetchone()
+            filename = row["filename"] if row else None
+        await self.db.execute("DELETE FROM radio_songs WHERE id = ?", (song_id,))
+        await self.db.commit()
+        return filename
+
+    async def reorder_radio_songs(self, song_ids: list[int]):
+        """Set position based on order of IDs provided."""
+        for i, sid in enumerate(song_ids):
+            await self.db.execute(
+                "UPDATE radio_songs SET position = ? WHERE id = ?", (i, sid)
+            )
+        await self.db.commit()
+
+    async def move_radio_song(self, song_id: int, direction: str):
+        """Move a song up or down in the playlist."""
+        songs = await self.get_all_radio_songs()
+        idx = next((i for i, s in enumerate(songs) if s["id"] == song_id), None)
+        if idx is None:
+            return
+        if direction == "up" and idx > 0:
+            swap_id = songs[idx - 1]["id"]
+            swap_pos = songs[idx - 1]["position"]
+            await self.db.execute("UPDATE radio_songs SET position = ? WHERE id = ?", (swap_pos, song_id))
+            await self.db.execute("UPDATE radio_songs SET position = ? WHERE id = ?", (songs[idx]["position"], swap_id))
+        elif direction == "down" and idx < len(songs) - 1:
+            swap_id = songs[idx + 1]["id"]
+            swap_pos = songs[idx + 1]["position"]
+            await self.db.execute("UPDATE radio_songs SET position = ? WHERE id = ?", (swap_pos, song_id))
+            await self.db.execute("UPDATE radio_songs SET position = ? WHERE id = ?", (songs[idx]["position"], swap_id))
+        await self.db.commit()
+
+    async def cleanup_expired_radio_songs(self) -> list[str]:
+        """Delete expired songs. Returns list of filenames for file cleanup."""
+        import time
+        async with self.db.execute(
+            "SELECT filename FROM radio_songs WHERE expires_at < ?", (time.time(),)
+        ) as cursor:
+            filenames = [row["filename"] for row in await cursor.fetchall()]
+        if filenames:
+            await self.db.execute("DELETE FROM radio_songs WHERE expires_at < ?", (time.time(),))
+            await self.db.commit()
+        return filenames
+
+    async def count_radio_uploads_by_ip(self, ip: str, hours: int = 1) -> int:
+        """Count uploads from an IP in the last N hours for rate limiting."""
+        import time
+        since = time.time() - hours * 3600
+        async with self.db.execute(
+            "SELECT COUNT(*) FROM radio_songs WHERE uploaded_by_ip = ? AND uploaded_at > ?",
+            (ip, since),
+        ) as cursor:
+            return (await cursor.fetchone())[0]
