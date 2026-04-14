@@ -26,12 +26,18 @@
                             class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none"
                             placeholder="https://twitch.tv/yourchannel">
                     </div>
-                    <div>
+                    <div class="space-y-2">
                         <label class="flex items-center gap-2 cursor-pointer">
                             <input type="checkbox" name="upload_enabled" value="1"
                                 {% if upload_enabled != '0' %}checked{% endif %}
                                 class="w-4 h-4 rounded border-gray-600 bg-discord-darker text-discord-blurple focus:ring-discord-blurple">
                             <span class="text-gray-300 text-sm">Upload form enabled</span>
+                        </label>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" name="shuffle" value="1"
+                                {% if shuffle == '1' %}checked{% endif %}
+                                class="w-4 h-4 rounded border-gray-600 bg-discord-darker text-discord-blurple focus:ring-discord-blurple">
+                            <span class="text-gray-300 text-sm">Shuffle playback</span>
                         </label>
                     </div>
                     <div>

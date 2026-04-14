@@ -1614,6 +1614,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 twitch_key = form.get("twitch_key", "").strip()
                 stream_url = form.get("stream_url", "").strip()
                 upload_enabled = "1" if form.get("upload_enabled") else "0"
+                shuffle = "1" if form.get("shuffle") else "0"
                 post_channel_id = form.get("post_channel_id", "").strip()
 
                 # Only update key if not masked placeholder
@@ -1622,6 +1623,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 if stream_url:
                     await db.set_setting("radio_stream_url", stream_url)
                 await db.set_setting("radio_upload_enabled", upload_enabled)
+                await db.set_setting("radio_shuffle", shuffle)
                 if post_channel_id:
                     await db.set_setting("radio_post_channel_id", post_channel_id)
 
@@ -1697,6 +1699,7 @@ def create_app(db: Database, bot=None) -> Quart:
         upload_enabled = await db.get_setting("radio_upload_enabled") or "1"
         bg_filename = await db.get_setting("radio_background_filename") or ""
         bg_type = await db.get_setting("radio_background_type") or "image"
+        shuffle = await db.get_setting("radio_shuffle") or "0"
 
         guild = get_guild()
         text_channels = []
@@ -1711,6 +1714,7 @@ def create_app(db: Database, bot=None) -> Quart:
             songs=songs, masked_key=masked_key, stream_url=stream_url,
             upload_enabled=upload_enabled, bg_filename=bg_filename, bg_type=bg_type,
             text_channels=text_channels, post_channel_id=post_channel_id,
+            shuffle=shuffle,
         )
 
     @app.route("/radio/files/<filename>")

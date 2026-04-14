@@ -1429,6 +1429,33 @@ class CommandsCog(commands.Cog):
         view = PollSelectView(self.bot, active_polls)
         await interaction.response.send_message("Select a poll to edit:", view=view, ephemeral=True)
 
+    @app.command(name="twitch-playlist", description="Show the current Twitch radio playlist")
+    async def twitch_playlist(self, interaction: discord.Interaction):
+        from datetime import datetime, timezone
+        songs = await self.bot.db.get_all_radio_songs(active_only=True)
+        if not songs:
+            await interaction.response.send_message("📻 The playlist is currently empty.", ephemeral=True)
+            return
+        lines = []
+        for i, s in enumerate(songs, 1):
+            expires = datetime.fromtimestamp(s["expires_at"], tz=timezone.utc).strftime("%d.%m.%Y")
+            dur = f"{s['duration'] / 60:.1f}"
+            lines.append(f"**{i}.** {s['title']} — {s['artist']}  ({dur} min, expires {expires})")
+        # Discord message limit is 2000 chars — split if needed
+        header = f"📻 **Twitch Radio Playlist** ({len(songs)} songs)\n\n"
+        chunks = []
+        current = header
+        for line in lines:
+            if len(current) + len(line) + 1 > 1900:
+                chunks.append(current)
+                current = ""
+            current += line + "\n"
+        if current:
+            chunks.append(current)
+        await interaction.response.send_message(chunks[0], ephemeral=True)
+        for chunk in chunks[1:]:
+            await interaction.followup.send(chunk, ephemeral=True)
+
 
 NUMBER_EMOJIS = ["1\u20e3", "2\u20e3", "3\u20e3", "4\u20e3", "5\u20e3", "6\u20e3", "7\u20e3", "8\u20e3", "9\u20e3", "\U0001F51F"]
 

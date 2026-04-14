@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import random
 import time
 
 
@@ -37,6 +38,9 @@ class StreamManager:
         twitch_key = await self.db.get_setting("radio_twitch_key")
         if not twitch_key:
             return {"error": "Twitch stream key not configured."}
+        self.shuffle = (await self.db.get_setting("radio_shuffle") or "0") == "1"
+        if self.shuffle:
+            random.shuffle(self.playlist)
         self.is_running = True
         self.current_index = 0
         self._task = asyncio.create_task(self._stream_loop(twitch_key))
