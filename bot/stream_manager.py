@@ -138,8 +138,18 @@ class StreamManager:
             return text.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
 
         now_playing = f"{esc(song['title'])}  -  {esc(song['artist'])}"
+        # Use Noto Sans for broad Unicode support (Tibetan, Javanese, IPA, etc.)
+        font_path = "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"
+        if not os.path.exists(font_path):
+            # Fallback: try to find any Noto font
+            for root, dirs, files in os.walk("/usr/share/fonts"):
+                for f in files:
+                    if "NotoSans" in f and f.endswith(".ttf"):
+                        font_path = os.path.join(root, f)
+                        break
         overlay_filter = (
             f"drawtext=text='{now_playing}'"
+            f":fontfile='{font_path}'"
             f":fontsize=28:fontcolor=white:borderw=2:bordercolor=black"
             f":x=(w-text_w)/2:y=h-60"
         )
