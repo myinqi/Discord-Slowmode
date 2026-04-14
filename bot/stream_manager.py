@@ -161,13 +161,17 @@ class StreamManager:
 
         cmd += ["-i", audio_path]
 
-        # Video filters
+        # Video filters + encoding
+        vf = f"scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p,{overlay_filter}"
         cmd += [
-            "-vf", f"scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,{overlay_filter}",
-            "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
+            "-vf", vf,
+            "-c:v", "libx264", "-profile:v", "main", "-level", "4.0",
+            "-preset", "ultrafast",
+            "-pix_fmt", "yuv420p",
             "-b:v", "2500k", "-maxrate", "2500k", "-bufsize", "5000k",
+            "-r", "30",
             "-g", "60", "-keyint_min", "60",
-            "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
+            "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
             "-shortest",
             "-f", "flv", rtmp_url,
         ]
