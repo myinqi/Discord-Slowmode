@@ -1453,6 +1453,15 @@ def create_app(db: Database, bot=None) -> Quart:
         "automatically deleted from the server."
     )
 
+    CONTENT_GUIDELINES_TEXT = (
+        "By uploading, you also confirm that your track does not contain any of the following: "
+        "extremist, radical, or politically motivated content (whether left-wing or right-wing); "
+        "glorification or incitement of violence, hatred, or discrimination against individuals or groups; "
+        "graphic, cruel, disturbing, or otherwise harmful material; "
+        "content that violates applicable laws, Twitch Community Guidelines, or basic standards of decency. "
+        "Submissions that violate these guidelines will be removed without notice and may result in a permanent upload ban."
+    )
+
     MAX_UPLOAD_SIZE_MB = 20
     MAX_DURATION_SEC = 360
     MAX_BITRATE_KBPS = 320
@@ -1576,7 +1585,7 @@ def create_app(db: Database, bot=None) -> Quart:
             await flash(f"'{title}' by {artist} uploaded successfully! (#{song_id})", "success")
             return redirect(url_for("radio_upload"))
 
-        return await render_template("radio_upload.html", closed=False, rights_text=RIGHTS_DECLARATION_TEXT)
+        return await render_template("radio_upload.html", closed=False, rights_text=RIGHTS_DECLARATION_TEXT, content_guidelines=CONTENT_GUIDELINES_TEXT)
 
     @app.route("/radio", methods=["GET", "POST"])
     @admin_required
@@ -1671,6 +1680,13 @@ def create_app(db: Database, bot=None) -> Quart:
                         await channel.send(embed=embed)
                         await flash(f"Stream link posted to #{channel.name}.", "success")
 
+            elif action == "save_post_channel":
+                ch_id = form.get("post_channel_id", "").strip()
+                if ch_id:
+                    await db.set_setting("radio_post_channel_id", ch_id)
+                from quart import jsonify
+                return jsonify({"ok": True})
+
             return redirect(url_for("radio_admin"))
 
         # GET
@@ -1688,11 +1704,13 @@ def create_app(db: Database, bot=None) -> Quart:
             for ch in sorted(guild.text_channels, key=lambda c: c.position):
                 text_channels.append({"id": ch.id, "name": ch.name})
 
+        post_channel_id = await db.get_setting("radio_post_channel_id") or ""
+
         return await render_template(
             "radio.html",
             songs=songs, masked_key=masked_key, stream_url=stream_url,
             upload_enabled=upload_enabled, bg_filename=bg_filename, bg_type=bg_type,
-            text_channels=text_channels,
+            text_channels=text_channels, post_channel_id=post_channel_id,
         )
 
     @app.route("/radio/files/<filename>")

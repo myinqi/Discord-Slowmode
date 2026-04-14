@@ -94,7 +94,7 @@
                     class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
                     <option value="">Select channel...</option>
                     {% for ch in text_channels %}
-                    <option value="{{ ch.id }}">#{{ ch.name }}</option>
+                    <option value="{{ ch.id }}" {% if ch.id|string == post_channel_id %}selected{% endif %}>#{{ ch.name }}</option>
                     {% endfor %}
                 </select>
                 <div class="grid grid-cols-2 gap-2">
@@ -174,8 +174,13 @@
 
 <script>
 // Sync channel select to hidden form inputs
-document.getElementById('post-channel-select').addEventListener('change', function() {
+const chSelect = document.getElementById('post-channel-select');
+document.querySelectorAll('.post-ch-input').forEach(el => el.value = chSelect.value);
+chSelect.addEventListener('change', function() {
     document.querySelectorAll('.post-ch-input').forEach(el => el.value = this.value);
+    // Persist selection
+    fetch('/radio', { method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: 'action=save_post_channel&post_channel_id=' + this.value });
 });
 
 async function streamAction(action) {
