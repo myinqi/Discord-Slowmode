@@ -1700,6 +1700,38 @@ def create_app(db: Database, bot=None) -> Quart:
         from quart import send_from_directory
         return await send_from_directory(RADIO_UPLOAD_DIR, filename)
 
+    @app.route("/radio/export-rights")
+    @admin_required
+    async def radio_export_rights():
+        import csv, io
+        from datetime import datetime, timezone
+        from quart import Response
+        songs = await db.get_all_radio_songs(active_only=False)
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow([
+            "ID", "Title", "Artist", "Suno URL", "Original Filename",
+            "Uploaded At (UTC)", "Expires At (UTC)", "Uploader IP",
+            "Rights Declaration", "Rights Hash (SHA256)", "Rights Agreed At (UTC)",
+        ])
+        for s in songs:
+            fmt = lambda ts: datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S") if ts else ""
+            writer.writerow([
+                s["id"], s["title"], s["artist"], s.get("suno_url", ""),
+                s.get("original_filename", ""),
+                fmt(s.get("uploaded_at")), fmt(s.get("expires_at")),
+                s.get("uploaded_by_ip", ""),
+                s.get("rights_declaration", ""), s.get("rights_hash", ""),
+                fmt(s.get("rights_agreed_at")),
+            ])
+        csv_data = output.getvalue()
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        return Response(
+            csv_data,
+            mimetype="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=streaming_rights_{timestamp}.csv"},
+        )
+
     from bot.stream_manager import StreamManager
     stream_manager = StreamManager(db, RADIO_UPLOAD_DIR)
 
