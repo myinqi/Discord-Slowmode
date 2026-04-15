@@ -12,6 +12,8 @@ import shutil
 import tempfile
 import time
 
+import aiohttp
+
 _EMOJI_RE = re.compile(
     "["
     "\U0001F600-\U0001FAFF"  # emoticons, symbols, pictographs, transport, maps
@@ -30,6 +32,8 @@ _EMOJI_RE = re.compile(
 )
 
 _PLAYLIST_REPEATS = 50
+_LYRICS_LINE_DURATION = 6  # seconds per lyrics line on screen
+_LYRICS_MAX_LINES = 4      # max lines shown at once
 
 
 class StreamManager:
@@ -47,6 +51,8 @@ class StreamManager:
         self._start_time = None
         self._twitch_key = None
         self._overlay_path = None
+        self._lyrics_path = None
+        self._lyrics_cache = {}  # {song_id: [lines]}
         self._concat_start = 0
 
     async def get_status(self) -> dict:
@@ -76,6 +82,9 @@ class StreamManager:
         self._font_path = await self._resolve_font()
         self._temp_dir = tempfile.mkdtemp(prefix="radio_")
         self._overlay_path = os.path.join(self._temp_dir, "nowplaying.txt")
+        self._lyrics_path = os.path.join(self._temp_dir, "lyrics.txt")
+        with open(self._lyrics_path, "w", encoding="utf-8") as f:
+            f.write(" ")
         self.is_running = True
         self.current_index = 0
         await self._launch()
@@ -157,6 +166,57 @@ class StreamManager:
             shutil.rmtree(self._temp_dir, ignore_errors=True)
             self._temp_dir = None
 
+    async def _fetch_lyrics(self, suno_url: str) -> list[str]:
+        """Scrape lyrics from a Suno song page. Returns list of text lines."""
+        if not suno_url:
+            return []
+        try:
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(suno_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return []
+                    html = await resp.text()
+                    # Lyrics are in the metadata.prompt field inside Next.js RSC payload
+                    # Format: self.__next_f.push([1,"48:T<hex>,"]) followed by push with the text
+                    match = re.search(
+                        r'self\.__next_f\.push\(\[1,"[0-9a-f]+:T[0-9a-f]+,"\]\)</script>'
+                        r'<script>self\.__next_f\.push\(\[1,"(.*?)"\]\)</script>',
+                        html, re.DOTALL
+                    )
+                    if not match:
+                        return []
+                    raw = match.group(1)
+                    # Unescape JSON string escapes
+                    raw = raw.replace("\\n", "\n").replace("\\t", " ").replace('\\"', '"')
+                    # Split into lines, strip emoji, skip empty
+                    lines = []
+                    for line in raw.split("\n"):
+                        cleaned = _EMOJI_RE.sub("", line).strip()
+                        if cleaned:
+                            lines.append(cleaned)
+                    print(f"[radio] Scraped {len(lines)} lyrics lines from {suno_url}")
+                    return lines
+        except Exception as e:
+            print(f"[radio] Lyrics scrape error: {e}")
+            return []
+
+    def _write_lyrics(self, lines: list[str], offset: int):
+        """Write a window of lyrics lines to the lyrics overlay file."""
+        if not lines:
+            text = " "
+        else:
+            start = offset % len(lines)
+            window = []
+            for i in range(_LYRICS_MAX_LINES):
+                idx = (start + i) % len(lines)
+                window.append(lines[idx])
+            text = "\n".join(window)
+        try:
+            with open(self._lyrics_path, "w", encoding="utf-8") as fh:
+                fh.write(text)
+        except Exception as e:
+            print(f"[radio] Lyrics write error: {e}")
+
     async def _resolve_font(self) -> str:
         """Return font family name for fontconfig-based rendering."""
         # Use fontconfig (font= instead of fontfile=) for automatic
@@ -207,7 +267,7 @@ class StreamManager:
         # This ignores embedded cover art in MP3 files that concat picks up
         # Use fontconfig for automatic fallback across all Noto fonts
         font = self._font_path
-        overlay = (
+        now_playing = (
             f"drawtext=font='{font}'"
             f":textfile='{self._overlay_path}'"
             f":reload=1"
@@ -215,10 +275,18 @@ class StreamManager:
             f":borderw=2:bordercolor=black"
             f":x=(w-text_w)/2:y=h-60"
         )
+        lyrics = (
+            f"drawtext=font='{font}'"
+            f":textfile='{self._lyrics_path}'"
+            f":reload=1"
+            f":fontsize=22:fontcolor=white"
+            f":borderw=1:bordercolor=black"
+            f":x=40:y=(h-text_h)/2"
+        )
         vf = (
             "scale=1920:1080:force_original_aspect_ratio=decrease,"
             "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,"
-            f"format=yuv420p,{overlay}"
+            f"format=yuv420p,{now_playing},{lyrics}"
         )
 
         cmd += [
@@ -265,6 +333,26 @@ class StreamManager:
                     self.current_index = (self._concat_start + song_i) % n
                     self._write_overlay(actual)
                     print(f"[radio] Now playing: {actual['title']} by {actual['artist']}")
+                    # Scrape lyrics async for this song
+                    song_id = actual["id"]
+                    if song_id not in self._lyrics_cache:
+                        suno_url = actual.get("suno_url", "")
+                        self._lyrics_cache[song_id] = await self._fetch_lyrics(suno_url)
+                    self._lyrics_offset = 0
+                    self._write_lyrics(self._lyrics_cache.get(song_id, []), 0)
+                # Rotate lyrics lines periodically
+                song_id = actual["id"]
+                lyrics = self._lyrics_cache.get(song_id, [])
+                if lyrics:
+                    if not hasattr(self, "_lyrics_offset"):
+                        self._lyrics_offset = 0
+                    if not hasattr(self, "_lyrics_timer"):
+                        self._lyrics_timer = 0.0
+                    self._lyrics_timer += 1.0
+                    if self._lyrics_timer >= _LYRICS_LINE_DURATION:
+                        self._lyrics_timer = 0.0
+                        self._lyrics_offset += 1
+                        self._write_lyrics(lyrics, self._lyrics_offset)
                 await asyncio.sleep(1)
         except asyncio.CancelledError:
             pass
