@@ -1818,6 +1818,8 @@ def create_app(db: Database, bot=None) -> Quart:
             result = await stream_manager.skip_next()
         elif action == "prev":
             result = await stream_manager.skip_prev()
+        elif action == "reload":
+            result = await stream_manager.reload_playlist()
         else:
             result = {"error": "Unknown action."}
         return jsonify(result)

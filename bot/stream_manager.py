@@ -226,6 +226,23 @@ class StreamManager:
         await self._launch()
         return await self.get_status()
 
+    async def reload_playlist(self):
+        if not self.is_running:
+            return {"error": "Stream is not running."}
+        new_songs = await self.db.get_all_radio_songs(active_only=True)
+        if not new_songs:
+            return {"error": "No active songs found."}
+        old_count = len(self.playlist)
+        shuffle = (await self.db.get_setting("radio_shuffle") or "0") == "1"
+        if shuffle:
+            random.shuffle(new_songs)
+        self.playlist = new_songs
+        self.current_index = 0
+        print(f"[radio] Playlist reloaded: {old_count} -> {len(self.playlist)} songs")
+        await self._teardown()
+        await self._launch()
+        return await self.get_status()
+
     # ------------------------------------------------------------------ #
 
     async def _launch(self):
@@ -487,7 +504,18 @@ class StreamManager:
         try:
             # Stream stderr line by line for real-time logging
             while True:
-                line = await self._process.stderr.readline()
+                try:
+                    line = await asyncio.wait_for(
+                        self._process.stderr.readline(), timeout=60,
+                    )
+                except asyncio.TimeoutError:
+                    # ffmpeg hung (likely RTMP connection lost)
+                    print("[radio] Watchdog: no ffmpeg output for 60s, killing process")
+                    try:
+                        self._process.kill()
+                    except Exception:
+                        pass
+                    break
                 if not line:
                     break
                 text = line.decode(errors="replace").rstrip()
