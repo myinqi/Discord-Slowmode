@@ -7,9 +7,27 @@ ensuring seamless transitions without stream interruptions.
 import asyncio
 import os
 import random
+import re
 import shutil
 import tempfile
 import time
+
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F600-\U0001FAFF"  # emoticons, symbols, pictographs, transport, maps
+    "\U00002702-\U000027B0"  # dingbats
+    "\U0000FE00-\U0000FE0F"  # variation selectors
+    "\U0000200D"              # zero width joiner
+    "\U000020E3"              # combining enclosing keycap
+    "\U00002600-\U000026FF"  # misc symbols
+    "\U0000231A-\U0000231B"  # watch, hourglass
+    "\U00002934-\U00002935"  # arrows
+    "\U000025AA-\U000025AB"  # squares
+    "\U000025FB-\U000025FE"  # squares
+    "\U00003030\U0000303D"   # wavy dash, part alternation mark
+    "\U00003297\U00003299"   # circled ideograph
+    "]+"
+)
 
 _PLAYLIST_REPEATS = 50
 
@@ -140,24 +158,11 @@ class StreamManager:
             self._temp_dir = None
 
     async def _resolve_font(self) -> str:
-        """Return best single font path for maximum Unicode coverage."""
-        # Priority: NotoSans-Regular has broad coverage for most Unicode blocks
-        # Symbols2 is good for emoji/math but may miss some script characters
-        candidates = [
-            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        ]
-        for path in candidates:
-            if os.path.exists(path):
-                print(f"[radio] Using font: {path}")
-                return path
-        # Fallback: find any Noto font
-        for root, _dirs, files in os.walk("/usr/share/fonts"):
-            for f in files:
-                if "NotoSans" in f and f.endswith((".ttf", ".ttc")):
-                    return os.path.join(root, f)
-        return "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+        """Return font family name for fontconfig-based rendering."""
+        # Use fontconfig (font= instead of fontfile=) for automatic
+        # per-character fallback across all installed Noto fonts
+        print("[radio] Using fontconfig: font='Noto Sans'")
+        return "Noto Sans"
 
     def _build_concat_file(self) -> str:
         path = os.path.join(self._temp_dir, "playlist.txt")
@@ -174,6 +179,7 @@ class StreamManager:
 
     def _write_overlay(self, song: dict):
         text = f"{song['title']}  \u2014  {song['artist']}"
+        text = _EMOJI_RE.sub("", text).strip()
         try:
             with open(self._overlay_path, "w", encoding="utf-8") as fh:
                 fh.write(text)
@@ -199,10 +205,10 @@ class StreamManager:
 
         # Explicit mapping: video from background (input 0), audio from concat (input 1)
         # This ignores embedded cover art in MP3 files that concat picks up
-        # Single font with maximum Unicode coverage
+        # Use fontconfig for automatic fallback across all Noto fonts
         font = self._font_path
         overlay = (
-            f"drawtext=fontfile='{font}'"
+            f"drawtext=font='{font}'"
             f":textfile='{self._overlay_path}'"
             f":reload=1"
             f":fontsize=28:fontcolor=white"
