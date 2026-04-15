@@ -44,6 +44,59 @@ def _normalize_text(text: str) -> str:
     return text.strip()
 
 
+class TwitchChat:
+    """Minimal async Twitch IRC client for posting chat messages."""
+
+    def __init__(self, oauth_token: str, channel: str):
+        self._token = oauth_token if oauth_token.startswith("oauth:") else f"oauth:{oauth_token}"
+        self._channel = channel.lower().lstrip("#")
+        self._reader = None
+        self._writer = None
+        self._connected = False
+
+    async def connect(self):
+        try:
+            self._reader, self._writer = await asyncio.open_connection(
+                "irc.chat.twitch.tv", 6667,
+            )
+            self._writer.write(f"PASS {self._token}\r\n".encode())
+            self._writer.write(f"NICK justinfan{random.randint(10000,99999)}\r\n".encode())
+            await self._writer.drain()
+            # Wait for welcome, then auth with real token for sending
+            self._writer.write(f"PASS {self._token}\r\n".encode())
+            self._writer.write(f"NICK bot\r\n".encode())
+            await self._writer.drain()
+            self._writer.write(f"JOIN #{self._channel}\r\n".encode())
+            await self._writer.drain()
+            self._connected = True
+            print(f"[radio] Twitch chat connected to #{self._channel}")
+        except Exception as e:
+            print(f"[radio] Twitch chat connect error: {e}")
+            self._connected = False
+
+    async def send(self, message: str):
+        if not self._connected or not self._writer:
+            return
+        try:
+            self._writer.write(f"PRIVMSG #{self._channel} :{message}\r\n".encode())
+            await self._writer.drain()
+        except Exception as e:
+            print(f"[radio] Twitch chat send error: {e}")
+            self._connected = False
+
+    async def disconnect(self):
+        self._connected = False
+        if self._writer:
+            try:
+                self._writer.close()
+                await self._writer.wait_closed()
+            except Exception:
+                pass
+            self._writer = None
+            self._reader = None
+        print("[radio] Twitch chat disconnected")
+
+
 class StreamManager:
     def __init__(self, db, radio_dir: str):
         self.db = db
@@ -62,6 +115,7 @@ class StreamManager:
         self._lyrics_path = None
         self._lyrics_cache = {}  # {song_id: [lines]}
         self._concat_start = 0
+        self._twitch_chat = None
 
     async def get_status(self) -> dict:
         return {
@@ -93,6 +147,12 @@ class StreamManager:
         self._lyrics_path = os.path.join(self._temp_dir, "lyrics.txt")
         with open(self._lyrics_path, "w", encoding="utf-8") as f:
             f.write(" ")
+        # Connect to Twitch chat if configured
+        chat_token = await self.db.get_setting("radio_twitch_chat_token")
+        chat_channel = await self.db.get_setting("radio_twitch_chat_channel")
+        if chat_token and chat_channel:
+            self._twitch_chat = TwitchChat(chat_token, chat_channel)
+            await self._twitch_chat.connect()
         self.is_running = True
         self.current_index = 0
         await self._launch()
@@ -102,6 +162,9 @@ class StreamManager:
         self.is_running = False
         await self._teardown()
         self._cleanup_temp()
+        if self._twitch_chat:
+            await self._twitch_chat.disconnect()
+            self._twitch_chat = None
         self.current_song = None
         return await self.get_status()
 
@@ -273,6 +336,8 @@ class StreamManager:
 
         # Explicit mapping: video from background (input 0), audio from concat (input 1)
         # This ignores embedded cover art in MP3 files that concat picks up
+        cmd += ["-map", "0:v:0", "-map", "1:a:0"]
+
         # Use fontconfig for automatic fallback across all Noto fonts
         font = self._font_path
         now_playing = (
@@ -341,6 +406,13 @@ class StreamManager:
                     self.current_index = (self._concat_start + song_i) % n
                     self._write_overlay(actual)
                     print(f"[radio] Now playing: {actual['title']} by {actual['artist']}")
+                    # Post to Twitch chat
+                    if self._twitch_chat:
+                        suno_url = actual.get("suno_url", "")
+                        chat_msg = f"\U0001F3B5 Now Playing: {actual['title']} — {actual['artist']}"
+                        if suno_url:
+                            chat_msg += f" | {suno_url}"
+                        await self._twitch_chat.send(chat_msg)
                     # Scrape lyrics async for this song
                     song_id = actual["id"]
                     if song_id not in self._lyrics_cache:

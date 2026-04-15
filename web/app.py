@@ -1624,6 +1624,8 @@ def create_app(db: Database, bot=None) -> Quart:
                 shuffle = "1" if form.get("shuffle") else "0"
                 post_ch1 = form.get("post_channel_1_id", "").strip()
                 post_ch2 = form.get("post_channel_2_id", "").strip()
+                chat_token = form.get("twitch_chat_token", "").strip()
+                chat_channel = form.get("twitch_chat_channel", "").strip()
 
                 # Only update key if not masked placeholder
                 if twitch_key and not twitch_key.startswith("****"):
@@ -1634,6 +1636,10 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.set_setting("radio_shuffle", shuffle)
                 await db.set_setting("radio_post_channel_1_id", post_ch1)
                 await db.set_setting("radio_post_channel_2_id", post_ch2)
+                if chat_token and not chat_token.startswith("****"):
+                    await db.set_setting("radio_twitch_chat_token", chat_token)
+                if chat_channel:
+                    await db.set_setting("radio_twitch_chat_channel", chat_channel)
 
                 # Background upload
                 files = await request.files
@@ -1720,6 +1726,9 @@ def create_app(db: Database, bot=None) -> Quart:
 
         post_channel_1_id = await db.get_setting("radio_post_channel_1_id") or ""
         post_channel_2_id = await db.get_setting("radio_post_channel_2_id") or ""
+        chat_token = await db.get_setting("radio_twitch_chat_token") or ""
+        masked_chat_token = f"****{chat_token[-4:]}" if len(chat_token) > 4 else ""
+        chat_channel = await db.get_setting("radio_twitch_chat_channel") or ""
 
         return await render_template(
             "radio.html",
@@ -1729,6 +1738,8 @@ def create_app(db: Database, bot=None) -> Quart:
             post_channel_1_id=post_channel_1_id,
             post_channel_2_id=post_channel_2_id,
             shuffle=shuffle,
+            masked_chat_token=masked_chat_token,
+            chat_channel=chat_channel,
         )
 
     @app.route("/radio/files/<filename>")

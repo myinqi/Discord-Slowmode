@@ -49,6 +49,19 @@
                         {% endif %}
                     </div>
                     <div class="space-y-2 pt-2 border-t border-gray-700/50">
+                        <label class="block text-gray-400 text-xs mb-1">Twitch Chat OAuth Token</label>
+                        <input type="password" name="twitch_chat_token" value="{{ masked_chat_token }}"
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none"
+                            placeholder="oauth:xxxxxxxxxx">
+                        <p class="text-gray-500 text-xs mt-1">From <a href="https://twitchtokengenerator.com" target="_blank" class="text-discord-blurple hover:underline">twitchtokengenerator.com</a> — posts Now Playing to chat</p>
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">Twitch Chat Channel</label>
+                        <input type="text" name="twitch_chat_channel" value="{{ chat_channel }}"
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none"
+                            placeholder="yourchannel">
+                    </div>
+                    <div class="space-y-2 pt-2 border-t border-gray-700/50">
                         <label class="block text-gray-400 text-xs">Discord Channel 1 (for posts)</label>
                         <select name="post_channel_1_id"
                             class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
