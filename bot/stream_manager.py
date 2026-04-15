@@ -247,6 +247,8 @@ class StreamManager:
             *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
         )
         self._start_time = time.monotonic()
+        self._restart_delay = 5
+        self._restart_retries = 0
         self._tasks = [
             asyncio.create_task(self._track_now_playing()),
             asyncio.create_task(self._monitor_process()),
@@ -495,9 +497,18 @@ class StreamManager:
             if self.is_running:
                 print(f"[radio] Encoder exited (code {code})")
                 self._process = None
-                await asyncio.sleep(3)
+                # Exponential backoff for restarts
+                delay = getattr(self, "_restart_delay", 5)
+                retries = getattr(self, "_restart_retries", 0)
+                if retries >= 10:
+                    print("[radio] Too many restart attempts (10), giving up. Use admin panel to restart.")
+                    self.is_running = False
+                    return
+                self._restart_retries = retries + 1
+                print(f"[radio] Restarting encoder in {delay}s (attempt {self._restart_retries}/10)...")
+                await asyncio.sleep(delay)
+                self._restart_delay = min(delay * 2, 60)  # max 60s
                 if self.is_running:
-                    print("[radio] Restarting encoder...")
                     await self._launch()
         except asyncio.CancelledError:
             pass
