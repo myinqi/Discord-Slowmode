@@ -170,13 +170,13 @@ class StreamManager:
         if bg_filename and os.path.exists(os.path.join(self.radio_dir, bg_filename)):
             bg_path = os.path.join(self.radio_dir, bg_filename)
             if bg_type == "video":
-                cmd += ["-stream_loop", "-1", "-i", bg_path]
+                cmd += ["-stream_loop", "-1", "-re", "-i", bg_path]
             else:
-                cmd += ["-loop", "1", "-i", bg_path]
+                cmd += ["-loop", "1", "-re", "-i", bg_path]
         else:
             cmd += ["-f", "lavfi", "-i", "color=c=black:s=1920x1080:r=30"]
 
-        cmd += ["-re", "-f", "concat", "-safe", "0", "-i", playlist_path]
+        cmd += ["-f", "concat", "-safe", "0", "-i", playlist_path]
 
         font = self._font_path
         overlay = (
