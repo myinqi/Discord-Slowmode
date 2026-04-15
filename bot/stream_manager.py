@@ -25,7 +25,7 @@ class StreamManager:
         self.current_song = None
         self.playlist = []
         self._temp_dir = None
-        self._font_path = None
+        self._fonts = []
         self._start_time = None
         self._twitch_key = None
         self._overlay_path = None
@@ -55,7 +55,7 @@ class StreamManager:
         shuffle = (await self.db.get_setting("radio_shuffle") or "0") == "1"
         if shuffle:
             random.shuffle(self.playlist)
-        self._font_path = await self._resolve_font()
+        self._fonts = await self._resolve_fonts()
         self._temp_dir = tempfile.mkdtemp(prefix="radio_")
         self._overlay_path = os.path.join(self._temp_dir, "nowplaying.txt")
         self.is_running = True
@@ -139,25 +139,31 @@ class StreamManager:
             shutil.rmtree(self._temp_dir, ignore_errors=True)
             self._temp_dir = None
 
-    async def _resolve_font(self) -> str:
-        # Priority order: try fonts with best Unicode coverage for math/special symbols
+    async def _resolve_fonts(self) -> list:
+        """Return list of font paths for fallback chain."""
         candidates = [
             "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSansSymbols-Regular.ttf",
             "/usr/share/fonts/truetype/noto/NotoSansMath-Regular.ttf",
-            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
             "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf",
         ]
+        found = []
         for path in candidates:
             if os.path.exists(path):
-                print(f"[radio] Using font: {path}")
-                return path
-        # Fallback: find any Noto font
-        for root, _dirs, files in os.walk("/usr/share/fonts"):
-            for f in files:
-                if "NotoSans" in f and f.endswith((".ttf", ".ttc", ".otf")):
-                    return os.path.join(root, f)
-        return "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+                found.append(path)
+        if not found:
+            for root, _dirs, files in os.walk("/usr/share/fonts"):
+                for f in files:
+                    if "NotoSans" in f and f.endswith((".ttf", ".ttc", ".otf")):
+                        found.append(os.path.join(root, f))
+                        break
+                if found:
+                    break
+        if not found:
+            found = ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+        print(f"[radio] Font chain: {found}")
+        return found
 
     def _build_concat_file(self) -> str:
         path = os.path.join(self._temp_dir, "playlist.txt")
@@ -199,11 +205,10 @@ class StreamManager:
 
         # Explicit mapping: video from background (input 0), audio from concat (input 1)
         # This ignores embedded cover art in MP3 files that concat picks up
-        cmd += ["-map", "0:v:0", "-map", "1:a:0"]
-
-        font = self._font_path
+        # Build font chain for drawtext - multiple fonts as fallback
+        font_params = ":".join(f"fontfile='{f}'" for f in self._fonts[:3])  # Max 3 fonts to avoid command too long
         overlay = (
-            f"drawtext=fontfile='{font}'"
+            f"drawtext={font_params}"
             f":textfile='{self._overlay_path}'"
             f":reload=1"
             f":fontsize=28:fontcolor=white"
