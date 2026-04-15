@@ -1680,12 +1680,12 @@ def create_app(db: Database, bot=None) -> Quart:
                         await flash(f"Stream link posted to #{channel.name}.", "success")
 
             elif action == "save_post_channels":
-                upload_ch = form.get("upload_channel_id", "").strip()
-                stream_ch = form.get("stream_channel_id", "").strip()
-                if upload_ch:
-                    await db.set_setting("radio_post_upload_channel_id", upload_ch)
-                if stream_ch:
-                    await db.set_setting("radio_post_stream_channel_id", stream_ch)
+                ch1 = form.get("channel_1_id", "").strip()
+                ch2 = form.get("channel_2_id", "").strip()
+                if ch1:
+                    await db.set_setting("radio_post_channel_1_id", ch1)
+                if ch2:
+                    await db.set_setting("radio_post_channel_2_id", ch2)
                 from quart import jsonify
                 return jsonify({"ok": True})
 
@@ -1707,16 +1707,16 @@ def create_app(db: Database, bot=None) -> Quart:
             for ch in sorted(guild.text_channels, key=lambda c: c.position):
                 text_channels.append({"id": ch.id, "name": ch.name})
 
-        post_upload_channel_id = await db.get_setting("radio_post_upload_channel_id") or ""
-        post_stream_channel_id = await db.get_setting("radio_post_stream_channel_id") or ""
+        post_channel_1_id = await db.get_setting("radio_post_channel_1_id") or ""
+        post_channel_2_id = await db.get_setting("radio_post_channel_2_id") or ""
 
         return await render_template(
             "radio.html",
             songs=songs, masked_key=masked_key, stream_url=stream_url,
             upload_enabled=upload_enabled, bg_filename=bg_filename, bg_type=bg_type,
             text_channels=text_channels,
-            post_upload_channel_id=post_upload_channel_id,
-            post_stream_channel_id=post_stream_channel_id,
+            post_channel_1_id=post_channel_1_id,
+            post_channel_2_id=post_channel_2_id,
             shuffle=shuffle,
         )
 
