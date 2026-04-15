@@ -1570,6 +1570,13 @@ def create_app(db: Database, bot=None) -> Quart:
                 return redirect(url_for("radio_upload"))
             artist = artist or "Unknown Artist"
 
+            # Artist limit: max 3 active songs per artist
+            artist_count = await db.count_active_radio_songs_by_artist(artist)
+            if artist_count >= 3:
+                os.remove(filepath)
+                await flash(f"Artist '{artist}' already has {artist_count} songs in the playlist (max 3).", "error")
+                return redirect(url_for("radio_upload"))
+
             # Generate rights hash
             rights_hash = hashlib.sha256(
                 f"{RIGHTS_DECLARATION_TEXT}|{time.time()}|{client_ip}|{original_filename}|{suno_url}".encode()

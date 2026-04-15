@@ -1448,3 +1448,11 @@ class Database:
             (ip, since),
         ) as cursor:
             return (await cursor.fetchone())[0]
+
+    async def count_active_radio_songs_by_artist(self, artist: str) -> int:
+        """Count active radio songs for a given artist (case-insensitive)."""
+        async with self.db.execute(
+            "SELECT COUNT(*) FROM radio_songs WHERE active = 1 AND LOWER(artist) = LOWER(?)",
+            (artist,),
+        ) as cursor:
+            return (await cursor.fetchone())[0]
