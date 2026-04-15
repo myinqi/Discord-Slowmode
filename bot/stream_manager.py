@@ -502,11 +502,11 @@ class StreamManager:
         if not self._process:
             return
         try:
-            # Stream stderr line by line for real-time logging
+            # Read stderr in chunks (ffmpeg uses \r for progress, not \n)
             while True:
                 try:
-                    line = await asyncio.wait_for(
-                        self._process.stderr.readline(), timeout=60,
+                    data = await asyncio.wait_for(
+                        self._process.stderr.read(4096), timeout=60,
                     )
                 except asyncio.TimeoutError:
                     # ffmpeg hung (likely RTMP connection lost)
@@ -516,11 +516,14 @@ class StreamManager:
                     except Exception:
                         pass
                     break
-                if not line:
+                if not data:
                     break
-                text = line.decode(errors="replace").rstrip()
-                if text:
-                    print(f"[radio/ffmpeg] {text}")
+                text = data.decode(errors="replace")
+                # Log only lines with actual content, skip noisy progress
+                for line in text.replace("\r", "\n").splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("frame="):
+                        print(f"[radio/ffmpeg] {line}")
             code = await self._process.wait()
             if self.is_running:
                 print(f"[radio] Encoder exited (code {code})")
