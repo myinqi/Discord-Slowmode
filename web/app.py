@@ -1562,6 +1562,24 @@ def create_app(db: Database, bot=None) -> Quart:
                 await flash(result["error"], "error")
                 return redirect(url_for("radio_upload"))
 
+            # Strip cover art / non-audio streams to prevent concat stalls
+            stripped_path = filepath + ".stripped.mp3"
+            try:
+                strip_proc = await asyncio.create_subprocess_exec(
+                    "ffmpeg", "-y", "-i", filepath, "-vn", "-acodec", "copy", stripped_path,
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                )
+                await strip_proc.communicate()
+                if strip_proc.returncode == 0 and os.path.exists(stripped_path):
+                    os.replace(stripped_path, filepath)
+                else:
+                    # If stripping fails, keep the original
+                    if os.path.exists(stripped_path):
+                        os.remove(stripped_path)
+            except Exception:
+                if os.path.exists(stripped_path):
+                    os.remove(stripped_path)
+
             # Fetch Suno metadata
             title, artist, _ = await _fetch_suno_info(suno_url)
             if not title:
