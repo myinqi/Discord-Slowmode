@@ -94,7 +94,15 @@ class StreamManager:
         self._write_overlay(self.current_song)
         playlist_path = self._build_concat_file()
         cmd = await self._build_cmd(playlist_path)
+        # Debug: log command and playlist
         print(f"[radio] Starting encoder (song {self.current_index + 1}/{len(self.playlist)})")
+        print(f"[radio] CMD: {' '.join(cmd[:12])} ...")
+        try:
+            with open(playlist_path) as pf:
+                lines = pf.readlines()[:5]
+                print(f"[radio] Concat file ({len(open(playlist_path).readlines())} lines): {lines}")
+        except Exception as e:
+            print(f"[radio] Could not read concat file: {e}")
         self._process = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
         )
@@ -245,15 +253,17 @@ class StreamManager:
         if not self._process:
             return
         try:
-            stderr_data = await self._process.stderr.read()
-            code = self._process.returncode
-            if code is None:
-                code = await self._process.wait()
+            # Stream stderr line by line for real-time logging
+            while True:
+                line = await self._process.stderr.readline()
+                if not line:
+                    break
+                text = line.decode(errors="replace").rstrip()
+                if text:
+                    print(f"[radio/ffmpeg] {text}")
+            code = await self._process.wait()
             if self.is_running:
-                err = stderr_data.decode(errors="replace")[-800:] if stderr_data else ""
                 print(f"[radio] Encoder exited (code {code})")
-                if err:
-                    print(f"[radio] stderr: {err}")
                 self._process = None
                 await asyncio.sleep(3)
                 if self.is_running:
