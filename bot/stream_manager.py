@@ -246,6 +246,11 @@ class StreamManager:
     # ------------------------------------------------------------------ #
 
     async def _launch(self):
+        # Cancel any leftover tasks from a previous launch (e.g. restart from monitor)
+        for t in getattr(self, "_tasks", []):
+            if not t.done():
+                t.cancel()
+        self._tasks = []
         self._concat_start = self.current_index
         self.current_song = self.playlist[self.current_index]
         self._write_overlay(self.current_song)
@@ -462,8 +467,11 @@ class StreamManager:
                         song_i = i
                         break
                 actual = ordered[song_i]
-                if self.current_song is None or self.current_song["id"] != actual["id"]:
+                now = time.monotonic()
+                last_change = getattr(self, "_last_song_change", 0.0)
+                if (self.current_song is None or self.current_song["id"] != actual["id"]) and (now - last_change) > 30:
                     self.current_song = actual
+                    self._last_song_change = now
                     self.current_index = (self._concat_start + song_i) % n
                     self._write_overlay(actual)
                     print(f"[radio] Now playing: {actual['title']} by {actual['artist']}")
