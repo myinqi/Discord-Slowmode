@@ -140,13 +140,24 @@ class StreamManager:
             self._temp_dir = None
 
     async def _resolve_font(self) -> str:
-        path = "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"
-        if not os.path.exists(path):
-            for root, _dirs, files in os.walk("/usr/share/fonts"):
-                for f in files:
-                    if "NotoSans" in f and f.endswith(".ttf"):
-                        return os.path.join(root, f)
-        return path
+        # Priority order: try fonts with best Unicode coverage for math/special symbols
+        candidates = [
+            "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSansMath-Regular.ttf",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf",
+        ]
+        for path in candidates:
+            if os.path.exists(path):
+                print(f"[radio] Using font: {path}")
+                return path
+        # Fallback: find any Noto font
+        for root, _dirs, files in os.walk("/usr/share/fonts"):
+            for f in files:
+                if "NotoSans" in f and f.endswith((".ttf", ".ttc", ".otf")):
+                    return os.path.join(root, f)
+        return "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
     def _build_concat_file(self) -> str:
         path = os.path.join(self._temp_dir, "playlist.txt")

@@ -1615,6 +1615,8 @@ def create_app(db: Database, bot=None) -> Quart:
                 stream_url = form.get("stream_url", "").strip()
                 upload_enabled = "1" if form.get("upload_enabled") else "0"
                 shuffle = "1" if form.get("shuffle") else "0"
+                post_ch1 = form.get("post_channel_1_id", "").strip()
+                post_ch2 = form.get("post_channel_2_id", "").strip()
 
                 # Only update key if not masked placeholder
                 if twitch_key and not twitch_key.startswith("****"):
@@ -1623,6 +1625,8 @@ def create_app(db: Database, bot=None) -> Quart:
                     await db.set_setting("radio_stream_url", stream_url)
                 await db.set_setting("radio_upload_enabled", upload_enabled)
                 await db.set_setting("radio_shuffle", shuffle)
+                await db.set_setting("radio_post_channel_1_id", post_ch1)
+                await db.set_setting("radio_post_channel_2_id", post_ch2)
 
                 # Background upload
                 files = await request.files
