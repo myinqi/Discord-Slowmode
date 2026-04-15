@@ -141,11 +141,12 @@ class StreamManager:
 
     async def _resolve_font(self) -> str:
         """Return best single font path for maximum Unicode coverage."""
-        # Priority: Symbols2 has the widest Unicode coverage including math, symbols, emoji
+        # Priority: NotoSans-Regular has broad coverage for most Unicode blocks
+        # Symbols2 is good for emoji/math but may miss some script characters
         candidates = [
+            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
             "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
             "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
         ]
         for path in candidates:
             if os.path.exists(path):
