@@ -232,6 +232,36 @@ function updateStatus(data) {
     }
 }
 
+// Sync channel dropdowns with hidden form inputs
+const uploadSelect = document.getElementById('upload-channel-select');
+const streamSelect = document.getElementById('stream-channel-select');
+const uploadInput = document.getElementById('upload-ch-input');
+const streamInput = document.getElementById('stream-ch-input');
+
+if (uploadSelect && uploadInput) {
+    uploadSelect.addEventListener('change', () => {
+        uploadInput.value = uploadSelect.value;
+        // Save preference
+        fetch('/radio', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'action=save_post_channels&upload_channel_id=' + encodeURIComponent(uploadSelect.value)
+        });
+    });
+}
+
+if (streamSelect && streamInput) {
+    streamSelect.addEventListener('change', () => {
+        streamInput.value = streamSelect.value;
+        // Save preference
+        fetch('/radio', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'action=save_post_channels&stream_channel_id=' + encodeURIComponent(streamSelect.value)
+        });
+    });
+}
+
 // Poll status every 5 seconds
 async function pollStatus() {
     try {

@@ -1615,7 +1615,6 @@ def create_app(db: Database, bot=None) -> Quart:
                 stream_url = form.get("stream_url", "").strip()
                 upload_enabled = "1" if form.get("upload_enabled") else "0"
                 shuffle = "1" if form.get("shuffle") else "0"
-                post_channel_id = form.get("post_channel_id", "").strip()
 
                 # Only update key if not masked placeholder
                 if twitch_key and not twitch_key.startswith("****"):
@@ -1624,8 +1623,6 @@ def create_app(db: Database, bot=None) -> Quart:
                     await db.set_setting("radio_stream_url", stream_url)
                 await db.set_setting("radio_upload_enabled", upload_enabled)
                 await db.set_setting("radio_shuffle", shuffle)
-                if post_channel_id:
-                    await db.set_setting("radio_post_channel_id", post_channel_id)
 
                 # Background upload
                 files = await request.files
@@ -1682,10 +1679,13 @@ def create_app(db: Database, bot=None) -> Quart:
                         await channel.send(embed=embed)
                         await flash(f"Stream link posted to #{channel.name}.", "success")
 
-            elif action == "save_post_channel":
-                ch_id = form.get("post_channel_id", "").strip()
-                if ch_id:
-                    await db.set_setting("radio_post_channel_id", ch_id)
+            elif action == "save_post_channels":
+                upload_ch = form.get("upload_channel_id", "").strip()
+                stream_ch = form.get("stream_channel_id", "").strip()
+                if upload_ch:
+                    await db.set_setting("radio_post_upload_channel_id", upload_ch)
+                if stream_ch:
+                    await db.set_setting("radio_post_stream_channel_id", stream_ch)
                 from quart import jsonify
                 return jsonify({"ok": True})
 
@@ -1707,13 +1707,16 @@ def create_app(db: Database, bot=None) -> Quart:
             for ch in sorted(guild.text_channels, key=lambda c: c.position):
                 text_channels.append({"id": ch.id, "name": ch.name})
 
-        post_channel_id = await db.get_setting("radio_post_channel_id") or ""
+        post_upload_channel_id = await db.get_setting("radio_post_upload_channel_id") or ""
+        post_stream_channel_id = await db.get_setting("radio_post_stream_channel_id") or ""
 
         return await render_template(
             "radio.html",
             songs=songs, masked_key=masked_key, stream_url=stream_url,
             upload_enabled=upload_enabled, bg_filename=bg_filename, bg_type=bg_type,
-            text_channels=text_channels, post_channel_id=post_channel_id,
+            text_channels=text_channels,
+            post_upload_channel_id=post_upload_channel_id,
+            post_stream_channel_id=post_stream_channel_id,
             shuffle=shuffle,
         )
 
