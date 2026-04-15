@@ -11,7 +11,7 @@ import shutil
 import tempfile
 import time
 
-_PLAYLIST_REPEATS = 200
+_PLAYLIST_REPEATS = 50
 
 
 class StreamManager:
@@ -185,6 +185,10 @@ class StreamManager:
             cmd += ["-f", "lavfi", "-i", "color=c=black:s=1920x1080:r=30"]
 
         cmd += ["-f", "concat", "-safe", "0", "-i", playlist_path]
+
+        # Explicit mapping: video from background (input 0), audio from concat (input 1)
+        # This ignores embedded cover art in MP3 files that concat picks up
+        cmd += ["-map", "0:v:0", "-map", "1:a:0"]
 
         font = self._font_path
         overlay = (
