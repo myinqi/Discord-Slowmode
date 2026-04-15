@@ -95,26 +95,40 @@
             <div class="px-5 py-4 border-b border-gray-700/50">
                 <h3 class="text-white font-semibold">Post to Discord</h3>
             </div>
-            <div class="p-5 space-y-3">
-                <select id="post-channel-select"
-                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
-                    <option value="">Select channel...</option>
-                    {% for ch in text_channels %}
-                    <option value="{{ ch.id }}" {% if ch.id|string == post_channel_id %}selected{% endif %}>#{{ ch.name }}</option>
-                    {% endfor %}
-                </select>
-                <div class="grid grid-cols-2 gap-2">
-                    <form method="POST">
+            <div class="p-5 space-y-4">
+                <!-- Upload Link Channel -->
+                <div class="space-y-2">
+                    <label class="text-gray-400 text-xs">Channel for Upload Link</label>
+                    <select id="upload-channel-select" name="post_upload_channel_id"
+                        class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                        <option value="">Select channel...</option>
+                        {% for ch in text_channels %}
+                        <option value="{{ ch.id }}" {% if ch.id|string == post_upload_channel_id %}selected{% endif %}>#{{ ch.name }}</option>
+                        {% endfor %}
+                    </select>
+                    <form method="POST" class="mt-2">
                         <input type="hidden" name="action" value="post_upload_url">
-                        <input type="hidden" name="post_channel_id_select" value="" class="post-ch-input">
+                        <input type="hidden" name="post_channel_id_select" id="upload-ch-input" value="{{ post_upload_channel_id }}">
                         <button type="submit"
                             class="w-full px-3 py-2 bg-green-600/20 hover:bg-green-600/40 text-green-400 rounded-lg text-xs font-medium transition-colors">
                             🎵 Post Upload Link
                         </button>
                     </form>
-                    <form method="POST">
+                </div>
+
+                <!-- Stream Link Channel -->
+                <div class="space-y-2">
+                    <label class="text-gray-400 text-xs">Channel for Stream Link</label>
+                    <select id="stream-channel-select" name="post_stream_channel_id"
+                        class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                        <option value="">Select channel...</option>
+                        {% for ch in text_channels %}
+                        <option value="{{ ch.id }}" {% if ch.id|string == post_stream_channel_id %}selected{% endif %}>#{{ ch.name }}</option>
+                        {% endfor %}
+                    </select>
+                    <form method="POST" class="mt-2">
                         <input type="hidden" name="action" value="post_stream_url">
-                        <input type="hidden" name="post_channel_id_select" value="" class="post-ch-input">
+                        <input type="hidden" name="post_channel_id_select" id="stream-ch-input" value="{{ post_stream_channel_id }}">
                         <button type="submit"
                             class="w-full px-3 py-2 bg-purple-600/20 hover:bg-purple-600/40 text-purple-400 rounded-lg text-xs font-medium transition-colors">
                             📺 Post Stream Link
