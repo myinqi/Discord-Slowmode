@@ -53,6 +53,7 @@ class TwitchChat:
         self._reader = None
         self._writer = None
         self._connected = False
+        self._keepalive_task = None
 
     async def connect(self):
         try:
@@ -60,32 +61,73 @@ class TwitchChat:
                 "irc.chat.twitch.tv", 6667,
             )
             self._writer.write(f"PASS {self._token}\r\n".encode())
-            self._writer.write(f"NICK justinfan{random.randint(10000,99999)}\r\n".encode())
-            await self._writer.drain()
-            # Wait for welcome, then auth with real token for sending
-            self._writer.write(f"PASS {self._token}\r\n".encode())
             self._writer.write(f"NICK bot\r\n".encode())
             await self._writer.drain()
+            # Wait for server welcome or auth failure
+            authed = False
+            for _ in range(30):  # read up to 30 lines
+                line = await asyncio.wait_for(self._reader.readline(), timeout=5)
+                msg = line.decode(errors="replace").strip()
+                if not msg:
+                    continue
+                if "Welcome" in msg or "001" in msg:
+                    authed = True
+                    break
+                if "Login authentication failed" in msg:
+                    print(f"[radio] Twitch chat auth FAILED: {msg}")
+                    self._connected = False
+                    return
+            if not authed:
+                print("[radio] Twitch chat: no welcome received, auth may have failed")
             self._writer.write(f"JOIN #{self._channel}\r\n".encode())
             await self._writer.drain()
             self._connected = True
-            print(f"[radio] Twitch chat connected to #{self._channel}")
+            self._keepalive_task = asyncio.create_task(self._keepalive())
+            print(f"[radio] Twitch chat connected and authenticated to #{self._channel}")
         except Exception as e:
             print(f"[radio] Twitch chat connect error: {e}")
             self._connected = False
 
+    async def _keepalive(self):
+        """Read server messages and respond to PINGs to keep connection alive."""
+        try:
+            while self._connected and self._reader:
+                line = await asyncio.wait_for(self._reader.readline(), timeout=300)
+                msg = line.decode(errors="replace").strip()
+                if msg.startswith("PING"):
+                    pong = msg.replace("PING", "PONG", 1)
+                    self._writer.write(f"{pong}\r\n".encode())
+                    await self._writer.drain()
+        except asyncio.TimeoutError:
+            print("[radio] Twitch chat keepalive timeout")
+            self._connected = False
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            print(f"[radio] Twitch chat keepalive error: {e}")
+            self._connected = False
+
     async def send(self, message: str):
         if not self._connected or not self._writer:
+            print("[radio] Twitch chat: not connected, skipping message")
             return
         try:
             self._writer.write(f"PRIVMSG #{self._channel} :{message}\r\n".encode())
             await self._writer.drain()
+            print(f"[radio] Twitch chat sent: {message[:80]}")
         except Exception as e:
             print(f"[radio] Twitch chat send error: {e}")
             self._connected = False
 
     async def disconnect(self):
         self._connected = False
+        if self._keepalive_task:
+            self._keepalive_task.cancel()
+            try:
+                await self._keepalive_task
+            except Exception:
+                pass
+            self._keepalive_task = None
         if self._writer:
             try:
                 self._writer.close()
