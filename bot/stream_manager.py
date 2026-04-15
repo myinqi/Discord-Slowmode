@@ -141,9 +141,13 @@ class StreamManager:
 
     async def _resolve_fonts(self) -> list:
         """Return list of font paths for fallback chain."""
+        # Priority: symbols, math, then script-specific fonts for special characters
         candidates = [
             "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
             "/usr/share/fonts/truetype/noto/NotoSansSymbols-Regular.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSansJavanese-Regular.ttf",  # ꧁ etc
+            "/usr/share/fonts/truetype/noto/NotoSansTibetan-Regular.ttf",     # ༺ etc
+            "/usr/share/fonts/truetype/noto/NotoSansPhagsPa-Regular.ttf",     # Tibetan variants
             "/usr/share/fonts/truetype/noto/NotoSansMath-Regular.ttf",
             "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
             "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf",
@@ -152,18 +156,17 @@ class StreamManager:
         for path in candidates:
             if os.path.exists(path):
                 found.append(path)
-        if not found:
-            for root, _dirs, files in os.walk("/usr/share/fonts"):
-                for f in files:
-                    if "NotoSans" in f and f.endswith((".ttf", ".ttc", ".otf")):
-                        found.append(os.path.join(root, f))
-                        break
-                if found:
-                    break
+        # Add any other Noto fonts found on system
+        for root, _dirs, files in os.walk("/usr/share/fonts/truetype/noto"):
+            for f in files:
+                if f.startswith("Noto") and f.endswith("-Regular.ttf"):
+                    full = os.path.join(root, f)
+                    if full not in found:
+                        found.append(full)
         if not found:
             found = ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
-        print(f"[radio] Font chain: {found}")
-        return found
+        print(f"[radio] Font chain ({len(found)} fonts)")
+        return found[:5]  # Limit to 5 for command line length
 
     def _build_concat_file(self) -> str:
         path = os.path.join(self._temp_dir, "playlist.txt")
