@@ -11,6 +11,7 @@ import re
 import shutil
 import tempfile
 import time
+import unicodedata
 
 import aiohttp
 
@@ -33,7 +34,14 @@ _EMOJI_RE = re.compile(
 
 _PLAYLIST_REPEATS = 50
 _LYRICS_LINE_DURATION = 6  # seconds per lyrics line on screen
-_LYRICS_MAX_LINES = 4      # max lines shown at once
+_LYRICS_MAX_LINES = 8      # max lines shown at once
+
+
+def _normalize_text(text: str) -> str:
+    """Normalize fancy Unicode (mathematical bold etc.) to plain text and strip emoji."""
+    text = unicodedata.normalize("NFKC", text)
+    text = _EMOJI_RE.sub("", text)
+    return text.strip()
 
 
 class StreamManager:
@@ -191,7 +199,7 @@ class StreamManager:
                     # Split into lines, strip emoji, skip empty
                     lines = []
                     for line in raw.split("\n"):
-                        cleaned = _EMOJI_RE.sub("", line).strip()
+                        cleaned = _normalize_text(line)
                         if cleaned:
                             lines.append(cleaned)
                     print(f"[radio] Scraped {len(lines)} lyrics lines from {suno_url}")
@@ -239,7 +247,7 @@ class StreamManager:
 
     def _write_overlay(self, song: dict):
         text = f"{song['title']}  \u2014  {song['artist']}"
-        text = _EMOJI_RE.sub("", text).strip()
+        text = _normalize_text(text)
         try:
             with open(self._overlay_path, "w", encoding="utf-8") as fh:
                 fh.write(text)
