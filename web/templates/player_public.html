@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TrYa Suno Player</title>
+<link rel="icon" type="image/png" href="/static/Bot_icon_small.png">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,-apple-system,sans-serif;background:#111;color:#eee;min-height:100vh}
@@ -81,6 +82,7 @@ label.fl{font-size:11px;color:#555;display:block;margin-bottom:3px}
             <button class="player-btn" onclick="prev()">← Prev</button>
             <button class="player-btn" onclick="next()">Next →</button>
             <button class="player-btn" id="btnShuffle" onclick="toggleShuffle()">🔀 Shuffle</button>
+            <button class="player-btn" id="btnHidePlayed" onclick="toggleHidePlayed()">👁 Hide Played</button>
         </div>
         <div class="player-row">
             <span style="font-size:13px;color:#555">Auto-Next</span>
@@ -113,6 +115,7 @@ label.fl{font-size:11px;color:#555;display:block;margin-bottom:3px}
 
 <script>
 var T=[], cur=-1, tSec=0, cd=0, tick=null, shuffled=false, shuffleOrder=[];
+var playedSet=new Set(), hidePlayed=false;
 var player=document.getElementById('player');
 var API_BASE='/public';
 
@@ -222,7 +225,7 @@ function getPlayIndex(i){return shuffled&&shuffleOrder.length?shuffleOrder[i]:i;
 
 async function play(i){
     if(i<0||i>=T.length)return;
-    var realIdx=getPlayIndex(i);cur=i;var e=T[realIdx];
+    var realIdx=getPlayIndex(i);cur=i;playedSet.add(realIdx);var e=T[realIdx];
     document.getElementById('tinfo').textContent=e.title;
     document.getElementById('sub').textContent=(i+1)+' / '+T.length+(e.author?' · '+e.author:'')+(e.reactions?' · '+e.reactions+' reactions':'');
     showLyrics(null);renderQ();resetCd();
@@ -233,19 +236,22 @@ async function play(i){
 }
 
 player.addEventListener('ended',function(){next();});
-function prev(){if(cur>0)play(cur-1);}
-function next(){if(cur+1<T.length)play(cur+1);else stopCd();}
+function prev(){var i=cur-1;if(hidePlayed){while(i>=0&&playedSet.has(getPlayIndex(i)))i--;}if(i>=0)play(i);}
+function next(){var i=cur+1;if(hidePlayed){while(i<T.length&&playedSet.has(getPlayIndex(i)))i++;}if(i<T.length)play(i);else stopCd();}
 
 function toggleShuffle(){shuffled=!shuffled;document.getElementById('btnShuffle').classList.toggle('shuffle-active',shuffled);if(shuffled)buildShuffleOrder();renderQ();}
+function toggleHidePlayed(){hidePlayed=!hidePlayed;document.getElementById('btnHidePlayed').classList.toggle('shuffle-active',hidePlayed);renderQ();}
 function buildShuffleOrder(){shuffleOrder=[];for(var i=0;i<T.length;i++)shuffleOrder.push(i);for(var i=shuffleOrder.length-1;i>0;i--){var j=Math.floor(Math.random()*(i+1));var t=shuffleOrder[i];shuffleOrder[i]=shuffleOrder[j];shuffleOrder[j]=t;}}
 
 function resetCd(){stopCd();if(!tSec)return;cd=tSec;document.getElementById('cntd').textContent='→ '+fmt(cd);document.getElementById('prog').style.cssText='transition:none;width:0%';setTimeout(function(){document.getElementById('prog').style.cssText='transition:width '+tSec+'s linear;width:100%';},50);tick=setInterval(function(){cd--;document.getElementById('cntd').textContent='→ '+fmt(cd);if(cd<=0)next();},1000);}
 function stopCd(){clearInterval(tick);tick=null;document.getElementById('cntd').textContent='';document.getElementById('prog').style.cssText='width:0%';}
 
 function renderQ(){
-    var html='';
+    var html='',shown=0;
     for(var i=0;i<T.length;i++){
         var realIdx=getPlayIndex(i),t=T[realIdx];
+        if(hidePlayed&&i!==cur&&playedSet.has(realIdx))continue;
+        shown++;
         var url=t.isUUID?'https://suno.com/song/'+t.id:'https://suno.com/s/'+t.id;
         var rc=t.reactions?'<span class="rc">'+t.reactions+' ❤</span>':'';
         html+='<div class="qi'+(i===cur?' on':'')+'" onclick="play('+i+')">'
@@ -257,6 +263,7 @@ function renderQ(){
             +'</div>';
     }
     document.getElementById('queue').innerHTML=html;
+    document.getElementById('qcount').textContent='('+shown+(hidePlayed&&shown<T.length?' / '+T.length:'')+')';    
 }
 
 function saveSettings(){localStorage.setItem('pub-player-channel',document.getElementById('channelSel').value);localStorage.setItem('pub-player-limit',document.getElementById('limitInput').value);}
