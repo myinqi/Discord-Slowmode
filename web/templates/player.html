@@ -142,9 +142,46 @@ async function fetchSongs(){
         if(shuffled)buildShuffleOrder();
         renderQ();
         document.getElementById('btnPlay').disabled=T.length===0;
+        /* Resolve missing titles in background */
+        resolveAllTitles();
     }catch(e){
         ls.textContent='Error: '+e.message;
     }
+}
+
+/* --- Background batch title resolver --- */
+async function resolveAllTitles(){
+    var pending=[];
+    for(var i=0;i<T.length;i++){
+        if(needsTitle(T[i]))pending.push(i);
+    }
+    if(!pending.length)return;
+    var ls=document.getElementById('load-status');
+    var done=0;
+    /* Resolve in parallel batches of 3 to avoid hammering the server */
+    for(var b=0;b<pending.length;b+=3){
+        var batch=pending.slice(b,b+3);
+        await Promise.all(batch.map(async function(idx){
+            var e=T[idx];
+            var uuid=e.id;
+            /* If short ID, resolve to UUID first */
+            if(!e.isUUID){
+                var resolved=await resolveShortId(e.id);
+                if(resolved){uuid=resolved;e.id=resolved;e.isUUID=true;}
+                else return;
+            }
+            /* Fetch title from Suno */
+            var meta=await fetchSunoMeta(uuid);
+            if(meta&&meta.title){
+                e.title=meta.title;
+            }
+            done++;
+        }));
+        ls.textContent=T.length+' songs — resolving titles ('+done+'/'+pending.length+')';
+        renderQ();
+    }
+    ls.textContent=T.length+' songs ready';
+    renderQ();
 }
 
 /* --- Short URL resolver (server-side proxy) --- */
