@@ -1431,24 +1431,34 @@ class CommandsCog(commands.Cog):
 
     @app_commands.command(name="help", description="Show a list of all available commands")
     async def help_command(self, interaction: discord.Interaction):
+        has_admin = await self._has_command_permission(interaction)
+
         embed = discord.Embed(
             title="📖 Bot Commands",
-            description="Here are all the available slash commands:",
+            description="Here are the commands available to you:",
             color=discord.Color.blue(),
         )
 
-        # Cooldown Management
-        cooldown_cmds = (
-            "**`/cooldown-set #channel <minutes>`** — Set cooldown for a channel (0–2880 min)\n"
-            "**`/cooldown-info #channel`** — Show current cooldown configuration\n"
-            "**`/cooldown-reset @user [#channel]`** — Reset a user's cooldown\n"
-            "**`/cooldown-clear [#channel]`** — Clear all cooldowns in a channel\n"
-            "**`/cooldown-toggle #channel <true/false>`** — Enable/disable monitoring\n"
-            "**`/timer`** — Show your remaining cooldown timers"
-        )
-        embed.add_field(name="⏱️ Cooldown Management", value=cooldown_cmds, inline=False)
+        # Cooldown Management (Admin only)
+        if has_admin:
+            cooldown_cmds = (
+                "**`/cooldown-set #channel <minutes>`** — Set cooldown for a channel (0–2880 min)\n"
+                "**`/cooldown-info #channel`** — Show current cooldown configuration\n"
+                "**`/cooldown-reset @user [#channel]`** — Reset a user's cooldown\n"
+                "**`/cooldown-clear [#channel]`** — Clear all cooldowns in a channel\n"
+                "**`/cooldown-toggle #channel <true/false>`** — Enable/disable monitoring\n"
+                "**`/timer`** — Show your remaining cooldown timers"
+            )
+            embed.add_field(name="⏱️ Cooldown Management", value=cooldown_cmds, inline=False)
+        else:
+            # Non-admins only see timer
+            embed.add_field(
+                name="⏱️ Cooldown",
+                value="**`/timer`** — Show your remaining cooldown timers",
+                inline=False,
+            )
 
-        # Song Discovery & Stats
+        # Song Discovery & Stats (all users)
         song_cmds = (
             "**`/find-list <search>`** — Search Suno playlists by artist/user/keyword\n"
             "**`/find-song [@user] [title]`** — Find songs by user, title, or random\n"
@@ -1461,18 +1471,27 @@ class CommandsCog(commands.Cog):
         )
         embed.add_field(name="🎵 Song Discovery & Stats", value=song_cmds, inline=False)
 
-        # Listening Party
-        party_cmds = (
-            "**`/party-submit <url>`** — Submit a Suno song (max 2 per user)\n"
-            "**`/party-songs`** — View your submitted songs\n"
-            "**`/party-remove <id>`** — Remove one of your songs\n"
-            "**`/party-list`** — List all submitted songs\n"
-            "**`/party`** — Browse unheard songs in carousel mode\n"
-            "**`/party-reset`** — Reset the playlist (Admin/Mod only)"
-        )
+        # Listening Party (all users + admin reset)
+        if has_admin:
+            party_cmds = (
+                "**`/party-submit <url>`** — Submit a Suno song (max 2 per user)\n"
+                "**`/party-songs`** — View your submitted songs\n"
+                "**`/party-remove <id>`** — Remove one of your songs\n"
+                "**`/party-list`** — List all submitted songs\n"
+                "**`/party`** — Browse unheard songs in carousel mode\n"
+                "**`/party-reset`** — Reset the playlist (Admin/Mod only)"
+            )
+        else:
+            party_cmds = (
+                "**`/party-submit <url>`** — Submit a Suno song (max 2 per user)\n"
+                "**`/party-songs`** — View your submitted songs\n"
+                "**`/party-remove <id>`** — Remove one of your songs\n"
+                "**`/party-list`** — List all submitted songs\n"
+                "**`/party`** — Browse unheard songs in carousel mode"
+            )
         embed.add_field(name="🎉 Listening Party", value=party_cmds, inline=False)
 
-        # Utility & Fun
+        # Utility & Fun (all users)
         utility_cmds = (
             "**`/talk [translate] <text>`** — Bot speaks your message in channel\n"
             "**`/translate <to> <text>`** — Translate text privately\n"
@@ -1484,15 +1503,18 @@ class CommandsCog(commands.Cog):
         )
         embed.add_field(name="🛠️ Utility & Fun", value=utility_cmds, inline=False)
 
-        # Context Menu
+        # Context Menu (all users)
         embed.add_field(
             name="📋 Context Menu (Right-click a message)",
             value="**`Translate Message`** — Translate any message",
             inline=False,
         )
 
-        # Permissions note
-        embed.set_footer(text="ℹ️ Cooldown commands require Command Role or Server Owner")
+        # Dynamic footer based on permissions
+        if has_admin:
+            embed.set_footer(text="✅ You have admin/mod permissions — all commands shown")
+        else:
+            embed.set_footer(text="ℹ️ Some admin commands are hidden — ask a moderator for access")
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
