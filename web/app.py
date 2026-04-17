@@ -653,7 +653,7 @@ def create_app(db: Database, bot=None) -> Quart:
             async with aiohttp.ClientSession() as sess:
                 async with sess.get(f"https://suno.com/song/{uuid}", timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     html = await resp.text()
-                    lyrics = title = image_url = None
+                    lyrics = title = image_url = artist = None
                     m = re.search(r'<meta\s+property="og:title"\s+content="([^"]*)"', html)
                     if m:
                         title = m.group(1).strip()
@@ -668,13 +668,20 @@ def create_app(db: Database, bot=None) -> Quart:
                         m = re.search(r'"image_url"\s*:\s*"([^"]*)"', html)
                         if m:
                             image_url = m.group(1)
+                    m = re.search(r'"display_name"\s*:\s*"((?:[^"\\]|\\.)*)"', html)
+                    if m:
+                        artist = m.group(1).replace('\\"', '"')
+                    if not artist:
+                        m = re.search(r'"handle"\s*:\s*"((?:[^"\\]|\\.)*)"', html)
+                        if m:
+                            artist = m.group(1)
                     idx = html.find(uuid)
                     if idx > -1:
                         chunk = html[max(0, idx-500):idx+5000]
                         m = re.search(r'"prompt"\s*:\s*"((?:[^"\\]|\\.)*)"', chunk)
                         if m:
                             lyrics = m.group(1).replace("\\n", "\n").replace('\\"', '"')
-                    return jsonify({"lyrics": lyrics, "title": title, "image_url": image_url})
+                    return jsonify({"lyrics": lyrics, "title": title, "image_url": image_url, "artist": artist})
         except Exception as e:
             return jsonify({"lyrics": None, "title": None, "error": str(e)}), 500
 
@@ -733,6 +740,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     lyrics = None
                     title = None
                     image_url = None
+                    artist = None
 
                     # Extract title from og:title or JSON
                     m = re.search(r'<meta\s+property="og:title"\s+content="([^"]*)"', html)
@@ -752,6 +760,15 @@ def create_app(db: Database, bot=None) -> Quart:
                         if m:
                             image_url = m.group(1)
 
+                    # Extract artist/display_name
+                    m = re.search(r'"display_name"\s*:\s*"((?:[^"\\]|\\.)*)"', html)
+                    if m:
+                        artist = m.group(1).replace('\\"', '"')
+                    if not artist:
+                        m = re.search(r'"handle"\s*:\s*"((?:[^"\\]|\\.)*)"', html)
+                        if m:
+                            artist = m.group(1)
+
                     # Extract lyrics from prompt field near UUID
                     idx = html.find(uuid)
                     if idx > -1:
@@ -760,7 +777,7 @@ def create_app(db: Database, bot=None) -> Quart:
                         if m:
                             lyrics = m.group(1).replace("\\n", "\n").replace('\\"', '"')
 
-                    return jsonify({"lyrics": lyrics, "title": title, "image_url": image_url})
+                    return jsonify({"lyrics": lyrics, "title": title, "image_url": image_url, "artist": artist})
         except Exception as e:
             return jsonify({"lyrics": None, "title": None, "error": str(e)}), 500
 

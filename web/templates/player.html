@@ -179,6 +179,7 @@ async function resolveAllTitles(){
             if(meta){
                 if(meta.title)e.title=meta.title;
                 if(meta.image_url)e.imageUrl=meta.image_url;
+                if(meta.artist)e.sunoArtist=meta.artist;
             }
             done++;
         }));
@@ -278,8 +279,20 @@ async function playTrack(uuid,idx){
             e.imageUrl=meta.image_url;
             setArtwork(uuid, meta.image_url);
         }
-        if(changed)renderQ();
+        if(meta.artist&&!e.sunoArtist){
+            e.sunoArtist=meta.artist;
+            changed=true;
+        }
+        if(changed){updateSub(e,i);renderQ();}
     });
+}
+
+function updateSub(e,i){
+    var parts=[(i+1)+' / '+T.length];
+    if(e.author)parts.push(e.author);
+    if(e.sunoArtist&&e.sunoArtist!==e.author)parts.push('🎤 '+e.sunoArtist);
+    if(e.reactions)parts.push(e.reactions+' reactions');
+    document.getElementById('sub').textContent=parts.join(' · ');
 }
 
 function getPlayIndex(i){
@@ -293,7 +306,7 @@ async function play(i){
     playedSet.add(realIdx);
     var e=T[realIdx];
     document.getElementById('tinfo').textContent=e.title;
-    document.getElementById('sub').textContent=(i+1)+' / '+T.length+(e.author?' · '+e.author:'')+(e.reactions?' · '+e.reactions+' reactions':'');
+    updateSub(e,i);
     showLyrics(null);
     renderQ();
     resetCd();
@@ -378,7 +391,7 @@ function renderQ(){
         html+='<div class="qi'+(i===cur?' on':'')+'" onclick="play('+i+')">'
             +'<span class="n">'+(i+1)+'</span>'
             +'<span class="t">'+esc(t.title)+'</span>'
-            +'<span class="a">'+esc(t.author)+'</span>'
+            +'<span class="a">'+esc(t.sunoArtist||t.author)+'</span>'
             +rc
             +'<a href="'+url+'" target="_blank" onclick="event.stopPropagation()" style="font-size:11px;color:#555;text-decoration:none;flex-shrink:0;margin-left:4px" title="Open on Suno">↗</a>'
             +'</div>';
