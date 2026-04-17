@@ -74,11 +74,12 @@
 
         <!-- Now Playing -->
         <div id="nowplaying">
-            <img id="artwork" src="" alt="">
+            <a id="artwork-link" href="#" target="_blank" style="flex-shrink:0"><img id="artwork" src="" alt=""></a>
             <div style="flex:1;min-width:0">
                 <div id="tinfo">—</div>
                 <div id="sub"></div>
                 <div id="p-status"></div>
+                <a id="suno-link" href="#" target="_blank" style="display:none;font-size:12px;color:#7ab8f5;text-decoration:none;margin-bottom:6px">↗ Open on Suno</a>
                 <audio id="player" controls preload="none"></audio>
             </div>
         </div>
@@ -170,10 +171,11 @@ async function resolveAllTitles(){
                 if(resolved){uuid=resolved;e.id=resolved;e.isUUID=true;}
                 else return;
             }
-            /* Fetch title from Suno */
+            /* Fetch title + image from Suno */
             var meta=await fetchSunoMeta(uuid);
-            if(meta&&meta.title){
-                e.title=meta.title;
+            if(meta){
+                if(meta.title)e.title=meta.title;
+                if(meta.image_url)e.imageUrl=meta.image_url;
             }
             done++;
         }));
@@ -211,15 +213,33 @@ function showLyrics(text){
     el.textContent=text||'';
 }
 
-function setArtwork(uuid){
+function setArtwork(uuid, imageUrl){
     var img=document.getElementById('artwork');
     if(!uuid){img.style.display='none';return;}
     img.style.display='block';
-    img.src='https://cdn1.suno.ai/image_large_'+uuid+'.jpeg';
-    img.onerror=function(){
-        img.src='https://cdn1.suno.ai/image_'+uuid+'.jpeg';
-        img.onerror=function(){img.style.display='none';};
-    };
+    if(imageUrl){
+        img.src=imageUrl;
+        img.onerror=function(){
+            img.src='https://cdn1.suno.ai/image_large_'+uuid+'.jpeg';
+            img.onerror=function(){img.style.display='none';};
+        };
+    }else{
+        img.src='https://cdn1.suno.ai/image_large_'+uuid+'.jpeg';
+        img.onerror=function(){
+            img.src='https://cdn1.suno.ai/image_'+uuid+'.jpeg';
+            img.onerror=function(){img.style.display='none';};
+        };
+    }
+}
+
+function setSunoLink(uuid){
+    var link=document.getElementById('suno-link');
+    var alink=document.getElementById('artwork-link');
+    if(!uuid){link.style.display='none';return;}
+    var url='https://suno.com/song/'+uuid;
+    link.href=url;
+    link.style.display='inline-block';
+    alink.href=url;
 }
 
 /* --- Playback --- */
@@ -234,21 +254,28 @@ function needsTitle(e){
 async function playTrack(uuid,idx){
     player.style.display='block';
     setStatus('Loading…');
-    setArtwork(uuid);
+    var realIdx=getPlayIndex(idx);
+    var e=T[realIdx];
+    setArtwork(uuid, e.imageUrl||null);
+    setSunoLink(uuid);
     player.src='https://cdn1.suno.ai/'+uuid+'.mp3';
     player.oncanplay=function(){setStatus('');};
     player.onerror=function(){setStatus('⚠ Could not load audio');};
     player.play().catch(function(){setStatus('Press ▶ to play');});
-    var realIdx=getPlayIndex(idx);
-    var e=T[realIdx];
     fetchSunoMeta(uuid).then(function(meta){
         if(!meta||cur!==idx)return;
         if(meta.lyrics)showLyrics(meta.lyrics);
+        var changed=false;
         if(meta.title&&needsTitle(e)){
             e.title=meta.title;
             document.getElementById('tinfo').textContent=meta.title;
-            renderQ();
+            changed=true;
         }
+        if(meta.image_url){
+            e.imageUrl=meta.image_url;
+            setArtwork(uuid, meta.image_url);
+        }
+        if(changed)renderQ();
     });
 }
 

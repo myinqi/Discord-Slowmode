@@ -660,6 +660,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     html = await resp.text()
                     lyrics = None
                     title = None
+                    image_url = None
 
                     # Extract title from og:title or JSON
                     m = re.search(r'<meta\s+property="og:title"\s+content="([^"]*)"', html)
@@ -670,6 +671,15 @@ def create_app(db: Database, bot=None) -> Quart:
                         if m:
                             title = m.group(1).replace('\\"', '"')
 
+                    # Extract image from og:image
+                    m = re.search(r'<meta\s+property="og:image"\s+content="([^"]*)"', html)
+                    if m:
+                        image_url = m.group(1).strip()
+                    if not image_url:
+                        m = re.search(r'"image_url"\s*:\s*"([^"]*)"', html)
+                        if m:
+                            image_url = m.group(1)
+
                     # Extract lyrics from prompt field near UUID
                     idx = html.find(uuid)
                     if idx > -1:
@@ -678,7 +688,7 @@ def create_app(db: Database, bot=None) -> Quart:
                         if m:
                             lyrics = m.group(1).replace("\\n", "\n").replace('\\"', '"')
 
-                    return jsonify({"lyrics": lyrics, "title": title})
+                    return jsonify({"lyrics": lyrics, "title": title, "image_url": image_url})
         except Exception as e:
             return jsonify({"lyrics": None, "title": None, "error": str(e)}), 500
 
