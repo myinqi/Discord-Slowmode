@@ -39,6 +39,12 @@
                 <p class="text-xs text-gray-500 mt-1">Maximum number of songs each user can submit to a Listening Party playlist. Default: 2.</p>
             </div>
             <div>
+                <label class="block text-sm font-medium text-gray-300 mb-1">Player URL (public)</label>
+                <input type="text" name="player_url" value="{{ player_url }}" placeholder="https://example.com/public/player"
+                    class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple focus:ring-1 focus:ring-discord-blurple">
+                <p class="text-xs text-gray-500 mt-1">Public URL to the Suno web player. Posted by the <code>/player</code> slash command.</p>
+            </div>
+            <div>
                 <label class="block text-sm font-medium text-gray-300 mb-1">Party Playlist — Post Channel</label>
                 <select name="party_voice_channel"
                     class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple focus:ring-1 focus:ring-discord-blurple">

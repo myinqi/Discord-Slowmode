@@ -200,9 +200,17 @@ Protokoll aller Aktionen: gelöschte Nachrichten, Konfigurationsänderungen, Ben
 - Bilder einzeln löschen oder ganze Kategorien (inkl. aller Bilder) entfernen
 - Über `/imageposting` Slash-Command im Discord-Kanal posten
 
+### Suno Web Player
+- Öffentlicher Player unter `/public/player` — kein Login erforderlich
+- Alle geposteten Songs abspielen mit Shuffle, Auto-Next, Lyrics und Cover-Anzeige
+- Hide Played: Bereits gehörte Songs ausblenden
+- Suno-Artist-Name und Discord-Username werden angezeigt
+- Player-URL wird im Settings-Bereich konfiguriert und per `/player` Slash-Command im Discord gepostet
+
 ### Settings (Einstellungen)
 - Bot-Name ändern
 - Guild-ID ändern (erfordert Neustart)
+- Player URL: Öffentliche URL zum Suno Web Player (für `/player` Command)
 
 ---
 
@@ -232,6 +240,7 @@ Protokoll aller Aktionen: gelöschte Nachrichten, Konfigurationsänderungen, Ben
 | `/party-remove <song_id>` | Eigenen Song aus der Playlist entfernen (ID aus `/party-songs`, nur für dich sichtbar) |
 | `/party-list` | Alle eingereichten Songs aller User auflisten (nur für dich sichtbar) |
 | `/party-reset` | Party-Playlist zurücksetzen — nur für Admin/Mod/Owner |
+| `/player` | Link zum Suno Web Player im Kanal posten (URL wird in Settings konfiguriert) |
 | `/help` | Übersicht aller verfügbaren Commands anzeigen (nur für dich sichtbar) |
 
 > Cooldown- und Toggle-Commands können nur von Serverbesitzern und Mitgliedern mit einer **Command Role** genutzt werden. `/party-reset` erfordert ebenfalls Command-Berechtigung. Alle anderen Commands sind für **alle** Servermitglieder verfügbar.

@@ -1429,6 +1429,26 @@ class CommandsCog(commands.Cog):
         view = PollSelectView(self.bot, active_polls)
         await interaction.response.send_message("Select a poll to edit:", view=view, ephemeral=True)
 
+    @app_commands.command(name="player", description="Post the link to the Suno web player")
+    async def player_cmd(self, interaction: discord.Interaction):
+        player_url = await self.bot.db.get_setting("player_url")
+        if not player_url:
+            await interaction.response.send_message(
+                "The player URL is not configured yet. An admin needs to set it in **Settings** on the web interface.",
+                ephemeral=True,
+            )
+            return
+
+        bot_name = await self.bot.db.get_setting("bot_name") or "Slowmode Bot"
+        embed = discord.Embed(
+            title="🎵 Suno Web Player",
+            description=f"Hör dir alle geposteten Songs direkt im Browser an!\n\n**[▶ Player öffnen]({player_url})**",
+            color=discord.Color.purple(),
+        )
+        embed.set_footer(text=bot_name)
+        embed.timestamp = discord.utils.utcnow()
+        await interaction.response.send_message(embed=embed)
+
     @app_commands.command(name="help", description="Show a list of all available commands")
     async def help_command(self, interaction: discord.Interaction):
         has_admin = await self._has_command_permission(interaction)
@@ -1493,6 +1513,7 @@ class CommandsCog(commands.Cog):
 
         # Utility & Fun (all users)
         utility_cmds = (
+            "**`/player`** — Post the link to the Suno web player\n"
             "**`/talk [translate] <text>`** — Bot speaks your message in channel\n"
             "**`/translate <to> <text>`** — Translate text privately\n"
             "**`/imageposting <category> [title]`** — Post an image from the library\n"

@@ -209,6 +209,7 @@ def create_app(db: Database, bot=None) -> Quart:
 
             party_max_songs = form.get("party_max_songs", "2").strip()
             party_voice_channel = form.get("party_voice_channel", "").strip()
+            player_url = form.get("player_url", "").strip()
 
             if bot_name:
                 await db.set_setting("bot_name", bot_name)
@@ -217,10 +218,11 @@ def create_app(db: Database, bot=None) -> Quart:
             await db.set_setting("new_command_channel", new_channel)
             await db.set_setting("party_max_songs", party_max_songs)
             await db.set_setting("party_voice_channel", party_voice_channel)
+            await db.set_setting("player_url", player_url)
 
             await db.add_audit_log(
                 event_type="settings_changed",
-                details=f"Bot name: {bot_name}, Guild ID: {guild_id}, /new channel: {new_channel}, party_max_songs: {party_max_songs}, party_voice_channel: {party_voice_channel}",
+                details=f"Bot name: {bot_name}, Guild ID: {guild_id}, /new channel: {new_channel}, party_max_songs: {party_max_songs}, party_voice_channel: {party_voice_channel}, player_url: {player_url}",
                 actor=session.get("username", "unknown"),
             )
             await flash("Settings saved.", "success")
@@ -231,6 +233,7 @@ def create_app(db: Database, bot=None) -> Quart:
         new_command_channel = await db.get_setting("new_command_channel") or ""
         party_max_songs = await db.get_setting("party_max_songs") or "2"
         party_voice_channel = await db.get_setting("party_voice_channel") or ""
+        player_url = await db.get_setting("player_url") or ""
         monitored = await db.get_monitored_channels()
         guild = get_guild()
         channel_options = []
@@ -275,6 +278,7 @@ def create_app(db: Database, bot=None) -> Quart:
         return await render_template("settings.html", bot_name=bot_name, guild_id=guild_id,
                                      new_command_channel=new_command_channel, channel_options=channel_options,
                                      party_max_songs=party_max_songs, party_voice_channel=party_voice_channel,
+                                     player_url=player_url,
                                      all_text_channels=all_text_channels,
                                      monitored_channels=monitored,
                                      available_output_channels=available_output_channels,
