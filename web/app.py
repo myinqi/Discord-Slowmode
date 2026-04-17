@@ -647,43 +647,8 @@ def create_app(db: Database, bot=None) -> Quart:
 
     @app.route("/public/api/suno-lyrics/<uuid>")
     async def api_suno_lyrics_public(uuid):
-        import aiohttp, re
         from quart import jsonify
-        try:
-            async with aiohttp.ClientSession() as sess:
-                async with sess.get(f"https://suno.com/song/{uuid}", timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                    html = await resp.text()
-                    lyrics = title = image_url = artist = None
-                    m = re.search(r'<meta\s+property="og:title"\s+content="([^"]*)"', html)
-                    if m:
-                        title = m.group(1).strip()
-                    if not title:
-                        m = re.search(r'"title"\s*:\s*"((?:[^"\\]|\\.)*)"', html)
-                        if m:
-                            title = m.group(1).replace('\\"', '"')
-                    m = re.search(r'<meta\s+property="og:image"\s+content="([^"]*)"', html)
-                    if m:
-                        image_url = m.group(1).strip()
-                    if not image_url:
-                        m = re.search(r'"image_url"\s*:\s*"([^"]*)"', html)
-                        if m:
-                            image_url = m.group(1)
-                    m = re.search(r'"display_name"\s*:\s*"((?:[^"\\]|\\.)*)"', html)
-                    if m:
-                        artist = m.group(1).replace('\\"', '"')
-                    if not artist:
-                        m = re.search(r'"handle"\s*:\s*"((?:[^"\\]|\\.)*)"', html)
-                        if m:
-                            artist = m.group(1)
-                    idx = html.find(uuid)
-                    if idx > -1:
-                        chunk = html[max(0, idx-500):idx+5000]
-                        m = re.search(r'"prompt"\s*:\s*"((?:[^"\\]|\\.)*)"', chunk)
-                        if m:
-                            lyrics = m.group(1).replace("\\n", "\n").replace('\\"', '"')
-                    return jsonify({"lyrics": lyrics, "title": title, "image_url": image_url, "artist": artist})
-        except Exception as e:
-            return jsonify({"lyrics": None, "title": None, "error": str(e)}), 500
+        return jsonify(await _fetch_suno_meta(uuid))
 
     @app.route("/api/player-songs")
     @login_required
@@ -724,34 +689,37 @@ def create_app(db: Database, bot=None) -> Quart:
         except Exception as e:
             return jsonify({"uuid": None, "error": str(e)}), 500
 
-    @app.route("/api/suno-lyrics/<uuid>")
-    @login_required
-    async def api_suno_lyrics(uuid):
-        """Server-side proxy to fetch lyrics and metadata from Suno."""
+    async def _fetch_suno_meta(uuid):
+        """Shared helper to fetch song metadata from Suno embed page."""
         import aiohttp, re
-        from quart import jsonify
+        lyrics = title = image_url = artist = None
         try:
             async with aiohttp.ClientSession() as sess:
                 async with sess.get(
-                    f"https://suno.com/song/{uuid}",
+                    f"https://suno.com/embed/{uuid}",
                     timeout=aiohttp.ClientTimeout(total=10),
+                    headers={"User-Agent": "Mozilla/5.0"},
                 ) as resp:
                     html = await resp.text()
-                    lyrics = None
-                    title = None
-                    image_url = None
-                    artist = None
 
-                    # Extract title from og:title or JSON
-                    m = re.search(r'<meta\s+property="og:title"\s+content="([^"]*)"', html)
+                    # Title + Artist from <title>: "Song Title by Artist | Suno"
+                    m = re.search(r'<title>(.+?)\s*\|\s*Suno</title>', html)
                     if m:
-                        title = m.group(1).strip()
-                    if not title:
-                        m = re.search(r'"title"\s*:\s*"((?:[^"\\]|\\.)*)"', html)
-                        if m:
-                            title = m.group(1).replace('\\"', '"')
+                        raw = m.group(1).strip()
+                        parts = raw.rsplit(' by ', 1)
+                        if len(parts) == 2:
+                            title = parts[0].strip()
+                            artist = parts[1].strip()
+                        else:
+                            title = raw
 
-                    # Extract image from og:image
+                    # Fallback title from og:title
+                    if not title:
+                        m = re.search(r'<meta\s+property="og:title"\s+content="([^"]*)"', html)
+                        if m:
+                            title = m.group(1).strip()
+
+                    # Image from og:image
                     m = re.search(r'<meta\s+property="og:image"\s+content="([^"]*)"', html)
                     if m:
                         image_url = m.group(1).strip()
@@ -760,26 +728,34 @@ def create_app(db: Database, bot=None) -> Quart:
                         if m:
                             image_url = m.group(1)
 
-                    # Extract artist/display_name
-                    m = re.search(r'"display_name"\s*:\s*"((?:[^"\\]|\\.)*)"', html)
-                    if m:
-                        artist = m.group(1).replace('\\"', '"')
+                    # Artist fallback from display_name in JSON
                     if not artist:
-                        m = re.search(r'"handle"\s*:\s*"((?:[^"\\]|\\.)*)"', html)
-                        if m:
-                            artist = m.group(1)
+                        matches = re.findall(r'display_name\\":\\"([^"\\]+)\\"', html)
+                        for dn in reversed(matches):
+                            if len(dn) > 1 and not dn.startswith('v') and dn not in ('Cover', 'Remix'):
+                                artist = dn.strip()
+                                break
 
-                    # Extract lyrics from prompt field near UUID
+                    # Lyrics from prompt field
                     idx = html.find(uuid)
                     if idx > -1:
                         chunk = html[max(0, idx-500):idx+5000]
                         m = re.search(r'"prompt"\s*:\s*"((?:[^"\\]|\\.)*)"', chunk)
                         if m:
                             lyrics = m.group(1).replace("\\n", "\n").replace('\\"', '"')
+                    if not lyrics:
+                        m = re.search(r'prompt\\":\\"((?:[^\\]|\\.)*?)\\"', html)
+                        if m:
+                            lyrics = m.group(1).replace("\\\\n", "\n").replace('\\\\"', '"').replace("\\n", "\n")
+        except Exception:
+            pass
+        return {"lyrics": lyrics, "title": title, "image_url": image_url, "artist": artist}
 
-                    return jsonify({"lyrics": lyrics, "title": title, "image_url": image_url, "artist": artist})
-        except Exception as e:
-            return jsonify({"lyrics": None, "title": None, "error": str(e)}), 500
+    @app.route("/api/suno-lyrics/<uuid>")
+    @login_required
+    async def api_suno_lyrics(uuid):
+        from quart import jsonify
+        return jsonify(await _fetch_suno_meta(uuid))
 
     @app.route("/listening-party", methods=["GET", "POST"])
     @login_required
