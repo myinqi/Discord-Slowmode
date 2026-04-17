@@ -401,7 +401,18 @@ function loadSettings(){
 
 /* --- Events --- */
 document.getElementById('btnFetch').onclick=function(){saveSettings();fetchSongs();};
-document.getElementById('btnPlay').onclick=function(){if(T.length)play(0);};
+document.getElementById('btnPlay').onclick=function(){
+    if(!T.length)return;
+    if(cur>=0){
+        /* Already have a track — toggle pause/resume */
+        if(player.paused)player.play();else player.pause();
+        return;
+    }
+    /* Find first unplayed song (respects hidePlayed) */
+    var start=0;
+    if(hidePlayed){while(start<T.length&&playedSet.has(getPlayIndex(start)))start++;}
+    if(start<T.length)play(start);
+};
 document.getElementById('rng').oninput=function(){
     tSec=parseInt(this.value);
     document.getElementById('rlbl').textContent=tSec?fmt(tSec):'OFF';

@@ -270,7 +270,13 @@ function saveSettings(){localStorage.setItem('pub-player-channel',document.getEl
 function loadSettings(){var ch=localStorage.getItem('pub-player-channel'),lim=localStorage.getItem('pub-player-limit');if(ch!==null)document.getElementById('channelSel').value=ch;if(lim)document.getElementById('limitInput').value=lim;}
 
 document.getElementById('btnFetch').onclick=function(){saveSettings();fetchSongs();};
-document.getElementById('btnPlay').onclick=function(){if(T.length)play(0);};
+document.getElementById('btnPlay').onclick=function(){
+    if(!T.length)return;
+    if(cur>=0){if(player.paused)player.play();else player.pause();return;}
+    var start=0;
+    if(hidePlayed){while(start<T.length&&playedSet.has(getPlayIndex(start)))start++;}
+    if(start<T.length)play(start);
+};
 document.getElementById('rng').oninput=function(){tSec=parseInt(this.value);document.getElementById('rlbl').textContent=tSec?fmt(tSec):'OFF';if(tSec&&cur>=0)resetCd();else stopCd();};
 document.getElementById('channelSel').onchange=function(){saveSettings();};
 document.getElementById('limitInput').onchange=function(){saveSettings();};
