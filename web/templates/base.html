@@ -66,6 +66,9 @@
                 <a href="{{ url_for('users') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'users' %}active{% endif %}">
                     <span class="sidebar-icon mr-3">👥</span><span class="sidebar-label">Users</span>
                 </a>
+                <a href="{{ url_for('welcome') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'welcome' %}active{% endif %}">
+                    <span class="sidebar-icon mr-3">👋</span><span class="sidebar-label">Welcome</span>
+                </a>
                 <a href="{{ url_for('party_playlist') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'party_playlist' %}active{% endif %}">
                     <span class="sidebar-icon mr-3">🎧</span><span class="sidebar-label">Party Playlist</span>
                 </a>

@@ -240,6 +240,46 @@ class SlowmodeCog(commands.Cog):
         except Exception:
             pass
 
+    @commands.Cog.listener()
+    async def on_member_join(self, member: discord.Member):
+        """Send welcome message when a new member joins."""
+        if member.bot:
+            return
+
+        db = self.bot.db
+        config = await db.get_welcome_config()
+
+        if not config["enabled"]:
+            return
+
+        # Prepare placeholders
+        user_mention = member.mention
+        user_name = member.display_name
+
+        # Send to welcome channel
+        if config["channel_id"]:
+            channel = member.guild.get_channel(config["channel_id"])
+            if channel:
+                try:
+                    message = config["message_text"].format(
+                        user=user_mention,
+                        username=user_name,
+                    )
+                    await channel.send(message)
+                except Exception as e:
+                    print(f"[welcome] Failed to send channel message: {e}")
+
+        # Send DM
+        if config["dm_enabled"]:
+            try:
+                dm_message = config["dm_text"].format(
+                    user=user_mention,
+                    username=user_name,
+                )
+                await member.send(dm_message)
+            except Exception as e:
+                print(f"[welcome] Failed to send DM to {member.id}: {e}")
+
 
 async def setup(bot):
     await bot.add_cog(SlowmodeCog(bot))

@@ -478,7 +478,7 @@ class StreamManager:
                     # Post to Twitch chat
                     if self._twitch_chat:
                         suno_url = actual.get("suno_url", "")
-                        chat_msg = f"\U0001F3B5 Now Playing: {actual['title']} — {actual['artist']}"
+                        chat_msg = f"\U0001F3B5 Now Playing: {actual['title']} - {actual['artist']}"
                         if suno_url:
                             chat_msg += f" | {suno_url}"
                         await self._twitch_chat.send(chat_msg)

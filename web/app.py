@@ -280,6 +280,46 @@ def create_app(db: Database, bot=None) -> Quart:
                                      available_output_channels=available_output_channels,
                                      lp_configs=lp_configs)
 
+    @app.route("/welcome", methods=["GET", "POST"])
+    @login_required
+    async def welcome():
+        db = get_db()
+        if request.method == "POST":
+            form = await request.form
+            enabled = form.get("enabled") == "1"
+            dm_enabled = form.get("dm_enabled") == "1"
+            channel_id = form.get("channel_id", "").strip()
+            message_text = form.get("message_text", "").strip()
+            dm_text = form.get("dm_text", "").strip()
+
+            # Convert channel_id to int or None
+            channel_id_int = int(channel_id) if channel_id.isdigit() else None
+
+            await db.set_welcome_config(
+                enabled=enabled,
+                channel_id=channel_id_int,
+                message_text=message_text if message_text else None,
+                dm_enabled=dm_enabled,
+                dm_text=dm_text if dm_text else None,
+            )
+
+            await db.add_audit_log(
+                event_type="welcome_config_updated",
+                details=f"enabled={enabled}, channel={channel_id_int}, dm_enabled={dm_enabled}",
+                actor=session.get("username", "unknown"),
+            )
+            await flash("Welcome configuration saved.", "success")
+            return redirect(url_for("welcome"))
+
+        config = await db.get_welcome_config()
+        guild = get_guild()
+        channels = []
+        if guild:
+            for ch in sorted(guild.text_channels, key=lambda c: c.position):
+                channels.append({"id": ch.id, "name": ch.name})
+
+        return await render_template("welcome.html", config=config, channels=channels)
+
     @app.route("/channels", methods=["GET", "POST"])
     @login_required
     async def channels():

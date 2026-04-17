@@ -221,6 +221,22 @@ class Database:
         """)
         await self.db.commit()
 
+        # Create welcome_config table
+        await self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS welcome_config (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                enabled INTEGER DEFAULT 0,
+                channel_id INTEGER,
+                message_text TEXT DEFAULT '🎉 Welcome {user} to our server!',
+                dm_enabled INTEGER DEFAULT 0,
+                dm_text TEXT DEFAULT 'Welcome to our server, {user}!',
+                created_at REAL DEFAULT (unixepoch()),
+                updated_at REAL DEFAULT (unixepoch())
+            );
+            INSERT OR IGNORE INTO welcome_config (id) VALUES (1);
+        """)
+        await self.db.commit()
+
         # Create image_categories and image_posts tables
         await self.db.executescript("""
             CREATE TABLE IF NOT EXISTS image_categories (
@@ -255,6 +271,62 @@ class Database:
             (key, value),
         )
         await self.db.commit()
+
+    # --- Welcome Config ---
+
+    async def get_welcome_config(self) -> dict:
+        async with self.db.execute(
+            "SELECT * FROM welcome_config WHERE id = 1"
+        ) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                return {
+                    "enabled": bool(row["enabled"]),
+                    "channel_id": row["channel_id"],
+                    "message_text": row["message_text"],
+                    "dm_enabled": bool(row["dm_enabled"]),
+                    "dm_text": row["dm_text"],
+                }
+            return {
+                "enabled": False,
+                "channel_id": None,
+                "message_text": "🎉 Welcome {user} to our server!",
+                "dm_enabled": False,
+                "dm_text": "Welcome to our server, {user}!",
+            }
+
+    async def set_welcome_config(
+        self,
+        enabled: bool = None,
+        channel_id: int = None,
+        message_text: str = None,
+        dm_enabled: bool = None,
+        dm_text: str = None,
+    ):
+        import time
+        updates = []
+        params = []
+        if enabled is not None:
+            updates.append("enabled = ?")
+            params.append(1 if enabled else 0)
+        if channel_id is not None:
+            updates.append("channel_id = ?")
+            params.append(channel_id)
+        if message_text is not None:
+            updates.append("message_text = ?")
+            params.append(message_text)
+        if dm_enabled is not None:
+            updates.append("dm_enabled = ?")
+            params.append(1 if dm_enabled else 0)
+        if dm_text is not None:
+            updates.append("dm_text = ?")
+            params.append(dm_text)
+        if updates:
+            updates.append("updated_at = ?")
+            params.append(time.time())
+            sql = f"UPDATE welcome_config SET {', '.join(updates)} WHERE id = 1"
+            await self.db.execute(sql, params)
+            await self.db.commit()
 
     # --- Web Users ---
 
