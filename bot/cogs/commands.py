@@ -1442,7 +1442,7 @@ class CommandsCog(commands.Cog):
         bot_name = await self.bot.db.get_setting("bot_name") or "Slowmode Bot"
         embed = discord.Embed(
             title="🎵 Suno Web Player",
-            description=f"Hör dir alle geposteten Songs direkt im Browser an!\n\n**[▶ Player öffnen]({player_url})**",
+            description=f"Listen to all posted songs directly in your browser!\n\n**[▶ Open Player]({player_url})**",
             color=discord.Color.purple(),
         )
         embed.set_footer(text=bot_name)
