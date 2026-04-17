@@ -48,7 +48,7 @@
             </div>
             <div>
                 <label class="block text-xs text-gray-500 mb-1">Limit</label>
-                <input type="number" id="limitInput" value="200" min="1" max="500" style="width:70px">
+                <input type="number" id="limitInput" value="20" min="1" max="500" style="width:70px">
             </div>
             <div style="padding-bottom:1px">
                 <button class="player-btn primary" id="btnFetch">⬇ Load Songs</button>
@@ -147,32 +147,26 @@ async function fetchSongs(){
     }
 }
 
-/* --- Short URL resolver --- */
+/* --- Short URL resolver (server-side proxy) --- */
 async function resolveShortId(shortId){
     try{
-        var r=await fetch('https://suno.com/s/'+shortId);
-        var m=r.url.match(/\/song\/([a-f0-9-]{36})/);
-        if(m)return m[1];
-        var html=await r.text();
-        m=html.match(/cdn1\.suno\.ai\/([a-f0-9-]{36})\.mp3/);
-        if(m)return m[1];
+        var r=await fetch('/api/suno-resolve/'+encodeURIComponent(shortId));
+        if(r.ok){
+            var data=await r.json();
+            return data.uuid||null;
+        }
     }catch(e){}
     return null;
 }
 
-/* --- Lyrics from Suno page --- */
+/* --- Lyrics from server-side proxy --- */
 async function fetchLyrics(uuid){
     try{
-        var r=await fetch('https://suno.com/song/'+uuid);
-        var html=await r.text();
-        var idx=html.indexOf(uuid);
-        if(idx>-1){
-            var chunk=html.slice(idx,idx+3000);
-            var pm=chunk.match(/"prompt":"((?:[^"\\]|\\.)*)"/);
-            if(pm)return pm[1].replace(/\\n/g,'\n').replace(/\\"/g,'"');
+        var r=await fetch('/api/suno-lyrics/'+encodeURIComponent(uuid));
+        if(r.ok){
+            var data=await r.json();
+            return data.lyrics||null;
         }
-        var lm=html.match(/\[Verse[\s\S]*?(?="\]\))/);
-        if(lm)return lm[0].replace(/\\n/g,'\n').replace(/\\"/g,'"');
     }catch(e){}
     return null;
 }
@@ -197,9 +191,11 @@ function setArtwork(uuid){
 /* --- Playback --- */
 async function playTrack(uuid,idx){
     player.style.display='block';
-    setStatus('');
+    setStatus('Loading…');
     setArtwork(uuid);
     player.src='https://cdn1.suno.ai/'+uuid+'.mp3';
+    player.oncanplay=function(){setStatus('');};
+    player.onerror=function(){setStatus('⚠ Could not load audio');};
     player.play().catch(function(){setStatus('Press ▶ to play');});
     fetchLyrics(uuid).then(function(lyrics){
         if(lyrics&&cur===idx)showLyrics(lyrics);
@@ -221,13 +217,19 @@ async function play(i){
     renderQ();
     resetCd();
 
-    var uuid=e.isUUID?e.id:await resolveShortId(e.id);
+    var uuid;
+    if(e.isUUID){
+        uuid=e.id;
+    }else{
+        setStatus('Resolving short URL…');
+        uuid=await resolveShortId(e.id);
+    }
     if(uuid){
-        if(!e.isUUID){e.id=uuid;e.isUUID=true;renderQ();}
+        if(!e.isUUID){e.id=uuid;e.isUUID=true;e.title=e.title;renderQ();}
         playTrack(uuid,i);
     }else{
         player.style.display='none';player.src='';setArtwork(null);
-        setStatus('Could not resolve — open on Suno manually');
+        setStatus('⚠ Could not resolve — click ↗ to open on Suno');
     }
 }
 
@@ -286,16 +288,31 @@ function renderQ(){
     document.getElementById('queue').innerHTML=html;
 }
 
+/* --- Persist settings in localStorage --- */
+function saveSettings(){
+    localStorage.setItem('player-channel',document.getElementById('channelSel').value);
+    localStorage.setItem('player-limit',document.getElementById('limitInput').value);
+}
+function loadSettings(){
+    var ch=localStorage.getItem('player-channel');
+    var lim=localStorage.getItem('player-limit');
+    if(ch!==null)document.getElementById('channelSel').value=ch;
+    if(lim)document.getElementById('limitInput').value=lim;
+}
+
 /* --- Events --- */
-document.getElementById('btnFetch').onclick=fetchSongs;
+document.getElementById('btnFetch').onclick=function(){saveSettings();fetchSongs();};
 document.getElementById('btnPlay').onclick=function(){if(T.length)play(0);};
 document.getElementById('rng').oninput=function(){
     tSec=parseInt(this.value);
     document.getElementById('rlbl').textContent=tSec?fmt(tSec):'OFF';
     if(tSec&&cur>=0)resetCd();else stopCd();
 };
+document.getElementById('channelSel').onchange=function(){saveSettings();};
+document.getElementById('limitInput').onchange=function(){saveSettings();};
 
 /* Auto-load on page open */
+loadSettings();
 fetchSongs();
 </script>
 {% endblock %}

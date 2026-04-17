@@ -616,6 +616,65 @@ def create_app(db: Database, bot=None) -> Quart:
         songs = await db.get_player_songs(channel_id=ch_id, limit=limit)
         return jsonify(songs)
 
+    @app.route("/api/suno-resolve/<short_id>")
+    @login_required
+    async def api_suno_resolve(short_id):
+        """Server-side proxy to resolve Suno short URLs to full UUIDs."""
+        import aiohttp, re
+        from quart import jsonify
+        try:
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(
+                    f"https://suno.com/s/{short_id}",
+                    allow_redirects=True,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    url = str(resp.url)
+                    m = re.search(r'/song/([a-f0-9-]{36})', url)
+                    if m:
+                        return jsonify({"uuid": m.group(1)})
+                    html = await resp.text()
+                    m = re.search(r'cdn[12]\.suno\.ai/([a-f0-9-]{36})\.mp3', html)
+                    if m:
+                        return jsonify({"uuid": m.group(1)})
+                    # Try meta tag or JSON data
+                    m = re.search(r'"audio_url"\s*:\s*"[^"]*?([a-f0-9-]{36})\.mp3"', html)
+                    if m:
+                        return jsonify({"uuid": m.group(1)})
+            return jsonify({"uuid": None, "error": "Could not resolve"}), 404
+        except Exception as e:
+            return jsonify({"uuid": None, "error": str(e)}), 500
+
+    @app.route("/api/suno-lyrics/<uuid>")
+    @login_required
+    async def api_suno_lyrics(uuid):
+        """Server-side proxy to fetch lyrics from Suno."""
+        import aiohttp, re
+        from quart import jsonify
+        try:
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(
+                    f"https://suno.com/song/{uuid}",
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    html = await resp.text()
+                    # Try prompt field
+                    idx = html.find(uuid)
+                    if idx > -1:
+                        chunk = html[idx:idx+5000]
+                        m = re.search(r'"prompt"\s*:\s*"((?:[^"\\]|\\.)*)"', chunk)
+                        if m:
+                            lyrics = m.group(1).replace("\\n", "\n").replace('\\"', '"')
+                            return jsonify({"lyrics": lyrics})
+                    # Try title
+                    title = None
+                    m = re.search(r'"title"\s*:\s*"((?:[^"\\]|\\.)*)"', html)
+                    if m:
+                        title = m.group(1).replace('\\"', '"')
+                    return jsonify({"lyrics": None, "title": title})
+        except Exception as e:
+            return jsonify({"lyrics": None, "error": str(e)}), 500
+
     @app.route("/listening-party", methods=["GET", "POST"])
     @login_required
     async def listening_party():
