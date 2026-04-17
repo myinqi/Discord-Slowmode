@@ -737,16 +737,27 @@ def create_app(db: Database, bot=None) -> Quart:
                                 break
 
                     # Lyrics from prompt field
+                    def _valid_lyrics(s):
+                        if not s or len(s.strip()) < 10:
+                            return False
+                        if re.match(r'^\$\w+$', s.strip()):
+                            return False
+                        return True
+
                     idx = html.find(uuid)
                     if idx > -1:
                         chunk = html[max(0, idx-500):idx+5000]
                         m = re.search(r'"prompt"\s*:\s*"((?:[^"\\]|\\.)*)"', chunk)
                         if m:
-                            lyrics = m.group(1).replace("\\n", "\n").replace('\\"', '"')
+                            candidate = m.group(1).replace("\\n", "\n").replace('\\"', '"')
+                            if _valid_lyrics(candidate):
+                                lyrics = candidate
                     if not lyrics:
                         m = re.search(r'prompt\\":\\"((?:[^\\]|\\.)*?)\\"', html)
                         if m:
-                            lyrics = m.group(1).replace("\\\\n", "\n").replace('\\\\"', '"').replace("\\n", "\n")
+                            candidate = m.group(1).replace("\\\\n", "\n").replace('\\\\"', '"').replace("\\n", "\n")
+                            if _valid_lyrics(candidate):
+                                lyrics = candidate
         except Exception:
             pass
         return {"lyrics": lyrics, "title": title, "image_url": image_url, "artist": artist}
