@@ -232,6 +232,7 @@ Protokoll aller Aktionen: gelöschte Nachrichten, Konfigurationsänderungen, Ben
 | `/party-remove <song_id>` | Eigenen Song aus der Playlist entfernen (ID aus `/party-songs`, nur für dich sichtbar) |
 | `/party-list` | Alle eingereichten Songs aller User auflisten (nur für dich sichtbar) |
 | `/party-reset` | Party-Playlist zurücksetzen — nur für Admin/Mod/Owner |
+| `/help` | Übersicht aller verfügbaren Commands anzeigen (nur für dich sichtbar) |
 
 > Cooldown- und Toggle-Commands können nur von Serverbesitzern und Mitgliedern mit einer **Command Role** genutzt werden. `/party-reset` erfordert ebenfalls Command-Berechtigung. Alle anderen Commands sind für **alle** Servermitglieder verfügbar.
 
