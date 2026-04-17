@@ -591,9 +591,7 @@ def create_app(db: Database, bot=None) -> Quart:
             total=total,
         )
 
-    @app.route("/player")
-    @login_required
-    async def player():
+    async def _get_player_channels():
         guild = get_guild()
         channels = []
         monitored = await db.get_monitored_channels()
@@ -604,7 +602,81 @@ def create_app(db: Database, bot=None) -> Quart:
                 if gch:
                     ch_name = gch.name
             channels.append({"id": ch["channel_id"], "name": ch_name})
-        return await render_template("player.html", channels=channels)
+        return channels
+
+    @app.route("/player")
+    @login_required
+    async def player():
+        return await render_template("player.html", channels=await _get_player_channels())
+
+    # --- Public player (no login required) ---
+    @app.route("/public/player")
+    async def player_public():
+        return await render_template("player_public.html", channels=await _get_player_channels())
+
+    @app.route("/public/api/player-songs")
+    async def api_player_songs_public():
+        from quart import jsonify
+        channel_id = request.args.get("channel_id", "").strip()
+        limit = min(int(request.args.get("limit", "200")), 500)
+        ch_id = int(channel_id) if channel_id.isdigit() else None
+        songs = await db.get_player_songs(channel_id=ch_id, limit=limit)
+        return jsonify(songs)
+
+    @app.route("/public/api/suno-resolve/<short_id>")
+    async def api_suno_resolve_public(short_id):
+        import aiohttp, re
+        from quart import jsonify
+        try:
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(f"https://suno.com/s/{short_id}", allow_redirects=True, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    url = str(resp.url)
+                    m = re.search(r'/song/([a-f0-9-]{36})', url)
+                    if m:
+                        return jsonify({"uuid": m.group(1)})
+                    html = await resp.text()
+                    m = re.search(r'cdn[12]\.suno\.ai/([a-f0-9-]{36})\.mp3', html)
+                    if m:
+                        return jsonify({"uuid": m.group(1)})
+                    m = re.search(r'"audio_url"\s*:\s*"[^"]*?([a-f0-9-]{36})\.mp3"', html)
+                    if m:
+                        return jsonify({"uuid": m.group(1)})
+            return jsonify({"uuid": None}), 404
+        except Exception as e:
+            return jsonify({"uuid": None, "error": str(e)}), 500
+
+    @app.route("/public/api/suno-lyrics/<uuid>")
+    async def api_suno_lyrics_public(uuid):
+        import aiohttp, re
+        from quart import jsonify
+        try:
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(f"https://suno.com/song/{uuid}", timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    html = await resp.text()
+                    lyrics = title = image_url = None
+                    m = re.search(r'<meta\s+property="og:title"\s+content="([^"]*)"', html)
+                    if m:
+                        title = m.group(1).strip()
+                    if not title:
+                        m = re.search(r'"title"\s*:\s*"((?:[^"\\]|\\.)*)"', html)
+                        if m:
+                            title = m.group(1).replace('\\"', '"')
+                    m = re.search(r'<meta\s+property="og:image"\s+content="([^"]*)"', html)
+                    if m:
+                        image_url = m.group(1).strip()
+                    if not image_url:
+                        m = re.search(r'"image_url"\s*:\s*"([^"]*)"', html)
+                        if m:
+                            image_url = m.group(1)
+                    idx = html.find(uuid)
+                    if idx > -1:
+                        chunk = html[max(0, idx-500):idx+5000]
+                        m = re.search(r'"prompt"\s*:\s*"((?:[^"\\]|\\.)*)"', chunk)
+                        if m:
+                            lyrics = m.group(1).replace("\\n", "\n").replace('\\"', '"')
+                    return jsonify({"lyrics": lyrics, "title": title, "image_url": image_url})
+        except Exception as e:
+            return jsonify({"lyrics": None, "title": None, "error": str(e)}), 500
 
     @app.route("/api/player-songs")
     @login_required
