@@ -648,7 +648,7 @@ def create_app(db: Database, bot=None) -> Quart:
     @app.route("/api/suno-lyrics/<uuid>")
     @login_required
     async def api_suno_lyrics(uuid):
-        """Server-side proxy to fetch lyrics from Suno."""
+        """Server-side proxy to fetch lyrics and metadata from Suno."""
         import aiohttp, re
         from quart import jsonify
         try:
@@ -658,22 +658,29 @@ def create_app(db: Database, bot=None) -> Quart:
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as resp:
                     html = await resp.text()
-                    # Try prompt field
+                    lyrics = None
+                    title = None
+
+                    # Extract title from og:title or JSON
+                    m = re.search(r'<meta\s+property="og:title"\s+content="([^"]*)"', html)
+                    if m:
+                        title = m.group(1).strip()
+                    if not title:
+                        m = re.search(r'"title"\s*:\s*"((?:[^"\\]|\\.)*)"', html)
+                        if m:
+                            title = m.group(1).replace('\\"', '"')
+
+                    # Extract lyrics from prompt field near UUID
                     idx = html.find(uuid)
                     if idx > -1:
-                        chunk = html[idx:idx+5000]
+                        chunk = html[max(0, idx-500):idx+5000]
                         m = re.search(r'"prompt"\s*:\s*"((?:[^"\\]|\\.)*)"', chunk)
                         if m:
                             lyrics = m.group(1).replace("\\n", "\n").replace('\\"', '"')
-                            return jsonify({"lyrics": lyrics})
-                    # Try title
-                    title = None
-                    m = re.search(r'"title"\s*:\s*"((?:[^"\\]|\\.)*)"', html)
-                    if m:
-                        title = m.group(1).replace('\\"', '"')
-                    return jsonify({"lyrics": None, "title": title})
+
+                    return jsonify({"lyrics": lyrics, "title": title})
         except Exception as e:
-            return jsonify({"lyrics": None, "error": str(e)}), 500
+            return jsonify({"lyrics": None, "title": None, "error": str(e)}), 500
 
     @app.route("/listening-party", methods=["GET", "POST"])
     @login_required

@@ -159,14 +159,11 @@ async function resolveShortId(shortId){
     return null;
 }
 
-/* --- Lyrics from server-side proxy --- */
-async function fetchLyrics(uuid){
+/* --- Lyrics + metadata from server-side proxy --- */
+async function fetchSunoMeta(uuid){
     try{
         var r=await fetch('/api/suno-lyrics/'+encodeURIComponent(uuid));
-        if(r.ok){
-            var data=await r.json();
-            return data.lyrics||null;
-        }
+        if(r.ok) return await r.json();
     }catch(e){}
     return null;
 }
@@ -189,6 +186,14 @@ function setArtwork(uuid){
 }
 
 /* --- Playback --- */
+function needsTitle(e){
+    if(!e.title)return true;
+    /* Title looks like a short ID or raw UUID */
+    if(/^[a-zA-Z0-9_-]{8,22}$/.test(e.title))return true;
+    if(/^[a-f0-9-]{36}$/.test(e.title))return true;
+    return false;
+}
+
 async function playTrack(uuid,idx){
     player.style.display='block';
     setStatus('Loading…');
@@ -197,8 +202,16 @@ async function playTrack(uuid,idx){
     player.oncanplay=function(){setStatus('');};
     player.onerror=function(){setStatus('⚠ Could not load audio');};
     player.play().catch(function(){setStatus('Press ▶ to play');});
-    fetchLyrics(uuid).then(function(lyrics){
-        if(lyrics&&cur===idx)showLyrics(lyrics);
+    var realIdx=getPlayIndex(idx);
+    var e=T[realIdx];
+    fetchSunoMeta(uuid).then(function(meta){
+        if(!meta||cur!==idx)return;
+        if(meta.lyrics)showLyrics(meta.lyrics);
+        if(meta.title&&needsTitle(e)){
+            e.title=meta.title;
+            document.getElementById('tinfo').textContent=meta.title;
+            renderQ();
+        }
     });
 }
 
