@@ -283,7 +283,6 @@ def create_app(db: Database, bot=None) -> Quart:
     @app.route("/welcome", methods=["GET", "POST"])
     @login_required
     async def welcome():
-        db = get_db()
         if request.method == "POST":
             form = await request.form
             enabled = form.get("enabled") == "1"
