@@ -616,6 +616,35 @@ class Database:
         )
         await self.db.commit()
 
+    async def get_player_songs(self, channel_id: int = None, limit: int = 200) -> list[dict]:
+        """Get songs for the web player with reaction counts."""
+        if channel_id:
+            sql = """
+                SELECT sp.id, sp.url, sp.song_title, sp.user_name, sp.posted_at, sp.channel_id,
+                       COUNT(sr.id) as reaction_count
+                FROM song_posts sp
+                LEFT JOIN song_reactions sr ON sr.message_id = sp.message_id AND sp.message_id IS NOT NULL
+                WHERE sp.channel_id = ?
+                GROUP BY sp.id
+                ORDER BY sp.posted_at DESC
+                LIMIT ?
+            """
+            params = (channel_id, limit)
+        else:
+            sql = """
+                SELECT sp.id, sp.url, sp.song_title, sp.user_name, sp.posted_at, sp.channel_id,
+                       COUNT(sr.id) as reaction_count
+                FROM song_posts sp
+                LEFT JOIN song_reactions sr ON sr.message_id = sp.message_id AND sp.message_id IS NOT NULL
+                GROUP BY sp.id
+                ORDER BY sp.posted_at DESC
+                LIMIT ?
+            """
+            params = (limit,)
+        async with self.db.execute(sql, params) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
     async def add_song_posts_bulk(self, rows: list[tuple]):
         await self.db.executemany(
             "INSERT INTO song_posts (channel_id, user_id, user_name, url, posted_at, message_id) VALUES (?, ?, ?, ?, ?, ?) "

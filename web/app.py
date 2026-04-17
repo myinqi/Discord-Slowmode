@@ -591,6 +591,31 @@ def create_app(db: Database, bot=None) -> Quart:
             total=total,
         )
 
+    @app.route("/player")
+    @login_required
+    async def player():
+        guild = get_guild()
+        channels = []
+        monitored = await db.get_monitored_channels()
+        for ch in monitored:
+            ch_name = f"channel-{ch['channel_id']}"
+            if guild:
+                gch = guild.get_channel(ch["channel_id"])
+                if gch:
+                    ch_name = gch.name
+            channels.append({"id": ch["channel_id"], "name": ch_name})
+        return await render_template("player.html", channels=channels)
+
+    @app.route("/api/player-songs")
+    @login_required
+    async def api_player_songs():
+        from quart import jsonify
+        channel_id = request.args.get("channel_id", "").strip()
+        limit = min(int(request.args.get("limit", "200")), 500)
+        ch_id = int(channel_id) if channel_id.isdigit() else None
+        songs = await db.get_player_songs(channel_id=ch_id, limit=limit)
+        return jsonify(songs)
+
     @app.route("/listening-party", methods=["GET", "POST"])
     @login_required
     async def listening_party():

@@ -75,6 +75,9 @@
                 <a href="{{ url_for('playlist_search') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'playlist_search' %}active{% endif %}">
                     <span class="sidebar-icon mr-3">🔍</span><span class="sidebar-label">Playlist Search</span>
                 </a>
+                <a href="{{ url_for('player') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'player' %}active{% endif %}">
+                    <span class="sidebar-icon mr-3">🎵</span><span class="sidebar-label">Suno Player</span>
+                </a>
                 <a href="{{ url_for('song_stats') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'song_stats' %}active{% endif %}">
                     <span class="sidebar-icon mr-3">📈</span><span class="sidebar-label">Song Stats</span>
                 </a>
