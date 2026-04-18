@@ -694,6 +694,7 @@ def create_app(db: Database, bot=None) -> Quart:
         )
         # Also add the reaction on the actual Discord message via the bot
         discord_ok = False
+        print(f"[player-react] bot={bot is not None}, ready={bot.is_ready() if bot else 'N/A'}, channel_id={channel_id!r}, message_id={message_id!r}, emoji={emoji!r}")
         if bot and bot.is_ready() and channel_id:
             try:
                 guild = get_guild()
@@ -703,8 +704,8 @@ def create_app(db: Database, bot=None) -> Quart:
                         msg = await ch.fetch_message(int(message_id))
                         await msg.add_reaction(emoji)
                         discord_ok = True
-            except Exception:
-                pass  # silently fail — DB reaction is saved regardless
+            except Exception as e:
+                print(f"[player-react] Failed to add Discord reaction: {e}")
         return jsonify({"ok": True, "discord": discord_ok})
 
     @app.route("/api/suno-resolve/<short_id>")
