@@ -1447,7 +1447,7 @@ class CommandsCog(commands.Cog):
         )
         embed.set_footer(text=bot_name)
         embed.timestamp = discord.utils.utcnow()
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="help", description="Show a list of all available commands")
     async def help_command(self, interaction: discord.Interaction):
