@@ -694,7 +694,6 @@ def create_app(db: Database, bot=None) -> Quart:
         )
         # Also add the reaction on the actual Discord message via the bot
         discord_ok = False
-        print(f"[player-react] bot={bot is not None}, ready={bot.is_ready() if bot else 'N/A'}, channel_id={channel_id!r}, message_id={message_id!r}, emoji={emoji!r}")
         if bot and bot.is_ready() and channel_id:
             try:
                 guild = get_guild()

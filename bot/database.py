@@ -645,7 +645,15 @@ class Database:
             params = (limit, offset)
         async with self.db.execute(sql, params) as cursor:
             rows = await cursor.fetchall()
-            return [dict(r) for r in rows]
+            result = []
+            for r in rows:
+                d = dict(r)
+                # Convert large IDs to strings to avoid JavaScript precision loss
+                for key in ("message_id", "user_id", "channel_id"):
+                    if d.get(key) is not None:
+                        d[key] = str(d[key])
+                result.append(d)
+            return result
 
     async def add_song_posts_bulk(self, rows: list[tuple]):
         await self.db.executemany(
