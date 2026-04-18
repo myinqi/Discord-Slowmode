@@ -2,288 +2,286 @@
 {% block title %}Suno Player{% endblock %}
 {% block content %}
 <style>
-    .player-wrap{max-width:750px}
-    .player-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0}
-    .player-btn{padding:7px 16px;font-size:13px;border:1px solid #555;border-radius:8px;background:transparent;color:#eee;cursor:pointer;transition:background .15s}
-    .player-btn:hover{background:#3a2a6e}
-    .player-btn.primary{background:#5865F2;color:#fff;border-color:transparent}
-    .player-btn.primary:hover{background:#4752c4}
-    .player-btn:disabled{opacity:.4;cursor:not-allowed}
-    #nowplaying{display:flex;gap:12px;align-items:flex-start;margin:10px 0 6px}
-    #artwork{width:80px;height:80px;border-radius:8px;object-fit:cover;background:#1a1a1a;flex-shrink:0;display:none}
-    #tinfo{font-size:15px;color:#eee;font-weight:500;margin-bottom:2px}
-    #sub{font-size:12px;color:#666;margin-bottom:4px}
-    #p-status{font-size:11px;margin-bottom:4px;color:#aa8}
-    audio{width:100%;border-radius:8px}
-    #bar{height:3px;background:#333;border-radius:2px;margin:6px 0 10px;overflow:hidden}
-    #prog{height:100%;width:0%;background:#5865F2}
-    #lyrics{display:none;margin:0 0 10px;padding:10px 12px;background:#1a1a1a;border-radius:8px;font-size:12px;color:#aaa;line-height:1.7;max-height:200px;overflow-y:auto;white-space:pre-wrap}
-    #queue{max-height:400px;overflow-y:auto;margin-top:10px}
-    .qi{display:flex;gap:8px;padding:6px 8px;border-radius:6px;font-size:12px;color:#888;cursor:pointer;align-items:center}
+    .player-wrap{max-width:750px;margin:0 auto}
+    /* -- Top bar: filters + feature buttons -- */
+    .top-bar{display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-bottom:12px}
+    .top-bar select,.top-bar input[type=number]{padding:6px 10px;font-size:12px;border:1px solid #333;border-radius:8px;background:#1a1a1a;color:#eee}
+    .top-bar select{min-width:160px}
+    .top-bar input[type=number]{width:64px}
+    .icon-btn{width:36px;height:36px;display:inline-flex;align-items:center;justify-content:center;border:1px solid #5865F2;border-radius:8px;background:#5865F2;color:#fff;cursor:pointer;font-size:16px;transition:all .15s;flex-shrink:0}
+    .icon-btn:hover{background:#4752c4;border-color:#4752c4}
+    .icon-btn.on{background:#3b2f7e;border-color:#7c6ff0;box-shadow:0 0 6px rgba(88,101,242,.4)}
+    .icon-btn:disabled{opacity:.35;cursor:not-allowed}
+    .icon-btn.primary{background:#5865F2;color:#fff;border-color:transparent}
+    .icon-btn.primary:hover{background:#4752c4}
+    #load-status{font-size:11px;color:#666;padding-bottom:2px;white-space:nowrap}
+    /* -- Now Playing card -- */
+    .np-card{display:flex;gap:14px;align-items:flex-start}
+    #artwork{width:120px;height:120px;border-radius:10px;object-fit:cover;background:#1a1a1a;flex-shrink:0;display:none;cursor:pointer}
+    .np-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+    #tinfo{font-size:16px;color:#eee;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #sub{font-size:12px;color:#888}
+    #p-status{font-size:11px;color:#aa8}
+    #suno-link{font-size:11px;color:#b8b4f0;text-decoration:none;display:none}
+    #suno-link:hover{text-decoration:underline}
+    /* -- Transport + progress -- */
+    .transport{display:flex;align-items:center;gap:8px;margin-top:8px}
+    .transport .icon-btn{width:32px;height:32px;font-size:14px;border-radius:50%}
+    .transport .play-btn{width:38px;height:38px;font-size:17px}
+    .seek-bar{flex:1;display:flex;align-items:center;gap:6px}
+    .seek-track{flex:1;height:4px;background:#333;border-radius:2px;cursor:pointer;position:relative}
+    .seek-fill{height:100%;background:#5865F2;border-radius:2px;pointer-events:none;width:0%}
+    .seek-time{font-size:11px;color:#777;min-width:36px;text-align:center}
+    .vol-wrap{display:flex;align-items:center;gap:4px}
+    .vol-wrap input[type=range]{width:70px;accent-color:#5865F2}
+    /* -- Auto-next bar -- */
+    .auto-row{display:flex;align-items:center;gap:8px;margin-top:6px}
+    .auto-row span{font-size:12px;color:#555}
+    .auto-row input[type=range]{width:100px;accent-color:#5865F2}
+    #rlbl{font-size:12px;color:#666}
+    #cntd{font-size:12px;font-weight:600;color:#b8b4f0}
+    /* -- Timer bar -- */
+    #timerbar{height:2px;background:#333;border-radius:1px;margin-top:4px;overflow:hidden}
+    #timerprog{height:100%;width:0%;background:#5865F2}
+    /* -- Reactions -- */
+    .react-row{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+    .react-btn{padding:4px 10px;font-size:16px;border:1px solid #333;border-radius:20px;background:transparent;cursor:pointer;transition:all .15s;position:relative}
+    .react-btn:hover{background:#2a2a3a;border-color:#5865F2}
+    .react-btn.reacted{background:#2d2456;border-color:#5865F2}
+    .react-btn .rc{font-size:10px;color:#888;margin-left:2px;vertical-align:middle}
+    /* -- Lyrics -- */
+    #lyrics{display:none;margin-top:10px;padding:10px 12px;background:#111;border-radius:8px;font-size:12px;color:#aaa;line-height:1.7;max-height:200px;overflow-y:auto;white-space:pre-wrap}
+    /* -- Queue -- */
+    #queue{max-height:400px;overflow-y:auto;margin-top:8px}
+    .qi{display:flex;gap:8px;padding:5px 8px;border-radius:6px;font-size:12px;color:#888;cursor:pointer;align-items:center}
     .qi:hover{background:#1a1a1a}
     .qi.on{background:#2d2456;color:#b8b4f0}
-    .qi .n{min-width:24px;text-align:right;font-weight:500;flex-shrink:0}
+    .qi .n{min-width:22px;text-align:right;font-weight:500;flex-shrink:0}
     .qi .t{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .qi .a{font-size:11px;opacity:.6;flex-shrink:0;max-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .qi .rc{font-size:10px;color:#666;flex-shrink:0;min-width:30px;text-align:right}
-    .filter-section{display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin-bottom:12px}
-    .filter-section select,.filter-section input{padding:7px 10px;font-size:12px;border:1px solid #333;border-radius:8px;background:#1a1a1a;color:#eee}
-    .filter-section select{min-width:180px}
-    .shuffle-active{background:#5865F2 !important;color:#fff !important;border-color:transparent !important}
+    .qi .a{font-size:11px;opacity:.6;flex-shrink:0;max-width:110px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .qi .rc{font-size:10px;color:#666;flex-shrink:0;min-width:24px;text-align:right}
+    .qi .link{font-size:11px;color:#555;text-decoration:none;flex-shrink:0}
+    .qi .link:hover{color:#b8b4f0}
 </style>
 
 <div class="player-wrap">
     <h2 class="text-2xl font-bold text-white mb-4">🎵 Suno Player</h2>
 
-    <!-- Source Selection -->
-    <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-4 mb-4">
-        <div class="filter-section">
-            <div>
-                <label class="block text-xs text-gray-500 mb-1">Channel</label>
-                <select id="channelSel">
-                    <option value="">All channels</option>
-                    {% for ch in channels %}
-                    <option value="{{ ch.id }}">#{{ ch.name }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div>
-                <label class="block text-xs text-gray-500 mb-1">Limit</label>
-                <input type="number" id="limitInput" value="20" min="1" max="500" style="width:70px">
-            </div>
-            <div style="padding-bottom:1px">
-                <button class="player-btn primary" id="btnFetch">⬇ Load Songs</button>
-            </div>
-            <div id="load-status" style="font-size:11px;color:#666;padding-bottom:4px"></div>
+    <!-- Top bar: filters + feature buttons -->
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-4 mb-3">
+        <div class="top-bar">
+            <select id="channelSel">
+                <option value="">All channels</option>
+                {% for ch in channels %}
+                <option value="{{ ch.id }}">#{{ ch.name }}</option>
+                {% endfor %}
+            </select>
+            <input type="number" id="limitInput" value="20" min="1" max="500" title="Songs to load">
+            <button class="icon-btn primary" id="btnFetch" title="Load Songs">⬇</button>
+            <button class="icon-btn" id="btnShuffle" onclick="toggleShuffle()" title="Shuffle">🔀</button>
+            <button class="icon-btn" id="btnHidePlayed" onclick="toggleHidePlayed()" title="Hide Played">👁</button>
+            <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:#666;cursor:pointer;user-select:none">
+                <input type="checkbox" id="chkAutoload" style="accent-color:#5865F2"> Auto-load more
+            </label>
+            <span id="load-status"></span>
         </div>
     </div>
 
-    <!-- Controls -->
-    <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-4 mb-4">
-        <div class="player-row">
-            <button class="player-btn primary" id="btnPlay" disabled>▶ Play</button>
-            <button class="player-btn" onclick="prev()">← Prev</button>
-            <button class="player-btn" onclick="next()">Next →</button>
-            <button class="player-btn" id="btnShuffle" onclick="toggleShuffle()">🔀 Shuffle</button>
-            <button class="player-btn" id="btnHidePlayed" onclick="toggleHidePlayed()">👁 Hide Played</button>
-        </div>
-        <div class="player-row">
-            <span style="font-size:13px;color:#555">Auto-Next</span>
-            <input type="range" id="rng" min="0" max="300" step="15" value="0" style="width:120px;accent-color:#5865F2">
-            <span id="rlbl" style="font-size:13px;color:#666">OFF</span>
-            <span id="cntd" style="font-size:13px;font-weight:500;color:#b8b4f0"></span>
-        </div>
-
+    <!-- Player card -->
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-4 mb-3">
         <!-- Now Playing -->
-        <div id="nowplaying">
-            <a id="artwork-link" href="#" target="_blank" style="flex-shrink:0"><img id="artwork" src="" alt=""></a>
-            <div style="flex:1;min-width:0">
+        <div class="np-card">
+            <img id="artwork" src="" alt="" onclick="var l=document.getElementById('suno-link');if(l.href)window.open(l.href,'_blank')">
+            <div class="np-info">
                 <div id="tinfo">—</div>
                 <div id="sub"></div>
                 <div id="p-status"></div>
-                <a id="suno-link" href="#" target="_blank" style="display:none;font-size:12px;color:#b8b4f0;text-decoration:none;margin-bottom:6px">↗ Open on Suno</a>
-                <audio id="player" controls preload="none"></audio>
+                <a id="suno-link" href="#" target="_blank">↗ Open on Suno</a>
             </div>
         </div>
-        <div id="bar"><div id="prog"></div></div>
+
+        <!-- Transport controls + seek bar -->
+        <div class="transport">
+            <button class="icon-btn" onclick="prev()" title="Previous">⏮</button>
+            <button class="icon-btn play-btn primary" id="btnPlay" disabled title="Play / Pause">▶</button>
+            <button class="icon-btn" onclick="next()" title="Next">⏭</button>
+            <div class="seek-bar">
+                <span class="seek-time" id="timeNow">0:00</span>
+                <div class="seek-track" id="seekTrack">
+                    <div class="seek-fill" id="seekFill"></div>
+                </div>
+                <span class="seek-time" id="timeDur">0:00</span>
+            </div>
+            <div class="vol-wrap">
+                <span style="font-size:14px;color:#888">🔊</span>
+                <input type="range" id="volSlider" min="0" max="100" value="80">
+            </div>
+        </div>
+
+        <!-- Auto-Next -->
+        <div class="auto-row">
+            <span>Auto-Next</span>
+            <input type="range" id="rng" min="0" max="300" step="15" value="0">
+            <span id="rlbl">OFF</span>
+            <span id="cntd"></span>
+        </div>
+        <div id="timerbar"><div id="timerprog"></div></div>
+
+        <!-- Emoji Reactions -->
+        <div class="react-row" id="reactRow" style="display:none">
+            <button class="react-btn" data-emoji="💜" onclick="react(this)">💜</button>
+            <button class="react-btn" data-emoji="💯" onclick="react(this)">💯</button>
+            <button class="react-btn" data-emoji="👏🏻" onclick="react(this)">👏🏻</button>
+            <button class="react-btn" data-emoji="❤️‍🔥" onclick="react(this)">❤️‍🔥</button>
+            <button class="react-btn" data-emoji="🫶🏻" onclick="react(this)">🫶🏻</button>
+            <button class="react-btn" data-emoji="🔥" onclick="react(this)">🔥</button>
+        </div>
+
+        <!-- Lyrics -->
         <div id="lyrics"></div>
     </div>
 
     <!-- Queue -->
     <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-4">
-        <h3 class="text-white font-semibold text-sm mb-2">Queue <span id="qcount" class="text-gray-500 font-normal"></span></h3>
+        <h3 class="text-white font-semibold text-sm mb-1">Queue <span id="qcount" class="text-gray-500 font-normal"></span></h3>
         <div id="queue"></div>
     </div>
 </div>
 
+<audio id="player" preload="none" style="display:none"></audio>
+
 <script>
 var T=[], cur=-1, tSec=0, cd=0, tick=null, shuffled=false, shuffleOrder=[];
-var playedSet=new Set(), hidePlayed=false;
+var playedSet=new Set(), hidePlayed=false, loadOffset=0, autoloadEnabled=false;
 var player=document.getElementById('player');
+var REACT_EMOJIS=['💜','💯','👏🏻','❤️‍🔥','🫶🏻','🔥'];
 
 /* --- UUID extraction from Suno URLs --- */
 var SUNO_RE=/(?:https?:\/\/)?(?:app\.)?suno\.(?:com|ai)\/(?:song|track|s)\/([a-zA-Z0-9_-]{8,})/;
-
-function extractUUID(url){
-    var m=url.match(SUNO_RE);
-    return m?m[1]:null;
-}
-
+function extractUUID(url){var m=url.match(SUNO_RE);return m?m[1]:null;}
 function isFullUUID(id){return /-/.test(id);}
-
 function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
-function fmt(s){var m=Math.floor(s/60),ss=s%60;return m+':'+(ss<10?'0':'')+ss;}
+function fmt(s){var m=Math.floor(s/60),ss=Math.floor(s%60);return m+':'+(ss<10?'0':'')+ss;}
 function setStatus(msg){document.getElementById('p-status').textContent=msg;}
 
 /* --- Load songs from API --- */
-async function fetchSongs(){
+async function fetchSongs(append){
     var ch=document.getElementById('channelSel').value;
-    var limit=document.getElementById('limitInput').value;
+    var limit=parseInt(document.getElementById('limitInput').value)||20;
     var ls=document.getElementById('load-status');
+    if(!append){loadOffset=0;T=[];cur=-1;playedSet.clear();}
     ls.textContent='Loading…';
     try{
-        var url='/api/player-songs?limit='+limit;
+        var url='/api/player-songs?limit='+limit+'&offset='+loadOffset;
         if(ch)url+='&channel_id='+ch;
         var resp=await fetch(url);
         if(!resp.ok){ls.textContent='Error '+resp.status;return;}
         var songs=await resp.json();
-        T=[];
+        var added=0;
+        var existingIds=new Set(T.map(function(t){return t.url;}));
         songs.forEach(function(s){
+            if(existingIds.has(s.url))return;
             var uuid=extractUUID(s.url);
             if(uuid){
                 T.push({
-                    id:uuid,
-                    title:s.song_title||uuid,
-                    author:s.user_name||'',
-                    url:s.url,
-                    reactions:s.reaction_count||0,
-                    isUUID:isFullUUID(uuid)
+                    id:uuid, title:s.song_title||uuid, author:s.user_name||'',
+                    url:s.url, reactions:s.reaction_count||0, isUUID:isFullUUID(uuid),
+                    messageId:s.message_id, channelId:s.channel_id, userId:s.user_id
                 });
+                added++;
             }
         });
-        ls.textContent=songs.length+' songs loaded — '+T.length+' playable';
+        loadOffset+=limit;
+        ls.textContent=T.length+' songs'+(append?' (+'+added+' new)':' loaded');
         document.getElementById('qcount').textContent='('+T.length+')';
         if(shuffled)buildShuffleOrder();
         renderQ();
         document.getElementById('btnPlay').disabled=T.length===0;
-        /* Resolve missing titles in background */
         resolveAllTitles();
-    }catch(e){
-        ls.textContent='Error: '+e.message;
+    }catch(e){ls.textContent='Error: '+e.message;}
+}
+
+/* --- Autoload more when all songs played --- */
+async function maybeAutoload(){
+    if(!autoloadEnabled)return;
+    var allPlayed=true;
+    for(var i=0;i<T.length;i++){if(!playedSet.has(getPlayIndex(i))){allPlayed=false;break;}}
+    if(allPlayed&&T.length>0){
+        document.getElementById('load-status').textContent='Auto-loading more…';
+        await fetchSongs(true);
     }
 }
 
 /* --- Background batch title resolver --- */
 async function resolveAllTitles(){
     var pending=[];
-    for(var i=0;i<T.length;i++){
-        if(needsTitle(T[i]))pending.push(i);
-    }
+    for(var i=0;i<T.length;i++){if(needsTitle(T[i]))pending.push(i);}
     if(!pending.length)return;
     var ls=document.getElementById('load-status');
     var done=0;
-    /* Resolve in parallel batches of 3 to avoid hammering the server */
     for(var b=0;b<pending.length;b+=3){
         var batch=pending.slice(b,b+3);
         await Promise.all(batch.map(async function(idx){
-            var e=T[idx];
-            var uuid=e.id;
-            /* If short ID, resolve to UUID first */
-            if(!e.isUUID){
-                var resolved=await resolveShortId(e.id);
-                if(resolved){uuid=resolved;e.id=resolved;e.isUUID=true;}
-                else return;
-            }
-            /* Fetch title + image from Suno */
+            var e=T[idx],uuid=e.id;
+            if(!e.isUUID){var resolved=await resolveShortId(e.id);if(resolved){uuid=resolved;e.id=resolved;e.isUUID=true;}else return;}
             var meta=await fetchSunoMeta(uuid);
-            if(meta){
-                if(meta.title)e.title=meta.title;
-                if(meta.image_url)e.imageUrl=meta.image_url;
-                if(meta.artist)e.sunoArtist=meta.artist;
-            }
+            if(meta){if(meta.title)e.title=meta.title;if(meta.image_url)e.imageUrl=meta.image_url;if(meta.artist)e.sunoArtist=meta.artist;}
             done++;
         }));
-        ls.textContent=T.length+' songs — resolving titles ('+done+'/'+pending.length+')';
+        ls.textContent=T.length+' songs — resolving ('+done+'/'+pending.length+')';
         renderQ();
     }
-    ls.textContent=T.length+' songs ready';
-    renderQ();
+    ls.textContent=T.length+' songs ready';renderQ();
 }
 
-/* --- Short URL resolver (server-side proxy) --- */
 async function resolveShortId(shortId){
-    try{
-        var r=await fetch('/api/suno-resolve/'+encodeURIComponent(shortId));
-        if(r.ok){
-            var data=await r.json();
-            return data.uuid||null;
-        }
-    }catch(e){}
-    return null;
+    try{var r=await fetch('/api/suno-resolve/'+encodeURIComponent(shortId));if(r.ok){var d=await r.json();return d.uuid||null;}}catch(e){}return null;
 }
-
-/* --- Lyrics + metadata from server-side proxy --- */
 async function fetchSunoMeta(uuid){
-    try{
-        var r=await fetch('/api/suno-lyrics/'+encodeURIComponent(uuid));
-        if(r.ok) return await r.json();
-    }catch(e){}
-    return null;
+    try{var r=await fetch('/api/suno-lyrics/'+encodeURIComponent(uuid));if(r.ok)return await r.json();}catch(e){}return null;
 }
 
-function showLyrics(text){
-    var el=document.getElementById('lyrics');
-    el.style.display=text?'block':'none';
-    el.textContent=text||'';
-}
+function showLyrics(text){var el=document.getElementById('lyrics');el.style.display=text?'block':'none';el.textContent=text||'';}
 
-function setArtwork(uuid, imageUrl){
+function setArtwork(uuid,imageUrl){
     var img=document.getElementById('artwork');
     if(!uuid){img.style.display='none';return;}
     img.style.display='block';
-    if(imageUrl){
-        img.src=imageUrl;
-        img.onerror=function(){
-            img.src='https://cdn1.suno.ai/image_large_'+uuid+'.jpeg';
-            img.onerror=function(){img.style.display='none';};
-        };
-    }else{
-        img.src='https://cdn1.suno.ai/image_large_'+uuid+'.jpeg';
-        img.onerror=function(){
-            img.src='https://cdn1.suno.ai/image_'+uuid+'.jpeg';
-            img.onerror=function(){img.style.display='none';};
-        };
-    }
+    if(imageUrl){img.src=imageUrl;img.onerror=function(){img.src='https://cdn1.suno.ai/image_large_'+uuid+'.jpeg';img.onerror=function(){img.style.display='none';};};}
+    else{img.src='https://cdn1.suno.ai/image_large_'+uuid+'.jpeg';img.onerror=function(){img.src='https://cdn1.suno.ai/image_'+uuid+'.jpeg';img.onerror=function(){img.style.display='none';};};}
 }
 
 function setSunoLink(uuid){
     var link=document.getElementById('suno-link');
-    var alink=document.getElementById('artwork-link');
     if(!uuid){link.style.display='none';return;}
-    var url='https://suno.com/song/'+uuid;
-    link.href=url;
-    link.style.display='inline-block';
-    alink.href=url;
+    link.href='https://suno.com/song/'+uuid;link.style.display='inline-block';
 }
 
 /* --- Playback --- */
 function needsTitle(e){
     if(!e.title)return true;
-    /* Title looks like a short ID or raw UUID */
     if(/^[a-zA-Z0-9_-]{8,22}$/.test(e.title))return true;
     if(/^[a-f0-9-]{36}$/.test(e.title))return true;
     return false;
 }
 
 async function playTrack(uuid,idx){
-    player.style.display='block';
     setStatus('Loading…');
-    var realIdx=getPlayIndex(idx);
-    var e=T[realIdx];
-    setArtwork(uuid, e.imageUrl||null);
-    setSunoLink(uuid);
+    var realIdx=getPlayIndex(idx);var e=T[realIdx];
+    setArtwork(uuid,e.imageUrl||null);setSunoLink(uuid);
     player.src='https://cdn1.suno.ai/'+uuid+'.mp3';
     player.oncanplay=function(){setStatus('');};
     player.onerror=function(){setStatus('⚠ Could not load audio');};
     player.play().catch(function(){setStatus('Press ▶ to play');});
+    updatePlayBtn();
     fetchSunoMeta(uuid).then(function(meta){
         if(!meta||cur!==idx)return;
         if(meta.lyrics)showLyrics(meta.lyrics);
         var changed=false;
-        if(meta.title&&needsTitle(e)){
-            e.title=meta.title;
-            document.getElementById('tinfo').textContent=meta.title;
-            changed=true;
-        }
-        if(meta.image_url){
-            e.imageUrl=meta.image_url;
-            setArtwork(uuid, meta.image_url);
-        }
-        if(meta.artist&&!e.sunoArtist){
-            e.sunoArtist=meta.artist;
-            changed=true;
-        }
-        if(changed){updateSub(e,i);renderQ();}
+        if(meta.title&&needsTitle(e)){e.title=meta.title;document.getElementById('tinfo').textContent=meta.title;changed=true;}
+        if(meta.image_url){e.imageUrl=meta.image_url;setArtwork(uuid,meta.image_url);}
+        if(meta.artist&&!e.sunoArtist){e.sunoArtist=meta.artist;changed=true;}
+        if(changed){updateSub(e,idx);renderQ();}
     });
 }
 
@@ -291,99 +289,106 @@ function updateSub(e,i){
     var parts=[(i+1)+' / '+T.length];
     if(e.author)parts.push(e.author);
     if(e.sunoArtist&&e.sunoArtist!==e.author)parts.push('🎤 '+e.sunoArtist);
-    if(e.reactions)parts.push(e.reactions+' reactions');
+    if(e.reactions)parts.push(e.reactions+' ❤');
     document.getElementById('sub').textContent=parts.join(' · ');
 }
 
-function getPlayIndex(i){
-    return shuffled&&shuffleOrder.length?shuffleOrder[i]:i;
+function getPlayIndex(i){return shuffled&&shuffleOrder.length?shuffleOrder[i]:i;}
+
+function updatePlayBtn(){
+    var btn=document.getElementById('btnPlay');
+    btn.textContent=(!player.paused&&!player.ended)?'⏸':'▶';
 }
 
 async function play(i){
     if(i<0||i>=T.length)return;
-    var realIdx=getPlayIndex(i);
-    cur=i;
-    playedSet.add(realIdx);
+    var realIdx=getPlayIndex(i);cur=i;playedSet.add(realIdx);
     var e=T[realIdx];
     document.getElementById('tinfo').textContent=e.title;
-    updateSub(e,i);
-    showLyrics(null);
-    renderQ();
-    resetCd();
-
+    updateSub(e,i);showLyrics(null);
+    document.getElementById('reactRow').style.display='flex';
+    updateReactBtns();
+    renderQ();resetCd();
     var uuid;
-    if(e.isUUID){
-        uuid=e.id;
-    }else{
-        setStatus('Resolving short URL…');
-        uuid=await resolveShortId(e.id);
-    }
-    if(uuid){
-        if(!e.isUUID){e.id=uuid;e.isUUID=true;e.title=e.title;renderQ();}
-        playTrack(uuid,i);
-    }else{
-        player.style.display='none';player.src='';setArtwork(null);
-        setStatus('⚠ Could not resolve — click ↗ to open on Suno');
-    }
+    if(e.isUUID){uuid=e.id;}else{setStatus('Resolving…');uuid=await resolveShortId(e.id);}
+    if(uuid){if(!e.isUUID){e.id=uuid;e.isUUID=true;renderQ();}playTrack(uuid,i);}
+    else{player.src='';setArtwork(null);setStatus('⚠ Could not resolve');updatePlayBtn();}
 }
 
-player.addEventListener('ended',function(){next();});
-function prev(){
-    var i=cur-1;
-    if(hidePlayed){while(i>=0&&playedSet.has(getPlayIndex(i)))i--;}
-    if(i>=0)play(i);
-}
-function next(){
-    var i=cur+1;
-    if(hidePlayed){while(i<T.length&&playedSet.has(getPlayIndex(i)))i++;}
-    if(i<T.length)play(i);else stopCd();
-}
+player.addEventListener('ended',function(){
+    updatePlayBtn();
+    maybeAutoload().then(function(){next();});
+});
+player.addEventListener('play',function(){updatePlayBtn();});
+player.addEventListener('pause',function(){updatePlayBtn();});
+
+function prev(){var i=cur-1;if(hidePlayed){while(i>=0&&playedSet.has(getPlayIndex(i)))i--;}if(i>=0)play(i);}
+function next(){var i=cur+1;if(hidePlayed){while(i<T.length&&playedSet.has(getPlayIndex(i)))i++;}if(i<T.length)play(i);else stopCd();}
+
+/* --- Seek bar --- */
+player.addEventListener('timeupdate',function(){
+    if(!player.duration)return;
+    var pct=(player.currentTime/player.duration)*100;
+    document.getElementById('seekFill').style.width=pct+'%';
+    document.getElementById('timeNow').textContent=fmt(player.currentTime);
+});
+player.addEventListener('loadedmetadata',function(){document.getElementById('timeDur').textContent=fmt(player.duration);});
+document.getElementById('seekTrack').addEventListener('click',function(ev){
+    if(!player.duration)return;
+    var rect=this.getBoundingClientRect();var pct=(ev.clientX-rect.left)/rect.width;
+    player.currentTime=pct*player.duration;
+});
+
+/* Volume */
+document.getElementById('volSlider').oninput=function(){player.volume=this.value/100;};
+player.volume=0.8;
 
 /* --- Shuffle --- */
-function toggleShuffle(){
-    shuffled=!shuffled;
-    var btn=document.getElementById('btnShuffle');
-    btn.classList.toggle('shuffle-active',shuffled);
-    if(shuffled)buildShuffleOrder();
-    renderQ();
-}
+function toggleShuffle(){shuffled=!shuffled;document.getElementById('btnShuffle').classList.toggle('on',shuffled);if(shuffled)buildShuffleOrder();renderQ();}
 function buildShuffleOrder(){
-    shuffleOrder=[];
-    for(var i=0;i<T.length;i++)shuffleOrder.push(i);
-    for(var i=shuffleOrder.length-1;i>0;i--){
-        var j=Math.floor(Math.random()*(i+1));
-        var tmp=shuffleOrder[i];shuffleOrder[i]=shuffleOrder[j];shuffleOrder[j]=tmp;
-    }
+    shuffleOrder=[];for(var i=0;i<T.length;i++)shuffleOrder.push(i);
+    for(var i=shuffleOrder.length-1;i>0;i--){var j=Math.floor(Math.random()*(i+1));var t=shuffleOrder[i];shuffleOrder[i]=shuffleOrder[j];shuffleOrder[j]=t;}
 }
 
 /* --- Auto-Next Timer --- */
 function resetCd(){
-    stopCd();if(!tSec)return;
-    cd=tSec;
+    stopCd();if(!tSec)return;cd=tSec;
     document.getElementById('cntd').textContent='→ '+fmt(cd);
-    document.getElementById('prog').style.cssText='transition:none;width:0%';
-    setTimeout(function(){document.getElementById('prog').style.cssText='transition:width '+tSec+'s linear;width:100%';},50);
+    document.getElementById('timerprog').style.cssText='transition:none;width:0%';
+    setTimeout(function(){document.getElementById('timerprog').style.cssText='transition:width '+tSec+'s linear;width:100%';},50);
     tick=setInterval(function(){cd--;document.getElementById('cntd').textContent='→ '+fmt(cd);if(cd<=0)next();},1000);
 }
-function stopCd(){
-    clearInterval(tick);tick=null;
-    document.getElementById('cntd').textContent='';
-    document.getElementById('prog').style.cssText='width:0%';
-}
+function stopCd(){clearInterval(tick);tick=null;document.getElementById('cntd').textContent='';document.getElementById('timerprog').style.cssText='width:0%';}
 
 /* --- Hide Played --- */
-function toggleHidePlayed(){
-    hidePlayed=!hidePlayed;
-    document.getElementById('btnHidePlayed').classList.toggle('shuffle-active',hidePlayed);
-    renderQ();
+function toggleHidePlayed(){hidePlayed=!hidePlayed;document.getElementById('btnHidePlayed').classList.toggle('on',hidePlayed);renderQ();}
+
+/* --- Emoji Reactions --- */
+function updateReactBtns(){
+    /* Reset all reaction buttons */
+    var btns=document.querySelectorAll('.react-btn');
+    btns.forEach(function(b){b.classList.remove('reacted');});
+}
+
+async function react(btn){
+    if(cur<0)return;
+    var emoji=btn.getAttribute('data-emoji');
+    var realIdx=getPlayIndex(cur);var e=T[realIdx];
+    if(!e.messageId){setStatus('⚠ No message ID — cannot save reaction');return;}
+    btn.classList.toggle('reacted');
+    try{
+        await fetch('/api/player-react',{
+            method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({message_id:e.messageId,channel_id:e.channelId,song_url:e.url,post_author_id:e.userId,emoji:emoji,song_title:e.title})
+        });
+    }catch(ex){console.error('Reaction failed',ex);}
 }
 
 /* --- Queue Rendering --- */
 function renderQ(){
     var html='',shown=0;
     for(var i=0;i<T.length;i++){
-        var realIdx=getPlayIndex(i);
-        var t=T[realIdx];
+        var realIdx=getPlayIndex(i);var t=T[realIdx];
         if(hidePlayed&&i!==cur&&playedSet.has(realIdx))continue;
         shown++;
         var url=t.isUUID?'https://suno.com/song/'+t.id:'https://suno.com/s/'+t.id;
@@ -393,35 +398,33 @@ function renderQ(){
             +'<span class="t">'+esc(t.title)+'</span>'
             +'<span class="a">'+esc(t.sunoArtist||t.author)+'</span>'
             +rc
-            +'<a href="'+url+'" target="_blank" onclick="event.stopPropagation()" style="font-size:11px;color:#555;text-decoration:none;flex-shrink:0;margin-left:4px" title="Open on Suno">↗</a>'
+            +'<a href="'+url+'" target="_blank" onclick="event.stopPropagation()" class="link" title="Open on Suno">↗</a>'
             +'</div>';
     }
     document.getElementById('queue').innerHTML=html;
-    document.getElementById('qcount').textContent='('+shown+(hidePlayed&&shown<T.length?' / '+T.length:'')+')';    
+    document.getElementById('qcount').textContent='('+shown+(hidePlayed&&shown<T.length?' / '+T.length:'')+')';
 }
 
-/* --- Persist settings in localStorage --- */
+/* --- Persist settings --- */
 function saveSettings(){
     localStorage.setItem('player-channel',document.getElementById('channelSel').value);
     localStorage.setItem('player-limit',document.getElementById('limitInput').value);
+    localStorage.setItem('player-autoload',autoloadEnabled?'1':'0');
 }
 function loadSettings(){
     var ch=localStorage.getItem('player-channel');
     var lim=localStorage.getItem('player-limit');
+    var al=localStorage.getItem('player-autoload');
     if(ch!==null)document.getElementById('channelSel').value=ch;
     if(lim)document.getElementById('limitInput').value=lim;
+    if(al==='1'){autoloadEnabled=true;document.getElementById('chkAutoload').checked=true;}
 }
 
 /* --- Events --- */
-document.getElementById('btnFetch').onclick=function(){saveSettings();fetchSongs();};
+document.getElementById('btnFetch').onclick=function(){saveSettings();fetchSongs(false);};
 document.getElementById('btnPlay').onclick=function(){
     if(!T.length)return;
-    if(cur>=0){
-        /* Already have a track — toggle pause/resume */
-        if(player.paused)player.play();else player.pause();
-        return;
-    }
-    /* Find first unplayed song (respects hidePlayed) */
+    if(cur>=0){if(player.paused)player.play();else player.pause();return;}
     var start=0;
     if(hidePlayed){while(start<T.length&&playedSet.has(getPlayIndex(start)))start++;}
     if(start<T.length)play(start);
@@ -431,11 +434,12 @@ document.getElementById('rng').oninput=function(){
     document.getElementById('rlbl').textContent=tSec?fmt(tSec):'OFF';
     if(tSec&&cur>=0)resetCd();else stopCd();
 };
+document.getElementById('chkAutoload').onchange=function(){autoloadEnabled=this.checked;saveSettings();};
 document.getElementById('channelSel').onchange=function(){saveSettings();};
 document.getElementById('limitInput').onchange=function(){saveSettings();};
 
 /* Auto-load on page open */
 loadSettings();
-fetchSongs();
+fetchSongs(false);
 </script>
 {% endblock %}

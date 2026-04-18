@@ -616,31 +616,33 @@ class Database:
         )
         await self.db.commit()
 
-    async def get_player_songs(self, channel_id: int = None, limit: int = 200) -> list[dict]:
+    async def get_player_songs(self, channel_id: int = None, limit: int = 200, offset: int = 0) -> list[dict]:
         """Get songs for the web player with reaction counts."""
         if channel_id:
             sql = """
                 SELECT sp.id, sp.url, sp.song_title, sp.user_name, sp.posted_at, sp.channel_id,
+                       sp.message_id, sp.user_id,
                        COUNT(sr.id) as reaction_count
                 FROM song_posts sp
                 LEFT JOIN song_reactions sr ON sr.message_id = sp.message_id AND sp.message_id IS NOT NULL
                 WHERE sp.channel_id = ?
                 GROUP BY sp.id
                 ORDER BY sp.posted_at DESC
-                LIMIT ?
+                LIMIT ? OFFSET ?
             """
-            params = (channel_id, limit)
+            params = (channel_id, limit, offset)
         else:
             sql = """
                 SELECT sp.id, sp.url, sp.song_title, sp.user_name, sp.posted_at, sp.channel_id,
+                       sp.message_id, sp.user_id,
                        COUNT(sr.id) as reaction_count
                 FROM song_posts sp
                 LEFT JOIN song_reactions sr ON sr.message_id = sp.message_id AND sp.message_id IS NOT NULL
                 GROUP BY sp.id
                 ORDER BY sp.posted_at DESC
-                LIMIT ?
+                LIMIT ? OFFSET ?
             """
-            params = (limit,)
+            params = (limit, offset)
         async with self.db.execute(sql, params) as cursor:
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]

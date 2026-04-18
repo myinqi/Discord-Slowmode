@@ -660,9 +660,39 @@ def create_app(db: Database, bot=None) -> Quart:
         from quart import jsonify
         channel_id = request.args.get("channel_id", "").strip()
         limit = min(int(request.args.get("limit", "200")), 500)
+        offset = max(int(request.args.get("offset", "0")), 0)
         ch_id = int(channel_id) if channel_id.isdigit() else None
-        songs = await db.get_player_songs(channel_id=ch_id, limit=limit)
+        songs = await db.get_player_songs(channel_id=ch_id, limit=limit, offset=offset)
         return jsonify(songs)
+
+    @app.route("/api/player-react", methods=["POST"])
+    @login_required
+    async def api_player_react():
+        from quart import jsonify
+        data = await request.get_json()
+        if not data:
+            return jsonify({"error": "No data"}), 400
+        message_id = data.get("message_id")
+        channel_id = data.get("channel_id")
+        song_url = data.get("song_url", "")
+        post_author_id = data.get("post_author_id")
+        emoji = data.get("emoji", "")
+        song_title = data.get("song_title")
+        if not message_id or not emoji:
+            return jsonify({"error": "Missing message_id or emoji"}), 400
+        reactor_user_id = session.get("user_id", 0)
+        reactor_user_name = session.get("username", "web-user")
+        await db.add_song_reaction(
+            message_id=int(message_id),
+            channel_id=int(channel_id or 0),
+            song_url=song_url,
+            post_author_id=int(post_author_id) if post_author_id else None,
+            reactor_user_id=int(reactor_user_id),
+            reactor_user_name=reactor_user_name,
+            emoji=emoji,
+            song_title=song_title,
+        )
+        return jsonify({"ok": True})
 
     @app.route("/api/suno-resolve/<short_id>")
     @login_required
