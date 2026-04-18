@@ -80,9 +80,7 @@
             <button class="icon-btn primary" id="btnFetch" title="Load Songs">⬇</button>
             <button class="icon-btn" id="btnShuffle" onclick="toggleShuffle()" title="Shuffle">🔀</button>
             <button class="icon-btn" id="btnHidePlayed" onclick="toggleHidePlayed()" title="Hide Played">👁</button>
-            <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:#666;cursor:pointer;user-select:none">
-                <input type="checkbox" id="chkAutoload" style="accent-color:#5865F2"> Auto-load more
-            </label>
+            <button class="icon-btn" id="btnAutoload" onclick="toggleAutoload()" title="Auto-load more songs">♾</button>
             <span id="load-status"></span>
         </div>
     </div>
@@ -363,6 +361,9 @@ function stopCd(){clearInterval(tick);tick=null;document.getElementById('cntd').
 /* --- Hide Played --- */
 function toggleHidePlayed(){hidePlayed=!hidePlayed;document.getElementById('btnHidePlayed').classList.toggle('on',hidePlayed);renderQ();}
 
+/* --- Autoload toggle --- */
+function toggleAutoload(){autoloadEnabled=!autoloadEnabled;document.getElementById('btnAutoload').classList.toggle('on',autoloadEnabled);saveSettings();}
+
 /* --- Emoji Reactions --- */
 function updateReactBtns(){
     /* Reset all reaction buttons */
@@ -417,7 +418,7 @@ function loadSettings(){
     var al=localStorage.getItem('player-autoload');
     if(ch!==null)document.getElementById('channelSel').value=ch;
     if(lim)document.getElementById('limitInput').value=lim;
-    if(al==='1'){autoloadEnabled=true;document.getElementById('chkAutoload').checked=true;}
+    if(al==='1'){autoloadEnabled=true;document.getElementById('btnAutoload').classList.add('on');}
 }
 
 /* --- Events --- */
@@ -434,7 +435,6 @@ document.getElementById('rng').oninput=function(){
     document.getElementById('rlbl').textContent=tSec?fmt(tSec):'OFF';
     if(tSec&&cur>=0)resetCd();else stopCd();
 };
-document.getElementById('chkAutoload').onchange=function(){autoloadEnabled=this.checked;saveSettings();};
 document.getElementById('channelSel').onchange=function(){saveSettings();};
 document.getElementById('limitInput').onchange=function(){saveSettings();};
 

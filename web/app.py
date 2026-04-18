@@ -692,7 +692,20 @@ def create_app(db: Database, bot=None) -> Quart:
             emoji=emoji,
             song_title=song_title,
         )
-        return jsonify({"ok": True})
+        # Also add the reaction on the actual Discord message via the bot
+        discord_ok = False
+        if bot and bot.is_ready() and channel_id:
+            try:
+                guild = get_guild()
+                if guild:
+                    ch = guild.get_channel(int(channel_id))
+                    if ch:
+                        msg = await ch.fetch_message(int(message_id))
+                        await msg.add_reaction(emoji)
+                        discord_ok = True
+            except Exception:
+                pass  # silently fail — DB reaction is saved regardless
+        return jsonify({"ok": True, "discord": discord_ok})
 
     @app.route("/api/suno-resolve/<short_id>")
     @login_required
