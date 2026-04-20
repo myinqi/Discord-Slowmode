@@ -2033,7 +2033,12 @@ def create_app(db: Database, bot=None) -> Quart:
                                 os.remove(old_path)
                         await db.set_setting("radio_pip_filename", pip_name)
                         await db.set_setting("radio_pip_file_type", pip_type)
-                await flash("PiP configuration saved.", "success")
+                # Hot-reload PiP on running stream
+                if stream_manager.is_running:
+                    await stream_manager.reload_pip()
+                    await flash("PiP configuration saved & applied to running stream.", "success")
+                else:
+                    await flash("PiP configuration saved.", "success")
 
             elif action == "set_source_mode":
                 mode = form.get("source_mode", "submissions")
@@ -2178,6 +2183,8 @@ def create_app(db: Database, bot=None) -> Quart:
             result = await stream_manager.skip_prev()
         elif action == "reload":
             result = await stream_manager.reload_playlist()
+        elif action == "pip-reload":
+            result = await stream_manager.reload_pip()
         else:
             result = {"error": "Unknown action."}
         return jsonify(result)

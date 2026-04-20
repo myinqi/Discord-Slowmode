@@ -555,6 +555,17 @@ class StreamManager:
         await self._launch()
         return await self.get_status()
 
+    async def reload_pip(self):
+        """Hot-swap PiP overlay by gracefully restarting ffmpeg at the current song position."""
+        if not self.is_running:
+            return {"error": "Stream is not running."}
+        # Preserve elapsed time so we can resume at the right point in the playlist
+        elapsed = time.monotonic() - self._start_time if self._start_time else 0
+        print(f"[radio] PiP reload: restarting encoder (elapsed {elapsed:.0f}s)")
+        await self._teardown()
+        await self._launch()
+        return await self.get_status()
+
     # ------------------------------------------------------------------ #
 
     async def _launch(self):
