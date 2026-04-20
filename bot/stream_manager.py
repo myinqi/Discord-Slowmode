@@ -191,7 +191,7 @@ async def _parse_suno_api(playlist_uuid: str) -> list[dict]:
 
 
 async def _parse_suno_html(url: str) -> list[dict]:
-    """Fallback: scrape the playlist HTML for song UUIDs and embedded JSON data."""
+    """Fallback: scrape the playlist HTML for song data from embedded RSC/JSON payloads."""
     headers = {"User-Agent": _BROWSER_UA}
     try:
         async with aiohttp.ClientSession() as sess:
@@ -205,13 +205,60 @@ async def _parse_suno_html(url: str) -> list[dict]:
         return []
 
     import json as _json
+    print(f"[radio] HTML page size: {len(html)} chars")
 
-    # Try __NEXT_DATA__ first (Next.js SSR payload)
+    # Collect all text content: decode RSC flight chunks into a single blob
+    full_text = html
+    rsc_chunks = re.findall(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)', html, re.DOTALL)
+    if rsc_chunks:
+        decoded_parts = []
+        for chunk in rsc_chunks:
+            decoded = chunk.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"').replace("\\\\", "\\")
+            decoded_parts.append(decoded)
+        full_text = html + "\n" + "\n".join(decoded_parts)
+        print(f"[radio] Decoded {len(rsc_chunks)} RSC chunks, total text: {len(full_text)} chars")
+
+    # Strategy 1: Look for CDN audio URLs (most reliable)
+    cdn_pattern = re.compile(r'cdn[12]\.suno\.ai/([a-f0-9-]{36})\.mp3')
+    cdn_uuids = cdn_pattern.findall(full_text)
+    if cdn_uuids:
+        seen = set()
+        songs = []
+        for uuid in cdn_uuids:
+            if uuid not in seen:
+                seen.add(uuid)
+                songs.append({
+                    "uuid": uuid,
+                    "title": uuid[:12],
+                    "artist": "",
+                    "suno_url": f"https://suno.com/song/{uuid}",
+                })
+        print(f"[radio] Found {len(songs)} songs via CDN URL pattern")
+        return songs
+
+    # Strategy 2: Look for song page URLs
+    song_uuids = SUNO_SONG_RE.findall(full_text)
+    if song_uuids:
+        seen = set()
+        songs = []
+        for uuid in song_uuids:
+            if uuid not in seen:
+                seen.add(uuid)
+                songs.append({
+                    "uuid": uuid,
+                    "title": uuid[:12],
+                    "artist": "",
+                    "suno_url": f"https://suno.com/song/{uuid}",
+                })
+        if len(songs) > 1:
+            print(f"[radio] Found {len(songs)} songs via song URL pattern")
+            return songs
+
+    # Strategy 3: Look for __NEXT_DATA__ (Pages Router)
     nd_match = re.search(r'<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
     if nd_match:
         try:
             nd = _json.loads(nd_match.group(1))
-            # Navigate props tree to find playlist clips
             props = nd.get("props", {}).get("pageProps", {})
             clips = props.get("playlist", {}).get("playlist_clips") or props.get("clips") or []
             songs = []
@@ -226,56 +273,29 @@ async def _parse_suno_html(url: str) -> list[dict]:
                         "suno_url": f"https://suno.com/song/{clip_id}",
                     })
             if songs:
-                print(f"[radio] Parsed {len(songs)} songs from __NEXT_DATA__")
+                print(f"[radio] Found {len(songs)} songs from __NEXT_DATA__")
                 return songs
         except Exception as e:
             print(f"[radio] __NEXT_DATA__ parse error: {e}")
 
-    # Try RSC payload chunks (React Server Components)
-    rsc_chunks = re.findall(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)', html, re.DOTALL)
-    for chunk in rsc_chunks:
-        try:
-            decoded = chunk.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"').replace("\\\\", "\\")
-            # Look for JSON objects with clip data
-            json_matches = re.finditer(r'\{[^{}]*"id"\s*:\s*"[a-f0-9-]{36}"[^{}]*"title"[^{}]*\}', decoded)
-            songs = []
-            seen = set()
-            for jm in json_matches:
-                try:
-                    obj = _json.loads(jm.group(0))
-                    cid = obj.get("id", "")
-                    if cid and cid not in seen:
-                        seen.add(cid)
-                        songs.append({
-                            "uuid": cid,
-                            "title": obj.get("title") or cid[:12],
-                            "artist": obj.get("display_name") or "",
-                            "suno_url": f"https://suno.com/song/{cid}",
-                        })
-                except Exception:
-                    pass
-            if songs:
-                print(f"[radio] Parsed {len(songs)} songs from RSC payload")
-                return songs
-        except Exception:
-            pass
+    # Return whatever we found (even if just 1)
+    if song_uuids:
+        seen = set()
+        songs = []
+        for uuid in song_uuids:
+            if uuid not in seen:
+                seen.add(uuid)
+                songs.append({
+                    "uuid": uuid,
+                    "title": uuid[:12],
+                    "artist": "",
+                    "suno_url": f"https://suno.com/song/{uuid}",
+                })
+        print(f"[radio] Fallback: found {len(songs)} songs via song URL regex")
+        return songs
 
-    # Last resort: regex for all song UUIDs in HTML
-    found = SUNO_SONG_RE.findall(html)
-    seen = set()
-    songs = []
-    for uuid in found:
-        if uuid not in seen:
-            seen.add(uuid)
-            songs.append({
-                "uuid": uuid,
-                "title": uuid[:12],
-                "artist": "",
-                "suno_url": f"https://suno.com/song/{uuid}",
-            })
-    if songs:
-        print(f"[radio] Parsed {len(songs)} songs from HTML regex fallback")
-    return songs
+    print("[radio] No songs found in HTML at all")
+    return []
 
 
 async def parse_suno_playlist(url: str) -> list[dict]:
