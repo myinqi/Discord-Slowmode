@@ -1987,6 +1987,35 @@ def create_app(db: Database, bot=None) -> Quart:
                 from quart import jsonify
                 return jsonify({"ok": True})
 
+            elif action == "set_source_mode":
+                mode = form.get("source_mode", "submissions")
+                await db.set_setting("radio_source_mode", mode)
+                await flash(f"Radio source set to: {mode}", "success")
+
+            elif action == "add_suno_playlist":
+                pl_url = form.get("suno_playlist_url", "").strip()
+                pl_desc = form.get("suno_playlist_desc", "").strip()
+                if pl_url:
+                    try:
+                        await db.add_suno_playlist(pl_url, pl_desc)
+                        await flash("Suno playlist added.", "success")
+                    except Exception as e:
+                        await flash(f"Could not add playlist: {e}", "error")
+
+            elif action == "delete_suno_playlist":
+                pl_id = int(form.get("playlist_id", 0))
+                await db.delete_suno_playlist(pl_id)
+                # If this was the active playlist, clear the setting
+                active = await db.get_setting("radio_active_suno_playlist")
+                if active and int(active) == pl_id:
+                    await db.set_setting("radio_active_suno_playlist", "")
+                await flash("Suno playlist deleted.", "success")
+
+            elif action == "select_suno_playlist":
+                pl_id = form.get("playlist_id", "").strip()
+                await db.set_setting("radio_active_suno_playlist", pl_id)
+                await flash("Active Suno playlist updated.", "success")
+
             return redirect(url_for("radio_admin"))
 
         # GET
@@ -2011,6 +2040,10 @@ def create_app(db: Database, bot=None) -> Quart:
         masked_chat_token = f"****{chat_token[-4:]}" if len(chat_token) > 4 else ""
         chat_channel = await db.get_setting("radio_twitch_chat_channel") or ""
 
+        source_mode = await db.get_setting("radio_source_mode") or "submissions"
+        suno_playlists = await db.get_all_suno_playlists()
+        active_suno_playlist = await db.get_setting("radio_active_suno_playlist") or ""
+
         return await render_template(
             "radio.html",
             songs=songs, masked_key=masked_key, stream_url=stream_url,
@@ -2021,6 +2054,9 @@ def create_app(db: Database, bot=None) -> Quart:
             shuffle=shuffle,
             masked_chat_token=masked_chat_token,
             chat_channel=chat_channel,
+            source_mode=source_mode,
+            suno_playlists=suno_playlists,
+            active_suno_playlist=active_suno_playlist,
         )
 
     @app.route("/radio/files/<filename>")

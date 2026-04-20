@@ -255,6 +255,17 @@ class Database:
         """)
         await self.db.commit()
 
+        # Create suno_playlists table for radio Suno playlist sources
+        await self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS suno_playlists (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url TEXT NOT NULL UNIQUE,
+                description TEXT NOT NULL DEFAULT '',
+                created_at REAL DEFAULT (unixepoch())
+            );
+        """)
+        await self.db.commit()
+
     # --- Settings ---
 
     async def get_setting(self, key: str, default: str = "") -> str:
@@ -1567,3 +1578,26 @@ class Database:
             (artist,),
         ) as cursor:
             return (await cursor.fetchone())[0]
+
+    # --- Suno Playlists (Radio) ---
+
+    async def add_suno_playlist(self, url: str, description: str) -> int:
+        cursor = await self.db.execute(
+            "INSERT INTO suno_playlists (url, description) VALUES (?, ?)",
+            (url, description),
+        )
+        await self.db.commit()
+        return cursor.lastrowid
+
+    async def get_all_suno_playlists(self) -> list[dict]:
+        async with self.db.execute("SELECT * FROM suno_playlists ORDER BY created_at DESC") as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def get_suno_playlist(self, playlist_id: int) -> Optional[dict]:
+        async with self.db.execute("SELECT * FROM suno_playlists WHERE id = ?", (playlist_id,)) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def delete_suno_playlist(self, playlist_id: int):
+        await self.db.execute("DELETE FROM suno_playlists WHERE id = ?", (playlist_id,))
+        await self.db.commit()

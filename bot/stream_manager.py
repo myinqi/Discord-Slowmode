@@ -139,6 +139,97 @@ class TwitchChat:
         print("[radio] Twitch chat disconnected")
 
 
+SUNO_SONG_RE = re.compile(r'https?://suno\.com/song/([a-f0-9-]{36})')
+
+
+async def parse_suno_playlist(url: str) -> list[dict]:
+    """Scrape a Suno playlist page and return list of {uuid, title, artist, suno_url}."""
+    songs = []
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                if resp.status != 200:
+                    print(f"[radio] Suno playlist fetch failed: HTTP {resp.status}")
+                    return []
+                html = await resp.text()
+    except Exception as e:
+        print(f"[radio] Suno playlist fetch error: {e}")
+        return []
+
+    # Parse song links and their preceding artist/title context
+    # The page structure has alternating artist links and song links
+    lines = html.split("\n")
+    raw_text = ""
+    try:
+        # Try to extract from the readable text content
+        import re as _re
+        # Find all song URLs
+        song_urls = SUNO_SONG_RE.findall(html)
+        # Also try to get title from link text: [Title](https://suno.com/song/uuid)
+        # or from og/meta tags embedded in the HTML
+        # Simpler approach: fetch each song's metadata individually
+        seen = set()
+        for uuid in song_urls:
+            if uuid in seen:
+                continue
+            seen.add(uuid)
+            songs.append({
+                "uuid": uuid,
+                "title": uuid[:12],  # placeholder, resolved later
+                "artist": "",
+                "suno_url": f"https://suno.com/song/{uuid}",
+            })
+    except Exception as e:
+        print(f"[radio] Suno playlist parse error: {e}")
+
+    print(f"[radio] Parsed {len(songs)} songs from Suno playlist")
+    return songs
+
+
+async def download_suno_song(uuid: str, target_dir: str) -> str | None:
+    """Download a Suno song MP3 to target_dir. Returns filepath or None."""
+    url = f"https://cdn1.suno.ai/{uuid}.mp3"
+    filepath = os.path.join(target_dir, f"{uuid}.mp3")
+    if os.path.exists(filepath):
+        return filepath
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.get(url, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+                if resp.status != 200:
+                    print(f"[radio] Download failed for {uuid}: HTTP {resp.status}")
+                    return None
+                data = await resp.read()
+                with open(filepath, "wb") as f:
+                    f.write(data)
+                print(f"[radio] Downloaded {uuid}.mp3 ({len(data) // 1024} KB)")
+                return filepath
+    except Exception as e:
+        print(f"[radio] Download error for {uuid}: {e}")
+        return None
+
+
+async def resolve_suno_meta(uuid: str) -> dict:
+    """Fetch title + artist from Suno embed page."""
+    url = f"https://suno.com/song/{uuid}"
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    return {}
+                html = await resp.text()
+                match = re.search(r'<title>([^<]+)</title>', html)
+                if match:
+                    raw = match.group(1).strip()
+                    raw = re.sub(r'\s*[|\-\u2013]\s*Suno$', '', raw).strip()
+                    by_match = re.search(r'^(.+?)\s+by\s+(.+)$', raw)
+                    if by_match:
+                        return {"title": by_match.group(1).strip(), "artist": by_match.group(2).strip()}
+                    return {"title": raw, "artist": ""}
+    except Exception:
+        pass
+    return {}
+
+
 class StreamManager:
     def __init__(self, db, radio_dir: str):
         self.db = db
@@ -158,6 +249,7 @@ class StreamManager:
         self._lyrics_cache = {}  # {song_id: [lines]}
         self._concat_start = 0
         self._twitch_chat = None
+        self._suno_dl_dir = None  # temp dir for downloaded Suno playlist songs
 
     async def get_status(self) -> dict:
         return {
@@ -171,12 +263,79 @@ class StreamManager:
             } if self.current_song else None,
         }
 
+    async def _load_suno_playlist(self, playlist_id: int) -> list[dict]:
+        """Parse a Suno playlist, download MP3s, resolve metadata. Returns playlist entries."""
+        pl = await self.db.get_suno_playlist(playlist_id)
+        if not pl:
+            return []
+        songs = await parse_suno_playlist(pl["url"])
+        if not songs:
+            return []
+        # Create download dir (persistent across restarts — reuse cached files)
+        dl_dir = os.path.join(self.radio_dir, "suno_cache")
+        os.makedirs(dl_dir, exist_ok=True)
+        self._suno_dl_dir = dl_dir
+
+        entries = []
+        for i, s in enumerate(songs):
+            print(f"[radio] Preparing Suno song {i+1}/{len(songs)}: {s['uuid']}")
+            filepath = await download_suno_song(s["uuid"], dl_dir)
+            if not filepath:
+                continue
+            # Resolve title/artist
+            meta = await resolve_suno_meta(s["uuid"])
+            title = meta.get("title") or s["title"]
+            artist = meta.get("artist") or s["artist"] or "Unknown"
+            # Get duration via ffprobe
+            duration = await self._probe_duration(filepath)
+            entries.append({
+                "id": s["uuid"],
+                "title": title,
+                "artist": artist,
+                "filename": os.path.basename(filepath),
+                "suno_url": s["suno_url"],
+                "duration": duration,
+            })
+        print(f"[radio] Suno playlist ready: {len(entries)} songs")
+        return entries
+
+    async def _probe_duration(self, filepath: str) -> float:
+        """Get audio duration in seconds via ffprobe."""
+        try:
+            import json as _json
+            proc = await asyncio.create_subprocess_exec(
+                "ffprobe", "-v", "quiet", "-print_format", "json",
+                "-show_format", filepath,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+            if proc.returncode == 0:
+                info = _json.loads(stdout)
+                return float(info.get("format", {}).get("duration", 180))
+        except Exception:
+            pass
+        return 180
+
     async def start(self):
         if self.is_running:
             return {"error": "Stream is already running."}
-        self.playlist = await self.db.get_all_radio_songs(active_only=True)
-        if not self.playlist:
-            return {"error": "No songs in the playlist."}
+
+        # Determine radio source mode
+        source_mode = await self.db.get_setting("radio_source_mode") or "submissions"
+        if source_mode == "suno_playlist":
+            active_pl_id = await self.db.get_setting("radio_active_suno_playlist")
+            if not active_pl_id:
+                return {"error": "No Suno playlist selected."}
+            self.playlist = await self._load_suno_playlist(int(active_pl_id))
+            if not self.playlist:
+                return {"error": "Suno playlist is empty or could not be loaded."}
+            self._source_mode = "suno_playlist"
+        else:
+            self.playlist = await self.db.get_all_radio_songs(active_only=True)
+            if not self.playlist:
+                return {"error": "No songs in the playlist."}
+            self._source_mode = "submissions"
+
         self._twitch_key = await self.db.get_setting("radio_twitch_key")
         if not self._twitch_key:
             return {"error": "Twitch stream key not configured."}
@@ -364,11 +523,16 @@ class StreamManager:
     def _build_concat_file(self) -> str:
         path = os.path.join(self._temp_dir, "playlist.txt")
         n = len(self.playlist)
+        # Determine base directory for audio files
+        if getattr(self, "_source_mode", "submissions") == "suno_playlist" and self._suno_dl_dir:
+            base_dir = self._suno_dl_dir
+        else:
+            base_dir = self.radio_dir
         with open(path, "w") as f:
             for _ in range(_PLAYLIST_REPEATS):
                 for i in range(n):
                     idx = (self._concat_start + i) % n
-                    audio = os.path.join(self.radio_dir, self.playlist[idx]["filename"])
+                    audio = os.path.join(base_dir, self.playlist[idx]["filename"])
                     if os.path.exists(audio):
                         safe = audio.replace("'", "'\\''")
                         f.write(f"file '{safe}'\n")
