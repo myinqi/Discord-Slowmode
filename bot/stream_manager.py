@@ -580,6 +580,7 @@ class StreamManager:
             *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
         )
         self._start_time = time.monotonic()
+        self._last_song_change = 0.0
         self._restart_delay = 5
         self._restart_retries = 0
         self._tasks = [
@@ -796,24 +797,31 @@ class StreamManager:
             s = self.playlist[idx]
             durations.append(s.get("duration", 180))
             ordered.append(s)
-        total = sum(durations)
+        # Build cumulative boundary list for the full concat (50 repeats)
+        boundaries = []
+        for _ in range(_PLAYLIST_REPEATS):
+            for dur in durations:
+                prev = boundaries[-1] if boundaries else 0.0
+                boundaries.append(prev + dur)
+        total = boundaries[-1] if boundaries else 0
         if total <= 0:
             return
+        print(f"[radio] Tracker: {n} songs, single-pass={sum(durations):.0f}s, total={total:.0f}s")
         try:
             while self.is_running:
                 elapsed = time.monotonic() - self._start_time
-                pos = elapsed % total
-                cumulative = 0.0
+                # Find which song index we're in (linear, no modulo — matches concat file exactly)
                 song_i = 0
-                for i, dur in enumerate(durations):
-                    cumulative += dur
-                    if pos < cumulative:
-                        song_i = i
+                for i, end_t in enumerate(boundaries):
+                    if elapsed < end_t:
+                        song_i = i % n
                         break
+                else:
+                    song_i = 0  # wrapped past all repeats
                 actual = ordered[song_i]
                 now = time.monotonic()
                 last_change = getattr(self, "_last_song_change", 0.0)
-                if (self.current_song is None or self.current_song["id"] != actual["id"]) and (now - last_change) > 30:
+                if (self.current_song is None or self.current_song["id"] != actual["id"]) and (now - last_change) > 5:
                     self.current_song = actual
                     self._last_song_change = now
                     self.current_index = (self._concat_start + song_i) % n
