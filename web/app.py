@@ -2003,6 +2003,38 @@ def create_app(db: Database, bot=None) -> Quart:
                 from quart import jsonify
                 return jsonify({"ok": True})
 
+            elif action == "save_pip_config":
+                pip_mode = form.get("pip_mode", "off")
+                pip_format = form.get("pip_format", "16:9")
+                pip_scale = form.get("pip_scale", "25")
+                pip_position = form.get("pip_position", "center-right")
+                pip_rtmp_key = form.get("pip_rtmp_key", "").strip()
+                await db.set_setting("radio_pip_mode", pip_mode)
+                await db.set_setting("radio_pip_format", pip_format)
+                await db.set_setting("radio_pip_scale", pip_scale)
+                await db.set_setting("radio_pip_position", pip_position)
+                await db.set_setting("radio_pip_rtmp_key", pip_rtmp_key)
+                # PiP file upload
+                files = await request.files
+                pip_file = files.get("pip_file")
+                if pip_file and pip_file.filename:
+                    ext = pip_file.filename.rsplit(".", 1)[-1].lower()
+                    allowed = {"png", "jpg", "jpeg", "gif", "webp", "mp4", "webm"}
+                    if ext in allowed:
+                        import uuid
+                        pip_type = "video" if ext in ("mp4", "webm") else "image"
+                        pip_name = f"radio_pip_{uuid.uuid4().hex}.{ext}"
+                        pip_path = os.path.join(RADIO_UPLOAD_DIR, pip_name)
+                        await pip_file.save(pip_path)
+                        old_pip = await db.get_setting("radio_pip_filename")
+                        if old_pip:
+                            old_path = os.path.join(RADIO_UPLOAD_DIR, old_pip)
+                            if os.path.exists(old_path):
+                                os.remove(old_path)
+                        await db.set_setting("radio_pip_filename", pip_name)
+                        await db.set_setting("radio_pip_file_type", pip_type)
+                await flash("PiP configuration saved.", "success")
+
             elif action == "set_source_mode":
                 mode = form.get("source_mode", "submissions")
                 await db.set_setting("radio_source_mode", mode)
@@ -2060,6 +2092,14 @@ def create_app(db: Database, bot=None) -> Quart:
         suno_playlists = await db.get_all_suno_playlists()
         active_suno_playlist = await db.get_setting("radio_active_suno_playlist") or ""
 
+        pip_mode = await db.get_setting("radio_pip_mode") or "off"
+        pip_format = await db.get_setting("radio_pip_format") or "16:9"
+        pip_scale = await db.get_setting("radio_pip_scale") or "25"
+        pip_position = await db.get_setting("radio_pip_position") or "center-right"
+        pip_filename = await db.get_setting("radio_pip_filename") or ""
+        pip_file_type = await db.get_setting("radio_pip_file_type") or "image"
+        pip_rtmp_key = await db.get_setting("radio_pip_rtmp_key") or ""
+
         return await render_template(
             "radio.html",
             songs=songs, masked_key=masked_key, stream_url=stream_url,
@@ -2073,6 +2113,9 @@ def create_app(db: Database, bot=None) -> Quart:
             source_mode=source_mode,
             suno_playlists=suno_playlists,
             active_suno_playlist=active_suno_playlist,
+            pip_mode=pip_mode, pip_format=pip_format, pip_scale=pip_scale,
+            pip_position=pip_position, pip_filename=pip_filename,
+            pip_file_type=pip_file_type, pip_rtmp_key=pip_rtmp_key,
         )
 
     @app.route("/radio/files/<filename>")

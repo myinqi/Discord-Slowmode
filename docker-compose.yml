@@ -5,6 +5,7 @@ services:
     restart: unless-stopped
     ports:
       - "5000:5000"
+      - "1936:1936"
     volumes:
       - bot-data:/app/data
     env_file:

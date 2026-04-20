@@ -127,6 +127,89 @@
             </div>
         </div>
 
+        <!-- PiP Overlay -->
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            <div class="px-5 py-4 border-b border-gray-700/50">
+                <h3 class="text-white font-semibold">Picture-in-Picture Overlay</h3>
+            </div>
+            <div class="p-5">
+                <form method="POST" enctype="multipart/form-data" class="space-y-4">
+                    <input type="hidden" name="action" value="save_pip_config">
+                    <!-- Mode -->
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">Mode</label>
+                        <select name="pip_mode"
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                            <option value="off" {% if pip_mode == 'off' %}selected{% endif %}>Off</option>
+                            <option value="local" {% if pip_mode == 'local' %}selected{% endif %}>Local File (Image / Video)</option>
+                            <option value="rtmp" {% if pip_mode == 'rtmp' %}selected{% endif %}>Remote OBS (RTMP)</option>
+                        </select>
+                    </div>
+                    <!-- Format -->
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">Aspect Ratio</label>
+                        <div class="flex gap-3">
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="radio" name="pip_format" value="16:9" {% if pip_format != '9:16' %}checked{% endif %}
+                                    class="w-4 h-4 border-gray-600 bg-discord-darker text-discord-blurple focus:ring-discord-blurple">
+                                <span class="text-gray-300 text-sm">16:9</span>
+                            </label>
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="radio" name="pip_format" value="9:16" {% if pip_format == '9:16' %}checked{% endif %}
+                                    class="w-4 h-4 border-gray-600 bg-discord-darker text-discord-blurple focus:ring-discord-blurple">
+                                <span class="text-gray-300 text-sm">9:16</span>
+                            </label>
+                        </div>
+                    </div>
+                    <!-- Size -->
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">Size: <span id="pip-size-label" class="text-gray-300">{{ pip_scale }}%</span></label>
+                        <input type="range" name="pip_scale" min="10" max="60" value="{{ pip_scale }}"
+                            class="w-full accent-discord-blurple"
+                            oninput="document.getElementById('pip-size-label').textContent=this.value+'%'">
+                    </div>
+                    <!-- Position -->
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-2">Position</label>
+                        <div class="grid grid-cols-3 gap-1 w-40">
+                            {% for pos, label in [('top-left','↖'),('top-center','↑'),('top-right','↗'),('center-left','←'),('center','●'),('center-right','→'),('bottom-left','↙'),('bottom-center','↓'),('bottom-right','↘')] %}
+                            <label class="cursor-pointer">
+                                <input type="radio" name="pip_position" value="{{ pos }}" class="hidden peer"
+                                    {% if pip_position == pos %}checked{% endif %}>
+                                <span class="block text-center py-1.5 rounded text-sm transition-colors
+                                    peer-checked:bg-discord-blurple peer-checked:text-white
+                                    bg-discord-darker text-gray-400 hover:bg-gray-600/40">{{ label }}</span>
+                            </label>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    <!-- Local file upload -->
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">Local File (image or video)</label>
+                        <input type="file" name="pip_file" accept="image/*,video/mp4,video/webm"
+                            class="w-full text-gray-400 text-sm file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-sm file:bg-discord-blurple/20 file:text-discord-blurple hover:file:bg-discord-blurple/40 file:cursor-pointer">
+                        {% if pip_filename %}
+                        <p class="text-gray-500 text-xs mt-1">Current: {{ pip_filename }} ({{ pip_file_type }})</p>
+                        {% endif %}
+                    </div>
+                    <!-- RTMP Key -->
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">RTMP Stream Key (for OBS)</label>
+                        <input type="text" name="pip_rtmp_key" value="{{ pip_rtmp_key }}"
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none font-mono"
+                            placeholder="my-secret-key">
+                        {% if pip_rtmp_key %}
+                        <p class="text-gray-500 text-xs mt-1">OBS URL: <code class="text-gray-400">rtmp://YOUR_SERVER:1936/live/{{ pip_rtmp_key }}</code></p>
+                        {% endif %}
+                    </div>
+                    <button type="submit"
+                        class="w-full px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg font-medium text-sm transition-colors">
+                        Save PiP Config
+                    </button>
+                </form>
+            </div>
+        </div>
+
         <!-- Post Links -->
         <div class="bg-discord-dark rounded-xl border border-gray-700/50">
             <div class="px-5 py-4 border-b border-gray-700/50">

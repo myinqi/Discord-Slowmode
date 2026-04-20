@@ -729,6 +729,7 @@ class StreamManager:
 
         cmd = ["ffmpeg", "-y"]
 
+        # Input 0: background
         if bg_filename and os.path.exists(os.path.join(self.radio_dir, bg_filename)):
             bg_path = os.path.join(self.radio_dir, bg_filename)
             if bg_type == "video":
@@ -738,11 +739,42 @@ class StreamManager:
         else:
             cmd += ["-f", "lavfi", "-i", "color=c=black:s=1920x1080:r=30"]
 
+        # Input 1: audio concat
         cmd += ["-f", "concat", "-safe", "0", "-i", playlist_path]
 
-        # Explicit mapping: video from background (input 0), audio from concat (input 1)
-        # This ignores embedded cover art in MP3 files that concat picks up
-        cmd += ["-map", "0:v:0", "-map", "1:a:0"]
+        # PiP settings
+        pip_mode = await self.db.get_setting("radio_pip_mode") or "off"
+        pip_input_idx = None  # Will be set if PiP is active
+
+        if pip_mode == "local":
+            pip_fn = await self.db.get_setting("radio_pip_filename") or ""
+            pip_ft = await self.db.get_setting("radio_pip_file_type") or "image"
+            pip_path = os.path.join(self.radio_dir, pip_fn) if pip_fn else ""
+            if pip_path and os.path.exists(pip_path):
+                # Input 2: PiP local file
+                if pip_ft == "video":
+                    cmd += ["-stream_loop", "-1", "-i", pip_path]
+                else:
+                    cmd += ["-loop", "1", "-i", pip_path]
+                pip_input_idx = 2
+                print(f"[radio] PiP: local {pip_ft} ({pip_fn})")
+            else:
+                print(f"[radio] PiP: local file not found, skipping")
+
+        elif pip_mode == "rtmp":
+            pip_rtmp_key = await self.db.get_setting("radio_pip_rtmp_key") or ""
+            if pip_rtmp_key:
+                # Input 2: RTMP listener — OBS sends to this endpoint
+                rtmp_url = f"rtmp://0.0.0.0:1936/live/{pip_rtmp_key}"
+                cmd += [
+                    "-f", "flv", "-listen", "1",
+                    "-rw_timeout", "5000000",  # 5s timeout waiting for connection
+                    "-i", rtmp_url,
+                ]
+                pip_input_idx = 2
+                print(f"[radio] PiP: RTMP listener on port 1936")
+            else:
+                print("[radio] PiP: RTMP mode but no key configured, skipping")
 
         # Use fontconfig for automatic fallback across all Noto fonts
         font = self._font_path
@@ -770,14 +802,56 @@ class StreamManager:
             f":borderw=3:bordercolor=black"
             f":x=(w-text_w)/2:y=30"
         )
-        vf = (
-            "scale=1920:1080:force_original_aspect_ratio=decrease,"
-            "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,"
-            f"format=yuv420p,{header},{now_playing},{lyrics}"
-        )
+
+        if pip_input_idx is not None:
+            # Build filter_complex with PiP overlay
+            pip_format = await self.db.get_setting("radio_pip_format") or "16:9"
+            pip_scale_pct = int(await self.db.get_setting("radio_pip_scale") or "25")
+            pip_position = await self.db.get_setting("radio_pip_position") or "center-right"
+
+            # Calculate PiP dimensions based on aspect ratio and scale
+            if pip_format == "9:16":
+                pip_h = int(1080 * pip_scale_pct / 100)
+                pip_w = int(pip_h * 9 / 16)
+            else:  # 16:9
+                pip_w = int(1920 * pip_scale_pct / 100)
+                pip_h = int(pip_w * 9 / 16)
+
+            # Position mapping with 40px padding
+            pad = 40
+            pos_map = {
+                "top-left":      (f"{pad}", f"{pad}"),
+                "top-center":    (f"(W-w)/2", f"{pad}"),
+                "top-right":     (f"W-w-{pad}", f"{pad}"),
+                "center-left":   (f"{pad}", f"(H-h)/2"),
+                "center":        (f"(W-w)/2", f"(H-h)/2"),
+                "center-right":  (f"W-w-{pad}", f"(H-h)/2"),
+                "bottom-left":   (f"{pad}", f"H-h-{pad}"),
+                "bottom-center": (f"(W-w)/2", f"H-h-{pad}"),
+                "bottom-right":  (f"W-w-{pad}", f"H-h-{pad}"),
+            }
+            ox, oy = pos_map.get(pip_position, pos_map["center-right"])
+
+            fc = (
+                f"[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,"
+                f"pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p[bg];"
+                f"[{pip_input_idx}:v]scale={pip_w}:{pip_h}:force_original_aspect_ratio=decrease,"
+                f"pad={pip_w}:{pip_h}:(ow-iw)/2:(oh-ih)/2[pip];"
+                f"[bg][pip]overlay={ox}:{oy},"
+                f"{header},{now_playing},{lyrics}[vout]"
+            )
+            cmd += ["-filter_complex", fc, "-map", "[vout]", "-map", "1:a:0"]
+        else:
+            # Simple filter without PiP
+            cmd += ["-map", "0:v:0", "-map", "1:a:0"]
+            vf = (
+                "scale=1920:1080:force_original_aspect_ratio=decrease,"
+                "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,"
+                f"format=yuv420p,{header},{now_playing},{lyrics}"
+            )
+            cmd += ["-vf", vf]
 
         cmd += [
-            "-vf", vf,
             "-c:v", "libx264", "-profile:v", "main", "-level", "4.0",
             "-preset", "ultrafast",
             "-pix_fmt", "yuv420p",
