@@ -139,50 +139,60 @@ class TwitchChat:
         print("[radio] Twitch chat disconnected")
 
 
-SUNO_SONG_RE = re.compile(r'https?://suno\.com/song/([a-f0-9-]{36})')
+SUNO_PLAYLIST_UUID_RE = re.compile(r'suno\.com/playlist/([a-f0-9-]{36})')
 
 
 async def parse_suno_playlist(url: str) -> list[dict]:
-    """Scrape a Suno playlist page and return list of {uuid, title, artist, suno_url}."""
-    songs = []
-    try:
-        async with aiohttp.ClientSession() as sess:
-            async with sess.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                if resp.status != 200:
-                    print(f"[radio] Suno playlist fetch failed: HTTP {resp.status}")
-                    return []
-                html = await resp.text()
-    except Exception as e:
-        print(f"[radio] Suno playlist fetch error: {e}")
+    """Fetch songs from a Suno playlist via their public API."""
+    # Extract playlist UUID from URL
+    m = SUNO_PLAYLIST_UUID_RE.search(url)
+    if not m:
+        print(f"[radio] Could not extract playlist UUID from: {url}")
         return []
+    playlist_uuid = m.group(1)
+    api_url = f"https://studio-api.suno.ai/api/playlist/{playlist_uuid}"
 
-    # Parse song links and their preceding artist/title context
-    # The page structure has alternating artist links and song links
-    lines = html.split("\n")
-    raw_text = ""
-    try:
-        # Try to extract from the readable text content
-        import re as _re
-        # Find all song URLs
-        song_urls = SUNO_SONG_RE.findall(html)
-        # Also try to get title from link text: [Title](https://suno.com/song/uuid)
-        # or from og/meta tags embedded in the HTML
-        # Simpler approach: fetch each song's metadata individually
-        seen = set()
-        for uuid in song_urls:
-            if uuid in seen:
+    songs = []
+    page = 1
+    while True:
+        try:
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(
+                    api_url, params={"page": page},
+                    timeout=aiohttp.ClientTimeout(total=20),
+                ) as resp:
+                    if resp.status != 200:
+                        print(f"[radio] Suno API failed: HTTP {resp.status}")
+                        break
+                    data = await resp.json()
+        except Exception as e:
+            print(f"[radio] Suno API error: {e}")
+            break
+
+        clips = data.get("playlist_clips") or []
+        if not clips:
+            break
+
+        for entry in clips:
+            clip = entry.get("clip") or entry
+            clip_id = clip.get("id", "")
+            if not clip_id:
                 continue
-            seen.add(uuid)
+            title = clip.get("title") or clip_id[:12]
+            artist = clip.get("display_name") or ""
             songs.append({
-                "uuid": uuid,
-                "title": uuid[:12],  # placeholder, resolved later
-                "artist": "",
-                "suno_url": f"https://suno.com/song/{uuid}",
+                "uuid": clip_id,
+                "title": title,
+                "artist": artist,
+                "suno_url": f"https://suno.com/song/{clip_id}",
             })
-    except Exception as e:
-        print(f"[radio] Suno playlist parse error: {e}")
 
-    print(f"[radio] Parsed {len(songs)} songs from Suno playlist")
+        # Pagination: if fewer clips than expected, we're done
+        if not data.get("has_more", False):
+            break
+        page += 1
+
+    print(f"[radio] Parsed {len(songs)} songs from Suno playlist API")
     return songs
 
 
@@ -283,10 +293,14 @@ class StreamManager:
             filepath = await download_suno_song(s["uuid"], dl_dir)
             if not filepath:
                 continue
-            # Resolve title/artist
-            meta = await resolve_suno_meta(s["uuid"])
-            title = meta.get("title") or s["title"]
-            artist = meta.get("artist") or s["artist"] or "Unknown"
+            # Use metadata from API; fall back to scraping only if missing
+            title = s.get("title") or ""
+            artist = s.get("artist") or ""
+            if not title or title == s["uuid"][:12]:
+                meta = await resolve_suno_meta(s["uuid"])
+                title = meta.get("title") or title or s["uuid"][:12]
+                artist = meta.get("artist") or artist
+            artist = artist or "Unknown"
             # Get duration via ffprobe
             duration = await self._probe_duration(filepath)
             entries.append({
