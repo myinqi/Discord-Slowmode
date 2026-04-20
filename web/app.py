@@ -1969,9 +1969,20 @@ def create_app(db: Database, bot=None) -> Quart:
                     channel = guild.get_channel(int(ch_id)) or guild.get_thread(int(ch_id))
                     if channel:
                         import discord
+                        # Resolve current playlist name
+                        _src = await db.get_setting("radio_source_mode") or "submissions"
+                        if _src == "suno_playlist":
+                            _pl_id = await db.get_setting("radio_active_suno_playlist")
+                            if _pl_id:
+                                _pl = await db.get_suno_playlist(int(_pl_id))
+                                _pl_name = _pl["description"] if _pl and _pl.get("description") else "Suno Playlist"
+                            else:
+                                _pl_name = "Suno Playlist"
+                        else:
+                            _pl_name = "Submissions Playlist"
                         embed = discord.Embed(
                             title="\U0001F4FA Live Stream",
-                            description=f"Watch the stream now!\n\n**[Tune in]({stream_url})**",
+                            description=f"Watch the stream now!\n\n\U0001F4CB Playlist: **{_pl_name}**\n\n**[Tune in]({stream_url})**",
                             color=discord.Color.purple(),
                         )
                         await channel.send(embed=embed)

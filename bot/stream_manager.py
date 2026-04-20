@@ -250,6 +250,7 @@ class StreamManager:
         self._concat_start = 0
         self._twitch_chat = None
         self._suno_dl_dir = None  # temp dir for downloaded Suno playlist songs
+        self._header_path = None  # playlist title overlay file
 
     async def get_status(self) -> dict:
         return {
@@ -346,8 +347,11 @@ class StreamManager:
         self._temp_dir = tempfile.mkdtemp(prefix="radio_")
         self._overlay_path = os.path.join(self._temp_dir, "nowplaying.txt")
         self._lyrics_path = os.path.join(self._temp_dir, "lyrics.txt")
+        self._header_path = os.path.join(self._temp_dir, "header.txt")
         with open(self._lyrics_path, "w", encoding="utf-8") as f:
             f.write(" ")
+        # Write playlist title header
+        await self._write_header()
         # Connect to Twitch chat if configured
         chat_token = await self.db.get_setting("radio_twitch_chat_token")
         chat_channel = await self.db.get_setting("radio_twitch_chat_channel")
@@ -538,6 +542,26 @@ class StreamManager:
                         f.write(f"file '{safe}'\n")
         return path
 
+    async def _write_header(self):
+        """Write the playlist title to the header overlay file."""
+        source_mode = getattr(self, "_source_mode", "submissions")
+        if source_mode == "suno_playlist":
+            active_id = await self.db.get_setting("radio_active_suno_playlist")
+            if active_id:
+                pl = await self.db.get_suno_playlist(int(active_id))
+                title = (pl["description"] if pl and pl.get("description") else "Suno Playlist")
+            else:
+                title = "Suno Playlist"
+        else:
+            title = "Submissions Playlist"
+        title = _normalize_text(title)
+        try:
+            with open(self._header_path, "w", encoding="utf-8") as fh:
+                fh.write(title)
+            print(f"[radio] Header overlay: {title}")
+        except Exception as e:
+            print(f"[radio] Header write error: {e}")
+
     def _write_overlay(self, song: dict):
         text = f"{song['title']}  \u2014  {song['artist']}"
         text = _normalize_text(text)
@@ -586,10 +610,18 @@ class StreamManager:
             f":borderw=1:bordercolor=black"
             f":x=40:y=(h-text_h)/2"
         )
+        header = (
+            f"drawtext=font='{font}'"
+            f":textfile='{self._header_path}'"
+            f":reload=1"
+            f":fontsize=42:fontcolor=white"
+            f":borderw=3:bordercolor=black"
+            f":x=(w-text_w)/2:y=30"
+        )
         vf = (
             "scale=1920:1080:force_original_aspect_ratio=decrease,"
             "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,"
-            f"format=yuv420p,{now_playing},{lyrics}"
+            f"format=yuv420p,{header},{now_playing},{lyrics}"
         )
 
         cmd += [
