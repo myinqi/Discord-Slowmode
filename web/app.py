@@ -738,7 +738,7 @@ def create_app(db: Database, bot=None) -> Quart:
 
     async def _fetch_suno_meta(uuid):
         """Shared helper to fetch song metadata from Suno embed page."""
-        import aiohttp, re
+        import aiohttp, re, html as _html
         lyrics = title = image_url = artist = None
         try:
             async with aiohttp.ClientSession() as sess:
@@ -807,6 +807,10 @@ def create_app(db: Database, bot=None) -> Quart:
                                 lyrics = candidate
         except Exception:
             pass
+        if title:
+            title = _html.unescape(title)
+        if artist:
+            artist = _html.unescape(artist)
         return {"lyrics": lyrics, "title": title, "image_url": image_url, "artist": artist}
 
     @app.route("/api/suno-lyrics/<uuid>")
@@ -1677,23 +1681,24 @@ def create_app(db: Database, bot=None) -> Quart:
 
     async def _fetch_suno_info(url: str) -> tuple[str | None, str | None, str | None]:
         """Fetch song title, artist and image from a Suno URL. Returns (title, artist, image_url)."""
+        import html as _html
         try:
             async with aiohttp.ClientSession() as sess:
                 async with sess.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status != 200:
                         return None, None, None
-                    html = await resp.text()
+                    page_html = await resp.text()
                     # Extract og:image
                     image_url = None
-                    img_match = re.search(r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']', html)
+                    img_match = re.search(r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']', page_html)
                     if not img_match:
-                        img_match = re.search(r'<meta\s+content=["\']([^"\']+)["\']\s+property=["\']og:image["\']', html)
+                        img_match = re.search(r'<meta\s+content=["\']([^"\']+)["\']\s+property=["\']og:image["\']', page_html)
                     if img_match:
                         image_url = img_match.group(1).strip()
                     # <title> format: "Song Title by Artist Name | Suno"
-                    match = re.search(r'<title>([^<]+)</title>', html)
+                    match = re.search(r'<title>([^<]+)</title>', page_html)
                     if match:
-                        raw = match.group(1).strip()
+                        raw = _html.unescape(match.group(1).strip())
                         raw = re.sub(r'\s*[|\-\u2013]\s*Suno$', '', raw).strip()
                         by_match = re.search(r'^(.+?)\s+by\s+(.+)$', raw)
                         if by_match:

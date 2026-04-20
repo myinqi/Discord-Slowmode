@@ -344,6 +344,7 @@ async def download_suno_song(uuid: str, target_dir: str) -> str | None:
 
 async def resolve_suno_meta(uuid: str) -> dict:
     """Fetch title + artist from Suno embed page."""
+    import html as _html
     url = f"https://suno.com/song/{uuid}"
     headers = {"User-Agent": _BROWSER_UA}
     try:
@@ -351,10 +352,10 @@ async def resolve_suno_meta(uuid: str) -> dict:
             async with sess.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 if resp.status != 200:
                     return {}
-                html = await resp.text()
-                match = re.search(r'<title>([^<]+)</title>', html)
+                page = await resp.text()
+                match = re.search(r'<title>([^<]+)</title>', page)
                 if match:
-                    raw = match.group(1).strip()
+                    raw = _html.unescape(match.group(1).strip())
                     raw = re.sub(r'\s*[|\-\u2013]\s*Suno$', '', raw).strip()
                     by_match = re.search(r'^(.+?)\s+by\s+(.+)$', raw)
                     if by_match:
