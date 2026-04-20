@@ -386,6 +386,7 @@ class StreamManager:
         self._twitch_chat = None
         self._suno_dl_dir = None  # temp dir for downloaded Suno playlist songs
         self._header_path = None  # playlist title overlay file
+        self._loading = False  # guard against concurrent start() calls
 
     async def get_status(self) -> dict:
         return {
@@ -459,25 +460,32 @@ class StreamManager:
     async def start(self):
         if self.is_running:
             return {"error": "Stream is already running."}
+        if self._loading:
+            return {"error": "Stream is currently loading, please wait."}
+        self._loading = True
 
         # Determine radio source mode
         source_mode = await self.db.get_setting("radio_source_mode") or "submissions"
         if source_mode == "suno_playlist":
             active_pl_id = await self.db.get_setting("radio_active_suno_playlist")
             if not active_pl_id:
+                self._loading = False
                 return {"error": "No Suno playlist selected."}
             self.playlist = await self._load_suno_playlist(int(active_pl_id))
             if not self.playlist:
+                self._loading = False
                 return {"error": "Suno playlist is empty or could not be loaded."}
             self._source_mode = "suno_playlist"
         else:
             self.playlist = await self.db.get_all_radio_songs(active_only=True)
             if not self.playlist:
+                self._loading = False
                 return {"error": "No songs in the playlist."}
             self._source_mode = "submissions"
 
         self._twitch_key = await self.db.get_setting("radio_twitch_key")
         if not self._twitch_key:
+            self._loading = False
             return {"error": "Twitch stream key not configured."}
         shuffle = (await self.db.get_setting("radio_shuffle") or "0") == "1"
         if shuffle:
@@ -498,6 +506,7 @@ class StreamManager:
             self._twitch_chat = TwitchChat(chat_token, chat_channel)
             await self._twitch_chat.connect()
         self.is_running = True
+        self._loading = False
         self.current_index = 0
         await self._launch()
         return await self.get_status()
