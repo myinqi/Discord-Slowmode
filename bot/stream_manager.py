@@ -140,34 +140,30 @@ class TwitchChat:
 
 
 SUNO_PLAYLIST_UUID_RE = re.compile(r'suno\.com/playlist/([a-f0-9-]{36})')
+_BROWSER_UA = "Mozilla/5.0 (X11; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0"
+SUNO_SONG_RE = re.compile(r'https?://suno\.com/song/([a-f0-9-]{36})')
 
 
-async def parse_suno_playlist(url: str) -> list[dict]:
-    """Fetch songs from a Suno playlist via their public API."""
-    # Extract playlist UUID from URL
-    m = SUNO_PLAYLIST_UUID_RE.search(url)
-    if not m:
-        print(f"[radio] Could not extract playlist UUID from: {url}")
-        return []
-    playlist_uuid = m.group(1)
+async def _parse_suno_api(playlist_uuid: str) -> list[dict]:
+    """Try Suno studio API to get playlist songs."""
     api_url = f"https://studio-api.suno.ai/api/playlist/{playlist_uuid}"
-
+    headers = {"User-Agent": _BROWSER_UA, "Accept": "application/json"}
     songs = []
     page = 1
     while True:
         try:
             async with aiohttp.ClientSession() as sess:
                 async with sess.get(
-                    api_url, params={"page": page},
+                    api_url, params={"page": page}, headers=headers,
                     timeout=aiohttp.ClientTimeout(total=20),
                 ) as resp:
                     if resp.status != 200:
                         print(f"[radio] Suno API failed: HTTP {resp.status}")
-                        break
+                        return []
                     data = await resp.json()
         except Exception as e:
             print(f"[radio] Suno API error: {e}")
-            break
+            return []
 
         clips = data.get("playlist_clips") or []
         if not clips:
@@ -187,12 +183,119 @@ async def parse_suno_playlist(url: str) -> list[dict]:
                 "suno_url": f"https://suno.com/song/{clip_id}",
             })
 
-        # Pagination: if fewer clips than expected, we're done
         if not data.get("has_more", False):
             break
         page += 1
 
-    print(f"[radio] Parsed {len(songs)} songs from Suno playlist API")
+    return songs
+
+
+async def _parse_suno_html(url: str) -> list[dict]:
+    """Fallback: scrape the playlist HTML for song UUIDs and embedded JSON data."""
+    headers = {"User-Agent": _BROWSER_UA}
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                if resp.status != 200:
+                    print(f"[radio] Suno HTML fetch failed: HTTP {resp.status}")
+                    return []
+                html = await resp.text()
+    except Exception as e:
+        print(f"[radio] Suno HTML fetch error: {e}")
+        return []
+
+    import json as _json
+
+    # Try __NEXT_DATA__ first (Next.js SSR payload)
+    nd_match = re.search(r'<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
+    if nd_match:
+        try:
+            nd = _json.loads(nd_match.group(1))
+            # Navigate props tree to find playlist clips
+            props = nd.get("props", {}).get("pageProps", {})
+            clips = props.get("playlist", {}).get("playlist_clips") or props.get("clips") or []
+            songs = []
+            for entry in clips:
+                clip = entry.get("clip") or entry
+                clip_id = clip.get("id", "")
+                if clip_id:
+                    songs.append({
+                        "uuid": clip_id,
+                        "title": clip.get("title") or clip_id[:12],
+                        "artist": clip.get("display_name") or "",
+                        "suno_url": f"https://suno.com/song/{clip_id}",
+                    })
+            if songs:
+                print(f"[radio] Parsed {len(songs)} songs from __NEXT_DATA__")
+                return songs
+        except Exception as e:
+            print(f"[radio] __NEXT_DATA__ parse error: {e}")
+
+    # Try RSC payload chunks (React Server Components)
+    rsc_chunks = re.findall(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)', html, re.DOTALL)
+    for chunk in rsc_chunks:
+        try:
+            decoded = chunk.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"').replace("\\\\", "\\")
+            # Look for JSON objects with clip data
+            json_matches = re.finditer(r'\{[^{}]*"id"\s*:\s*"[a-f0-9-]{36}"[^{}]*"title"[^{}]*\}', decoded)
+            songs = []
+            seen = set()
+            for jm in json_matches:
+                try:
+                    obj = _json.loads(jm.group(0))
+                    cid = obj.get("id", "")
+                    if cid and cid not in seen:
+                        seen.add(cid)
+                        songs.append({
+                            "uuid": cid,
+                            "title": obj.get("title") or cid[:12],
+                            "artist": obj.get("display_name") or "",
+                            "suno_url": f"https://suno.com/song/{cid}",
+                        })
+                except Exception:
+                    pass
+            if songs:
+                print(f"[radio] Parsed {len(songs)} songs from RSC payload")
+                return songs
+        except Exception:
+            pass
+
+    # Last resort: regex for all song UUIDs in HTML
+    found = SUNO_SONG_RE.findall(html)
+    seen = set()
+    songs = []
+    for uuid in found:
+        if uuid not in seen:
+            seen.add(uuid)
+            songs.append({
+                "uuid": uuid,
+                "title": uuid[:12],
+                "artist": "",
+                "suno_url": f"https://suno.com/song/{uuid}",
+            })
+    if songs:
+        print(f"[radio] Parsed {len(songs)} songs from HTML regex fallback")
+    return songs
+
+
+async def parse_suno_playlist(url: str) -> list[dict]:
+    """Fetch songs from a Suno playlist. Tries API first, then HTML fallback."""
+    m = SUNO_PLAYLIST_UUID_RE.search(url)
+    if not m:
+        print(f"[radio] Could not extract playlist UUID from: {url}")
+        return []
+    playlist_uuid = m.group(1)
+
+    # Try API first
+    songs = await _parse_suno_api(playlist_uuid)
+    if songs:
+        print(f"[radio] Got {len(songs)} songs from Suno API")
+        return songs
+
+    # Fallback to HTML scraping
+    print("[radio] API failed, trying HTML fallback...")
+    songs = await _parse_suno_html(url)
+    print(f"[radio] Parsed {len(songs)} songs total from Suno playlist")
     return songs
 
 
@@ -202,9 +305,10 @@ async def download_suno_song(uuid: str, target_dir: str) -> str | None:
     filepath = os.path.join(target_dir, f"{uuid}.mp3")
     if os.path.exists(filepath):
         return filepath
+    headers = {"User-Agent": _BROWSER_UA}
     try:
         async with aiohttp.ClientSession() as sess:
-            async with sess.get(url, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+            async with sess.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=60)) as resp:
                 if resp.status != 200:
                     print(f"[radio] Download failed for {uuid}: HTTP {resp.status}")
                     return None
@@ -221,9 +325,10 @@ async def download_suno_song(uuid: str, target_dir: str) -> str | None:
 async def resolve_suno_meta(uuid: str) -> dict:
     """Fetch title + artist from Suno embed page."""
     url = f"https://suno.com/song/{uuid}"
+    headers = {"User-Agent": _BROWSER_UA}
     try:
         async with aiohttp.ClientSession() as sess:
-            async with sess.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            async with sess.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 if resp.status != 200:
                     return {}
                 html = await resp.text()
