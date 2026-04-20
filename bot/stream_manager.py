@@ -563,8 +563,10 @@ class StreamManager:
                 t.cancel()
         self._tasks = []
         self._concat_start = self.current_index
-        self.current_song = self.playlist[self.current_index]
-        self._write_overlay(self.current_song)
+        # Write initial overlay but leave current_song=None so tracker
+        # detects first song as a change (triggers lyrics + chat post)
+        self._write_overlay(self.playlist[self.current_index])
+        self.current_song = None
         playlist_path = self._build_concat_file()
         cmd = await self._build_cmd(playlist_path)
         # Debug: log command and playlist
