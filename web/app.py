@@ -2347,19 +2347,31 @@ def create_app(db: Database, bot=None) -> Quart:
             # Model
             m = _re.search(r'\\"major_model_version\\":\\"([^\\]+)\\"', html)
             result["model"] = m.group(1) if m else ""
-            # Lyrics — use proven helper that fetches from Suno embed URL
+            # Lyrics — extract from Next.js RSC payload (same method as stream_manager)
             lyrics_text = ""
-            real_id = result.get("realId") or song_id
-            print(f"[suno-resolve] Fetching embed meta for real_id={real_id}", flush=True)
-            try:
-                meta = await _fetch_suno_meta(real_id)
-                print(f"[suno-resolve] Embed meta: title={meta.get('title')!r}, artist={meta.get('artist')!r}, lyrics_len={len(meta.get('lyrics') or '')}", flush=True)
-                if meta.get("lyrics"):
-                    lyrics_text = meta["lyrics"]
-                if not result.get("author") and meta.get("artist"):
-                    result["author"] = meta["artist"]
-            except Exception as e:
-                print(f"[suno-resolve] _fetch_suno_meta failed: {e}", flush=True)
+            rsc_match = _re.search(
+                r'self\.__next_f\.push\(\[1,"[0-9a-f]+:T[0-9a-f]+,"\]\)</script>'
+                r'<script>self\.__next_f\.push\(\[1,"(.*?)"\]\)</script>',
+                html, _re.DOTALL
+            )
+            if rsc_match:
+                raw = rsc_match.group(1)
+                lyrics_text = raw.replace("\\n", "\n").replace("\\t", " ").replace('\\"', '"').strip()
+                print(f"[suno-resolve] Lyrics from RSC payload, length={len(lyrics_text)}", flush=True)
+            else:
+                # Fallback: try _fetch_suno_meta helper
+                real_id = result.get("realId") or song_id
+                try:
+                    meta = await _fetch_suno_meta(real_id)
+                    if meta.get("lyrics"):
+                        lyrics_text = meta["lyrics"]
+                        print(f"[suno-resolve] Lyrics from embed helper, length={len(lyrics_text)}", flush=True)
+                    if not result.get("author") and meta.get("artist"):
+                        result["author"] = meta["artist"]
+                except Exception as e:
+                    print(f"[suno-resolve] Helper failed: {e}", flush=True)
+            if not lyrics_text:
+                print(f"[suno-resolve] No lyrics found for {song_id}", flush=True)
             result["lyrics"] = lyrics_text
             # GPT description prompt (style/genre prompt used for generation)
             m = _re.search(r'\\"gpt_description_prompt\\":\\"((?:[^\\]|\\.)*)(?:\\"|")', html)
