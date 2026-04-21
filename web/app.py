@@ -2210,6 +2210,12 @@ def create_app(db: Database, bot=None) -> Quart:
     async def start_cleanup_task():
         app.radio_cleanup_task = asyncio.create_task(_radio_cleanup_loop())
 
+    # --- Suno Audio Analyzer ---
+    @app.route("/suno-analyzer")
+    @admin_required
+    async def suno_analyzer():
+        return await render_template("suno_analyzer.html")
+
     # --- Party Playlist ---
 
     @app.route("/party-playlist", methods=["GET", "POST"])
