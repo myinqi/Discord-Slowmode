@@ -165,7 +165,16 @@ var phIds=['lufs','energy','onset','bpm','stereo','crest','flux','harm','vocal',
 
 function setStatus(msg){document.getElementById('status').textContent=msg;}
 function setProgress(pct){document.getElementById('progress-bar').style.width=pct+'%';}
-function extractUUID(s){var m=s.trim().match(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/);return m?m[0]:null;}
+function extractUUID(s){
+  var t=s.trim();
+  // Try standard UUID format first
+  var m=t.match(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/);
+  if(m)return m[0];
+  // Try share URL format: /s/XXXXX or suno.com/s/XXXXX
+  var share=t.match(/\/s\/([A-Za-z0-9_-]+)/);
+  if(share)return share[1];
+  return null;
+}
 function fmt(s){var m=Math.floor(s/60),ss=Math.round(s%60);return m+':'+(ss<10?'0':'')+ss;}
 
 // zoom state
@@ -275,7 +284,10 @@ updatePlayheads();
 
 async function fetchMeta(uuid){
   try{
-    var r=await fetch('https://suno.com/song/'+uuid);
+    // Determine URL: UUID uses /song/, share code uses /s/
+    var isShareCode=!uuid.match(/^[a-f0-9]{8}-[a-f0-9]{4}/);
+    var url=isShareCode?'https://suno.com/s/'+uuid:'https://suno.com/song/'+uuid;
+    var r=await fetch(url);
     var html=await r.text();
     var res={title:'',author:'',artwork:'',tags:[],plays:null,likes:null,comments:null,created_at:'',model:''};
     var tm=html.match(/<title>([^<|]+)/);if(tm)res.title=tm[1].trim();
@@ -339,6 +351,8 @@ async function analyze(){
     }
   }
   setProgress(10);setStatus('Audio laden…');
+  // Share codes use cdn1.suno.ai/{code}.mp3 directly
+  var isShareCode=!uuid.match(/^[a-f0-9]{8}-[a-f0-9]{4}/);
   var mp3url='https://cdn1.suno.ai/'+uuid+'.mp3';
   player.src=mp3url;
   try{
