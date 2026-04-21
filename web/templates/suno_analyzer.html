@@ -621,79 +621,71 @@ onmessage=function(e){
   var energyP5=energySorted[p5idx]*3; // 3x the 5th percentile = activity threshold
 
   // --- VOCAL GENDER DETECTION ---
-  // Step 1: Check for vocal presence via formant energy ratio
-  // Human voice has strong formants at 800-3500Hz; instruments without voice lack this
-  var vCheckSize=4096,vCheckHalf=vCheckSize/2;
-  var vocalPresenceScores=[];
-  for(var vw=0;vw<6;vw++){
-    var vPos=Math.floor(n*(0.2+0.6*vw/5));
-    if(vPos+vCheckSize>n)continue;
-    var formantE=0,subBassE=0,totalVE=0;
-    for(var k=1;k<vCheckHalf;k++){
-      var freq=k*sr/vCheckSize;
-      var re=0,im=0,w2=2*Math.PI*k/vCheckSize;
-      for(var i2=0;i2<vCheckSize;i2++){re+=ch[vPos+i2]*Math.cos(w2*i2);im-=ch[vPos+i2]*Math.sin(w2*i2);}
-      var mg=(re*re+im*im)/(vCheckSize*vCheckSize);
-      totalVE+=mg;
-      if(freq>=800&&freq<=3500)formantE+=mg;
-      if(freq>=20&&freq<=120)subBassE+=mg;
-    }
-    // vocal presence: ratio of formant energy to total
-    if(totalVE>0)vocalPresenceScores.push(formantE/totalVE);
-  }
-  var hasVocals=false;
-  if(vocalPresenceScores.length>2){
-    vocalPresenceScores.sort(function(a,b){return a-b;});
-    var medVP=vocalPresenceScores[Math.floor(vocalPresenceScores.length/2)];
-    hasVocals=medVP>0.08; // >8% of energy in formant range suggests vocals
-  }
+  // Uses autocorrelation on bandpassed signal (80-1200Hz) to find vocal F0.
+  // Then validates with harmonic structure in vocal formant region.
+  var acWinSize=Math.min(8192,n);
+  var acWindows=10;
+  var acF0s=[];
+  // autocorrelation lag range: 80Hz..500Hz
+  var lagLo=Math.floor(sr/500), lagHi=Math.floor(sr/80);
 
-  // Step 2: Cepstrum pitch detection with spectral bandpass (150-4000Hz)
-  // Bandpass isolates vocal frequencies from bass/sub-bass instruments
-  var cepFftSize=4096;
-  var cepHalf=cepFftSize/2;
-  var qLo=Math.floor(sr/500),qHi=Math.floor(sr/150); // 150-500Hz vocal F0 range
-  var bpLo=Math.ceil(150/sr*cepFftSize);  // only include 150Hz+
-  var bpHi=Math.floor(4000/sr*cepFftSize); // up to 4000Hz (vocal harmonics)
-  var cepF0s=[];
-  if(hasVocals){
-    for(var cw=0;cw<8;cw++){
-      var cepPos=Math.floor(n*(0.2+0.6*cw/7));
-      if(cepPos+cepFftSize>n)continue;
-      // compute magnitude spectrum with bandpass
-      var logSpec=new Float32Array(cepHalf);
-      for(var k=bpLo;k<=Math.min(bpHi,cepHalf-1);k++){
-        var re=0,im=0,w2=2*Math.PI*k/cepFftSize;
-        for(var i2=0;i2<cepFftSize;i2++){re+=ch[cepPos+i2]*Math.cos(w2*i2);im-=ch[cepPos+i2]*Math.sin(w2*i2);}
-        var mg=Math.sqrt(re*re+im*im)/cepFftSize;
-        logSpec[k]=Math.log(mg+1e-10);
+  for(var aw=0;aw<acWindows;aw++){
+    var acPos=Math.floor(n*(0.15+0.7*aw/(acWindows-1)));
+    if(acPos+acWinSize>n)continue;
+
+    // bandpass filter via DFT: keep only 80-1200Hz
+    var bpSize=acWinSize,bpHalf=bpSize/2;
+    var bpLoK=Math.ceil(80/sr*bpSize),bpHiK=Math.floor(1200/sr*bpSize);
+    // compute filtered signal via DFT→zero→IDFT (only relevant bins)
+    var reB=new Float32Array(bpHiK-bpLoK+1);
+    var imB=new Float32Array(bpHiK-bpLoK+1);
+    for(var ki=0;ki<reB.length;ki++){
+      var k=bpLoK+ki;
+      var w=2*Math.PI*k/bpSize;
+      var re=0,im=0;
+      for(var i2=0;i2<bpSize;i2++){
+        var h=0.5*(1-Math.cos(2*Math.PI*i2/bpSize));
+        var s=ch[acPos+i2]*h;
+        re+=s*Math.cos(w*i2);im-=s*Math.sin(w*i2);
       }
-      // bins outside bandpass stay 0 (log(0+1e-10) ≈ -23, use explicit floor)
-      for(var k=1;k<bpLo;k++)logSpec[k]=-23;
-      for(var k=bpHi+1;k<cepHalf;k++)logSpec[k]=-23;
-      // cepstrum via cosine transform in vocal quefrency range
-      var cepstrum=new Float32Array(cepHalf);
-      for(var q=qLo;q<=Math.min(qHi,cepHalf-1);q++){
-        var s=0;
-        for(var k=bpLo;k<=Math.min(bpHi,cepHalf-1);k++)s+=logSpec[k]*Math.cos(Math.PI*k*q/cepHalf);
-        cepstrum[q]=s/(bpHi-bpLo+1);
+      reB[ki]=re;imB[ki]=im;
+    }
+    // reconstruct bandpassed signal
+    var bpSig=new Float32Array(bpSize);
+    for(var ki=0;ki<reB.length;ki++){
+      var k=bpLoK+ki;
+      var w=2*Math.PI*k/bpSize;
+      for(var i2=0;i2<bpSize;i2++){
+        bpSig[i2]+=(reB[ki]*Math.cos(w*i2)-imB[ki]*Math.sin(w*i2))*2/bpSize;
       }
-      var cepPeak=0,cepPeakQ=qLo;
-      for(var q=qLo;q<=Math.min(qHi,cepHalf-1);q++){
-        if(cepstrum[q]>cepPeak){cepPeak=cepstrum[q];cepPeakQ=q;}
-      }
-      if(cepPeak>0.001)cepF0s.push(sr/cepPeakQ);
+    }
+
+    // normalized autocorrelation on bandpassed signal
+    var r0=0;
+    for(var i=0;i<bpSize;i++)r0+=bpSig[i]*bpSig[i];
+    if(r0<1e-10)continue;
+
+    var bestLag=lagLo,bestR=-1;
+    for(var lag=lagLo;lag<=Math.min(lagHi,bpSize/2);lag++){
+      var s=0;
+      for(var i=0;i<bpSize-lag;i++)s+=bpSig[i]*bpSig[i+lag];
+      var r=s/r0;
+      if(r>bestR){bestR=r;bestLag=lag;}
+    }
+    // only accept strong periodicity (r > 0.3)
+    if(bestR>0.3){
+      acF0s.push(sr/bestLag);
     }
   }
 
   var f0Cep=0,vocalGender;
-  if(!hasVocals||cepF0s.length<2){
+  if(acF0s.length<3){
     vocalGender='instrumental';
   }else{
-    cepF0s.sort(function(a,b){return a-b;});
-    f0Cep=cepF0s[Math.floor(cepF0s.length/2)];
-    if(f0Cep<155){vocalGender='male';}
-    else if(f0Cep>190){vocalGender='female';}
+    acF0s.sort(function(a,b){return a-b;});
+    f0Cep=acF0s[Math.floor(acF0s.length/2)];
+    if(f0Cep<160){vocalGender='male';}
+    else if(f0Cep>200){vocalGender='female';}
     else{vocalGender='mixed';}
   }
 
