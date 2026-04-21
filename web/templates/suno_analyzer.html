@@ -2,44 +2,42 @@
 {% block title %}Suno Audio Analyzer{% endblock %}
 {% block content %}
 <style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,sans-serif;background:#111;color:#eee;padding:1.5rem;max-width:860px}
-h1{font-size:15px;font-weight:500;color:#888;margin-bottom:1rem}
-.section{background:#1a1a1a;border-radius:8px;padding:12px;margin-bottom:10px}
-.slbl{font-size:11px;color:#555;margin-bottom:6px;display:flex;justify-content:space-between}
-input[type=text]{width:100%;padding:7px 10px;font-family:monospace;font-size:11px;border:1px solid #333;border-radius:8px;background:#0a0a0a;color:#eee;margin-bottom:6px}
-label{font-size:11px;color:#555;display:block;margin-bottom:3px}
-button{padding:7px 16px;font-size:13px;border:1px solid #444;border-radius:8px;background:transparent;color:#eee;cursor:pointer}
-button:hover{background:#222}
-button.p{background:#1a3a5c;color:#7ab8f5;border-color:transparent}
-.grid{display:grid;gap:8px;margin:10px 0}
-.g4{grid-template-columns:repeat(4,1fr)}
-.g2{grid-template-columns:repeat(2,1fr)}
-.card{background:#0f0f0f;border-radius:8px;padding:10px 12px;text-align:center}
-.card .val{font-size:20px;font-weight:500;color:#7ab8f5;margin:4px 0}
-.card .lbl{font-size:11px;color:#555}
-.gauge{position:relative;height:6px;border-radius:3px;margin-top:6px;overflow:visible}
-.gauge-track{position:absolute;left:0;right:0;top:0;height:100%;border-radius:3px}
-.gauge-marker{position:absolute;top:-3px;width:2px;height:12px;border-radius:1px;background:#fff;transform:translateX(-50%);transition:left 0.4s}
-canvas{width:100%;border-radius:4px;display:block}
-#status{font-size:12px;color:#666;margin:4px 0}
-#progress-wrap{height:3px;background:#222;border-radius:2px;margin:6px 0;overflow:hidden}
-#progress-bar{height:100%;width:0%;background:#7ab8f5;transition:width 0.3s}
-#artwork{width:72px;height:72px;border-radius:8px;object-fit:cover;display:none;float:left;margin-right:12px}
-#meta{margin-bottom:10px;overflow:hidden}
-#meta h2{font-size:15px;font-weight:500;margin-bottom:3px}
-#meta-sub{font-size:12px;color:#666;margin-bottom:4px}
-.tag{display:inline-block;background:#1a2a1a;color:#3a7;border-radius:4px;padding:2px 8px;font-size:11px;margin:2px 2px 2px 0}
-.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}
-audio{width:100%;border-radius:8px;margin:8px 0;accent-color:#7ab8f5}
-.chart-outer{position:relative}
-.playhead{position:absolute;top:0;bottom:0;width:1px;background:rgba(255,255,255,0.55);pointer-events:none;display:none}
-#struct-wrap{position:relative;height:16px;border-radius:4px;overflow:hidden;display:flex;margin-bottom:4px}
-.chart-pending{display:flex;align-items:center;justify-content:center;font-size:11px;color:#333;border-radius:4px;background:#0a0a0a}
+.analyzer-wrap{max-width:1200px;margin:0 auto;padding:0 1rem}
+.analyzer-wrap h1{font-size:15px;font-weight:500;color:#888;margin-bottom:1rem}
+.analyzer-wrap .section{background:#1a1a1a;border-radius:8px;padding:12px;margin-bottom:10px}
+.analyzer-wrap .slbl{font-size:11px;color:#555;margin-bottom:6px;display:flex;justify-content:space-between}
+.analyzer-wrap input[type=text]{width:100%;padding:7px 10px;font-family:monospace;font-size:11px;border:1px solid #333;border-radius:8px;background:#0a0a0a;color:#eee;margin-bottom:6px}
+.analyzer-wrap label{font-size:11px;color:#555;display:block;margin-bottom:3px}
+.analyzer-wrap button{padding:7px 16px;font-size:13px;border:1px solid #444;border-radius:8px;background:transparent;color:#eee;cursor:pointer}
+.analyzer-wrap button:hover{background:#222}
+.analyzer-wrap button.p{background:#1a3a5c;color:#7ab8f5;border-color:transparent}
+.analyzer-wrap .grid{display:grid;gap:8px;margin:10px 0}
+.analyzer-wrap .g4{grid-template-columns:repeat(4,1fr)}
+.analyzer-wrap .g2{grid-template-columns:repeat(2,1fr)}
+.analyzer-wrap .card{background:#0f0f0f;border-radius:8px;padding:10px 12px;text-align:center}
+.analyzer-wrap .card .val{font-size:20px;font-weight:500;color:#7ab8f5;margin:4px 0}
+.analyzer-wrap .card .lbl{font-size:11px;color:#555}
+.analyzer-wrap .gauge{position:relative;height:6px;border-radius:3px;margin-top:6px;overflow:visible}
+.analyzer-wrap .gauge-track{position:absolute;left:0;right:0;top:0;height:100%;border-radius:3px}
+.analyzer-wrap .gauge-marker{position:absolute;top:-3px;width:2px;height:12px;border-radius:1px;background:#fff;transform:translateX(-50%);transition:left 0.4s}
+.analyzer-wrap canvas{width:100%;border-radius:4px;display:block}
+.analyzer-wrap #status{font-size:12px;color:#666;margin:4px 0}
+.analyzer-wrap #progress-wrap{height:3px;background:#222;border-radius:2px;margin:6px 0;overflow:hidden}
+.analyzer-wrap #progress-bar{height:100%;width:0%;background:#7ab8f5;transition:width 0.3s}
+.analyzer-wrap #artwork{width:72px;height:72px;border-radius:8px;object-fit:cover;display:none;float:left;margin-right:12px}
+.analyzer-wrap #meta{margin-bottom:10px;overflow:hidden}
+.analyzer-wrap #meta h2{font-size:15px;font-weight:500;margin-bottom:3px}
+.analyzer-wrap #meta-sub{font-size:12px;color:#666;margin-bottom:4px}
+.analyzer-wrap .tag{display:inline-block;background:#1a2a1a;color:#3a7;border-radius:4px;padding:2px 8px;font-size:11px;margin:2px 2px 2px 0}
+.analyzer-wrap .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}
+.analyzer-wrap audio{width:100%;border-radius:8px;margin:8px 0;accent-color:#7ab8f5}
+.analyzer-wrap .chart-outer{position:relative}
+.analyzer-wrap .playhead{position:absolute;top:0;bottom:0;width:1px;background:rgba(255,255,255,0.55);pointer-events:none;display:none}
+.analyzer-wrap #struct-wrap{position:relative;height:16px;border-radius:4px;overflow:hidden;display:flex;margin-bottom:4px}
+.analyzer-wrap .chart-pending{display:flex;align-items:center;justify-content:center;font-size:11px;color:#333;border-radius:4px;background:#0a0a0a}
 #tt{position:fixed;background:#1e1e1e;border:0.5px solid #444;border-radius:6px;padding:6px 10px;font-size:12px;color:#eee;pointer-events:none;opacity:0;max-width:280px;line-height:1.5;z-index:9999;transition:opacity 0.1s;width:auto;height:auto}
 </style>
-</head>
-<body>
+<div class="analyzer-wrap">
 <h1>Suno Audio Analyzer</h1>
 <div id="tt"></div>
 
@@ -282,25 +280,11 @@ updatePlayheads();
 
 async function fetchMeta(uuid){
   try{
-    // Determine URL: UUID uses /song/, share code uses /s/
-    var isShareCode=!uuid.match(/^[a-f0-9]{8}-[a-f0-9]{4}/);
-    var url=isShareCode?'https://suno.com/s/'+uuid:'https://suno.com/song/'+uuid;
-    var r=await fetch(url);
-    var html=await r.text();
-    var res={title:'',author:'',artwork:'',tags:[],plays:null,likes:null,comments:null,created_at:'',model:'',realId:null};
-    var tm=html.match(/<title>([^<|]+)/);if(tm)res.title=tm[1].trim();
-    var am=html.match(/cdn2\.suno\.ai\/[^"]+\.jpeg/);if(am)res.artwork='https://'+am[0];
-    var dn=html.match(/\\"display_name\\":\\"([^\\]+)\\"/);if(!dn)dn=html.match(/"display_name":"([^"]+)"/);if(dn)res.author=dn[1];
-    var tg=html.match(/\\"tags\\":\\"([^\\]+)\\"/);if(!tg)tg=html.match(/"tags":"([^"]+)"/);if(tg)res.tags=tg[1].split(',').map(function(t){return t.trim();}).filter(Boolean);
-    var pc=html.match(/\\"play_count\\":(\d+)/);if(pc)res.plays=parseInt(pc[1]);
-    var uc=html.match(/\\"upvote_count\\":(\d+)/);if(uc)res.likes=parseInt(uc[1]);
-    var cc=html.match(/\\"comment_count\\":(\d+)/);if(cc)res.comments=parseInt(cc[1]);
-    var ca=html.match(/\\"created_at\\":\\"([^\\]+)\\"/);if(ca)res.created_at=ca[1];
-    var mv=html.match(/\\"major_model_version\\":\\"([^\\]+)\\"/);if(mv)res.model=mv[1];
-    // Extract real UUID from page for share links
-    var idMatch=html.match(/song\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/);
-    if(idMatch)res.realId=idMatch[1];
-    return res;
+    var r=await fetch('/suno-analyzer/resolve?id='+encodeURIComponent(uuid));
+    if(!r.ok)return null;
+    var data=await r.json();
+    if(data.error)return null;
+    return data;
   }catch(e){return null;}
 }
 
@@ -1490,4 +1474,5 @@ function drawSpectrum(buf,cid){
   loop();
 }
 </script>
+</div>
 {% endblock %}

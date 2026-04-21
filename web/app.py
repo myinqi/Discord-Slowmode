@@ -2216,6 +2216,61 @@ def create_app(db: Database, bot=None) -> Quart:
     async def suno_analyzer():
         return await render_template("suno_analyzer.html")
 
+    @app.route("/suno-analyzer/resolve")
+    @admin_required
+    async def suno_analyzer_resolve():
+        """Server-side proxy to resolve Suno share links and fetch metadata (avoids CORS)."""
+        from quart import jsonify
+        import aiohttp, re as _re
+        song_id = request.args.get("id", "").strip()
+        if not song_id:
+            return jsonify({"error": "No id provided"}), 400
+        # Determine URL
+        is_uuid = bool(_re.match(r'^[a-f0-9]{8}-[a-f0-9]{4}', song_id))
+        url = f"https://suno.com/song/{song_id}" if is_uuid else f"https://suno.com/s/{song_id}"
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return jsonify({"error": f"Suno returned {resp.status}"}), 502
+                    html = await resp.text()
+            result = {}
+            # Extract real UUID
+            m = _re.search(r'"id"\s*:\s*"([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})"', html)
+            if not m:
+                m = _re.search(r'song/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})', html)
+            result["realId"] = m.group(1) if m else None
+            # Title
+            m = _re.search(r'<title>([^<|]+)', html)
+            result["title"] = m.group(1).strip() if m else ""
+            # Artwork
+            m = _re.search(r'cdn2\.suno\.ai/[^"]+\.jpeg', html)
+            result["artwork"] = "https://" + m.group(0) if m else ""
+            # Author
+            m = _re.search(r'\\"display_name\\":\\"([^\\]+)\\"', html)
+            if not m:
+                m = _re.search(r'"display_name":"([^"]+)"', html)
+            result["author"] = m.group(1) if m else ""
+            # Tags
+            m = _re.search(r'\\"tags\\":\\"([^\\]+)\\"', html)
+            if not m:
+                m = _re.search(r'"tags":"([^"]+)"', html)
+            result["tags"] = [t.strip() for t in m.group(1).split(",") if t.strip()] if m else []
+            # Stats
+            for key, pat in [("plays", r'\\"play_count\\":(\d+)'), ("likes", r'\\"upvote_count\\":(\d+)'), ("comments", r'\\"comment_count\\":(\d+)')]:
+                m = _re.search(pat, html)
+                result[key] = int(m.group(1)) if m else None
+            # Created at
+            m = _re.search(r'\\"created_at\\":\\"([^\\]+)\\"', html)
+            result["created_at"] = m.group(1) if m else ""
+            # Model
+            m = _re.search(r'\\"major_model_version\\":\\"([^\\]+)\\"', html)
+            result["model"] = m.group(1) if m else ""
+            return jsonify(result)
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
     # --- Party Playlist ---
 
     @app.route("/party-playlist", methods=["GET", "POST"])
