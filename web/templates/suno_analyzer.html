@@ -42,10 +42,10 @@
 <div id="tt"></div>
 
 <div class="section">
-  <label>Suno Song URL oder UUID</label>
+  <label>Suno Song URL or UUID</label>
   <input type="text" id="url-input" value="https://suno.com/song/602781a8-161a-4123-aee3-2f9f35fd70d8">
   <div class="row">
-    <button class="p" onclick="analyze()">Analysieren</button>
+    <button class="p" onclick="analyze()">Analyze</button>
     <span id="status"></span>
   </div>
   <div id="progress-wrap"><div id="progress-bar"></div></div>
@@ -67,90 +67,90 @@
 <div class="grid g4">
   <div class="card"><div class="val" id="v-plays">—</div><div class="lbl">Plays</div></div>
   <div class="card"><div class="val" id="v-likes">—</div><div class="lbl">Likes</div></div>
-  <div class="card"><div class="val" id="v-comments">—</div><div class="lbl">Kommentare</div></div>
+  <div class="card"><div class="val" id="v-comments">—</div><div class="lbl">Comments</div></div>
   <div class="card"><div class="val" id="v-ratio">—</div><div class="lbl">Plays / Like</div></div>
 </div>
 <div class="grid g4">
-  <div class="card"><div class="val" id="v-age">—</div><div class="lbl">Alter</div></div>
-  <div class="card"><div class="val" id="v-ppd">—</div><div class="lbl">Plays / Tag</div></div>
-  <div class="card"><div class="val" id="v-model">—</div><div class="lbl">Modell</div></div>
-  <div class="card"><div class="val" id="v-vocal" style="font-size:14px">—</div><div class="lbl">Stimme</div></div>
+  <div class="card"><div class="val" id="v-age">—</div><div class="lbl">Age</div></div>
+  <div class="card"><div class="val" id="v-ppd">—</div><div class="lbl">Plays / Day</div></div>
+  <div class="card"><div class="val" id="v-model">—</div><div class="lbl">Model</div></div>
+  <div class="card"><div class="val" id="v-vocal" style="font-size:14px">—</div><div class="lbl">Voice</div></div>
 </div>
 <div class="grid g4">
   <div class="card"><div class="val" id="v-bpm">—</div><div class="lbl">BPM</div><div class="gauge" id="g-bpm"><div class="gauge-track"></div><div class="gauge-marker" id="gm-bpm"></div></div></div>
-  <div class="card"><div class="val" id="v-dur">—</div><div class="lbl">Dauer</div></div>
-  <div class="card"><div class="val" id="v-loud">—</div><div class="lbl">Lautheit dB</div><div class="gauge" id="g-loud"><div class="gauge-track"></div><div class="gauge-marker" id="gm-loud"></div></div></div>
-  <div class="card"><div class="val" id="v-dyn">—</div><div class="lbl">Dynamik dB</div><div class="gauge" id="g-dyn"><div class="gauge-track"></div><div class="gauge-marker" id="gm-dyn"></div></div></div>
+  <div class="card"><div class="val" id="v-dur">—</div><div class="lbl">Duration</div></div>
+  <div class="card"><div class="val" id="v-loud">—</div><div class="lbl">Loudness dB</div><div class="gauge" id="g-loud"><div class="gauge-track"></div><div class="gauge-marker" id="gm-loud"></div></div></div>
+  <div class="card"><div class="val" id="v-dyn">—</div><div class="lbl">Dynamic dB</div><div class="gauge" id="g-dyn"><div class="gauge-track"></div><div class="gauge-marker" id="gm-dyn"></div></div></div>
 </div>
 <div class="grid g4">
   <div class="card"><div class="val" id="v-centroid">—</div><div class="lbl">Centroid Hz</div><div class="gauge" id="g-centroid"><div class="gauge-track"></div><div class="gauge-marker" id="gm-centroid"></div></div></div>
   <div class="card"><div class="val" id="v-rolloff">—</div><div class="lbl">Rolloff Hz</div><div class="gauge" id="g-rolloff"><div class="gauge-track"></div><div class="gauge-marker" id="gm-rolloff"></div></div></div>
-  <div class="card"><div class="val" id="v-stereo">—</div><div class="lbl">Stereobreite</div><div class="gauge" id="g-stereo"><div class="gauge-track"></div><div class="gauge-marker" id="gm-stereo"></div></div></div>
+  <div class="card"><div class="val" id="v-stereo">—</div><div class="lbl">Stereo Width</div><div class="gauge" id="g-stereo"><div class="gauge-track"></div><div class="gauge-marker" id="gm-stereo"></div></div></div>
   <div class="card"><div class="val" id="v-attack">—</div><div class="lbl">Attack ms</div><div class="gauge" id="g-attack"><div class="gauge-track"></div><div class="gauge-marker" id="gm-attack"></div></div></div>
 </div>
 <div class="grid g4">
-  <div class="card"><div class="val" id="v-key">—</div><div class="lbl">Tonart</div></div>
-  <div class="card"><div class="val" id="v-mode">—</div><div class="lbl">Modus</div></div>
-  <div class="card"><div class="val" id="v-chord-rate">—</div><div class="lbl">Akkordwechsel/s</div><div class="gauge" id="g-chord-rate"><div class="gauge-track"></div><div class="gauge-marker" id="gm-chord-rate"></div></div></div>
-  <div class="card"><div class="val" id="v-note-stab">—</div><div class="lbl">Noten-Stabilität</div><div class="gauge" id="g-note-stab"><div class="gauge-track"></div><div class="gauge-marker" id="gm-note-stab"></div></div></div>
+  <div class="card"><div class="val" id="v-key">—</div><div class="lbl">Key</div></div>
+  <div class="card"><div class="val" id="v-mode">—</div><div class="lbl">Mode</div></div>
+  <div class="card"><div class="val" id="v-chord-rate">—</div><div class="lbl">Chord Changes/s</div><div class="gauge" id="g-chord-rate"><div class="gauge-track"></div><div class="gauge-marker" id="gm-chord-rate"></div></div></div>
+  <div class="card"><div class="val" id="v-note-stab">—</div><div class="lbl">Note Stability</div><div class="gauge" id="g-note-stab"><div class="gauge-track"></div><div class="gauge-marker" id="gm-note-stab"></div></div></div>
 </div>
 <div class="grid g4">
-  <div class="card"><div class="val" id="v-entropy">—</div><div class="lbl">Spektr. Entropie</div><div class="gauge" id="g-entropy"><div class="gauge-track"></div><div class="gauge-marker" id="gm-entropy"></div></div></div>
-  <div class="card"><div class="val" id="v-inharm">—</div><div class="lbl">Inharmonizität</div><div class="gauge" id="g-inharm"><div class="gauge-track"></div><div class="gauge-marker" id="gm-inharm"></div></div></div>
-  <div class="card"><div class="val" id="v-texture">—</div><div class="lbl">Textur-Index</div><div class="gauge" id="g-texture"><div class="gauge-track"></div><div class="gauge-marker" id="gm-texture"></div></div></div>
-  <div class="card"><div class="val" id="v-symmetry">—</div><div class="lbl">Energie-Form</div></div>
+  <div class="card"><div class="val" id="v-entropy">—</div><div class="lbl">Spectral Entropy</div><div class="gauge" id="g-entropy"><div class="gauge-track"></div><div class="gauge-marker" id="gm-entropy"></div></div></div>
+  <div class="card"><div class="val" id="v-inharm">—</div><div class="lbl">Inharmonicity</div><div class="gauge" id="g-inharm"><div class="gauge-track"></div><div class="gauge-marker" id="gm-inharm"></div></div></div>
+  <div class="card"><div class="val" id="v-texture">—</div><div class="lbl">Texture Index</div><div class="gauge" id="g-texture"><div class="gauge-track"></div><div class="gauge-marker" id="gm-texture"></div></div></div>
+  <div class="card"><div class="val" id="v-symmetry">—</div><div class="lbl">Energy Shape</div></div>
 </div>
 
 <div class="section">
-  <div class="slbl"><span>Song-Struktur</span></div>
+  <div class="slbl"><span>Song Structure</span></div>
   <div id="struct-wrap"></div>
 </div>
-<div class="section"><div class="slbl">Lautheit über Zeit (RMS dB)</div>
-  <div class="chart-outer"><canvas id="lufs-canvas" style="height:80px;background:#0a0a0a" class="chart-pending">berechne…</canvas><div class="playhead" id="ph-lufs"></div></div>
+<div class="section"><div class="slbl">Loudness over Time (RMS dB)</div>
+  <div class="chart-outer"><canvas id="lufs-canvas" style="height:80px;background:#0a0a0a" class="chart-pending">loading…</canvas><div class="playhead" id="ph-lufs"></div></div>
 </div>
-<div class="section"><div class="slbl">Energie über Zeit — orange=steigend · blau=fallend · grau=gleichbleibend</div>
-  <div class="chart-outer"><canvas id="energy-canvas" style="height:70px;background:#0a0a0a" class="chart-pending">berechne…</canvas><div class="playhead" id="ph-energy"></div></div>
+<div class="section"><div class="slbl">Energy over Time — orange=rising · blue=falling · gray=steady</div>
+  <div class="chart-outer"><canvas id="energy-canvas" style="height:70px;background:#0a0a0a" class="chart-pending">loading…</canvas><div class="playhead" id="ph-energy"></div></div>
 </div>
-<div class="section"><div class="slbl">Crestfaktor über Zeit — hoch=dynamisch · niedrig=komprimiert</div>
-  <div class="chart-outer"><canvas id="crest-canvas" style="height:70px;background:#0a0a0a" class="chart-pending">berechne…</canvas><div class="playhead" id="ph-crest"></div></div>
+<div class="section"><div class="slbl">Crest Factor over Time — high=dynamic · low=compressed</div>
+  <div class="chart-outer"><canvas id="crest-canvas" style="height:70px;background:#0a0a0a" class="chart-pending">loading…</canvas><div class="playhead" id="ph-crest"></div></div>
 </div>
-<div class="section"><div class="slbl">Onset-Dichte (Transienten/s)</div>
-  <div class="chart-outer"><canvas id="onset-canvas" style="height:70px;background:#0a0a0a" class="chart-pending">berechne…</canvas><div class="playhead" id="ph-onset"></div></div>
+<div class="section"><div class="slbl">Onset Density (Transients/s)</div>
+  <div class="chart-outer"><canvas id="onset-canvas" style="height:70px;background:#0a0a0a" class="chart-pending">loading…</canvas><div class="playhead" id="ph-onset"></div></div>
 </div>
-<div class="section"><div class="slbl">BPM über Zeit — orange=Autokorr · cyan=IOI Peaks · gelb=IOI Median</div>
-  <div class="chart-outer"><canvas id="bpmcurve-canvas" style="height:80px;background:#0a0a0a" class="chart-pending">berechne…</canvas><div class="playhead" id="ph-bpmcurve"></div></div>
+<div class="section"><div class="slbl">BPM over Time — orange=autocorr · cyan=IOI peaks · yellow=IOI median</div>
+  <div class="chart-outer"><canvas id="bpmcurve-canvas" style="height:80px;background:#0a0a0a" class="chart-pending">loading…</canvas><div class="playhead" id="ph-bpmcurve"></div></div>
 </div>
-<div class="section"><div class="slbl">Stereo-Bild (L–R Differenz)</div>
-  <div class="chart-outer"><canvas id="stereo-canvas" style="height:70px;background:#0a0a0a" class="chart-pending">berechne…</canvas><div class="playhead" id="ph-stereo"></div></div>
+<div class="section"><div class="slbl">Stereo Image (L–R Difference)</div>
+  <div class="chart-outer"><canvas id="stereo-canvas" style="height:70px;background:#0a0a0a" class="chart-pending">loading…</canvas><div class="playhead" id="ph-stereo"></div></div>
 </div>
-<div class="section"><div class="slbl">Gesangskurve — blau=männlich (85–180 Hz) · rot=weiblich (180–300 Hz)</div>
-  <div class="chart-outer"><canvas id="vocal-canvas" style="height:90px;background:#0a0a0a" class="chart-pending">berechne…</canvas><div class="playhead" id="ph-vocal"></div></div>
+<div class="section"><div class="slbl">Vocal Curve — blue=male (85–165 Hz) · red=female (165–350 Hz)</div>
+  <div class="chart-outer"><canvas id="vocal-canvas" style="height:90px;background:#0a0a0a" class="chart-pending">loading…</canvas><div class="playhead" id="ph-vocal"></div></div>
 </div>
-<div class="section"><div class="slbl">Harmonicity — hoch=tonal · niedrig=noisig/percussiv</div>
-  <div class="chart-outer"><canvas id="harm-canvas" style="height:70px;background:#0a0a0a" class="chart-pending">berechne…</canvas><div class="playhead" id="ph-harm"></div></div>
+<div class="section"><div class="slbl">Harmonicity — high=tonal · low=noisy/percussive</div>
+  <div class="chart-outer"><canvas id="harm-canvas" style="height:70px;background:#0a0a0a" class="chart-pending">loading…</canvas><div class="playhead" id="ph-harm"></div></div>
 </div>
-<div class="section"><div class="slbl">Spektrale Fluktuation — hoch=percussiv/lebendig</div>
-  <div class="chart-outer"><canvas id="flux-canvas" style="height:70px;background:#0a0a0a" class="chart-pending">berechne…</canvas><div class="playhead" id="ph-flux"></div></div>
+<div class="section"><div class="slbl">Spectral Flux — high=percussive/lively</div>
+  <div class="chart-outer"><canvas id="flux-canvas" style="height:70px;background:#0a0a0a" class="chart-pending">loading…</canvas><div class="playhead" id="ph-flux"></div></div>
 </div>
-<div class="section"><div class="slbl">Spektrale Entropie — niedrig=tonal/klar · hoch=noisig/dicht</div>
-  <div class="chart-outer"><canvas id="entropy-canvas" style="height:70px;background:#0a0a0a" class="chart-pending">berechne…</canvas><div class="playhead" id="ph-entropy"></div></div>
+<div class="section"><div class="slbl">Spectral Entropy — low=tonal/clear · high=noisy/dense</div>
+  <div class="chart-outer"><canvas id="entropy-canvas" style="height:70px;background:#0a0a0a" class="chart-pending">loading…</canvas><div class="playhead" id="ph-entropy"></div></div>
 </div>
-<div class="section"><div class="slbl">Inharmonizität — niedrig=rein · hoch=FM-artig/verstimmt</div>
-  <div class="chart-outer"><canvas id="inharm-canvas" style="height:70px;background:#0a0a0a" class="chart-pending">berechne…</canvas><div class="playhead" id="ph-inharm"></div></div>
+<div class="section"><div class="slbl">Inharmonicity — low=pure · high=FM-like/detuned</div>
+  <div class="chart-outer"><canvas id="inharm-canvas" style="height:70px;background:#0a0a0a" class="chart-pending">loading…</canvas><div class="playhead" id="ph-inharm"></div></div>
 </div>
-<div class="section"><div class="slbl">Noten-Stabilität — hoch=lange Noten · niedrig=Ornamente/Glissandi</div>
-  <div class="chart-outer"><canvas id="notestab-canvas" style="height:70px;background:#0a0a0a" class="chart-pending">berechne…</canvas><div class="playhead" id="ph-notestab"></div></div>
+<div class="section"><div class="slbl">Note Stability — high=sustained notes · low=ornaments/glissandi</div>
+  <div class="chart-outer"><canvas id="notestab-canvas" style="height:70px;background:#0a0a0a" class="chart-pending">loading…</canvas><div class="playhead" id="ph-notestab"></div></div>
 </div>
-<div class="section"><div class="slbl">Pitch-Tracking (dominante Melodielinie)</div>
-  <div class="chart-outer"><canvas id="pitch-canvas" style="height:100px;background:#0a0a0a" class="chart-pending">berechne…</canvas><div class="playhead" id="ph-pitch"></div></div>
+<div class="section"><div class="slbl">Pitch Tracking (dominant melody)</div>
+  <div class="chart-outer"><canvas id="pitch-canvas" style="height:100px;background:#0a0a0a" class="chart-pending">loading…</canvas><div class="playhead" id="ph-pitch"></div></div>
 </div>
-<div class="section"><div class="slbl">Chroma-Heatmap — 12 Halbtöne über Zeit · Akkordwechsel oben in Gelb</div>
-  <div class="chart-outer"><canvas id="chroma-canvas" style="height:120px;background:#0a0a0a" class="chart-pending">berechne…</canvas><div class="playhead" id="ph-chroma"></div></div>
+<div class="section"><div class="slbl">Chroma Heatmap — 12 semitones over time · chord changes in yellow</div>
+  <div class="chart-outer"><canvas id="chroma-canvas" style="height:120px;background:#0a0a0a" class="chart-pending">loading…</canvas><div class="playhead" id="ph-chroma"></div></div>
 </div>
-<div class="section"><div class="slbl">Spektrogramm — lokal Z-normiert · dunkel=Stille · hell=Signal</div>
-  <div class="chart-outer"><canvas id="spectro-canvas" style="height:360px;background:#0a0a0a" class="chart-pending">berechne…</canvas><div class="playhead" id="ph-spectro"></div></div>
+<div class="section"><div class="slbl">Spectrogram — locally Z-normalized · dark=silence · bright=signal</div>
+  <div class="chart-outer"><canvas id="spectro-canvas" style="height:360px;background:#0a0a0a" class="chart-pending">loading…</canvas><div class="playhead" id="ph-spectro"></div></div>
 </div>
-<div class="section"><div class="slbl">Frequenzspektrum — live</div>
+<div class="section"><div class="slbl">Frequency Spectrum — live</div>
   <div class="chart-outer"><canvas id="freq-canvas" style="height:120px;background:#0a0a0a"></canvas></div>
 </div>
 
@@ -290,7 +290,7 @@ async function fetchMeta(uuid){
 
 async function analyze(){
   var uuid=extractUUID(document.getElementById('url-input').value);
-  if(!uuid){setStatus('Keine gültige UUID');return;}
+  if(!uuid){setStatus('Invalid UUID');return;}
 
   // --- CLEANUP ---
   if(window._activeWorker){window._activeWorker.terminate();window._activeWorker=null;}
@@ -314,28 +314,28 @@ async function analyze(){
   document.getElementById('struct-wrap').innerHTML='';
   document.getElementById('tags').innerHTML='';
   setProgress(0);
-  setStatus('Metadaten laden…');setProgress(5);
+  setStatus('Loading metadata…');setProgress(5);
   var meta=await fetchMeta(uuid);
   if(meta){
     document.getElementById('meta').style.display='block';
     document.getElementById('title').textContent=meta.title||uuid;
-    document.getElementById('meta-sub').textContent=(meta.author||'')+(meta.created_at?' · '+new Date(meta.created_at).toLocaleDateString('de-DE'):'');
+    document.getElementById('meta-sub').textContent=(meta.author||'')+(meta.created_at?' · '+new Date(meta.created_at).toLocaleDateString('en-US'):'');
     if(meta.artwork){var img=document.getElementById('artwork');img.src=meta.artwork;img.style.display='block';}
     document.getElementById('tags').innerHTML=meta.tags.map(function(t){return '<span class="tag">'+t+'</span>';}).join('');
     document.getElementById('v-model').textContent=meta.model||'—';
     if(meta.plays!==null){
-      document.getElementById('v-plays').textContent=meta.plays.toLocaleString('de-DE');
-      document.getElementById('v-likes').textContent=meta.likes!==null?meta.likes.toLocaleString('de-DE'):'—';
-      document.getElementById('v-comments').textContent=meta.comments!==null?meta.comments.toLocaleString('de-DE'):'—';
+      document.getElementById('v-plays').textContent=meta.plays.toLocaleString('en-US');
+      document.getElementById('v-likes').textContent=meta.likes!==null?meta.likes.toLocaleString('en-US'):'—';
+      document.getElementById('v-comments').textContent=meta.comments!==null?meta.comments.toLocaleString('en-US'):'—';
       document.getElementById('v-ratio').textContent=meta.likes>0?Math.round(meta.plays/meta.likes):'—';
     }
     if(meta.created_at){
       var ageDays=Math.floor((Date.now()-new Date(meta.created_at))/(1000*86400));
-      document.getElementById('v-age').textContent=ageDays>365?Math.floor(ageDays/365)+'J '+(ageDays%365)+'d':ageDays+'d';
-      if(meta.plays!==null&&ageDays>0)document.getElementById('v-ppd').textContent=Math.round(meta.plays/ageDays).toLocaleString('de-DE');
+      document.getElementById('v-age').textContent=ageDays>365?Math.floor(ageDays/365)+'y '+(ageDays%365)+'d':ageDays+'d';
+      if(meta.plays!==null&&ageDays>0)document.getElementById('v-ppd').textContent=Math.round(meta.plays/ageDays).toLocaleString('en-US');
     }
   }
-  setProgress(10);setStatus('Audio laden…');
+  setProgress(10);setStatus('Loading audio…');
   // Use real UUID from meta if available (for share links), otherwise use input
   var audioId=meta&&meta.realId?meta.realId:uuid;
   var mp3url='https://cdn1.suno.ai/'+audioId+'.mp3';
@@ -343,11 +343,11 @@ async function analyze(){
   try{
     var arrayBuf;
     var cacheKey=audioId;
-    if(mp3Cache[cacheKey]){setStatus('Aus Cache…');arrayBuf=mp3Cache[cacheKey];}
+    if(mp3Cache[cacheKey]){setStatus('From cache…');arrayBuf=mp3Cache[cacheKey];}
     else{
       var resp=await fetch(mp3url);
-      if(!resp.ok){setStatus('MP3 nicht verfügbar ('+resp.status+')');return;}
-      setStatus('Dekodiere…');setProgress(20);
+      if(!resp.ok){setStatus('MP3 unavailable ('+resp.status+')');return;}
+      setStatus('Decoding…');setProgress(20);
       arrayBuf=await resp.arrayBuffer();
       mp3Cache[cacheKey]=arrayBuf;
     }
@@ -359,10 +359,10 @@ async function analyze(){
     window._audioSamples=new Float32Array(buf.getChannelData(0));
     window._audioSR=buf.sampleRate;
     document.getElementById('v-dur').textContent=fmt(buf.duration);
-    setProgress(30);setStatus('Starte Analyse…');
+    setProgress(30);setStatus('Starting analysis…');
     startWorkerAnalysis(buf);
     drawSpectrum(buf,'freq-canvas');
-  }catch(e){setStatus('Fehler: '+e.message);}
+  }catch(e){setStatus('Error: '+e.message);}
 }
 
 function startWorkerAnalysis(buf){
@@ -388,13 +388,13 @@ function startWorkerAnalysis(buf){
         document.getElementById('v-bpm').textContent=Math.round(msg.bpm);
         document.getElementById('v-loud').textContent=msg.loudness.toFixed(1);
         document.getElementById('v-dyn').textContent=msg.dynamic.toFixed(1);
-        document.getElementById('v-centroid').textContent=Math.round(msg.centroid).toLocaleString('de-DE');
-        document.getElementById('v-rolloff').textContent=Math.round(msg.rolloff).toLocaleString('de-DE');
+        document.getElementById('v-centroid').textContent=Math.round(msg.centroid).toLocaleString('en-US');
+        document.getElementById('v-rolloff').textContent=Math.round(msg.rolloff).toLocaleString('en-US');
         document.getElementById('v-key').textContent=msg.key;
         document.getElementById('v-stereo').textContent=(msg.stereoWidth*100).toFixed(0)+'%';
         var vEl=document.getElementById('v-vocal');
         vEl.textContent=msg.vocalGender+(msg.f0&&msg.vocalGender!=='instrumental'?' ('+msg.f0+' Hz)':'');
-        vEl.style.color=msg.vocalGender==='weiblich'?'#e06060':msg.vocalGender==='männlich'?'#7ab8f5':'#aaa';
+        vEl.style.color=msg.vocalGender==='female'?'#e06060':msg.vocalGender==='male'?'#7ab8f5':'#aaa';
         updateGauge('bpm',msg.bpm);
         updateGauge('loud',msg.loudness);
         updateGauge('dyn',msg.dynamic);
@@ -433,7 +433,7 @@ function startWorkerAnalysis(buf){
         drawVocalCurve(msg.male,msg.female,msg.dur);break;
       case 'fft_partial':
         setProgress(msg.pct);
-        setStatus('Runde '+msg.round+'/'+msg.totalRounds+(msg.isFinal?' (final)':'')+'…');
+        setStatus('Round '+msg.round+'/'+msg.totalRounds+(msg.isFinal?' (final)':'')+'…');
         if(msg.key)document.getElementById('v-key').textContent=msg.key;
         // update vocal estimate from pitch median
         if(msg.pitch&&msg.pitch.length){
@@ -441,10 +441,10 @@ function startWorkerAnalysis(buf){
           if(validPitch.length>10){
             validPitch.sort(function(a,b){return a-b;});
             var medF0=validPitch[Math.floor(validPitch.length/2)];
-            var vGender=medF0<155?'männlich':medF0>175?'weiblich':'gemischt';
+            var vGender=medF0<155?'male':medF0>175?'female':'mixed';
             var vEl=document.getElementById('v-vocal');
             vEl.textContent=vGender+' ('+Math.round(medF0)+' Hz)';
-            vEl.style.color=vGender==='weiblich'?'#e06060':vGender==='männlich'?'#7ab8f5':'#aaa';
+            vEl.style.color=vGender==='female'?'#e06060':vGender==='male'?'#7ab8f5':'#aaa';
           }
         }
         window._chartData.fft={frames:msg.frames,numFrames:msg.numFrames,fftSize:msg.fftSize,sr:sr,dur:msg.dur,flux:msg.flux,harm:msg.harm,pitch:msg.pitch,chroma:msg.chroma,entropy:msg.entropy,inharm:msg.inharm,noteStab:msg.noteStab};
@@ -466,8 +466,8 @@ function startWorkerAnalysis(buf){
         // update scalar cards from FFT
         if(msg.scalars){
           var sc=msg.scalars;
-          if(sc.centroid){document.getElementById('v-centroid').textContent=Math.round(sc.centroid).toLocaleString('de-DE');updateGauge('centroid',sc.centroid);}
-          if(sc.rolloff){document.getElementById('v-rolloff').textContent=Math.round(sc.rolloff).toLocaleString('de-DE');updateGauge('rolloff',sc.rolloff);}
+          if(sc.centroid){document.getElementById('v-centroid').textContent=Math.round(sc.centroid).toLocaleString('en-US');updateGauge('centroid',sc.centroid);}
+          if(sc.rolloff){document.getElementById('v-rolloff').textContent=Math.round(sc.rolloff).toLocaleString('en-US');updateGauge('rolloff',sc.rolloff);}
           if(sc.entropy!==undefined){var ev=sc.entropy*100;document.getElementById('v-entropy').textContent=ev.toFixed(0)+'%';updateGauge('entropy',ev);}
           if(sc.inharm!==undefined){var iv=sc.inharm*1000;document.getElementById('v-inharm').textContent=iv.toFixed(1);updateGauge('inharm',Math.min(100,iv*5));}
           if(sc.chordRate!==undefined){document.getElementById('v-chord-rate').textContent=sc.chordRate.toFixed(2);updateGauge('chord-rate',sc.chordRate);}
@@ -490,7 +490,7 @@ function startWorkerAnalysis(buf){
             if(a3>a1+1)sym='crescendo ↑';
             else if(a1>a3+1)sym='decrescendo ↓';
             else if(a2>a1+0.5&&a2>a3+0.5)sym='arch ∧';
-            else sym='gleichmäßig ─';
+            else sym='steady ─';
             document.getElementById('v-symmetry').textContent=sym;
           }
           // attack time from envelope
@@ -510,7 +510,7 @@ function startWorkerAnalysis(buf){
             }
           }
         }
-        if(msg.isFinal){setProgress(100);setStatus('Fertig');}
+        if(msg.isFinal){setProgress(100);setStatus('Done');}
         break;
     }
   };
@@ -527,7 +527,7 @@ onmessage=function(e){
   left=e.data.left; right=e.data.right; sr=e.data.sr;
   var ch=left, n=ch.length, dur=n/sr;
 
-  postMessage({type:'progress',label:'Hüllkurve…',pct:32});
+  postMessage({type:'progress',label:'Envelope…',pct:32});
   // --- ENVELOPE (shared) ---
   var envStep=Math.floor(sr/100);
   var env=[], envLen=Math.floor(n/envStep);
@@ -555,7 +555,7 @@ onmessage=function(e){
   var oStep=Math.floor(sr*0.5/envStep),oFrames=Math.floor(diff.length/oStep),onsets=new Float32Array(oFrames);
   for(var i=0;i<oFrames;i++){var cnt=0;for(var j=i*oStep;j<(i+1)*oStep;j++)if(diff[j]>0.01)cnt++;onsets[i]=cnt/(0.5);}
 
-  postMessage({type:'progress',label:'Skalare…',pct:38});
+  postMessage({type:'progress',label:'Scalars…',pct:38});
 
   // BPM global
   var minL=Math.floor(6000/180),maxL=Math.floor(6000/60),best=0,bestL=minL;
@@ -576,22 +576,39 @@ onmessage=function(e){
   var cum=0,thr=tot*0.85,rolloff=sr/2;
   for(var k=0;k<bins;k++){cum+=mag[k];if(cum>=thr){rolloff=k*sr/fftSize;break;}}
 
-  postMessage({type:'progress',label:'Tonart…',pct:42});
+  postMessage({type:'progress',label:'Key detection…',pct:42});
 
-  // key estimation
+  // key estimation — proper complex DFT with Hann window, HPS for overtone reduction
   var notes=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
   var majorP=[6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88];
   var minorP=[6.33,2.68,3.52,5.38,2.60,3.53,2.54,4.75,3.98,2.69,3.34,3.17];
   var chromaG=new Float32Array(12);
-  var kfftSize=4096,kstep=kfftSize*2,kmid=Math.floor(n*0.15),kend=Math.floor(n*0.85);
+  var kfftSize=4096,kstep=kfftSize,kmid=Math.floor(n*0.1),kend=Math.floor(n*0.9);
+  var kHann=new Float32Array(kfftSize);
+  for(var i=0;i<kfftSize;i++)kHann[i]=0.5*(1-Math.cos(2*Math.PI*i/kfftSize));
   for(var start=kmid;start+kfftSize<kend;start+=kstep){
+    // compute full magnitude spectrum with Hann window
+    var kMag=new Float32Array(kfftSize/2);
     for(var k=1;k<kfftSize/2;k++){
-      var freq=k*sr/kfftSize;if(freq<80||freq>4000)continue;
-      var re=0,w=2*Math.PI*k/kfftSize;
-      for(var i2=0;i2<kfftSize;i2++)re+=ch[start+i2]*Math.cos(w*i2);
-      var m=Math.abs(re)/kfftSize;
+      var re=0,im=0,w=2*Math.PI*k/kfftSize;
+      for(var i2=0;i2<kfftSize;i2++){
+        var s=ch[start+i2]*kHann[i2];
+        re+=s*Math.cos(w*i2);im-=s*Math.sin(w*i2);
+      }
+      kMag[k]=Math.sqrt(re*re+im*im)/kfftSize;
+    }
+    // harmonic product spectrum (multiply mag at f, 2f, 3f) to suppress overtones
+    var hps=new Float32Array(kfftSize/2);
+    for(var k=1;k<kfftSize/6;k++){
+      hps[k]=kMag[k]*(k*2<kfftSize/2?kMag[k*2]:0)*(k*3<kfftSize/2?kMag[k*3]:0);
+    }
+    // accumulate chroma from HPS in vocal/instrument fundamental range
+    for(var k=1;k<kfftSize/6;k++){
+      var freq=k*sr/kfftSize;if(freq<65||freq>2000)continue;
+      var weight=hps[k];
+      if(weight<=0)continue;
       var midi=Math.round(12*Math.log2(freq/440)+69);
-      chromaG[((midi%12)+12)%12]+=m;
+      chromaG[((midi%12)+12)%12]+=weight;
     }
   }
   var cmx=Math.max.apply(null,Array.prototype.slice.call(chromaG));
@@ -604,7 +621,7 @@ onmessage=function(e){
       var mn=sm/12,pn=sp/12,num=0,dc=0,dp=0;
       for(var i=0;i<12;i++){num+=(chromaG[(i+root)%12]-mn)*(prof[i]-pn);dc+=Math.pow(chromaG[(i+root)%12]-mn,2);dp+=Math.pow(prof[i]-pn,2);}
       var r=dc>0&&dp>0?num/Math.sqrt(dc*dp):0;
-      if(r>bestScore){bestScore=r;bestKey=notes[root]+(mode===0?' Dur':' Moll');}
+      if(r>bestScore){bestScore=r;bestKey=notes[root]+(mode===0?' Major':' Minor');}
     }
   }
 
@@ -614,55 +631,79 @@ onmessage=function(e){
   var p5idx=Math.floor(energySorted.length*0.05);
   var energyP5=energySorted[p5idx]*3; // 3x the 5th percentile = activity threshold
 
-  // --- CEPSTRUM VOCAL GENDER (multi-window) ---
+  // --- VOCAL GENDER DETECTION ---
+  // Step 1: Check for vocal presence via formant energy ratio
+  // Human voice has strong formants at 800-3500Hz; instruments without voice lack this
+  var vCheckSize=4096,vCheckHalf=vCheckSize/2;
+  var vocalPresenceScores=[];
+  for(var vw=0;vw<6;vw++){
+    var vPos=Math.floor(n*(0.2+0.6*vw/5));
+    if(vPos+vCheckSize>n)continue;
+    var formantE=0,subBassE=0,totalVE=0;
+    for(var k=1;k<vCheckHalf;k++){
+      var freq=k*sr/vCheckSize;
+      var re=0,im=0,w2=2*Math.PI*k/vCheckSize;
+      for(var i2=0;i2<vCheckSize;i2++){re+=ch[vPos+i2]*Math.cos(w2*i2);im-=ch[vPos+i2]*Math.sin(w2*i2);}
+      var mg=(re*re+im*im)/(vCheckSize*vCheckSize);
+      totalVE+=mg;
+      if(freq>=800&&freq<=3500)formantE+=mg;
+      if(freq>=20&&freq<=120)subBassE+=mg;
+    }
+    // vocal presence: ratio of formant energy to total
+    if(totalVE>0)vocalPresenceScores.push(formantE/totalVE);
+  }
+  var hasVocals=false;
+  if(vocalPresenceScores.length>2){
+    vocalPresenceScores.sort(function(a,b){return a-b;});
+    var medVP=vocalPresenceScores[Math.floor(vocalPresenceScores.length/2)];
+    hasVocals=medVP>0.08; // >8% of energy in formant range suggests vocals
+  }
+
+  // Step 2: Cepstrum pitch detection (only in vocal range 120-500Hz)
   var cepFftSize=4096;
   var cepHalf=cepFftSize/2;
-  var qLo=Math.floor(sr/500),qHi=Math.floor(sr/80);
-  // sample multiple windows across the song (20-80% range, skip intro/outro)
-  var cepWindows=8;
+  var qLo=Math.floor(sr/500),qHi=Math.floor(sr/120); // 120-500Hz (skip sub-bass)
   var cepF0s=[];
-  var cepStartFrac=0.2,cepEndFrac=0.8;
-  for(var cw=0;cw<cepWindows;cw++){
-    var cepPos=Math.floor(n*(cepStartFrac+(cepEndFrac-cepStartFrac)*cw/(cepWindows-1)));
-    if(cepPos+cepFftSize>n)continue;
-    // compute log power spectrum via manual DFT (small window, acceptable)
-    var logSpec=new Float32Array(cepHalf);
-    for(var k=1;k<cepHalf;k++){
-      var re=0,im=0,w2=2*Math.PI*k/cepFftSize;
-      for(var i2=0;i2<cepFftSize;i2++){re+=ch[cepPos+i2]*Math.cos(w2*i2);im-=ch[cepPos+i2]*Math.sin(w2*i2);}
-      var mg=Math.sqrt(re*re+im*im)/cepFftSize;
-      logSpec[k]=Math.log(mg+1e-10);
+  if(hasVocals){
+    for(var cw=0;cw<8;cw++){
+      var cepPos=Math.floor(n*(0.2+0.6*cw/7));
+      if(cepPos+cepFftSize>n)continue;
+      var logSpec=new Float32Array(cepHalf);
+      for(var k=1;k<cepHalf;k++){
+        var re=0,im=0,w2=2*Math.PI*k/cepFftSize;
+        for(var i2=0;i2<cepFftSize;i2++){re+=ch[cepPos+i2]*Math.cos(w2*i2);im-=ch[cepPos+i2]*Math.sin(w2*i2);}
+        var mg=Math.sqrt(re*re+im*im)/cepFftSize;
+        logSpec[k]=Math.log(mg+1e-10);
+      }
+      var cepstrum=new Float32Array(cepHalf);
+      for(var q=qLo;q<=Math.min(qHi,cepHalf-1);q++){
+        var s=0;
+        for(var k=1;k<cepHalf;k++)s+=logSpec[k]*Math.cos(Math.PI*k*q/cepHalf);
+        cepstrum[q]=s/cepHalf;
+      }
+      var cepPeak=0,cepPeakQ=qLo;
+      for(var q=qLo;q<=Math.min(qHi,cepHalf-1);q++){
+        if(cepstrum[q]>cepPeak){cepPeak=cepstrum[q];cepPeakQ=q;}
+      }
+      if(cepPeak>0.002)cepF0s.push(sr/cepPeakQ);
     }
-    // IFFT of log spectrum (cepstrum via cosine transform)
-    var cepstrum=new Float32Array(cepHalf);
-    for(var q=qLo;q<=Math.min(qHi,cepHalf-1);q++){
-      var s=0;
-      for(var k=1;k<cepHalf;k++)s+=logSpec[k]*Math.cos(Math.PI*k*q/cepHalf);
-      cepstrum[q]=s/cepHalf;
-    }
-    var cepPeak=0,cepPeakQ=qLo;
-    for(var q=qLo;q<=Math.min(qHi,cepHalf-1);q++){
-      if(cepstrum[q]>cepPeak){cepPeak=cepstrum[q];cepPeakQ=q;}
-    }
-    if(cepPeak>0.001)cepF0s.push(sr/cepPeakQ);
   }
-  // classify from median F0 across all windows
+
   var f0Cep=0,vocalGender;
-  if(cepF0s.length<2){
+  if(!hasVocals||cepF0s.length<2){
     vocalGender='instrumental';
   }else{
     cepF0s.sort(function(a,b){return a-b;});
     f0Cep=cepF0s[Math.floor(cepF0s.length/2)];
-    // thresholds: male ~85-155Hz, female ~165-300Hz
-    if(f0Cep<155){vocalGender='männlich';}
-    else if(f0Cep>175){vocalGender='weiblich';}
-    else{vocalGender='gemischt';}
+    if(f0Cep<155){vocalGender='male';}
+    else if(f0Cep>190){vocalGender='female';}
+    else{vocalGender='mixed';}
   }
 
   postMessage({type:'scalars',bpm:bpm,loudness:loudness,dynamic:dynamic,centroid:centroid,rolloff:rolloff,key:bestKey,stereoWidth:stereoWidth,vocalGender:vocalGender,f0:Math.round(f0Cep)});
   postMessage({type:'envelope',energy:energy,lufs:lufs,crest:crest,onsets:onsets,dur:dur});
 
-  postMessage({type:'progress',label:'BPM-Kurve…',pct:48});
+  postMessage({type:'progress',label:'BPM curve…',pct:48});
   // BPM curve — with energy mask: skip windows below 5th percentile
   var bwinLen=Math.floor(sr*5),bstepLen=Math.floor(sr*1),bnumW=Math.floor((n-bwinLen)/bstepLen),bpms=[];
   for(var w=0;w<bnumW;w++){
@@ -751,7 +792,7 @@ onmessage=function(e){
   for(var i=0;i<sFrames;i++){var s=0;for(var j=i*sStep;j<(i+1)*sStep;j++){var d=left[j]-right[j];s+=d*d;}widths[i]=Math.sqrt(s/sStep);}
   postMessage({type:'stereo_curve',widths:widths,dur:dur});
 
-  postMessage({type:'progress',label:'Gesangskurve…',pct:55});
+  postMessage({type:'progress',label:'Vocal curve…',pct:55});
   // vocal curve (band energy per 0.5s)
   // male fundamental ~85-165Hz, female fundamental ~165-350Hz
   var vStep=Math.floor(sr*0.5),vFrames=Math.floor(n/vStep),vmale=new Float32Array(vFrames),vfem=new Float32Array(vFrames);
@@ -770,7 +811,7 @@ onmessage=function(e){
   }
   postMessage({type:'vocal_curve',male:vmale,female:vfem,dur:dur});
 
-  postMessage({type:'progress',label:'Struktur…',pct:58});
+  postMessage({type:'progress',label:'Structure…',pct:58});
   // structure segmentation
   var frameSec=2,frameLen=Math.floor(sr*frameSec),numSeg=Math.floor(n/frameLen);
   var bands=[[20,100],[100,250],[250,500],[500,1000],[1000,2000],[2000,4000],[4000,8000],[8000,16000]];
@@ -1006,7 +1047,7 @@ onmessage=function(e){
         var mn=sm/12,pn=sp/12,num=0,dc=0,dp=0;
         for(var i=0;i<12;i++){num+=(totalChroma[(i+root)%12]-mn)*(prof[i]-pn);dc+=Math.pow(totalChroma[(i+root)%12]-mn,2);dp+=Math.pow(prof[i]-pn,2);}
         var r=dc>0&&dp>0?num/Math.sqrt(dc*dp):0;
-        if(r>bestScore2){bestScore2=r;bestKey2=notes[root];bestMode=mode===0?'Dur':'Moll';}
+        if(r>bestScore2){bestScore2=r;bestKey2=notes[root];bestMode=mode===0?'Major':'Minor';}
       }
     }
 
