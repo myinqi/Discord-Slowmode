@@ -2341,10 +2341,23 @@ def create_app(db: Database, bot=None) -> Quart:
             m = _re.search(r'\\"major_model_version\\":\\"([^\\]+)\\"', html)
             result["model"] = m.group(1) if m else ""
             # Lyrics
-            m = _re.search(r'\\"lyric\\":\\"((?:[^\\]|\\.)*)(?:\\"|")', html)
-            if not m:
-                m = _re.search(r'"lyric":"((?:[^"\\]|\\.)*)"', html)
-            result["lyrics"] = m.group(1).replace('\\n', '\n').replace('\\"', '"') if m else ""
+            lyrics_text = ""
+            m = _re.search(r'\\"lyric\\":\\"((?:[^\\]|\\.)*)(?:\\")', html)
+            if m:
+                lyrics_text = m.group(1).replace('\\\\n', '\n').replace('\\n', '\n').replace('\\"', '"')
+            if not lyrics_text:
+                m = _re.search(r'"lyric"\s*:\s*"((?:[^"\\]|\\.)*)"', html)
+                if m:
+                    lyrics_text = m.group(1).replace('\\n', '\n').replace('\\"', '"')
+            if not lyrics_text:
+                m = _re.search(r'\\"lyrics\\":\\"((?:[^\\]|\\.)*)(?:\\")', html)
+                if m:
+                    lyrics_text = m.group(1).replace('\\\\n', '\n').replace('\\n', '\n').replace('\\"', '"')
+            if not lyrics_text:
+                m = _re.search(r'"lyrics"\s*:\s*"((?:[^"\\]|\\.)*)"', html)
+                if m:
+                    lyrics_text = m.group(1).replace('\\n', '\n').replace('\\"', '"')
+            result["lyrics"] = lyrics_text
             # GPT description prompt (style/genre prompt used for generation)
             m = _re.search(r'\\"gpt_description_prompt\\":\\"((?:[^\\]|\\.)*)(?:\\"|")', html)
             if not m:

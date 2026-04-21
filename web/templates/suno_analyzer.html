@@ -72,6 +72,31 @@
   <button onclick="resetZoom()" style="padding:4px 10px;font-size:11px">Reset</button>
 </div>
 
+<div class="export-section" id="export-section">
+  <h3>Export for LLM Comment</h3>
+  <div class="export-row">
+    <label>Comment Length</label>
+    <select id="export-length" onchange="saveExportSettings()">
+      <option value="250">~250 chars</option>
+      <option value="350">~350 chars</option>
+      <option value="500">400–500 chars</option>
+    </select>
+    <label>Language</label>
+    <select id="export-lang" onchange="saveExportSettings()">
+      <option value="en">English</option>
+      <option value="de">Deutsch</option>
+    </select>
+  </div>
+  <div class="export-row" style="margin-bottom:0">
+    <button class="export-btn" id="export-btn" onclick="exportForLLM(this)">Copy LLM Prompt to Clipboard</button>
+    <button class="export-btn" id="dl-mp3-btn" onclick="downloadAudio('mp3')" style="background:#1a2a1a;color:#3a7">⬇ Download MP3</button>
+    <button class="export-btn" id="dl-wav-btn" onclick="downloadAudio('wav')" style="background:#2a1a2a;color:#a67acc">⬇ Download WAV</button>
+  </div>
+</div>
+<div class="section"><div class="slbl">Frequency Spectrum — live</div>
+  <div class="chart-outer"><canvas id="freq-canvas" style="height:120px;background:#0a0a0a"></canvas></div>
+</div>
+
 <div class="grid g4">
   <div class="card"><div class="val" id="v-plays">—</div><div class="lbl">Plays</div></div>
   <div class="card"><div class="val" id="v-likes">—</div><div class="lbl">Likes</div></div>
@@ -157,31 +182,6 @@
 </div>
 <div class="section"><div class="slbl">Spectrogram — locally Z-normalized · dark=silence · bright=signal</div>
   <div class="chart-outer"><canvas id="spectro-canvas" style="height:360px;background:#0a0a0a" class="chart-pending">loading…</canvas><div class="playhead" id="ph-spectro"></div></div>
-</div>
-<div class="section"><div class="slbl">Frequency Spectrum — live</div>
-  <div class="chart-outer"><canvas id="freq-canvas" style="height:120px;background:#0a0a0a"></canvas></div>
-</div>
-
-<div class="export-section" id="export-section">
-  <h3>Export for LLM Comment</h3>
-  <div class="export-row">
-    <label>Comment Length</label>
-    <select id="export-length" onchange="saveExportSettings()">
-      <option value="250">~250 chars</option>
-      <option value="350">~350 chars</option>
-      <option value="500">400–500 chars</option>
-    </select>
-    <label>Language</label>
-    <select id="export-lang" onchange="saveExportSettings()">
-      <option value="en">English</option>
-      <option value="de">Deutsch</option>
-    </select>
-  </div>
-  <div class="export-row" style="margin-bottom:0">
-    <button class="export-btn" id="export-btn" onclick="exportForLLM(this)">Copy LLM Prompt to Clipboard</button>
-    <button class="export-btn" id="dl-mp3-btn" onclick="downloadAudio('mp3')" style="background:#1a2a1a;color:#3a7">⬇ Download MP3</button>
-    <button class="export-btn" id="dl-wav-btn" onclick="downloadAudio('wav')" style="background:#2a1a2a;color:#a67acc">⬇ Download WAV</button>
-  </div>
 </div>
 
 <script>
