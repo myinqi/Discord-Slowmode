@@ -2347,47 +2347,19 @@ def create_app(db: Database, bot=None) -> Quart:
             # Model
             m = _re.search(r'\\"major_model_version\\":\\"([^\\]+)\\"', html)
             result["model"] = m.group(1) if m else ""
-            # Lyrics — try multiple patterns
+            # Lyrics — use proven helper that fetches from Suno embed URL
             lyrics_text = ""
-            # Pattern 1: double-escaped "lyric" (singular)
-            m = _re.search(r'\\"lyric\\":\s*\\"((?:[^\\]|\\.)*)(?:\\")', html)
-            if m:
-                lyrics_text = m.group(1).replace('\\\\n', '\n').replace('\\n', '\n').replace('\\"', '"')
-                print(f"[suno-resolve] Lyrics matched pattern 1 (escaped lyric), length={len(lyrics_text)}")
-            # Pattern 2: normal JSON "lyric" (singular)
-            if not lyrics_text:
-                m = _re.search(r'"lyric"\s*:\s*"((?:[^"\\]|\\.)*)"', html)
-                if m:
-                    lyrics_text = m.group(1).replace('\\n', '\n').replace('\\"', '"')
-                    print(f"[suno-resolve] Lyrics matched pattern 2 (json lyric), length={len(lyrics_text)}")
-            # Pattern 3: double-escaped "lyrics" (plural)
-            if not lyrics_text:
-                m = _re.search(r'\\"lyrics\\":\s*\\"((?:[^\\]|\\.)*)(?:\\")', html)
-                if m:
-                    lyrics_text = m.group(1).replace('\\\\n', '\n').replace('\\n', '\n').replace('\\"', '"')
-                    print(f"[suno-resolve] Lyrics matched pattern 3 (escaped lyrics), length={len(lyrics_text)}")
-            # Pattern 4: normal JSON "lyrics" (plural)
-            if not lyrics_text:
-                m = _re.search(r'"lyrics"\s*:\s*"((?:[^"\\]|\\.)*)"', html)
-                if m:
-                    lyrics_text = m.group(1).replace('\\n', '\n').replace('\\"', '"')
-                    print(f"[suno-resolve] Lyrics matched pattern 4 (json lyrics), length={len(lyrics_text)}")
-            if not lyrics_text:
-                print(f"[suno-resolve] No lyrics in HTML, trying API fetch...")
-                # Try to fetch lyrics from Suno API
-                try:
-                    api_url = f"https://studio-api.suno.ai/api/feed/?ids={result.get('realId', song_id)}"
-                    async with sess.get(api_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as api_resp:
-                        if api_resp.status == 200:
-                            data = await api_resp.json()
-                            if isinstance(data, list) and len(data) > 0:
-                                item = data[0]
-                                api_lyrics = item.get("lyric", "") or item.get("lyrics", "")
-                                if api_lyrics:
-                                    lyrics_text = api_lyrics.replace("\\n", "\n").replace('\\"', '"')
-                                    print(f"[suno-resolve] Lyrics fetched from API, length={len(lyrics_text)}")
-                except Exception as e:
-                    print(f"[suno-resolve] API lyrics fetch failed: {e}")
+            real_id = result.get("realId") or song_id
+            try:
+                meta = await _fetch_suno_meta(real_id)
+                if meta.get("lyrics"):
+                    lyrics_text = meta["lyrics"]
+                    print(f"[suno-resolve] Lyrics fetched from embed, length={len(lyrics_text)}")
+                # Also use embed helper as fallback for artist if current is empty
+                if not result.get("author") and meta.get("artist"):
+                    result["author"] = meta["artist"]
+            except Exception as e:
+                print(f"[suno-resolve] _fetch_suno_meta failed: {e}")
             result["lyrics"] = lyrics_text
             # GPT description prompt (style/genre prompt used for generation)
             m = _re.search(r'\\"gpt_description_prompt\\":\\"((?:[^\\]|\\.)*)(?:\\"|")', html)
