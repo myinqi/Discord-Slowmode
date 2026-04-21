@@ -26,8 +26,8 @@
 .analyzer-wrap #progress-bar{height:100%;width:0%;background:#7ab8f5;transition:width 0.3s}
 .analyzer-wrap #artwork{width:72px;height:72px;border-radius:8px;object-fit:cover;display:none;float:left;margin-right:12px}
 .analyzer-wrap #meta{margin-bottom:10px;overflow:hidden}
-.analyzer-wrap #meta h2{font-size:15px;font-weight:500;margin-bottom:3px}
-.analyzer-wrap #meta-sub{font-size:12px;color:#666;margin-bottom:4px}
+.analyzer-wrap #meta h2{font-size:18px;font-weight:600;margin-bottom:4px;color:#eee;line-height:1.4;word-break:break-word}
+.analyzer-wrap #meta-sub{font-size:13px;color:#888;margin-bottom:4px}
 .analyzer-wrap .tag{display:inline-block;background:#1a2a1a;color:#3a7;border-radius:4px;padding:2px 8px;font-size:11px;margin:2px 2px 2px 0}
 .analyzer-wrap .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}
 .analyzer-wrap audio{width:100%;border-radius:8px;margin:8px 0;accent-color:#7ab8f5}
@@ -441,7 +441,7 @@ function startWorkerAnalysis(buf){
           if(validPitch.length>10){
             validPitch.sort(function(a,b){return a-b;});
             var medF0=validPitch[Math.floor(validPitch.length/2)];
-            var vGender=medF0<165?'männlich':medF0>185?'weiblich':'gemischt';
+            var vGender=medF0<155?'männlich':medF0>175?'weiblich':'gemischt';
             var vEl=document.getElementById('v-vocal');
             vEl.textContent=vGender+' ('+Math.round(medF0)+' Hz)';
             vEl.style.color=vGender==='weiblich'?'#e06060':vGender==='männlich'?'#7ab8f5':'#aaa';
@@ -614,39 +614,50 @@ onmessage=function(e){
   var p5idx=Math.floor(energySorted.length*0.05);
   var energyP5=energySorted[p5idx]*3; // 3x the 5th percentile = activity threshold
 
-  // --- CEPSTRUM VOCAL GENDER ---
-  // use cepstrum to find fundamental frequency, then classify
+  // --- CEPSTRUM VOCAL GENDER (multi-window) ---
   var cepFftSize=4096;
-  var cepMid=Math.floor(n*0.3);
-  var cepLen=Math.min(cepFftSize,n-cepMid);
-  // compute log power spectrum
-  var logSpec=new Float32Array(cepFftSize/2);
-  for(var k=1;k<cepFftSize/2;k++){
-    var re=0,im=0,w2=2*Math.PI*k/cepFftSize;
-    for(var i2=0;i2<cepLen;i2++){re+=ch[cepMid+i2]*Math.cos(w2*i2);im-=ch[cepMid+i2]*Math.sin(w2*i2);}
-    var mag=Math.sqrt(re*re+im*im)/cepLen;
-    logSpec[k]=Math.log(mag+1e-10);
-  }
-  // IFFT of log spectrum (real cepstrum) — use cosine transform approximation
-  var cepLen2=cepFftSize/2;
-  var cepstrum=new Float32Array(cepLen2);
-  for(var q=1;q<cepLen2;q++){
-    var s=0;
-    for(var k=1;k<cepLen2;k++)s+=logSpec[k]*Math.cos(Math.PI*k*q/cepLen2);
-    cepstrum[q]=s/cepLen2;
-  }
-  // find peak in quefrency range corresponding to 80-500Hz
+  var cepHalf=cepFftSize/2;
   var qLo=Math.floor(sr/500),qHi=Math.floor(sr/80);
-  var cepPeak=0,cepPeakQ=qLo;
-  for(var q=qLo;q<=Math.min(qHi,cepLen2-1);q++){
-    if(cepstrum[q]>cepPeak){cepPeak=cepstrum[q];cepPeakQ=q;}
+  // sample multiple windows across the song (20-80% range, skip intro/outro)
+  var cepWindows=8;
+  var cepF0s=[];
+  var cepStartFrac=0.2,cepEndFrac=0.8;
+  for(var cw=0;cw<cepWindows;cw++){
+    var cepPos=Math.floor(n*(cepStartFrac+(cepEndFrac-cepStartFrac)*cw/(cepWindows-1)));
+    if(cepPos+cepFftSize>n)continue;
+    // compute log power spectrum via manual DFT (small window, acceptable)
+    var logSpec=new Float32Array(cepHalf);
+    for(var k=1;k<cepHalf;k++){
+      var re=0,im=0,w2=2*Math.PI*k/cepFftSize;
+      for(var i2=0;i2<cepFftSize;i2++){re+=ch[cepPos+i2]*Math.cos(w2*i2);im-=ch[cepPos+i2]*Math.sin(w2*i2);}
+      var mg=Math.sqrt(re*re+im*im)/cepFftSize;
+      logSpec[k]=Math.log(mg+1e-10);
+    }
+    // IFFT of log spectrum (cepstrum via cosine transform)
+    var cepstrum=new Float32Array(cepHalf);
+    for(var q=qLo;q<=Math.min(qHi,cepHalf-1);q++){
+      var s=0;
+      for(var k=1;k<cepHalf;k++)s+=logSpec[k]*Math.cos(Math.PI*k*q/cepHalf);
+      cepstrum[q]=s/cepHalf;
+    }
+    var cepPeak=0,cepPeakQ=qLo;
+    for(var q=qLo;q<=Math.min(qHi,cepHalf-1);q++){
+      if(cepstrum[q]>cepPeak){cepPeak=cepstrum[q];cepPeakQ=q;}
+    }
+    if(cepPeak>0.001)cepF0s.push(sr/cepPeakQ);
   }
-  var f0Cep=sr/cepPeakQ;
-  var vocalGender;
-  if(cepPeak<0.001){vocalGender='instrumental';}
-  else if(f0Cep<165){vocalGender='männlich';}
-  else if(f0Cep>185){vocalGender='weiblich';}
-  else{vocalGender='gemischt';}
+  // classify from median F0 across all windows
+  var f0Cep=0,vocalGender;
+  if(cepF0s.length<2){
+    vocalGender='instrumental';
+  }else{
+    cepF0s.sort(function(a,b){return a-b;});
+    f0Cep=cepF0s[Math.floor(cepF0s.length/2)];
+    // thresholds: male ~85-155Hz, female ~165-300Hz
+    if(f0Cep<155){vocalGender='männlich';}
+    else if(f0Cep>175){vocalGender='weiblich';}
+    else{vocalGender='gemischt';}
+  }
 
   postMessage({type:'scalars',bpm:bpm,loudness:loudness,dynamic:dynamic,centroid:centroid,rolloff:rolloff,key:bestKey,stereoWidth:stereoWidth,vocalGender:vocalGender,f0:Math.round(f0Cep)});
   postMessage({type:'envelope',energy:energy,lufs:lufs,crest:crest,onsets:onsets,dur:dur});
@@ -742,17 +753,18 @@ onmessage=function(e){
 
   postMessage({type:'progress',label:'Gesangskurve…',pct:55});
   // vocal curve (band energy per 0.5s)
+  // male fundamental ~85-165Hz, female fundamental ~165-350Hz
   var vStep=Math.floor(sr*0.5),vFrames=Math.floor(n/vStep),vmale=new Float32Array(vFrames),vfem=new Float32Array(vFrames);
   var vfft=512;
   for(var f=0;f<vFrames;f++){
     var st=f*vStep,alen=Math.min(vfft,n-st),mEf=0,fEf=0,mc=0,fc=0;
     for(var k=1;k<vfft/2;k++){
       var freq=k*sr/vfft;
-      if(freq<85||freq>300)continue;
+      if(freq<85||freq>350)continue;
       var re=0,w=2*Math.PI*k/vfft;
       for(var i2=0;i2<alen;i2++)re+=ch[st+i2]*Math.cos(w*i2);
       var mg=Math.abs(re)/alen;
-      if(freq<=180){mEf+=mg;mc++;}else{fEf+=mg;fc++;}
+      if(freq<=165){mEf+=mg;mc++;}else{fEf+=mg;fc++;}
     }
     vmale[f]=mc>0?mEf/mc:0;vfem[f]=fc>0?fEf/fc:0;
   }
@@ -806,13 +818,38 @@ onmessage=function(e){
   postMessage({type:'structure',segments:segments,duration:dur});
 
   // --- PROGRESSIVE FFT ROUNDS ---
-  // hops: coarse to fine. Each round doubles resolution.
+  // Radix-2 FFT for O(n log n) instead of O(n²) DFT
+  function fftRadix2(re,im,N){
+    // bit-reversal permutation
+    for(var i=1,j=0;i<N;i++){
+      var bit=N>>1;
+      for(;j&bit;bit>>=1)j^=bit;
+      j^=bit;
+      if(i<j){var t=re[i];re[i]=re[j];re[j]=t;t=im[i];im[i]=im[j];im[j]=t;}
+    }
+    for(var len=2;len<=N;len<<=1){
+      var ang=2*Math.PI/len;
+      var wRe=Math.cos(ang),wIm=Math.sin(ang);
+      for(var i=0;i<N;i+=len){
+        var curRe=1,curIm=0;
+        for(var j=0;j<len/2;j++){
+          var uRe=re[i+j],uIm=im[i+j];
+          var vRe=re[i+j+len/2]*curRe-im[i+j+len/2]*curIm;
+          var vIm=re[i+j+len/2]*curIm+im[i+j+len/2]*curRe;
+          re[i+j]=uRe+vRe;im[i+j]=uIm+vIm;
+          re[i+j+len/2]=uRe-vRe;im[i+j+len/2]=uIm-vIm;
+          var tmpRe=curRe*wRe-curIm*wIm;curIm=curRe*wIm+curIm*wRe;curRe=tmpRe;
+        }
+      }
+    }
+  }
+
   var fftSize2=1024;
   var bins2=fftSize2/2;
   var hann=new Float32Array(fftSize2);
   for(var i=0;i<fftSize2;i++)hann[i]=0.5*(1-Math.cos(2*Math.PI*i/fftSize2));
 
-  var rounds=[8192,4096,2048,1024,256]; // hop sizes, coarse to fine
+  var rounds=[4096,1024]; // only 2 rounds: coarse overview then detail
   var totalRounds=rounds.length;
 
   for(var round=0;round<totalRounds;round++){
@@ -834,16 +871,19 @@ onmessage=function(e){
     var rolloffArr=new Float32Array(numFrames);
     var prevMag=null;
 
+    // pre-allocate FFT buffers
+    var fftRe=new Float32Array(fftSize2);
+    var fftIm=new Float32Array(fftSize2);
+
     for(var frame=0;frame<numFrames;frame++){
       var st=frame*hop;
-      var win=new Float32Array(fftSize2);
-      for(var i=0;i<fftSize2;i++)win[i]=ch[st+i]*hann[i];
+      // window + copy into FFT buffers
+      for(var i=0;i<fftSize2;i++){fftRe[i]=ch[st+i]*hann[i];fftIm[i]=0;}
+      fftRadix2(fftRe,fftIm,fftSize2);
 
       var mag=new Float32Array(bins2);
       for(var k=0;k<bins2;k++){
-        var re2=0,im2=0,w2=2*Math.PI*k/fftSize2;
-        for(var i2=0;i2<fftSize2;i2++){re2+=win[i2]*Math.cos(w2*i2);im2-=win[i2]*Math.sin(w2*i2);}
-        mag[k]=Math.sqrt(re2*re2+im2*im2)/fftSize2;
+        mag[k]=Math.sqrt(fftRe[k]*fftRe[k]+fftIm[k]*fftIm[k])/fftSize2;
       }
 
       // spectro
