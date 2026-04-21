@@ -1,8 +1,6 @@
-<!DOCTYPE html>
-<html lang="de">
-<head>
-<meta charset="UTF-8">
-<title>Suno Audio Analyzer</title>
+{% extends "base.html" %}
+{% block title %}Suno Audio Analyzer{% endblock %}
+{% block content %}
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,sans-serif;background:#111;color:#eee;padding:1.5rem;max-width:860px}
@@ -289,7 +287,7 @@ async function fetchMeta(uuid){
     var url=isShareCode?'https://suno.com/s/'+uuid:'https://suno.com/song/'+uuid;
     var r=await fetch(url);
     var html=await r.text();
-    var res={title:'',author:'',artwork:'',tags:[],plays:null,likes:null,comments:null,created_at:'',model:''};
+    var res={title:'',author:'',artwork:'',tags:[],plays:null,likes:null,comments:null,created_at:'',model:'',realId:null};
     var tm=html.match(/<title>([^<|]+)/);if(tm)res.title=tm[1].trim();
     var am=html.match(/cdn2\.suno\.ai\/[^"]+\.jpeg/);if(am)res.artwork='https://'+am[0];
     var dn=html.match(/\\"display_name\\":\\"([^\\]+)\\"/);if(!dn)dn=html.match(/"display_name":"([^"]+)"/);if(dn)res.author=dn[1];
@@ -299,6 +297,9 @@ async function fetchMeta(uuid){
     var cc=html.match(/\\"comment_count\\":(\d+)/);if(cc)res.comments=parseInt(cc[1]);
     var ca=html.match(/\\"created_at\\":\\"([^\\]+)\\"/);if(ca)res.created_at=ca[1];
     var mv=html.match(/\\"major_model_version\\":\\"([^\\]+)\\"/);if(mv)res.model=mv[1];
+    // Extract real UUID from page for share links
+    var idMatch=html.match(/song\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/);
+    if(idMatch)res.realId=idMatch[1];
     return res;
   }catch(e){return null;}
 }
@@ -351,19 +352,20 @@ async function analyze(){
     }
   }
   setProgress(10);setStatus('Audio laden…');
-  // Share codes use cdn1.suno.ai/{code}.mp3 directly
-  var isShareCode=!uuid.match(/^[a-f0-9]{8}-[a-f0-9]{4}/);
-  var mp3url='https://cdn1.suno.ai/'+uuid+'.mp3';
+  // Use real UUID from meta if available (for share links), otherwise use input
+  var audioId=meta&&meta.realId?meta.realId:uuid;
+  var mp3url='https://cdn1.suno.ai/'+audioId+'.mp3';
   player.src=mp3url;
   try{
     var arrayBuf;
-    if(mp3Cache[uuid]){setStatus('Aus Cache…');arrayBuf=mp3Cache[uuid];}
+    var cacheKey=audioId;
+    if(mp3Cache[cacheKey]){setStatus('Aus Cache…');arrayBuf=mp3Cache[cacheKey];}
     else{
       var resp=await fetch(mp3url);
       if(!resp.ok){setStatus('MP3 nicht verfügbar ('+resp.status+')');return;}
       setStatus('Dekodiere…');setProgress(20);
       arrayBuf=await resp.arrayBuffer();
-      mp3Cache[uuid]=arrayBuf;
+      mp3Cache[cacheKey]=arrayBuf;
     }
     if(!audioCtx)audioCtx=new(window.AudioContext||window.webkitAudioContext)();
     var buf=await audioCtx.decodeAudioData(arrayBuf.slice(0));
@@ -1488,5 +1490,4 @@ function drawSpectrum(buf,cid){
   loop();
 }
 </script>
-</body>
-</html>
+{% endblock %}
