@@ -2350,16 +2350,16 @@ def create_app(db: Database, bot=None) -> Quart:
             # Lyrics — use proven helper that fetches from Suno embed URL
             lyrics_text = ""
             real_id = result.get("realId") or song_id
+            print(f"[suno-resolve] Fetching embed meta for real_id={real_id}", flush=True)
             try:
                 meta = await _fetch_suno_meta(real_id)
+                print(f"[suno-resolve] Embed meta: title={meta.get('title')!r}, artist={meta.get('artist')!r}, lyrics_len={len(meta.get('lyrics') or '')}", flush=True)
                 if meta.get("lyrics"):
                     lyrics_text = meta["lyrics"]
-                    print(f"[suno-resolve] Lyrics fetched from embed, length={len(lyrics_text)}")
-                # Also use embed helper as fallback for artist if current is empty
                 if not result.get("author") and meta.get("artist"):
                     result["author"] = meta["artist"]
             except Exception as e:
-                print(f"[suno-resolve] _fetch_suno_meta failed: {e}")
+                print(f"[suno-resolve] _fetch_suno_meta failed: {e}", flush=True)
             result["lyrics"] = lyrics_text
             # GPT description prompt (style/genre prompt used for generation)
             m = _re.search(r'\\"gpt_description_prompt\\":\\"((?:[^\\]|\\.)*)(?:\\"|")', html)
