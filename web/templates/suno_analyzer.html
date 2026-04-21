@@ -435,18 +435,8 @@ function startWorkerAnalysis(buf){
         setProgress(msg.pct);
         setStatus('Round '+msg.round+'/'+msg.totalRounds+(msg.isFinal?' (final)':'')+'…');
         if(msg.key)document.getElementById('v-key').textContent=msg.key;
-        // update vocal estimate from pitch median
-        if(msg.pitch&&msg.pitch.length){
-          var validPitch=Array.from(msg.pitch).filter(function(v){return v>60&&v<600;});
-          if(validPitch.length>10){
-            validPitch.sort(function(a,b){return a-b;});
-            var medF0=validPitch[Math.floor(validPitch.length/2)];
-            var vGender=medF0<155?'male':medF0>175?'female':'mixed';
-            var vEl=document.getElementById('v-vocal');
-            vEl.textContent=vGender+' ('+Math.round(medF0)+' Hz)';
-            vEl.style.color=vGender==='female'?'#e06060':vGender==='male'?'#7ab8f5':'#aaa';
-          }
-        }
+        // pitch median is from dominant melody (instruments), not reliable for vocal gender
+        // vocal gender is set by cepstrum in the 'scalars' message and not overridden here
         window._chartData.fft={frames:msg.frames,numFrames:msg.numFrames,fftSize:msg.fftSize,sr:sr,dur:msg.dur,flux:msg.flux,harm:msg.harm,pitch:msg.pitch,chroma:msg.chroma,entropy:msg.entropy,inharm:msg.inharm,noteStab:msg.noteStab};
         drawSpectrogramFromFrames(msg.frames,msg.numFrames,msg.fftSize,sr,msg.dur);
         drawFluxFromFrames(msg.flux,msg.dur);
@@ -658,33 +648,41 @@ onmessage=function(e){
     hasVocals=medVP>0.08; // >8% of energy in formant range suggests vocals
   }
 
-  // Step 2: Cepstrum pitch detection (only in vocal range 120-500Hz)
+  // Step 2: Cepstrum pitch detection with spectral bandpass (150-4000Hz)
+  // Bandpass isolates vocal frequencies from bass/sub-bass instruments
   var cepFftSize=4096;
   var cepHalf=cepFftSize/2;
-  var qLo=Math.floor(sr/500),qHi=Math.floor(sr/120); // 120-500Hz (skip sub-bass)
+  var qLo=Math.floor(sr/500),qHi=Math.floor(sr/150); // 150-500Hz vocal F0 range
+  var bpLo=Math.ceil(150/sr*cepFftSize);  // only include 150Hz+
+  var bpHi=Math.floor(4000/sr*cepFftSize); // up to 4000Hz (vocal harmonics)
   var cepF0s=[];
   if(hasVocals){
     for(var cw=0;cw<8;cw++){
       var cepPos=Math.floor(n*(0.2+0.6*cw/7));
       if(cepPos+cepFftSize>n)continue;
+      // compute magnitude spectrum with bandpass
       var logSpec=new Float32Array(cepHalf);
-      for(var k=1;k<cepHalf;k++){
+      for(var k=bpLo;k<=Math.min(bpHi,cepHalf-1);k++){
         var re=0,im=0,w2=2*Math.PI*k/cepFftSize;
         for(var i2=0;i2<cepFftSize;i2++){re+=ch[cepPos+i2]*Math.cos(w2*i2);im-=ch[cepPos+i2]*Math.sin(w2*i2);}
         var mg=Math.sqrt(re*re+im*im)/cepFftSize;
         logSpec[k]=Math.log(mg+1e-10);
       }
+      // bins outside bandpass stay 0 (log(0+1e-10) ≈ -23, use explicit floor)
+      for(var k=1;k<bpLo;k++)logSpec[k]=-23;
+      for(var k=bpHi+1;k<cepHalf;k++)logSpec[k]=-23;
+      // cepstrum via cosine transform in vocal quefrency range
       var cepstrum=new Float32Array(cepHalf);
       for(var q=qLo;q<=Math.min(qHi,cepHalf-1);q++){
         var s=0;
-        for(var k=1;k<cepHalf;k++)s+=logSpec[k]*Math.cos(Math.PI*k*q/cepHalf);
-        cepstrum[q]=s/cepHalf;
+        for(var k=bpLo;k<=Math.min(bpHi,cepHalf-1);k++)s+=logSpec[k]*Math.cos(Math.PI*k*q/cepHalf);
+        cepstrum[q]=s/(bpHi-bpLo+1);
       }
       var cepPeak=0,cepPeakQ=qLo;
       for(var q=qLo;q<=Math.min(qHi,cepHalf-1);q++){
         if(cepstrum[q]>cepPeak){cepPeak=cepstrum[q];cepPeakQ=q;}
       }
-      if(cepPeak>0.002)cepF0s.push(sr/cepPeakQ);
+      if(cepPeak>0.001)cepF0s.push(sr/cepPeakQ);
     }
   }
 
