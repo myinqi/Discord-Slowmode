@@ -2373,14 +2373,21 @@ def create_app(db: Database, bot=None) -> Quart:
                     lyrics_text = m.group(1).replace('\\n', '\n').replace('\\"', '"')
                     print(f"[suno-resolve] Lyrics matched pattern 4 (json lyrics), length={len(lyrics_text)}")
             if not lyrics_text:
-                # Debug: check if any lyric-related key exists
-                has_lyric = 'lyric' in html.lower()
-                print(f"[suno-resolve] No lyrics matched. 'lyric' in html: {has_lyric}")
-                # Show a small snippet around the key if found
-                idx = html.lower().find('"lyric')
-                if idx >= 0:
-                    snippet = html[max(0,idx):idx+200]
-                    print(f"[suno-resolve] Lyrics context: {snippet[:200]}")
+                print(f"[suno-resolve] No lyrics in HTML, trying API fetch...")
+                # Try to fetch lyrics from Suno API
+                try:
+                    api_url = f"https://studio-api.suno.ai/api/feed/?ids={result.get('realId', song_id)}"
+                    async with sess.get(api_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as api_resp:
+                        if api_resp.status == 200:
+                            data = await api_resp.json()
+                            if isinstance(data, list) and len(data) > 0:
+                                item = data[0]
+                                api_lyrics = item.get("lyric", "") or item.get("lyrics", "")
+                                if api_lyrics:
+                                    lyrics_text = api_lyrics.replace("\\n", "\n").replace('\\"', '"')
+                                    print(f"[suno-resolve] Lyrics fetched from API, length={len(lyrics_text)}")
+                except Exception as e:
+                    print(f"[suno-resolve] API lyrics fetch failed: {e}")
             result["lyrics"] = lyrics_text
             # GPT description prompt (style/genre prompt used for generation)
             m = _re.search(r'\\"gpt_description_prompt\\":\\"((?:[^\\]|\\.)*)(?:\\"|")', html)
