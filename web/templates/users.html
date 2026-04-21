@@ -52,8 +52,17 @@
                         {% if u.id == current_user_id %}
                         <span class="ml-2 text-xs text-gray-500">(you)</span>
                         {% endif %}
+                        {% if not u.is_admin %}
+                        <span class="ml-2 text-xs text-gray-500">({{ u.perms|length }}/{{ all_permissions|length }} permissions)</span>
+                        {% endif %}
                     </div>
                     <div class="flex items-center gap-2">
+                        {% if u.id != current_user_id and not u.is_admin %}
+                        <button type="button" onclick="togglePerms('perms-{{ u.id }}')"
+                            class="px-3 py-1.5 bg-discord-blurple/20 hover:bg-discord-blurple/40 text-blue-300 rounded-lg text-sm transition-colors">
+                            Permissions
+                        </button>
+                        {% endif %}
                         {% if u.id != current_user_id %}
                         <!-- Reset Password -->
                         <form method="POST" class="flex items-center gap-2">
@@ -83,9 +92,51 @@
                         {% endif %}
                     </div>
                 </div>
+                {% if not u.is_admin and u.id != current_user_id %}
+                <div id="perms-{{ u.id }}" class="hidden mt-3 pt-3 border-t border-gray-700/50">
+                    <form method="POST">
+                        <input type="hidden" name="action" value="set_permissions">
+                        <input type="hidden" name="user_id" value="{{ u.id }}">
+                        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 mb-3">
+                            {% for key, label in all_permissions %}
+                            <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer hover:text-white px-2 py-1.5 rounded bg-discord-dark/50">
+                                <input type="checkbox" name="perm_{{ key }}" value="1"
+                                    {% if key in u.perms %}checked{% endif %}
+                                    class="rounded border-gray-600 text-discord-blurple focus:ring-discord-blurple bg-discord-darker">
+                                {{ label }}
+                            </label>
+                            {% endfor %}
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button type="submit"
+                                class="px-4 py-1.5 bg-discord-green/20 hover:bg-discord-green/40 text-green-300 rounded-lg text-sm font-medium transition-colors">
+                                Save Permissions
+                            </button>
+                            <button type="button" onclick="selectAllPerms('perms-{{ u.id }}', true)"
+                                class="px-3 py-1.5 bg-gray-600/20 hover:bg-gray-600/40 text-gray-300 rounded-lg text-xs transition-colors">
+                                Select All
+                            </button>
+                            <button type="button" onclick="selectAllPerms('perms-{{ u.id }}', false)"
+                                class="px-3 py-1.5 bg-gray-600/20 hover:bg-gray-600/40 text-gray-300 rounded-lg text-xs transition-colors">
+                                Deselect All
+                            </button>
+                        </div>
+                    </form>
+                </div>
+                {% endif %}
             </div>
             {% endfor %}
         </div>
     </div>
 </div>
+<script>
+function togglePerms(id) {
+    var el = document.getElementById(id);
+    if (el) el.classList.toggle('hidden');
+}
+function selectAllPerms(id, checked) {
+    var el = document.getElementById(id);
+    if (el) el.querySelectorAll('input[type=checkbox]').forEach(function(cb) { cb.checked = checked; });
+}
+</script>
 {% endblock %}

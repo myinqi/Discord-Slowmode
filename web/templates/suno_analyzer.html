@@ -36,6 +36,14 @@
 .analyzer-wrap #struct-wrap{position:relative;height:16px;border-radius:4px;overflow:hidden;display:flex;margin-bottom:4px}
 .analyzer-wrap .chart-pending{display:flex;align-items:center;justify-content:center;font-size:11px;color:#333;border-radius:4px;background:#0a0a0a}
 #tt{position:fixed;background:#1e1e1e;border:0.5px solid #444;border-radius:6px;padding:6px 10px;font-size:12px;color:#eee;pointer-events:none;opacity:0;max-width:280px;line-height:1.5;z-index:9999;transition:opacity 0.1s;width:auto;height:auto}
+.analyzer-wrap .export-section{background:#1a1a1a;border-radius:8px;padding:14px;margin-top:14px}
+.analyzer-wrap .export-section h3{font-size:13px;font-weight:500;color:#888;margin:0 0 10px 0}
+.analyzer-wrap .export-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.analyzer-wrap .export-row label{font-size:11px;color:#666;margin:0}
+.analyzer-wrap .export-row select{padding:5px 8px;font-size:11px;border:1px solid #333;border-radius:6px;background:#0a0a0a;color:#eee;cursor:pointer}
+.analyzer-wrap .export-btn{padding:8px 20px;font-size:13px;border:1px solid transparent;border-radius:8px;background:#1a3a5c;color:#7ab8f5;cursor:pointer;transition:background 0.2s}
+.analyzer-wrap .export-btn:hover{background:#254a6e}
+.analyzer-wrap .export-btn.success{background:#1a3a1a;color:#3a7;border-color:#2a5a2a}
 </style>
 <div class="analyzer-wrap">
 <h1>Suno Audio Analyzer</h1>
@@ -154,10 +162,45 @@
   <div class="chart-outer"><canvas id="freq-canvas" style="height:120px;background:#0a0a0a"></canvas></div>
 </div>
 
+<div class="export-section" id="export-section">
+  <h3>Export for LLM Comment</h3>
+  <div class="export-row">
+    <label>Comment Length</label>
+    <select id="export-length" onchange="saveExportSettings()">
+      <option value="250">~250 chars</option>
+      <option value="350">~350 chars</option>
+      <option value="500">400–500 chars</option>
+    </select>
+    <label>Language</label>
+    <select id="export-lang" onchange="saveExportSettings()">
+      <option value="en">English</option>
+      <option value="de">Deutsch</option>
+    </select>
+  </div>
+  <div class="export-row" style="margin-bottom:0">
+    <button class="export-btn" id="export-btn" onclick="exportForLLM(this)">Copy LLM Prompt to Clipboard</button>
+    <button class="export-btn" id="dl-mp3-btn" onclick="downloadAudio('mp3')" style="background:#1a2a1a;color:#3a7">⬇ Download MP3</button>
+    <button class="export-btn" id="dl-wav-btn" onclick="downloadAudio('wav')" style="background:#2a1a2a;color:#a67acc">⬇ Download WAV</button>
+  </div>
+</div>
+
 <script>
 var audioCtx=null, mp3Cache={}, songDuration=0;
 var player=document.getElementById('player');
 var phIds=['lufs','energy','onset','bpm','stereo','crest','flux','harm','vocal','pitch','chroma','spectro','entropy','inharm','notestab'];
+var currentMeta=null; // stored for export
+
+// restore export settings from localStorage
+(function(){
+  var len=localStorage.getItem('sa_export_len');
+  var lang=localStorage.getItem('sa_export_lang');
+  if(len)document.getElementById('export-length').value=len;
+  if(lang)document.getElementById('export-lang').value=lang;
+})();
+function saveExportSettings(){
+  localStorage.setItem('sa_export_len',document.getElementById('export-length').value);
+  localStorage.setItem('sa_export_lang',document.getElementById('export-lang').value);
+}
 
 function setStatus(msg){document.getElementById('status').textContent=msg;}
 function setProgress(pct){document.getElementById('progress-bar').style.width=pct+'%';}
@@ -295,7 +338,7 @@ async function analyze(){
   // --- CLEANUP ---
   if(window._activeWorker){window._activeWorker.terminate();window._activeWorker=null;}
   window._chartData={};
-  songDuration=0;zoomLevel=1;viewStart=0;viewEnd=1;
+  songDuration=0;zoomLevel=1;viewStart=0;viewEnd=1;currentMeta=null;
   document.getElementById('zoom-slider').value=0;
   document.getElementById('zoom-label').textContent='1×';
   if(window._animFrame){cancelAnimationFrame(window._animFrame);window._animFrame=null;}
@@ -316,6 +359,7 @@ async function analyze(){
   setProgress(0);
   setStatus('Loading metadata…');setProgress(5);
   var meta=await fetchMeta(uuid);
+  currentMeta=meta;
   if(meta){
     document.getElementById('meta').style.display='block';
     document.getElementById('title').textContent=meta.title||uuid;
@@ -1580,6 +1624,145 @@ function drawSpectrum(buf,cid){
     }
   }
   loop();
+}
+
+// --- DOWNLOAD AUDIO ---
+function downloadAudio(fmt){
+  var title=currentMeta&&currentMeta.title?currentMeta.title:'suno_song';
+  var safeName=title.replace(/[^a-zA-Z0-9_\-\s]/g,'').replace(/\s+/g,'_').substring(0,60);
+  if(fmt==='mp3'){
+    var src=player.src;
+    if(!src){alert('No audio loaded');return;}
+    var btn=document.getElementById('dl-mp3-btn');
+    btn.textContent='⬇ Downloading…';
+    fetch(src).then(function(r){return r.blob();}).then(function(blob){
+      var a=document.createElement('a');
+      a.href=URL.createObjectURL(blob);
+      a.download=safeName+'.mp3';
+      document.body.appendChild(a);a.click();document.body.removeChild(a);
+      URL.revokeObjectURL(a.href);
+      btn.textContent='✓ Done';
+      setTimeout(function(){btn.textContent='⬇ Download MP3';},2000);
+    }).catch(function(){btn.textContent='⬇ Download MP3';alert('Download failed');});
+  }else if(fmt==='wav'){
+    var samples=window._audioSamples;
+    var wavSR=window._audioSR;
+    if(!samples||!wavSR){alert('No audio decoded yet');return;}
+    var btn=document.getElementById('dl-wav-btn');
+    btn.textContent='⬇ Converting…';
+    setTimeout(function(){
+      var numCh=1,bitsPerSample=16;
+      var bytesPerSample=bitsPerSample/8;
+      var blockAlign=numCh*bytesPerSample;
+      var dataLen=samples.length*blockAlign;
+      var bufLen=44+dataLen;
+      var buf=new ArrayBuffer(bufLen);
+      var v=new DataView(buf);
+      // RIFF header
+      v.setUint32(0,0x52494646,false); // "RIFF"
+      v.setUint32(4,bufLen-8,true);
+      v.setUint32(8,0x57415645,false); // "WAVE"
+      // fmt chunk
+      v.setUint32(12,0x666d7420,false); // "fmt "
+      v.setUint32(16,16,true);
+      v.setUint16(20,1,true); // PCM
+      v.setUint16(22,numCh,true);
+      v.setUint32(24,wavSR,true);
+      v.setUint32(28,wavSR*blockAlign,true);
+      v.setUint16(32,blockAlign,true);
+      v.setUint16(34,bitsPerSample,true);
+      // data chunk
+      v.setUint32(36,0x64617461,false); // "data"
+      v.setUint32(40,dataLen,true);
+      var off=44;
+      for(var i=0;i<samples.length;i++){
+        var s=Math.max(-1,Math.min(1,samples[i]));
+        v.setInt16(off,s<0?s*0x8000:s*0x7FFF,true);
+        off+=2;
+      }
+      var blob=new Blob([buf],{type:'audio/wav'});
+      var a=document.createElement('a');
+      a.href=URL.createObjectURL(blob);
+      a.download=safeName+'.wav';
+      document.body.appendChild(a);a.click();document.body.removeChild(a);
+      URL.revokeObjectURL(a.href);
+      btn.textContent='✓ Done';
+      setTimeout(function(){btn.textContent='⬇ Download WAV';},2000);
+    },50);
+  }
+}
+
+// --- EXPORT FOR LLM ---
+function exportForLLM(btn){
+  var len=document.getElementById('export-length').value;
+  var lang=document.getElementById('export-lang').value;
+
+  // Gather song info
+  var title=currentMeta&&currentMeta.title?currentMeta.title:'Unknown';
+  var artist=currentMeta&&currentMeta.author?currentMeta.author:'Unknown';
+  var songType=currentMeta&&currentMeta.type?currentMeta.type:'';
+  var styles=(currentMeta&&currentMeta.tags?currentMeta.tags:[]).join(', ');
+  var lyrics=currentMeta&&currentMeta.lyrics?currentMeta.lyrics:'';
+  var prompt=currentMeta&&currentMeta.prompt?currentMeta.prompt:'';
+
+  // Gather analysis values from UI cards
+  function v(id){var el=document.getElementById(id);return el?el.textContent.trim():'';}
+  var bpm=v('v-bpm'), dur=v('v-dur'), key=v('v-key'), mode=v('v-mode');
+  var loud=v('v-loud'), dyn=v('v-dyn'), voice=v('v-vocal');
+  var centroid=v('v-centroid'), stereo=v('v-stereo');
+  var entropy=v('v-entropy'), inharm=v('v-inharm');
+  var noteStab=v('v-note-stab'), chordRate=v('v-chord-rate');
+  var texture=v('v-texture'), shape=v('v-symmetry');
+
+  // Type info
+  var typeInfo='';
+  if(songType==='cover')typeInfo='This is a COVER version.';
+  else if(songType==='remix')typeInfo='This is a REMIX.';
+
+  // Build the prompt
+  var langLabel=lang==='de'?'German':'English';
+  var charTarget=len==='250'?'approximately 250 characters':len==='350'?'approximately 350 characters':'400 to 500 characters';
+
+  var text='Write a comment for this Suno song. The comment should be in '+langLabel+' and '+charTarget+' long.\n\n';
+  text+='=== SONG INFO ===\n';
+  text+='Title: '+title+'\n';
+  text+='Artist: '+artist+'\n';
+  if(typeInfo)text+=typeInfo+'\n';
+  if(styles)text+='Styles/Tags: '+styles+'\n';
+  if(prompt)text+='Generation Prompt: '+prompt+'\n';
+  text+='\n=== AUDIO ANALYSIS ===\n';
+  text+='BPM: '+bpm+' | Duration: '+dur+' | Key: '+key+' '+mode+'\n';
+  text+='Loudness: '+loud+' dB | Dynamic Range: '+dyn+' dB\n';
+  text+='Voice: '+voice+'\n';
+  text+='Stereo Width: '+stereo+' | Spectral Centroid: '+centroid+' Hz\n';
+  text+='Chord Changes/s: '+chordRate+' | Note Stability: '+noteStab+'\n';
+  text+='Spectral Entropy: '+entropy+' | Inharmonicity: '+inharm+'\n';
+  text+='Texture Index: '+texture+' | Energy Shape: '+shape+'\n';
+  if(lyrics){
+    text+='\n=== FULL LYRICS ===\n'+lyrics+'\n';
+  }
+  text+='\n=== INSTRUCTIONS ===\n';
+  text+='Write an authentic, personal-sounding comment that shows the commenter actually listened to the song. ';
+  text+='Reference specific musical details from the analysis (e.g. the energy, the key, rhythmic elements, production quality). ';
+  if(lyrics)text+='You may reference specific lyrics or themes. ';
+  text+='The comment should feel genuine — not generic or AI-generated. ';
+  text+='Keep it to '+charTarget+'. Do NOT use hashtags. Do NOT start with "Wow" or "This is amazing".';
+
+  // Copy to clipboard (cross-browser: textarea fallback)
+  var ta=document.createElement('textarea');
+  ta.value=text;
+  ta.style.position='fixed';
+  ta.style.left='-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  try{document.execCommand('copy');}catch(e){}
+  document.body.removeChild(ta);
+
+  // Visual feedback
+  var orig=btn.textContent;
+  btn.textContent='✓ Copied!';
+  btn.classList.add('success');
+  setTimeout(function(){btn.textContent=orig;btn.classList.remove('success');},2000);
 }
 </script>
 </div>

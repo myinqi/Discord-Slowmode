@@ -53,60 +53,35 @@
                 <h1 class="sidebar-header text-white font-bold text-lg flex items-center gap-2"><img src="{{ url_for('static', filename='Bot_icon_small.png') }}" alt="Bot" class="w-6 h-6 rounded"> <span class="sidebar-header-text">Corax Bot</span></h1>
                 <p class="text-gray-400 text-xs mt-1 sidebar-header-text">Admin Panel</p>
             </div>
+            {% set perms = session.get('permissions', []) %}
+            {% set is_admin = session.get('is_admin') %}
+            {% macro nav_link(endpoint, icon, label, perm) %}
+            {% if is_admin or perm in perms %}
+                <a href="{{ url_for(endpoint) }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == endpoint %}active{% endif %}">
+                    <span class="sidebar-icon mr-3">{{ icon }}</span><span class="sidebar-label">{{ label }}</span>
+                </a>
+            {% endif %}
+            {% endmacro %}
             <nav class="flex-1 p-3 space-y-1">
                 <a href="{{ url_for('dashboard') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'dashboard' %}active{% endif %}">
-                    <span class="sidebar-icon mr-3">📊</span><span class="sidebar-label">Dashboard</span>
+                    <span class="sidebar-icon mr-3">�</span><span class="sidebar-label">Dashboard</span>
                 </a>
-                <a href="{{ url_for('channels') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'channels' %}active{% endif %}">
-                    <span class="sidebar-icon mr-3">📢</span><span class="sidebar-label">Channels</span>
-                </a>
-                <a href="{{ url_for('roles') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'roles' %}active{% endif %}">
-                    <span class="sidebar-icon mr-3">🛡️</span><span class="sidebar-label">Roles</span>
-                </a>
-                <a href="{{ url_for('users') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'users' %}active{% endif %}">
-                    <span class="sidebar-icon mr-3">👥</span><span class="sidebar-label">Users</span>
-                </a>
-                <a href="{{ url_for('welcome') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'welcome' %}active{% endif %}">
-                    <span class="sidebar-icon mr-3">👋</span><span class="sidebar-label">Welcome</span>
-                </a>
-                <a href="{{ url_for('party_playlist') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'party_playlist' %}active{% endif %}">
-                    <span class="sidebar-icon mr-3">🎧</span><span class="sidebar-label">Party Playlist</span>
-                </a>
-                <a href="{{ url_for('playlist_search') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'playlist_search' %}active{% endif %}">
-                    <span class="sidebar-icon mr-3">🔍</span><span class="sidebar-label">Playlist Search</span>
-                </a>
-                <a href="{{ url_for('player') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'player' %}active{% endif %}">
-                    <span class="sidebar-icon mr-3">🎵</span><span class="sidebar-label">Suno Player</span>
-                </a>
-                <a href="{{ url_for('song_stats') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'song_stats' %}active{% endif %}">
-                    <span class="sidebar-icon mr-3">📈</span><span class="sidebar-label">Song Stats</span>
-                </a>
-                <a href="{{ url_for('user_stats') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'user_stats' %}active{% endif %}">
-                    <span class="sidebar-icon mr-3">👤</span><span class="sidebar-label">User Stats</span>
-                </a>
-                <a href="{{ url_for('reaction_stats') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'reaction_stats' %}active{% endif %}">
-                    <span class="sidebar-icon mr-3">💬</span><span class="sidebar-label">Reaction Stats</span>
-                </a>
-                <a href="{{ url_for('image_posting') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'image_posting' %}active{% endif %}">
-                    <span class="sidebar-icon mr-3">🖼️</span><span class="sidebar-label">Image Posting</span>
-                </a>
-                <a href="{{ url_for('polls') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'polls' %}active{% endif %}">
-                    <span class="sidebar-icon mr-3">📊</span><span class="sidebar-label">Polls</span>
-                </a>
-                {% if session.get('is_admin') %}
-                <a href="{{ url_for('radio_admin') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'radio_admin' %}active{% endif %}">
-                    <span class="sidebar-icon mr-3">📻</span><span class="sidebar-label">Twitch</span>
-                </a>
-                <a href="{{ url_for('suno_analyzer') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'suno_analyzer' %}active{% endif %}">
-                    <span class="sidebar-icon mr-3">🔬</span><span class="sidebar-label">Suno Analyzer</span>
-                </a>
-                {% endif %}
-                <a href="{{ url_for('audit') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'audit' %}active{% endif %}">
-                    <span class="sidebar-icon mr-3">📋</span><span class="sidebar-label">Audit Log</span>
-                </a>
-                <a href="{{ url_for('settings') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'settings' %}active{% endif %}">
-                    <span class="sidebar-icon mr-3">⚙️</span><span class="sidebar-label">Settings</span>
-                </a>
+                {{ nav_link('channels', '📢', 'Channels', 'channels') }}
+                {{ nav_link('roles', '�️', 'Roles', 'roles') }}
+                {{ nav_link('users', '👥', 'Users', 'users') }}
+                {{ nav_link('welcome', '👋', 'Welcome', 'welcome') }}
+                {{ nav_link('party_playlist', '🎧', 'Party Playlist', 'party_playlist') }}
+                {{ nav_link('playlist_search', '🔍', 'Playlist Search', 'playlist_search') }}
+                {{ nav_link('player', '🎵', 'Suno Player', 'player') }}
+                {{ nav_link('song_stats', '📈', 'Song Stats', 'song_stats') }}
+                {{ nav_link('user_stats', '👤', 'User Stats', 'user_stats') }}
+                {{ nav_link('reaction_stats', '💬', 'Reaction Stats', 'reaction_stats') }}
+                {{ nav_link('image_posting', '🖼️', 'Image Posting', 'image_posting') }}
+                {{ nav_link('polls', '📊', 'Polls', 'polls') }}
+                {{ nav_link('radio_admin', '📻', 'Twitch', 'radio') }}
+                {{ nav_link('suno_analyzer', '🔬', 'Suno Analyzer', 'suno_analyzer') }}
+                {{ nav_link('audit', '📋', 'Audit Log', 'audit') }}
+                {{ nav_link('settings', '⚙️', 'Settings', 'settings') }}
             </nav>
             <div class="p-3 border-t border-gray-700/50">
                 <div class="sidebar-footer-content flex items-center justify-between mb-2">

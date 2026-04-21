@@ -45,6 +45,26 @@ def create_app(db: Database, bot=None) -> Quart:
             return await f(*args, **kwargs)
         return decorated
 
+    ALL_PERMISSIONS = [
+        ('dashboard', 'Dashboard'),
+        ('channels', 'Channels'),
+        ('roles', 'Roles'),
+        ('users', 'Users'),
+        ('welcome', 'Welcome'),
+        ('party_playlist', 'Party Playlist'),
+        ('playlist_search', 'Playlist Search'),
+        ('player', 'Suno Player'),
+        ('song_stats', 'Song Stats'),
+        ('user_stats', 'User Stats'),
+        ('reaction_stats', 'Reaction Stats'),
+        ('image_posting', 'Image Posting'),
+        ('polls', 'Polls'),
+        ('radio', 'Twitch Radio'),
+        ('suno_analyzer', 'Suno Analyzer'),
+        ('audit', 'Audit Log'),
+        ('settings', 'Settings'),
+    ]
+
     def admin_required(f):
         @functools.wraps(f)
         async def decorated(*args, **kwargs):
@@ -59,6 +79,34 @@ def create_app(db: Database, bot=None) -> Quart:
                 return redirect(url_for("dashboard"))
             return await f(*args, **kwargs)
         return decorated
+
+    def permission_required(perm):
+        def decorator(f):
+            @functools.wraps(f)
+            async def decorated(*args, **kwargs):
+                if "user_id" not in session:
+                    return redirect(url_for("login"))
+                user = await db.get_web_user_by_id(session["user_id"])
+                if not user:
+                    session.clear()
+                    return redirect(url_for("login"))
+                if user["must_change_password"] and request.endpoint != "change_password":
+                    return redirect(url_for("change_password"))
+                # admins always have access
+                if user.get("is_admin"):
+                    return await f(*args, **kwargs)
+                import json
+                perms = []
+                try:
+                    perms = json.loads(user.get("permissions") or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    pass
+                if perm not in perms:
+                    await flash("You don't have permission to access this page.", "error")
+                    return redirect(url_for("dashboard"))
+                return await f(*args, **kwargs)
+            return decorated
+        return decorator
 
     def hash_password(password: str) -> str:
         return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
@@ -85,6 +133,11 @@ def create_app(db: Database, bot=None) -> Quart:
                 session["user_id"] = user["id"]
                 session["username"] = user["username"]
                 session["is_admin"] = bool(user.get("is_admin"))
+                import json
+                try:
+                    session["permissions"] = json.loads(user.get("permissions") or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    session["permissions"] = []
                 if user["must_change_password"]:
                     return redirect(url_for("change_password"))
                 return redirect(url_for("dashboard"))
@@ -148,7 +201,7 @@ def create_app(db: Database, bot=None) -> Quart:
         )
 
     @app.route("/settings", methods=["GET", "POST"])
-    @login_required
+    @permission_required('settings')
     async def settings():
         if request.method == "POST":
             form = await request.form
@@ -285,7 +338,7 @@ def create_app(db: Database, bot=None) -> Quart:
                                      lp_configs=lp_configs)
 
     @app.route("/welcome", methods=["GET", "POST"])
-    @login_required
+    @permission_required('welcome')
     async def welcome():
         if request.method == "POST":
             form = await request.form
@@ -324,7 +377,7 @@ def create_app(db: Database, bot=None) -> Quart:
         return await render_template("welcome.html", config=config, channels=channels)
 
     @app.route("/channels", methods=["GET", "POST"])
-    @login_required
+    @permission_required('channels')
     async def channels():
         if request.method == "POST":
             form = await request.form
@@ -444,7 +497,7 @@ def create_app(db: Database, bot=None) -> Quart:
         )
 
     @app.route("/roles", methods=["GET", "POST"])
-    @login_required
+    @permission_required('roles')
     async def roles():
         if request.method == "POST":
             form = await request.form
@@ -517,7 +570,7 @@ def create_app(db: Database, bot=None) -> Quart:
         )
 
     @app.route("/users", methods=["GET", "POST"])
-    @login_required
+    @permission_required('users')
     async def users():
         if request.method == "POST":
             form = await request.form
@@ -572,13 +625,33 @@ def create_app(db: Database, bot=None) -> Quart:
                     await db.db.commit()
                     await flash("Password reset. User must change it on next login.", "success")
 
+            elif action == "set_permissions":
+                user_id = int(form.get("user_id", "0"))
+                target = await db.get_web_user_by_id(user_id)
+                if target and not target.get("is_admin"):
+                    import json
+                    selected = [k for k, _ in ALL_PERMISSIONS if form.get(f"perm_{k}")]
+                    await db.set_user_permissions(user_id, selected)
+                    await db.add_audit_log(
+                        event_type="permissions_updated",
+                        details=f"Permissions for '{target['username']}' set to: {', '.join(selected) or 'none'}",
+                        actor=session.get("username", "unknown"),
+                    )
+                    await flash(f"Permissions updated for '{target['username']}'.", "success")
+
             return redirect(url_for("users"))
 
         user_list = await db.get_all_web_users()
-        return await render_template("users.html", users=user_list, current_user_id=session.get("user_id"))
+        import json
+        for u in user_list:
+            try:
+                u["perms"] = json.loads(u.get("permissions") or "[]")
+            except (json.JSONDecodeError, TypeError):
+                u["perms"] = []
+        return await render_template("users.html", users=user_list, current_user_id=session.get("user_id"), all_permissions=ALL_PERMISSIONS)
 
     @app.route("/audit")
-    @login_required
+    @permission_required('audit')
     async def audit():
         page = int(request.args.get("page", 1))
         per_page = 50
@@ -609,7 +682,7 @@ def create_app(db: Database, bot=None) -> Quart:
         return channels
 
     @app.route("/player")
-    @login_required
+    @permission_required('player')
     async def player():
         return await render_template("player.html", channels=await _get_player_channels())
 
@@ -820,7 +893,7 @@ def create_app(db: Database, bot=None) -> Quart:
         return jsonify(await _fetch_suno_meta(uuid))
 
     @app.route("/listening-party", methods=["GET", "POST"])
-    @login_required
+    @permission_required('party_playlist')
     async def listening_party():
         if request.method == "POST":
             form = await request.form
@@ -905,7 +978,7 @@ def create_app(db: Database, bot=None) -> Quart:
         )
 
     @app.route("/playlist-search", methods=["GET", "POST"])
-    @login_required
+    @permission_required('playlist_search')
     async def playlist_search():
         if request.method == "POST":
             form = await request.form
@@ -1029,7 +1102,7 @@ def create_app(db: Database, bot=None) -> Quart:
             app.scan_status["progress"] = ""
 
     @app.route("/song-stats", methods=["GET", "POST"])
-    @login_required
+    @permission_required('song_stats')
     async def song_stats():
         if request.method == "POST":
             form = await request.form
@@ -1091,7 +1164,7 @@ def create_app(db: Database, bot=None) -> Quart:
             return f"<pre>Error: {e}\n\n{traceback.format_exc()}</pre>", 500
 
     @app.route("/user-stats", methods=["GET", "POST"])
-    @login_required
+    @permission_required('user_stats')
     async def user_stats():
         if request.method == "POST":
             form = await request.form
@@ -1317,7 +1390,7 @@ def create_app(db: Database, bot=None) -> Quart:
             app.reaction_scan_status["progress"] = ""
 
     @app.route("/reaction-stats", methods=["GET", "POST"])
-    @login_required
+    @permission_required('reaction_stats')
     async def reaction_stats():
         import traceback
 
@@ -1421,7 +1494,7 @@ def create_app(db: Database, bot=None) -> Quart:
         return await send_from_directory(UPLOAD_DIR, filename)
 
     @app.route("/image-posting", methods=["GET", "POST"])
-    @login_required
+    @permission_required('image_posting')
     async def image_posting():
         if request.method == "POST":
             form = await request.form
@@ -1518,7 +1591,7 @@ def create_app(db: Database, bot=None) -> Quart:
     NUMBER_EMOJIS = ["1\u20e3", "2\u20e3", "3\u20e3", "4\u20e3", "5\u20e3", "6\u20e3", "7\u20e3", "8\u20e3", "9\u20e3", "\U0001F51F"]
 
     @app.route("/polls", methods=["GET", "POST"])
-    @login_required
+    @permission_required('polls')
     async def polls():
         import json as _json
         if request.method == "POST":
@@ -1881,7 +1954,7 @@ def create_app(db: Database, bot=None) -> Quart:
         return await render_template("radio_upload.html", closed=False, rights_text=RIGHTS_DECLARATION_TEXT, content_guidelines=CONTENT_GUIDELINES_TEXT)
 
     @app.route("/radio", methods=["GET", "POST"])
-    @admin_required
+    @permission_required('radio')
     async def radio_admin():
         import json as _json
         if request.method == "POST":
@@ -2129,7 +2202,7 @@ def create_app(db: Database, bot=None) -> Quart:
         return await send_from_directory(RADIO_UPLOAD_DIR, filename)
 
     @app.route("/radio/export-rights")
-    @admin_required
+    @permission_required('radio')
     async def radio_export_rights():
         import csv, io
         from datetime import datetime, timezone
@@ -2164,13 +2237,13 @@ def create_app(db: Database, bot=None) -> Quart:
     stream_manager = StreamManager(db, RADIO_UPLOAD_DIR)
 
     @app.route("/radio/stream/status")
-    @admin_required
+    @permission_required('radio')
     async def radio_stream_status():
         from quart import jsonify
         return jsonify(await stream_manager.get_status())
 
     @app.route("/radio/stream/<action>", methods=["POST"])
-    @admin_required
+    @permission_required('radio')
     async def radio_stream_action(action):
         from quart import jsonify
         if action == "start":
@@ -2212,12 +2285,12 @@ def create_app(db: Database, bot=None) -> Quart:
 
     # --- Suno Audio Analyzer ---
     @app.route("/suno-analyzer")
-    @admin_required
+    @permission_required('suno_analyzer')
     async def suno_analyzer():
         return await render_template("suno_analyzer.html")
 
     @app.route("/suno-analyzer/resolve")
-    @admin_required
+    @permission_required('suno_analyzer')
     async def suno_analyzer_resolve():
         """Server-side proxy to resolve Suno share links and fetch metadata (avoids CORS)."""
         from quart import jsonify
@@ -2267,6 +2340,21 @@ def create_app(db: Database, bot=None) -> Quart:
             # Model
             m = _re.search(r'\\"major_model_version\\":\\"([^\\]+)\\"', html)
             result["model"] = m.group(1) if m else ""
+            # Lyrics
+            m = _re.search(r'\\"lyric\\":\\"((?:[^\\]|\\.)*)(?:\\"|")', html)
+            if not m:
+                m = _re.search(r'"lyric":"((?:[^"\\]|\\.)*)"', html)
+            result["lyrics"] = m.group(1).replace('\\n', '\n').replace('\\"', '"') if m else ""
+            # GPT description prompt (style/genre prompt used for generation)
+            m = _re.search(r'\\"gpt_description_prompt\\":\\"((?:[^\\]|\\.)*)(?:\\"|")', html)
+            if not m:
+                m = _re.search(r'"gpt_description_prompt":"((?:[^"\\]|\\.)*)"', html)
+            result["prompt"] = m.group(1).replace('\\n', '\n').replace('\\"', '"') if m else ""
+            # Type: cover, remix, or original
+            m = _re.search(r'\\"type\\":\\"([^\\]+)\\"', html)
+            if not m:
+                m = _re.search(r'"type":"([^"]+)"', html)
+            result["type"] = m.group(1) if m else ""
             return jsonify(result)
         except Exception as e:
             return jsonify({"error": str(e)}), 500
@@ -2274,7 +2362,7 @@ def create_app(db: Database, bot=None) -> Quart:
     # --- Party Playlist ---
 
     @app.route("/party-playlist", methods=["GET", "POST"])
-    @login_required
+    @permission_required('party_playlist')
     async def party_playlist():
         if request.method == "POST":
             form = await request.form

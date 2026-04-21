@@ -34,6 +34,7 @@ class Database:
                 password_hash TEXT NOT NULL,
                 is_admin INTEGER DEFAULT 0,
                 must_change_password INTEGER DEFAULT 1,
+                permissions TEXT DEFAULT '[]',
                 created_at REAL DEFAULT (unixepoch())
             );
 
@@ -110,6 +111,13 @@ class Database:
             await self.db.execute(
                 "ALTER TABLE monitored_channels RENAME COLUMN cooldown_hours TO cooldown_minutes"
             )
+            await self.db.commit()
+
+        # Add permissions column to web_users if missing
+        async with self.db.execute("PRAGMA table_info(web_users)") as cursor:
+            wu_columns = [row[1] async for row in cursor]
+        if "permissions" not in wu_columns:
+            await self.db.execute("ALTER TABLE web_users ADD COLUMN permissions TEXT DEFAULT '[]'")
             await self.db.commit()
 
         # Add message_id column to song_posts if missing
@@ -357,7 +365,7 @@ class Database:
 
     async def get_all_web_users(self) -> list[dict]:
         async with self.db.execute(
-            "SELECT id, username, is_admin, must_change_password, created_at FROM web_users"
+            "SELECT id, username, is_admin, must_change_password, permissions, created_at FROM web_users"
         ) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
@@ -382,6 +390,27 @@ class Database:
             (password_hash, user_id),
         )
         await self.db.commit()
+
+    async def set_user_permissions(self, user_id: int, permissions: list[str]):
+        import json
+        await self.db.execute(
+            "UPDATE web_users SET permissions = ? WHERE id = ?",
+            (json.dumps(permissions), user_id),
+        )
+        await self.db.commit()
+
+    async def get_user_permissions(self, user_id: int) -> list[str]:
+        import json
+        async with self.db.execute(
+            "SELECT permissions FROM web_users WHERE id = ?", (user_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if row and row[0]:
+                try:
+                    return json.loads(row[0])
+                except (json.JSONDecodeError, TypeError):
+                    return []
+            return []
 
     async def delete_web_user(self, user_id: int):
         await self.db.execute("DELETE FROM web_users WHERE id = ?", (user_id,))
