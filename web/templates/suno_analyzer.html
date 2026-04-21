@@ -1698,8 +1698,11 @@ function exportForLLM(btn){
   var lang=document.getElementById('export-lang').value;
 
   // Gather song info
-  var title=currentMeta&&currentMeta.title?currentMeta.title:'Unknown';
+  var rawTitle=currentMeta&&currentMeta.title?currentMeta.title:'Unknown';
+  // Strip "by Author" suffix from title for clean display
+  var title=rawTitle.replace(/\s+by\s+[^|]+$/i,'').trim();
   var artist=currentMeta&&currentMeta.author?currentMeta.author:'Unknown';
+  var model=currentMeta&&currentMeta.model?currentMeta.model:'';
   var songType=currentMeta&&currentMeta.type?currentMeta.type:'';
   var styles=(currentMeta&&currentMeta.tags?currentMeta.tags:[]).join(', ');
   var lyrics=currentMeta&&currentMeta.lyrics?currentMeta.lyrics:'';
@@ -1727,6 +1730,7 @@ function exportForLLM(btn){
   text+='=== SONG INFO ===\n';
   text+='Title: '+title+'\n';
   text+='Artist: '+artist+'\n';
+  if(model)text+='Model: '+model+'\n';
   if(typeInfo)text+=typeInfo+'\n';
   if(styles)text+='Styles/Tags: '+styles+'\n';
   if(prompt)text+='Generation Prompt: '+prompt+'\n';

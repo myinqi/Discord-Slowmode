@@ -2320,11 +2320,18 @@ def create_app(db: Database, bot=None) -> Quart:
             # Artwork
             m = _re.search(r'cdn2\.suno\.ai/[^"]+\.jpeg', html)
             result["artwork"] = "https://" + m.group(0) if m else ""
-            # Author
-            m = _re.search(r'\\"display_name\\":\\"([^\\]+)\\"', html)
-            if not m:
-                m = _re.search(r'"display_name":"([^"]+)"', html)
-            result["author"] = m.group(1) if m else ""
+            # Author — try title "by Author" first (most reliable), then display_name
+            author = ""
+            title_by = _re.search(r'\bby\s+(.+?)(?:\s*\||\s*-\s*Suno|$)', result.get("title", ""))
+            if title_by:
+                author = title_by.group(1).strip()
+            if not author:
+                m = _re.search(r'\\"display_name\\":\\"([^\\]+)\\"', html)
+                if not m:
+                    m = _re.search(r'"display_name":"([^"]+)"', html)
+                if m:
+                    author = m.group(1)
+            result["author"] = author
             # Tags
             m = _re.search(r'\\"tags\\":\\"([^\\]+)\\"', html)
             if not m:
@@ -2340,23 +2347,40 @@ def create_app(db: Database, bot=None) -> Quart:
             # Model
             m = _re.search(r'\\"major_model_version\\":\\"([^\\]+)\\"', html)
             result["model"] = m.group(1) if m else ""
-            # Lyrics
+            # Lyrics — try multiple patterns
             lyrics_text = ""
-            m = _re.search(r'\\"lyric\\":\\"((?:[^\\]|\\.)*)(?:\\")', html)
+            # Pattern 1: double-escaped "lyric" (singular)
+            m = _re.search(r'\\"lyric\\":\s*\\"((?:[^\\]|\\.)*)(?:\\")', html)
             if m:
                 lyrics_text = m.group(1).replace('\\\\n', '\n').replace('\\n', '\n').replace('\\"', '"')
+                print(f"[suno-resolve] Lyrics matched pattern 1 (escaped lyric), length={len(lyrics_text)}")
+            # Pattern 2: normal JSON "lyric" (singular)
             if not lyrics_text:
                 m = _re.search(r'"lyric"\s*:\s*"((?:[^"\\]|\\.)*)"', html)
                 if m:
                     lyrics_text = m.group(1).replace('\\n', '\n').replace('\\"', '"')
+                    print(f"[suno-resolve] Lyrics matched pattern 2 (json lyric), length={len(lyrics_text)}")
+            # Pattern 3: double-escaped "lyrics" (plural)
             if not lyrics_text:
-                m = _re.search(r'\\"lyrics\\":\\"((?:[^\\]|\\.)*)(?:\\")', html)
+                m = _re.search(r'\\"lyrics\\":\s*\\"((?:[^\\]|\\.)*)(?:\\")', html)
                 if m:
                     lyrics_text = m.group(1).replace('\\\\n', '\n').replace('\\n', '\n').replace('\\"', '"')
+                    print(f"[suno-resolve] Lyrics matched pattern 3 (escaped lyrics), length={len(lyrics_text)}")
+            # Pattern 4: normal JSON "lyrics" (plural)
             if not lyrics_text:
                 m = _re.search(r'"lyrics"\s*:\s*"((?:[^"\\]|\\.)*)"', html)
                 if m:
                     lyrics_text = m.group(1).replace('\\n', '\n').replace('\\"', '"')
+                    print(f"[suno-resolve] Lyrics matched pattern 4 (json lyrics), length={len(lyrics_text)}")
+            if not lyrics_text:
+                # Debug: check if any lyric-related key exists
+                has_lyric = 'lyric' in html.lower()
+                print(f"[suno-resolve] No lyrics matched. 'lyric' in html: {has_lyric}")
+                # Show a small snippet around the key if found
+                idx = html.lower().find('"lyric')
+                if idx >= 0:
+                    snippet = html[max(0,idx):idx+200]
+                    print(f"[suno-resolve] Lyrics context: {snippet[:200]}")
             result["lyrics"] = lyrics_text
             # GPT description prompt (style/genre prompt used for generation)
             m = _re.search(r'\\"gpt_description_prompt\\":\\"((?:[^\\]|\\.)*)(?:\\"|")', html)
