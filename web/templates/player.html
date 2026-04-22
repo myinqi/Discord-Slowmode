@@ -25,9 +25,21 @@
     #suno-link{font-size:11px;color:#b8b4f0;text-decoration:none;display:none}
     #suno-link:hover{text-decoration:underline}
     /* -- Transport + progress -- */
-    .transport{display:flex;align-items:center;gap:8px;margin-top:8px}
-    .transport .icon-btn{width:32px;height:32px;font-size:14px;border-radius:50%}
-    .transport .play-btn{width:38px;height:38px;font-size:17px}
+    .transport{display:flex;align-items:center;gap:10px;margin-top:8px}
+    .tp-btn{width:44px;height:44px;border:0;padding:0;background:transparent center/contain no-repeat;cursor:pointer;flex-shrink:0;transition:transform .1s;filter:drop-shadow(0 0 4px rgba(167,139,250,.25))}
+    .tp-btn:hover{transform:scale(1.06)}
+    .tp-btn:active{transform:scale(.95)}
+    .tp-btn:disabled{opacity:.35;cursor:not-allowed;filter:none}
+    .tp-btn:disabled:hover{transform:none}
+    .tp-play{width:54px;height:54px}
+    .tp-prev{background-image:url("{{ url_for('static',filename='playerbuttons/TrYa-Button_prev.webp') }}")}
+    .tp-prev:hover{background-image:url("{{ url_for('static',filename='playerbuttons/TrYa-Button_prev_hover.webp') }}")}
+    .tp-next{background-image:url("{{ url_for('static',filename='playerbuttons/TrYa-Button_next.webp') }}")}
+    .tp-next:hover{background-image:url("{{ url_for('static',filename='playerbuttons/TrYa-Button_next_hover.webp') }}")}
+    .tp-play{background-image:url("{{ url_for('static',filename='playerbuttons/TrYa-Button_play.webp') }}")}
+    .tp-play:hover{background-image:url("{{ url_for('static',filename='playerbuttons/TrYa-Button_play_hover.webp') }}")}
+    .tp-play.playing{background-image:url("{{ url_for('static',filename='playerbuttons/TrYa-Button_pause.webp') }}")}
+    .tp-play.playing:hover{background-image:url("{{ url_for('static',filename='playerbuttons/TrYa-Button_pause_hover.webp') }}")}
     .seek-bar{flex:1;display:flex;align-items:center;gap:6px}
     .seek-track{flex:1;height:4px;background:#333;border-radius:2px;cursor:pointer;position:relative}
     .seek-fill{height:100%;background:#5865F2;border-radius:2px;pointer-events:none;width:0%}
@@ -100,9 +112,9 @@
 
         <!-- Transport controls + seek bar -->
         <div class="transport">
-            <button class="icon-btn" onclick="prev()" title="Previous">⏮</button>
-            <button class="icon-btn play-btn primary" id="btnPlay" disabled title="Play / Pause">▶</button>
-            <button class="icon-btn" onclick="next()" title="Next">⏭</button>
+            <button class="tp-btn tp-prev" onclick="prev()" title="Previous"></button>
+            <button class="tp-btn tp-play" id="btnPlay" disabled title="Play / Pause"></button>
+            <button class="tp-btn tp-next" onclick="next()" title="Next"></button>
             <div class="seek-bar">
                 <span class="seek-time" id="timeNow">0:00</span>
                 <div class="seek-track" id="seekTrack">
@@ -298,7 +310,8 @@ function getPlayIndex(i){return shuffled&&shuffleOrder.length?shuffleOrder[i]:i;
 
 function updatePlayBtn(){
     var btn=document.getElementById('btnPlay');
-    btn.textContent=(!player.paused&&!player.ended)?'⏸':'▶';
+    var playing=!player.paused&&!player.ended;
+    btn.classList.toggle('playing',playing);
 }
 
 async function play(i){
