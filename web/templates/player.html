@@ -17,7 +17,12 @@
     #load-status{font-size:11px;color:#666;padding-bottom:2px;white-space:nowrap}
     /* -- Now Playing card -- */
     .np-card{display:flex;gap:14px;align-items:flex-start}
-    #artwork{width:162px;height:162px;border-radius:10px;object-fit:cover;background:#1a1a1a;flex-shrink:0;display:none;cursor:pointer}
+    .artwork-wrap{width:162px;flex-shrink:0;display:none;position:relative;border-radius:10px;overflow:hidden;background:#1a1a1a;aspect-ratio:1/1;cursor:pointer;transition:aspect-ratio .2s}
+    .artwork-wrap.has-video{aspect-ratio:9/16}
+    #artwork,#artwork-video{width:100%;height:100%;object-fit:cover;display:block}
+    #artwork-video{display:none}
+    .artwork-wrap.has-video #artwork{display:none}
+    .artwork-wrap.has-video #artwork-video{display:block}
     .np-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
     #tinfo{font-size:16px;color:#eee;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     #sub{font-size:12px;color:#888}
@@ -101,7 +106,10 @@
     <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-4 mb-3">
         <!-- Now Playing -->
         <div class="np-card">
-            <img id="artwork" src="" alt="" onclick="var l=document.getElementById('suno-link');if(l.href)window.open(l.href,'_blank')">
+            <div class="artwork-wrap" id="artwork-wrap" onclick="var l=document.getElementById('suno-link');if(l.href)window.open(l.href,'_blank')">
+                <img id="artwork" src="" alt="">
+                <video id="artwork-video" autoplay loop muted playsinline></video>
+            </div>
             <div class="np-info">
                 <div id="tinfo">—</div>
                 <div id="sub"></div>
@@ -238,7 +246,7 @@ async function resolveAllTitles(){
             var e=T[idx],uuid=e.id;
             if(!e.isUUID){var resolved=await resolveShortId(e.id);if(resolved){uuid=resolved;e.id=resolved;e.isUUID=true;}else return;}
             var meta=await fetchSunoMeta(uuid);
-            if(meta){if(meta.title)e.title=meta.title;if(meta.image_url)e.imageUrl=meta.image_url;if(meta.artist)e.sunoArtist=meta.artist;}
+            if(meta){if(meta.title)e.title=meta.title;if(meta.image_url)e.imageUrl=meta.image_url;if(meta.artist)e.sunoArtist=meta.artist;if(meta.video_url)e.videoUrl=meta.video_url;}
             done++;
         }));
         ls.textContent=T.length+' songs — resolving ('+done+'/'+pending.length+')';
@@ -256,12 +264,31 @@ async function fetchSunoMeta(uuid){
 
 function showLyrics(text){var el=document.getElementById('lyrics');el.style.display=text?'block':'none';el.textContent=text||'';}
 
-function setArtwork(uuid,imageUrl){
+function setArtwork(uuid,imageUrl,videoUrl){
+    var wrap=document.getElementById('artwork-wrap');
     var img=document.getElementById('artwork');
-    if(!uuid){img.style.display='none';return;}
-    img.style.display='block';
-    if(imageUrl){img.src=imageUrl;img.onerror=function(){img.src='https://cdn1.suno.ai/image_large_'+uuid+'.jpeg';img.onerror=function(){img.style.display='none';};};}
-    else{img.src='https://cdn1.suno.ai/image_large_'+uuid+'.jpeg';img.onerror=function(){img.src='https://cdn1.suno.ai/image_'+uuid+'.jpeg';img.onerror=function(){img.style.display='none';};};}
+    var vid=document.getElementById('artwork-video');
+    if(!uuid){wrap.style.display='none';vid.removeAttribute('src');vid.load();return;}
+    wrap.style.display='block';
+    // Image fallback chain
+    if(imageUrl){img.src=imageUrl;img.onerror=function(){img.src='https://cdn1.suno.ai/image_large_'+uuid+'.jpeg';img.onerror=null;};}
+    else{img.src='https://cdn1.suno.ai/image_large_'+uuid+'.jpeg';img.onerror=function(){img.src='https://cdn1.suno.ai/image_'+uuid+'.jpeg';img.onerror=null;};}
+    // Video cover handling
+    if(videoUrl){
+        if(vid.src!==videoUrl){vid.src=videoUrl;vid.load();}
+        wrap.classList.add('has-video');
+        // Adjust aspect ratio once metadata loads (in case it's not 9:16)
+        vid.onloadedmetadata=function(){
+            if(vid.videoWidth&&vid.videoHeight){
+                wrap.style.aspectRatio=vid.videoWidth+' / '+vid.videoHeight;
+            }
+        };
+        vid.onerror=function(){wrap.classList.remove('has-video');wrap.style.aspectRatio='';};
+    }else{
+        wrap.classList.remove('has-video');
+        wrap.style.aspectRatio='';
+        vid.removeAttribute('src');vid.load();
+    }
 }
 
 function setSunoLink(uuid){
@@ -281,7 +308,7 @@ function needsTitle(e){
 async function playTrack(uuid,idx){
     setStatus('Loading…');
     var realIdx=getPlayIndex(idx);var e=T[realIdx];
-    setArtwork(uuid,e.imageUrl||null);setSunoLink(uuid);
+    setArtwork(uuid,e.imageUrl||null,e.videoUrl||null);setSunoLink(uuid);
     player.src='https://cdn1.suno.ai/'+uuid+'.mp3';
     player.oncanplay=function(){setStatus('');};
     player.onerror=function(){setStatus('⚠ Could not load audio');};
@@ -292,7 +319,8 @@ async function playTrack(uuid,idx){
         if(meta.lyrics)showLyrics(meta.lyrics);
         var changed=false;
         if(meta.title&&needsTitle(e)){e.title=meta.title;document.getElementById('tinfo').textContent=meta.title;changed=true;}
-        if(meta.image_url){e.imageUrl=meta.image_url;setArtwork(uuid,meta.image_url);}
+        if(meta.video_url)e.videoUrl=meta.video_url;
+        if(meta.image_url||meta.video_url){if(meta.image_url)e.imageUrl=meta.image_url;setArtwork(uuid,e.imageUrl||null,e.videoUrl||null);}
         if(meta.artist&&!e.sunoArtist){e.sunoArtist=meta.artist;changed=true;}
         if(changed){updateSub(e,idx);renderQ();}
     });
