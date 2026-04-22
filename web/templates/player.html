@@ -116,6 +116,9 @@
             </div>
         </div>
 
+        <!-- Frequency Spectrum -->
+        <canvas id="spectrum-canvas" style="width:100%;height:60px;background:#0a0a0a;border-radius:6px;margin:8px 0;display:block"></canvas>
+
         <!-- Auto-Next -->
         <div class="auto-row">
             <span>Auto-Next</span>
@@ -146,7 +149,7 @@
     </div>
 </div>
 
-<audio id="player" preload="none" style="display:none"></audio>
+<audio id="player" preload="none" crossorigin="anonymous" style="display:none"></audio>
 
 <script>
 var T=[], cur=-1, tSec=0, cd=0, tick=null, shuffled=false, shuffleOrder=[];
@@ -437,6 +440,61 @@ document.getElementById('rng').oninput=function(){
 };
 document.getElementById('channelSel').onchange=function(){saveSettings();};
 document.getElementById('limitInput').onchange=function(){saveSettings();};
+
+/* --- Live Frequency Spectrum --- */
+var _specCtx=null, _specAnalyser=null, _specSrc=null, _specFrame=null;
+function initSpectrum(){
+    if(_specSrc)return true;
+    try{
+        _specCtx=new(window.AudioContext||window.webkitAudioContext)();
+        _specSrc=_specCtx.createMediaElementSource(player);
+        _specAnalyser=_specCtx.createAnalyser();
+        _specAnalyser.fftSize=2048;
+        _specSrc.connect(_specAnalyser);
+        _specAnalyser.connect(_specCtx.destination);
+        return true;
+    }catch(e){console.warn('Spectrum init failed',e);return false;}
+}
+function drawSpectrum(){
+    var c=document.getElementById('spectrum-canvas');
+    if(!c||!_specAnalyser)return;
+    var ctx=c.getContext('2d');
+    // size canvas to CSS pixels
+    var rect=c.getBoundingClientRect();
+    if(c.width!==Math.floor(rect.width)||c.height!==Math.floor(rect.height)){
+        c.width=Math.floor(rect.width);c.height=Math.floor(rect.height);
+    }
+    var data=new Uint8Array(_specAnalyser.frequencyBinCount);
+    function loop(){
+        _specFrame=requestAnimationFrame(loop);
+        _specAnalyser.getByteFrequencyData(data);
+        var w=c.width,h=c.height;
+        ctx.fillStyle='#0a0a0a';
+        ctx.fillRect(0,0,w,h);
+        var bars=64,barW=w/bars;
+        for(var i=0;i<bars;i++){
+            var start=Math.floor(i*data.length/bars);
+            var end=Math.floor((i+1)*data.length/bars);
+            var sum=0;
+            for(var j=start;j<end;j++)sum+=data[j];
+            var avg=sum/(end-start);
+            var bh=(avg/255)*h*0.9;
+            var x=i*barW;
+            var y=h-bh;
+            var g=ctx.createLinearGradient(0,y,0,h);
+            g.addColorStop(0,'#60c0a0');g.addColorStop(1,'#1a3a5c');
+            ctx.fillStyle=g;
+            ctx.fillRect(x,y,barW-1,bh);
+        }
+    }
+    loop();
+}
+player.addEventListener('play',function(){
+    if(initSpectrum()){
+        if(_specCtx&&_specCtx.state==='suspended')_specCtx.resume();
+        if(!_specFrame)drawSpectrum();
+    }
+});
 
 /* Auto-load on page open */
 loadSettings();
