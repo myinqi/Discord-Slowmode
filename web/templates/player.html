@@ -465,26 +465,32 @@ function drawSpectrum(){
         c.width=Math.floor(rect.width);c.height=Math.floor(rect.height);
     }
     var data=new Uint8Array(_specAnalyser.frequencyBinCount);
+    // Pre-compute logarithmic bin edges (music-perception: more resolution in lows)
+    var bars=48;
+    var minBin=1, maxBin=Math.min(data.length, Math.floor(data.length*0.75)); // skip silent top range
+    var logMin=Math.log(minBin), logMax=Math.log(maxBin);
+    var binEdges=new Array(bars+1);
+    for(var k=0;k<=bars;k++){
+        binEdges[k]=Math.floor(Math.exp(logMin+(logMax-logMin)*k/bars));
+    }
     function loop(){
         _specFrame=requestAnimationFrame(loop);
         _specAnalyser.getByteFrequencyData(data);
         var w=c.width,h=c.height;
         ctx.fillStyle='#0a0a0a';
         ctx.fillRect(0,0,w,h);
-        var bars=64,barW=w/bars;
+        var gap=2, barW=(w-gap*(bars-1))/bars;
         for(var i=0;i<bars;i++){
-            var start=Math.floor(i*data.length/bars);
-            var end=Math.floor((i+1)*data.length/bars);
-            var sum=0;
-            for(var j=start;j<end;j++)sum+=data[j];
-            var avg=sum/(end-start);
-            var bh=(avg/255)*h*0.9;
-            var x=i*barW;
+            var start=binEdges[i], end=Math.max(binEdges[i+1], start+1);
+            var peak=0;
+            for(var j=start;j<end;j++){ if(data[j]>peak) peak=data[j]; }
+            var bh=(peak/255)*h*0.95;
+            var x=i*(barW+gap);
             var y=h-bh;
             var g=ctx.createLinearGradient(0,y,0,h);
             g.addColorStop(0,'#60c0a0');g.addColorStop(1,'#1a3a5c');
             ctx.fillStyle=g;
-            ctx.fillRect(x,y,barW-1,bh);
+            ctx.fillRect(x,y,barW,bh);
         }
     }
     loop();
