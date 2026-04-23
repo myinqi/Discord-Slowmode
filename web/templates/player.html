@@ -4,7 +4,8 @@
 <style>
     .player-wrap{max-width:750px;margin:0 auto}
     /* -- Top bar: filters + feature buttons -- */
-    .top-bar{display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-bottom:12px}
+    .top-bar{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
+    .top-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
     .top-bar select,.top-bar input[type=number]{padding:6px 10px;font-size:12px;border:1px solid #333;border-radius:8px;background:#1a1a1a;color:#eee}
     .top-bar select{min-width:130px}
     #timeSel{min-width:110px}
@@ -89,30 +90,34 @@
     <!-- Top bar: filters + feature buttons -->
     <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-4 mb-3">
         <div class="top-bar">
-            <select id="channelSel" title="Channel">
-                <option value="">All channels</option>
-                {% for ch in channels %}
-                <option value="{{ ch.id }}">#{{ ch.name }}</option>
-                {% endfor %}
-            </select>
-            <select id="timeSel" title="Time range">
-                <option value="0">All time</option>
-                <option value="1">Last 1 day</option>
-                <option value="2">Last 2 days</option>
-                <option value="3">Last 3 days</option>
-                <option value="7">Last 7 days</option>
-                <option value="14">Last 14 days</option>
-                <option value="30">Last 30 days</option>
-            </select>
-            <select id="artistSel" title="Suno artist">
-                <option value="">All artists</option>
-            </select>
-            <input type="number" id="limitInput" value="20" min="1" max="500" title="Songs to load">
-            <button class="icon-btn primary" id="btnFetch" title="Load Songs">⬇</button>
-            <button class="icon-btn" id="btnShuffle" onclick="toggleShuffle()" title="Shuffle">🔀</button>
-            <button class="icon-btn" id="btnHidePlayed" onclick="toggleHidePlayed()" title="Hide Played">👁</button>
-            <button class="icon-btn" id="btnAutoload" onclick="toggleAutoload()" title="Auto-load more songs">♾</button>
-            <span id="load-status"></span>
+            <div class="top-row">
+                <select id="channelSel" title="Channel">
+                    <option value="">All channels</option>
+                    {% for ch in channels %}
+                    <option value="{{ ch.id }}">#{{ ch.name }}</option>
+                    {% endfor %}
+                </select>
+                <select id="timeSel" title="Time range">
+                    <option value="0">All time</option>
+                    <option value="1">Last 1 day</option>
+                    <option value="2">Last 2 days</option>
+                    <option value="3">Last 3 days</option>
+                    <option value="7">Last 7 days</option>
+                    <option value="14">Last 14 days</option>
+                    <option value="30">Last 30 days</option>
+                </select>
+                <select id="artistSel" title="Suno artist">
+                    <option value="">All artists</option>
+                </select>
+                <input type="number" id="limitInput" value="20" min="1" max="500" title="Songs to load">
+            </div>
+            <div class="top-row">
+                <button class="icon-btn primary" id="btnFetch" title="Load Songs">⬇</button>
+                <button class="icon-btn" id="btnShuffle" onclick="toggleShuffle()" title="Shuffle">🔀</button>
+                <button class="icon-btn" id="btnHidePlayed" onclick="toggleHidePlayed()" title="Hide Played">👁</button>
+                <button class="icon-btn" id="btnAutoload" onclick="toggleAutoload()" title="Auto-load more songs">♾</button>
+                <span id="load-status"></span>
+            </div>
         </div>
     </div>
 
@@ -332,6 +337,11 @@ function isFiltered(i){
     return false;
 }
 
+function cleanArtistLabel(n){
+    // Remove Unicode combining marks (above/below) that make option rows huge
+    try{n=n.normalize('NFKD').replace(/[\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\ufe20-\ufe2f]/g,'');}catch(_){}
+    return n.trim()||n;
+}
 function updateArtistOptions(){
     var sel=document.getElementById('artistSel');
     var desired=sel.value||artistFilter||'';
@@ -341,7 +351,7 @@ function updateArtistOptions(){
     var html='<option value="">All artists</option>';
     for(var j=0;j<sorted.length;j++){
         var n=sorted[j];
-        html+='<option value="'+esc(n)+'"'+(n===desired?' selected':'')+'>'+esc(n)+'</option>';
+        html+='<option value="'+esc(n)+'"'+(n===desired?' selected':'')+'>'+esc(cleanArtistLabel(n))+'</option>';
     }
     sel.innerHTML=html;
 }
