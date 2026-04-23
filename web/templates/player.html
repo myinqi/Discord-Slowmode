@@ -29,7 +29,7 @@
     .music-btn:active:not(:disabled){transform:translateY(0) scale(.98)}
     .music-btn.is-on,.music-btn[aria-pressed="true"]{background:var(--surface-gradient-active);border-color:rgba(255,255,255,.28);box-shadow:var(--mp-active-glow)}
     .music-btn:disabled{opacity:.4;cursor:not-allowed}
-    .music-btn.mp-lg{--mp-icon:28px;width:72px;height:72px;border-radius:22px}
+    .music-btn.mp-lg{--mp-icon:26px;width:64px;height:64px;border-radius:20px}
     .music-btn.mp-sm{--mp-icon:18px;width:40px;height:40px;border-radius:12px}
     /* Play/Pause icon toggle */
     .music-btn .pause-icon{display:none}
@@ -38,7 +38,7 @@
     #load-status{font-size:11px;color:#666;padding-bottom:2px;white-space:nowrap}
     /* -- Now Playing card -- */
     .np-card{display:flex;gap:14px;align-items:flex-start}
-    .artwork-wrap{width:162px;flex-shrink:0;display:none;position:relative;border-radius:10px;overflow:hidden;background:#1a1a1a;aspect-ratio:1/1;cursor:pointer;transition:aspect-ratio .2s}
+    .artwork-wrap{width:216px;flex-shrink:0;display:none;position:relative;border-radius:10px;overflow:hidden;background:#1a1a1a;aspect-ratio:1/1;cursor:pointer;transition:aspect-ratio .2s}
     .artwork-wrap.has-video{aspect-ratio:9/16}
     #artwork,#artwork-video{width:100%;height:100%;object-fit:cover;display:block}
     #artwork-video{display:none}
@@ -260,7 +260,49 @@ async function fetchSongs(append){
         renderQ();
         document.getElementById('btnPlay').disabled=T.length===0;
         resolveAllTitles();
+        verifyLoadedSongs();
     }catch(e){ls.textContent='Error: '+e.message;}
+}
+
+/* --- Background orphan verification: check if tracked messages still exist on Discord --- */
+async function verifyLoadedSongs(){
+    var items=[];
+    for(var i=0;i<T.length;i++){
+        var t=T[i];
+        if(t.messageId&&t.channelId&&!t._verified){
+            items.push({message_id:String(t.messageId),channel_id:String(t.channelId)});
+        }
+    }
+    if(!items.length)return;
+    try{
+        var r=await fetch('/api/verify-songs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:items})});
+        if(!r.ok)return;
+        var data=await r.json();
+        if(!data.ok)return;
+        // Mark all as verified (not missing → confirmed present)
+        var missing=new Set(data.missing||[]);
+        var removedIdx=[];
+        for(var i=T.length-1;i>=0;i--){
+            if(T[i].messageId&&missing.has(String(T[i].messageId))){removedIdx.push(i);}
+            else{T[i]._verified=true;}
+        }
+        if(!removedIdx.length)return;
+        // Remove orphans from T, adjust cur + playedSet + shuffleOrder
+        for(var j=0;j<removedIdx.length;j++){
+            var idx=removedIdx[j];
+            T.splice(idx,1);
+            if(cur>idx)cur--;
+            else if(cur===idx)cur=-1;
+        }
+        // Rebuild shuffle order if active
+        if(shuffled)buildShuffleOrder();
+        // playedSet uses real indices; simplest safe reset
+        playedSet.clear();
+        renderQ();
+        updateArtistOptions();
+        var ls=document.getElementById('load-status');
+        if(ls)ls.textContent=T.length+' songs (removed '+removedIdx.length+' orphans)';
+    }catch(e){/* silent */}
 }
 
 /* --- Autoload more when all songs played --- */
