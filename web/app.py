@@ -730,11 +730,14 @@ def create_app(db: Database, bot=None) -> Quart:
 
     @app.route("/public/api/verify-songs", methods=["POST"])
     async def api_verify_songs_public():
-        """Public mirror of /api/verify-songs — batch-verify messages + remove orphans."""
+        """Public mirror — verify messages using DB-stored channel_id (never client-provided)."""
         from quart import jsonify
         import discord as _discord
         data = await request.get_json(silent=True) or {}
         items = data.get("items") or []
+        # Hard cap batch size to limit DoS potential
+        if len(items) > 100:
+            items = items[:100]
         if not bot or not bot.is_ready():
             return jsonify({"missing": [], "ok": False, "reason": "bot_not_ready"})
         guild = get_guild()
@@ -744,12 +747,18 @@ def create_app(db: Database, bot=None) -> Quart:
         async def check(item):
             try:
                 mid = int(item.get("message_id"))
-                cid = int(item.get("channel_id"))
             except (TypeError, ValueError):
                 return None
-            ch = guild.get_channel(cid)
+            # Look up channel_id from DB — never trust client input for deletion decisions
+            row = await db.get_song_post_by_message_id(mid)
+            if not row:
+                return None  # unknown to us, don't mark as missing
+            cid = row.get("channel_id")
+            if cid is None:
+                return None
+            ch = guild.get_channel(int(cid))
             if ch is None:
-                return mid
+                return mid  # channel gone
             try:
                 await ch.fetch_message(mid)
                 return None
@@ -953,12 +962,13 @@ def create_app(db: Database, bot=None) -> Quart:
     @app.route("/api/verify-songs", methods=["POST"])
     @login_required
     async def api_verify_songs():
-        """Batch-check that each (channel_id, message_id) still exists on Discord.
-        Returns list of missing message_ids; also deletes orphans from DB."""
+        """Verify messages using DB-stored channel_id (never client-provided)."""
         from quart import jsonify
         import discord as _discord
         data = await request.get_json(silent=True) or {}
         items = data.get("items") or []
+        if len(items) > 500:
+            items = items[:500]
         if not bot or not bot.is_ready():
             return jsonify({"missing": [], "ok": False, "reason": "bot_not_ready"})
         guild = get_guild()
@@ -968,10 +978,15 @@ def create_app(db: Database, bot=None) -> Quart:
         async def check(item):
             try:
                 mid = int(item.get("message_id"))
-                cid = int(item.get("channel_id"))
             except (TypeError, ValueError):
                 return None
-            ch = guild.get_channel(cid)
+            row = await db.get_song_post_by_message_id(mid)
+            if not row:
+                return None
+            cid = row.get("channel_id")
+            if cid is None:
+                return None
+            ch = guild.get_channel(int(cid))
             if ch is None:
                 return mid  # channel gone
             try:
@@ -980,7 +995,7 @@ def create_app(db: Database, bot=None) -> Quart:
             except _discord.NotFound:
                 return mid
             except Exception:
-                return None  # ignore rate-limit/forbidden — don't mark as missing
+                return None
 
         # Limit concurrency to avoid rate-limit bursts
         sem = asyncio.Semaphore(5)
