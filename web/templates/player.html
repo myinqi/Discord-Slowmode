@@ -10,12 +10,31 @@
     .top-bar select{min-width:130px}
     #timeSel{min-width:110px}
     .top-bar input[type=number]{width:64px}
-    .icon-btn{width:36px;height:36px;display:inline-flex;align-items:center;justify-content:center;border:1px solid #5865F2;border-radius:8px;background:#5865F2;color:#fff;cursor:pointer;font-size:16px;transition:all .15s;flex-shrink:0}
-    .icon-btn:hover{background:#4752c4;border-color:#4752c4}
-    .icon-btn.on{background:#3b2f7e;border-color:#7c6ff0;box-shadow:0 0 6px rgba(88,101,242,.4)}
-    .icon-btn:disabled{opacity:.35;cursor:not-allowed}
-    .icon-btn.primary{background:#5865F2;color:#fff;border-color:transparent}
-    .icon-btn.primary:hover{background:#4752c4}
+
+    /* -- Music Button System (CSS-based, shared for transport + utility) -- */
+    :root{
+        --mp-main:#2d2453;--mp-accent:#5561e4;--mp-light:#eff0f0;
+        --surface-gradient:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,0) 36%),linear-gradient(180deg,#3b316f 0%,#2d2453 100%);
+        --surface-gradient-hover:linear-gradient(180deg,rgba(255,255,255,.13),rgba(255,255,255,.02) 42%),linear-gradient(180deg,#473b85 0%,#2d2453 100%);
+        --surface-gradient-active:linear-gradient(180deg,rgba(255,255,255,.16),rgba(255,255,255,.02) 45%),linear-gradient(180deg,#6a77ff 0%,#5561e4 100%);
+        --mp-shadow:0 10px 24px rgba(7,10,18,.38);
+        --mp-hover-glow:0 0 0 1px rgba(85,97,228,.45),0 0 18px rgba(85,97,228,.28),0 10px 24px rgba(7,10,18,.36);
+        --mp-active-glow:0 0 0 1px rgba(255,255,255,.2),0 0 24px rgba(85,97,228,.42),0 12px 26px rgba(38,48,114,.34);
+    }
+    .music-btn{border:1px solid rgba(255,255,255,.14);background:var(--surface-gradient);color:var(--mp-light);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:var(--mp-shadow);transition:transform .18s ease,box-shadow .18s ease,background .18s ease,border-color .18s ease,filter .18s ease;position:relative;isolation:isolate;appearance:none;-webkit-appearance:none;outline:none;padding:0;flex-shrink:0}
+    .music-btn::before{content:"";position:absolute;inset:1px;border-radius:inherit;background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,0) 38%);pointer-events:none;z-index:0}
+    .music-btn>svg{position:relative;z-index:1;width:var(--mp-icon,28px);height:var(--mp-icon,28px);fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}
+    .music-btn .fill{fill:currentColor;stroke:none}
+    .music-btn:hover:not(:disabled){transform:translateY(-1px);background:var(--surface-gradient-hover);border-color:rgba(85,97,228,.45);box-shadow:var(--mp-hover-glow);filter:saturate(1.05)}
+    .music-btn:active:not(:disabled){transform:translateY(0) scale(.98)}
+    .music-btn.is-on,.music-btn[aria-pressed="true"]{background:var(--surface-gradient-active);border-color:rgba(255,255,255,.28);box-shadow:var(--mp-active-glow)}
+    .music-btn:disabled{opacity:.4;cursor:not-allowed}
+    .music-btn.mp-lg{--mp-icon:28px;width:72px;height:72px;border-radius:22px}
+    .music-btn.mp-sm{--mp-icon:18px;width:40px;height:40px;border-radius:12px}
+    /* Play/Pause icon toggle */
+    .music-btn .pause-icon{display:none}
+    .music-btn.playing .play-icon{display:none}
+    .music-btn.playing .pause-icon{display:inline-block}
     #load-status{font-size:11px;color:#666;padding-bottom:2px;white-space:nowrap}
     /* -- Now Playing card -- */
     .np-card{display:flex;gap:14px;align-items:flex-start}
@@ -33,21 +52,7 @@
     #suno-link,#artist-link{font-size:11px;color:#b8b4f0;text-decoration:none;display:none}
     #suno-link:hover,#artist-link:hover{text-decoration:underline}
     /* -- Transport + progress -- */
-    .transport{display:flex;align-items:center;gap:10px;margin-top:8px}
-    .tp-btn{width:44px;height:44px;border:0;padding:0;background:transparent center/contain no-repeat;cursor:pointer;flex-shrink:0;transition:transform .1s;filter:drop-shadow(0 0 4px rgba(167,139,250,.25))}
-    .tp-btn:hover{transform:scale(1.06)}
-    .tp-btn:active{transform:scale(.95)}
-    .tp-btn:disabled{opacity:.35;cursor:not-allowed;filter:none}
-    .tp-btn:disabled:hover{transform:none}
-    .tp-play{width:54px;height:54px}
-    .tp-prev{background-image:url("{{ url_for('static',filename='playerbuttons/TrYa-Button_prev.webp') }}")}
-    .tp-prev:hover{background-image:url("{{ url_for('static',filename='playerbuttons/TrYa-Button_prev_hover.webp') }}")}
-    .tp-next{background-image:url("{{ url_for('static',filename='playerbuttons/TrYa-Button_next.webp') }}")}
-    .tp-next:hover{background-image:url("{{ url_for('static',filename='playerbuttons/TrYa-Button_next_hover.webp') }}")}
-    .tp-play{background-image:url("{{ url_for('static',filename='playerbuttons/TrYa-Button_play.webp') }}")}
-    .tp-play:hover{background-image:url("{{ url_for('static',filename='playerbuttons/TrYa-Button_play_hover.webp') }}")}
-    .tp-play.playing{background-image:url("{{ url_for('static',filename='playerbuttons/TrYa-Button_pause.webp') }}")}
-    .tp-play.playing:hover{background-image:url("{{ url_for('static',filename='playerbuttons/TrYa-Button_pause_hover.webp') }}")}
+    .transport{display:flex;align-items:center;gap:12px;margin-top:8px}
     .seek-bar{flex:1;display:flex;align-items:center;gap:6px}
     .seek-track{flex:1;height:4px;background:#333;border-radius:2px;cursor:pointer;position:relative}
     .seek-fill{height:100%;background:#5865F2;border-radius:2px;pointer-events:none;width:0%}
@@ -112,10 +117,18 @@
             </div>
             <div class="top-row">
                 <input type="number" id="limitInput" value="20" min="1" max="500" title="Songs to load">
-                <button class="icon-btn primary" id="btnFetch" title="Load Songs">⬇</button>
-                <button class="icon-btn" id="btnShuffle" onclick="toggleShuffle()" title="Shuffle">🔀</button>
-                <button class="icon-btn" id="btnHidePlayed" onclick="toggleHidePlayed()" title="Hide Played">👁</button>
-                <button class="icon-btn" id="btnAutoload" onclick="toggleAutoload()" title="Auto-load more songs">♾</button>
+                <button class="music-btn mp-sm" id="btnFetch" title="Load Songs" aria-label="Load Songs">
+                    <svg viewBox="0 0 24 24"><path d="M12 4.2v8.5"/><path d="m8.8 9.7 3.2 3.2 3.2-3.2"/><path d="M4.8 15.9v2.2c0 .6.5 1.1 1.1 1.1h12.2c.6 0 1.1-.5 1.1-1.1v-2.2"/></svg>
+                </button>
+                <button class="music-btn mp-sm" id="btnShuffle" onclick="toggleShuffle()" title="Shuffle" aria-label="Shuffle">
+                    <svg viewBox="0 0 24 24"><path d="M4 7h4l3 4 2-2h7"/><path d="m17 5 3 2-3 2"/><path d="M4 17h4l3-4 2 2h7"/><path d="m17 15 3 2-3 2"/></svg>
+                </button>
+                <button class="music-btn mp-sm" id="btnHidePlayed" onclick="toggleHidePlayed()" title="Hide Played" aria-label="Hide Played">
+                    <svg viewBox="0 0 24 24"><path d="M2.5 12s3.4-5.5 9.5-5.5S21.5 12 21.5 12 18.1 17.5 12 17.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.6"/></svg>
+                </button>
+                <button class="music-btn mp-sm" id="btnAutoload" onclick="toggleAutoload()" title="Auto-load more songs" aria-label="Auto-load">
+                    <svg viewBox="0 0 24 24"><path d="M5.2 14.7c-1.7 0-3-1.3-3-3s1.3-3 3-3c3.4 0 4.5 6.6 7.8 6.6 1.7 0 3-1.3 3-3s-1.3-3-3-3c-3.3 0-4.4 6.6-7.8 6.6Z"/><path d="M18.8 14.7c1.7 0 3-1.3 3-3s-1.3-3-3-3c-3.4 0-4.5 6.6-7.8 6.6-1.7 0-3-1.3-3-3s1.3-3 3-3c3.3 0 4.4 6.6 7.8 6.6Z"/></svg>
+                </button>
                 <span id="load-status"></span>
             </div>
         </div>
@@ -139,9 +152,16 @@
 
         <!-- Transport controls + seek bar -->
         <div class="transport">
-            <button class="tp-btn tp-prev" onclick="prev()" title="Previous"></button>
-            <button class="tp-btn tp-play" id="btnPlay" disabled title="Play / Pause"></button>
-            <button class="tp-btn tp-next" onclick="next()" title="Next"></button>
+            <button class="music-btn mp-lg" onclick="prev()" title="Previous" aria-label="Previous">
+                <svg viewBox="0 0 24 24"><path class="fill" d="M10.8 6.5 4 12l6.8 5.5V6.5Z"/><path class="fill" d="M19 6.5 12.2 12l6.8 5.5V6.5Z"/></svg>
+            </button>
+            <button class="music-btn mp-lg" id="btnPlay" disabled title="Play / Pause" aria-label="Play/Pause">
+                <svg class="play-icon" viewBox="0 0 24 24"><path class="fill" d="M8 6.5v11l8-5.5-8-5.5Z"/></svg>
+                <svg class="pause-icon" viewBox="0 0 24 24"><path d="M9 6.8v10.4"/><path d="M15 6.8v10.4"/></svg>
+            </button>
+            <button class="music-btn mp-lg" onclick="next()" title="Next" aria-label="Next">
+                <svg viewBox="0 0 24 24"><path class="fill" d="M13.2 6.5 20 12l-6.8 5.5V6.5Z"/><path class="fill" d="M5 6.5 11.8 12 5 17.5V6.5Z"/></svg>
+            </button>
             <div class="seek-bar">
                 <span class="seek-time" id="timeNow">0:00</span>
                 <div class="seek-track" id="seekTrack">
@@ -447,7 +467,7 @@ document.getElementById('volSlider').oninput=function(){player.volume=this.value
 player.volume=0.8;
 
 /* --- Shuffle --- */
-function toggleShuffle(){shuffled=!shuffled;document.getElementById('btnShuffle').classList.toggle('on',shuffled);if(shuffled)buildShuffleOrder();renderQ();}
+function toggleShuffle(){shuffled=!shuffled;document.getElementById('btnShuffle').classList.toggle('is-on',shuffled);if(shuffled)buildShuffleOrder();renderQ();}
 function buildShuffleOrder(){
     shuffleOrder=[];for(var i=0;i<T.length;i++)shuffleOrder.push(i);
     for(var i=shuffleOrder.length-1;i>0;i--){var j=Math.floor(Math.random()*(i+1));var t=shuffleOrder[i];shuffleOrder[i]=shuffleOrder[j];shuffleOrder[j]=t;}
@@ -464,10 +484,10 @@ function resetCd(){
 function stopCd(){clearInterval(tick);tick=null;document.getElementById('cntd').textContent='';document.getElementById('timerprog').style.cssText='width:0%';}
 
 /* --- Hide Played --- */
-function toggleHidePlayed(){hidePlayed=!hidePlayed;document.getElementById('btnHidePlayed').classList.toggle('on',hidePlayed);renderQ();}
+function toggleHidePlayed(){hidePlayed=!hidePlayed;document.getElementById('btnHidePlayed').classList.toggle('is-on',hidePlayed);renderQ();}
 
 /* --- Autoload toggle --- */
-function toggleAutoload(){autoloadEnabled=!autoloadEnabled;document.getElementById('btnAutoload').classList.toggle('on',autoloadEnabled);saveSettings();}
+function toggleAutoload(){autoloadEnabled=!autoloadEnabled;document.getElementById('btnAutoload').classList.toggle('is-on',autoloadEnabled);saveSettings();}
 
 /* --- Emoji Reactions --- */
 function updateReactBtns(){
@@ -528,7 +548,7 @@ function loadSettings(){
     var af=localStorage.getItem('player-artist');
     if(ch!==null)document.getElementById('channelSel').value=ch;
     if(lim)document.getElementById('limitInput').value=lim;
-    if(al==='1'){autoloadEnabled=true;document.getElementById('btnAutoload').classList.add('on');}
+    if(al==='1'){autoloadEnabled=true;document.getElementById('btnAutoload').classList.add('is-on');}
     if(tf){timeFilterDays=parseInt(tf)||0;document.getElementById('timeSel').value=tf;}
     if(af){artistFilter=af;/* will be selected after updateArtistOptions once songs resolve */}
 }
