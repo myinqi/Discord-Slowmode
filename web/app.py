@@ -728,6 +728,49 @@ def create_app(db: Database, bot=None) -> Quart:
         from quart import jsonify
         return jsonify(await _fetch_suno_meta(uuid))
 
+    @app.route("/public/api/verify-songs", methods=["POST"])
+    async def api_verify_songs_public():
+        """Public mirror of /api/verify-songs — batch-verify messages + remove orphans."""
+        from quart import jsonify
+        import discord as _discord
+        data = await request.get_json(silent=True) or {}
+        items = data.get("items") or []
+        if not bot or not bot.is_ready():
+            return jsonify({"missing": [], "ok": False, "reason": "bot_not_ready"})
+        guild = get_guild()
+        if not guild:
+            return jsonify({"missing": [], "ok": False, "reason": "no_guild"})
+
+        async def check(item):
+            try:
+                mid = int(item.get("message_id"))
+                cid = int(item.get("channel_id"))
+            except (TypeError, ValueError):
+                return None
+            ch = guild.get_channel(cid)
+            if ch is None:
+                return mid
+            try:
+                await ch.fetch_message(mid)
+                return None
+            except _discord.NotFound:
+                return mid
+            except Exception:
+                return None
+
+        sem = asyncio.Semaphore(5)
+        async def bounded(i):
+            async with sem:
+                return await check(i)
+        results = await asyncio.gather(*[bounded(i) for i in items])
+        missing = [r for r in results if r is not None]
+        for mid in missing:
+            try:
+                await db.delete_song_posts_by_message_id(mid)
+            except Exception:
+                pass
+        return jsonify({"missing": [str(m) for m in missing], "ok": True})
+
     @app.route("/api/player-songs")
     @login_required
     async def api_player_songs():
