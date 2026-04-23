@@ -6,7 +6,8 @@
     /* -- Top bar: filters + feature buttons -- */
     .top-bar{display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-bottom:12px}
     .top-bar select,.top-bar input[type=number]{padding:6px 10px;font-size:12px;border:1px solid #333;border-radius:8px;background:#1a1a1a;color:#eee}
-    .top-bar select{min-width:160px}
+    .top-bar select{min-width:130px}
+    #timeSel{min-width:110px}
     .top-bar input[type=number]{width:64px}
     .icon-btn{width:36px;height:36px;display:inline-flex;align-items:center;justify-content:center;border:1px solid #5865F2;border-radius:8px;background:#5865F2;color:#fff;cursor:pointer;font-size:16px;transition:all .15s;flex-shrink:0}
     .icon-btn:hover{background:#4752c4;border-color:#4752c4}
@@ -27,8 +28,9 @@
     #tinfo{font-size:16px;color:#eee;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     #sub{font-size:12px;color:#888}
     #p-status{font-size:11px;color:#aa8}
-    #suno-link{font-size:11px;color:#b8b4f0;text-decoration:none;display:none}
-    #suno-link:hover{text-decoration:underline}
+    .link-row{display:flex;gap:12px;flex-wrap:wrap}
+    #suno-link,#artist-link{font-size:11px;color:#b8b4f0;text-decoration:none;display:none}
+    #suno-link:hover,#artist-link:hover{text-decoration:underline}
     /* -- Transport + progress -- */
     .transport{display:flex;align-items:center;gap:10px;margin-top:8px}
     .tp-btn{width:44px;height:44px;border:0;padding:0;background:transparent center/contain no-repeat;cursor:pointer;flex-shrink:0;transition:transform .1s;filter:drop-shadow(0 0 4px rgba(167,139,250,.25))}
@@ -87,11 +89,23 @@
     <!-- Top bar: filters + feature buttons -->
     <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-4 mb-3">
         <div class="top-bar">
-            <select id="channelSel">
+            <select id="channelSel" title="Channel">
                 <option value="">All channels</option>
                 {% for ch in channels %}
                 <option value="{{ ch.id }}">#{{ ch.name }}</option>
                 {% endfor %}
+            </select>
+            <select id="timeSel" title="Time range">
+                <option value="0">All time</option>
+                <option value="1">Last 1 day</option>
+                <option value="2">Last 2 days</option>
+                <option value="3">Last 3 days</option>
+                <option value="7">Last 7 days</option>
+                <option value="14">Last 14 days</option>
+                <option value="30">Last 30 days</option>
+            </select>
+            <select id="artistSel" title="Suno artist">
+                <option value="">All artists</option>
             </select>
             <input type="number" id="limitInput" value="20" min="1" max="500" title="Songs to load">
             <button class="icon-btn primary" id="btnFetch" title="Load Songs">⬇</button>
@@ -114,7 +128,7 @@
                 <div id="tinfo">—</div>
                 <div id="sub"></div>
                 <div id="p-status"></div>
-                <a id="suno-link" href="#" target="_blank">↗ Open on Suno</a>
+                <div class="link-row"><a id="suno-link" href="#" target="_blank">↗ Open on Suno</a><a id="artist-link" href="#" target="_blank">↗ Artist profile</a></div>
             </div>
         </div>
 
@@ -174,6 +188,7 @@
 <script>
 var T=[], cur=-1, tSec=0, cd=0, tick=null, shuffled=false, shuffleOrder=[];
 var playedSet=new Set(), hidePlayed=false, loadOffset=0, autoloadEnabled=false;
+var artistFilter='', timeFilterDays=0;
 var player=document.getElementById('player');
 var REACT_EMOJIS=['💜','💯','👏🏻','❤️‍🔥','🫶🏻','🔥'];
 
@@ -207,7 +222,8 @@ async function fetchSongs(append){
                 T.push({
                     id:uuid, title:s.song_title||uuid, author:s.user_name||'',
                     url:s.url, reactions:s.reaction_count||0, isUUID:isFullUUID(uuid),
-                    messageId:s.message_id, channelId:s.channel_id, userId:s.user_id
+                    messageId:s.message_id, channelId:s.channel_id, userId:s.user_id,
+                    posted_at:s.posted_at||0
                 });
                 added++;
             }
@@ -246,13 +262,13 @@ async function resolveAllTitles(){
             var e=T[idx],uuid=e.id;
             if(!e.isUUID){var resolved=await resolveShortId(e.id);if(resolved){uuid=resolved;e.id=resolved;e.isUUID=true;}else return;}
             var meta=await fetchSunoMeta(uuid);
-            if(meta){if(meta.title)e.title=meta.title;if(meta.image_url)e.imageUrl=meta.image_url;if(meta.artist)e.sunoArtist=meta.artist;if(meta.video_url)e.videoUrl=meta.video_url;}
+            if(meta){if(meta.title)e.title=meta.title;if(meta.image_url)e.imageUrl=meta.image_url;if(meta.artist)e.sunoArtist=meta.artist;if(meta.video_url)e.videoUrl=meta.video_url;if(meta.handle)e.sunoHandle=meta.handle;}
             done++;
         }));
         ls.textContent=T.length+' songs — resolving ('+done+'/'+pending.length+')';
-        renderQ();
+        renderQ();updateArtistOptions();
     }
-    ls.textContent=T.length+' songs ready';renderQ();
+    ls.textContent=T.length+' songs ready';renderQ();updateArtistOptions();
 }
 
 async function resolveShortId(shortId){
@@ -297,6 +313,39 @@ function setSunoLink(uuid){
     link.href='https://suno.com/song/'+uuid;link.style.display='inline-block';
 }
 
+function setArtistLink(handle){
+    var link=document.getElementById('artist-link');
+    if(!handle){link.style.display='none';return;}
+    link.href='https://suno.com/@'+handle;link.style.display='inline-block';
+}
+
+/* --- Filters --- */
+function isFiltered(i){
+    var e=T[i];if(!e)return true;
+    // Time filter
+    if(timeFilterDays>0&&e.posted_at){
+        var cutoff=Math.floor(Date.now()/1000)-timeFilterDays*86400;
+        if(e.posted_at<cutoff)return true;
+    }
+    // Artist filter (Suno artist name)
+    if(artistFilter&&(e.sunoArtist||'')!==artistFilter)return true;
+    return false;
+}
+
+function updateArtistOptions(){
+    var sel=document.getElementById('artistSel');
+    var desired=sel.value||artistFilter||'';
+    var names={};
+    for(var i=0;i<T.length;i++){var a=T[i].sunoArtist;if(a)names[a]=1;}
+    var sorted=Object.keys(names).sort(function(a,b){return a.toLowerCase().localeCompare(b.toLowerCase());});
+    var html='<option value="">All artists</option>';
+    for(var j=0;j<sorted.length;j++){
+        var n=sorted[j];
+        html+='<option value="'+esc(n)+'"'+(n===desired?' selected':'')+'>'+esc(n)+'</option>';
+    }
+    sel.innerHTML=html;
+}
+
 /* --- Playback --- */
 function needsTitle(e){
     if(!e.title)return true;
@@ -308,7 +357,7 @@ function needsTitle(e){
 async function playTrack(uuid,idx){
     setStatus('Loading…');
     var realIdx=getPlayIndex(idx);var e=T[realIdx];
-    setArtwork(uuid,e.imageUrl||null,e.videoUrl||null);setSunoLink(uuid);
+    setArtwork(uuid,e.imageUrl||null,e.videoUrl||null);setSunoLink(uuid);setArtistLink(e.sunoHandle||null);
     player.src='https://cdn1.suno.ai/'+uuid+'.mp3';
     player.oncanplay=function(){setStatus('');};
     player.onerror=function(){setStatus('⚠ Could not load audio');};
@@ -321,7 +370,8 @@ async function playTrack(uuid,idx){
         if(meta.title&&needsTitle(e)){e.title=meta.title;document.getElementById('tinfo').textContent=meta.title;changed=true;}
         if(meta.video_url)e.videoUrl=meta.video_url;
         if(meta.image_url||meta.video_url){if(meta.image_url)e.imageUrl=meta.image_url;setArtwork(uuid,e.imageUrl||null,e.videoUrl||null);}
-        if(meta.artist&&!e.sunoArtist){e.sunoArtist=meta.artist;changed=true;}
+        if(meta.artist&&!e.sunoArtist){e.sunoArtist=meta.artist;changed=true;updateArtistOptions();}
+        if(meta.handle&&!e.sunoHandle){e.sunoHandle=meta.handle;setArtistLink(meta.handle);}
         if(changed){updateSub(e,idx);renderQ();}
     });
 }
@@ -364,8 +414,9 @@ player.addEventListener('ended',function(){
 player.addEventListener('play',function(){updatePlayBtn();});
 player.addEventListener('pause',function(){updatePlayBtn();});
 
-function prev(){var i=cur-1;if(hidePlayed){while(i>=0&&playedSet.has(getPlayIndex(i)))i--;}if(i>=0)play(i);}
-function next(){var i=cur+1;if(hidePlayed){while(i<T.length&&playedSet.has(getPlayIndex(i)))i++;}if(i<T.length)play(i);else stopCd();}
+function _skip(i){var ri=getPlayIndex(i);return isFiltered(ri)||(hidePlayed&&playedSet.has(ri));}
+function prev(){var i=cur-1;while(i>=0&&_skip(i))i--;if(i>=0)play(i);}
+function next(){var i=cur+1;while(i<T.length&&_skip(i))i++;if(i<T.length)play(i);else stopCd();}
 
 /* --- Seek bar --- */
 player.addEventListener('timeupdate',function(){
@@ -434,6 +485,7 @@ function renderQ(){
     var html='',shown=0;
     for(var i=0;i<T.length;i++){
         var realIdx=getPlayIndex(i);var t=T[realIdx];
+        if(i!==cur&&isFiltered(realIdx))continue;
         if(hidePlayed&&i!==cur&&playedSet.has(realIdx))continue;
         shown++;
         var url=t.isUUID?'https://suno.com/song/'+t.id:'https://suno.com/s/'+t.id;
@@ -455,14 +507,20 @@ function saveSettings(){
     localStorage.setItem('player-channel',document.getElementById('channelSel').value);
     localStorage.setItem('player-limit',document.getElementById('limitInput').value);
     localStorage.setItem('player-autoload',autoloadEnabled?'1':'0');
+    localStorage.setItem('player-time',String(timeFilterDays));
+    localStorage.setItem('player-artist',artistFilter||'');
 }
 function loadSettings(){
     var ch=localStorage.getItem('player-channel');
     var lim=localStorage.getItem('player-limit');
     var al=localStorage.getItem('player-autoload');
+    var tf=localStorage.getItem('player-time');
+    var af=localStorage.getItem('player-artist');
     if(ch!==null)document.getElementById('channelSel').value=ch;
     if(lim)document.getElementById('limitInput').value=lim;
     if(al==='1'){autoloadEnabled=true;document.getElementById('btnAutoload').classList.add('on');}
+    if(tf){timeFilterDays=parseInt(tf)||0;document.getElementById('timeSel').value=tf;}
+    if(af){artistFilter=af;/* will be selected after updateArtistOptions once songs resolve */}
 }
 
 /* --- Events --- */
@@ -471,9 +529,11 @@ document.getElementById('btnPlay').onclick=function(){
     if(!T.length)return;
     if(cur>=0){if(player.paused)player.play();else player.pause();return;}
     var start=0;
-    if(hidePlayed){while(start<T.length&&playedSet.has(getPlayIndex(start)))start++;}
+    while(start<T.length&&_skip(start))start++;
     if(start<T.length)play(start);
 };
+document.getElementById('artistSel').onchange=function(){artistFilter=this.value;saveSettings();renderQ();};
+document.getElementById('timeSel').onchange=function(){timeFilterDays=parseInt(this.value)||0;saveSettings();renderQ();};
 document.getElementById('rng').oninput=function(){
     tSec=parseInt(this.value);
     document.getElementById('rlbl').textContent=tSec?fmt(tSec):'OFF';

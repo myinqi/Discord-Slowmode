@@ -812,7 +812,7 @@ def create_app(db: Database, bot=None) -> Quart:
     async def _fetch_suno_meta(uuid):
         """Shared helper to fetch song metadata from Suno embed page."""
         import aiohttp, re, html as _html
-        lyrics = title = image_url = artist = video_url = None
+        lyrics = title = image_url = artist = video_url = handle = None
         try:
             async with aiohttp.ClientSession() as sess:
                 async with sess.get(
@@ -885,13 +885,20 @@ def create_app(db: Database, bot=None) -> Quart:
                         m = re.search(r'video_cover_url\\":\\"([^"\\]+)\\"', html)
                     if m:
                         video_url = m.group(1).replace("\\/", "/")
+
+                    # Handle (artist URL slug) — first occurrence is the song owner
+                    m = re.search(r'handle\\":\\"([^"\\]+)\\"', html)
+                    if not m:
+                        m = re.search(r'"handle"\s*:\s*"([^"]+)"', html)
+                    if m:
+                        handle = m.group(1)
         except Exception:
             pass
         if title:
             title = _html.unescape(title)
         if artist:
             artist = _html.unescape(artist)
-        return {"lyrics": lyrics, "title": title, "image_url": image_url, "artist": artist, "video_url": video_url}
+        return {"lyrics": lyrics, "title": title, "image_url": image_url, "artist": artist, "video_url": video_url, "handle": handle}
 
     @app.route("/api/suno-lyrics/<uuid>")
     @login_required
