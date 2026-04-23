@@ -25,6 +25,20 @@
                 </button>
                 {% endif %}
             </form>
+            <form method="POST" onsubmit="return confirm('Verify every tracked song message against Discord and remove orphans? This may take a few minutes.');">
+                <input type="hidden" name="action" value="cleanup_orphans">
+                {% if cleanup_status and cleanup_status.running %}
+                <button type="button" disabled
+                    class="px-4 py-2 bg-gray-600 text-gray-300 rounded-lg font-medium text-sm cursor-not-allowed">
+                    Cleaning...
+                </button>
+                {% else %}
+                <button type="submit"
+                    class="px-4 py-2 bg-amber-600 hover:bg-amber-600/80 text-white rounded-lg font-medium transition-colors text-sm">
+                    Cleanup Orphans
+                </button>
+                {% endif %}
+            </form>
             <form method="POST" onsubmit="return confirm('Are you sure you want to delete ALL song data? This cannot be undone.');">
                 <input type="hidden" name="action" value="delete_all_songs">
                 <button type="submit"
@@ -45,6 +59,19 @@
     {% elif scan_status.result %}
     <div class="px-5 py-3 border-b border-gray-700/50 bg-green-500/10">
         <span class="text-green-400 text-sm">{{ scan_status.result }}</span>
+    </div>
+    {% endif %}
+    {% if cleanup_status and cleanup_status.running %}
+    <div class="px-5 py-3 border-b border-gray-700/50 bg-amber-500/10">
+        <div class="flex items-center gap-2">
+            <svg class="animate-spin h-4 w-4 text-amber-400" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/></svg>
+            <span class="text-amber-400 text-sm font-medium">{{ cleanup_status.progress or 'Starting cleanup...' }}</span>
+        </div>
+        <p class="text-gray-500 text-xs mt-1">Refresh this page to see updated progress.</p>
+    </div>
+    {% elif cleanup_status and cleanup_status.result %}
+    <div class="px-5 py-3 border-b border-gray-700/50 bg-green-500/10">
+        <span class="text-green-400 text-sm">{{ cleanup_status.result }}</span>
     </div>
     {% endif %}
     <div class="p-5">

@@ -1056,6 +1056,14 @@ class Database:
         await self.db.execute("DELETE FROM song_posts WHERE message_id = ?", (message_id,))
         await self.db.commit()
 
+    async def get_song_posts_with_message_id(self) -> list[dict]:
+        """Return all song_posts entries that have a message_id (for Discord verification)."""
+        async with self.db.execute(
+            "SELECT id, channel_id, message_id FROM song_posts WHERE message_id IS NOT NULL"
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
     async def delete_all_songs(self) -> int:
         """Delete all rows from song_posts. Returns number of deleted rows."""
         async with self.db.execute("SELECT COUNT(*) FROM song_posts") as cursor:

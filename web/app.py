@@ -23,6 +23,7 @@ def create_app(db: Database, bot=None) -> Quart:
     app.scan_status = {"running": False, "progress": "", "result": ""}
     app.title_scan_status = {"running": False, "progress": "", "result": ""}
     app.reaction_scan_status = {"running": False, "progress": "", "result": ""}
+    app.cleanup_status = {"running": False, "progress": "", "result": ""}
 
     @app.template_filter("timestamp_to_date")
     def timestamp_to_date(ts):
@@ -1115,6 +1116,70 @@ def create_app(db: Database, bot=None) -> Quart:
             app.scan_status["running"] = False
             app.scan_status["progress"] = ""
 
+    async def _run_orphan_cleanup():
+        """Background task: verify each song_post message exists on Discord, delete orphans."""
+        import discord as _discord
+        app.cleanup_status["running"] = True
+        app.cleanup_status["progress"] = "Loading song posts..."
+        app.cleanup_status["result"] = ""
+        try:
+            guild = get_guild()
+            if not guild:
+                app.cleanup_status["result"] = "Bot not connected to guild."
+                return
+            posts = await db.get_song_posts_with_message_id()
+            total = len(posts)
+            if not total:
+                app.cleanup_status["result"] = "No song posts with message IDs to verify."
+                return
+            # Group by channel for efficiency
+            by_channel: dict[int, list[int]] = {}
+            for p in posts:
+                by_channel.setdefault(int(p["channel_id"]), []).append(int(p["message_id"]))
+            removed = 0
+            checked = 0
+            errors = 0
+            for ch_id, msg_ids in by_channel.items():
+                channel = guild.get_channel(ch_id)
+                if channel is None:
+                    # Channel gone — remove all its posts
+                    for mid in msg_ids:
+                        await db.delete_song_posts_by_message_id(mid)
+                        removed += 1
+                        checked += 1
+                    continue
+                for mid in msg_ids:
+                    checked += 1
+                    try:
+                        await channel.fetch_message(mid)
+                    except _discord.NotFound:
+                        await db.delete_song_posts_by_message_id(mid)
+                        removed += 1
+                    except _discord.Forbidden:
+                        errors += 1
+                    except Exception:
+                        errors += 1
+                    if checked % 25 == 0:
+                        app.cleanup_status["progress"] = (
+                            f"Verified {checked}/{total} — removed {removed} orphans"
+                        )
+                    # Small sleep to avoid rate limit bursts
+                    await asyncio.sleep(0.05)
+            app.cleanup_status["result"] = (
+                f"Done. Verified {checked} song posts, removed {removed} orphans"
+                + (f", {errors} errors" if errors else "") + "."
+            )
+            await db.add_audit_log(
+                event_type="song_cleanup",
+                details=f"Orphan cleanup: {removed}/{checked} removed",
+                actor="system",
+            )
+        except Exception as e:
+            app.cleanup_status["result"] = f"Cleanup failed: {e}"
+        finally:
+            app.cleanup_status["running"] = False
+            app.cleanup_status["progress"] = ""
+
     @app.route("/song-stats", methods=["GET", "POST"])
     @permission_required('song_stats')
     async def song_stats():
@@ -1129,6 +1194,14 @@ def create_app(db: Database, bot=None) -> Quart:
                     actor = session.get("username", "unknown")
                     asyncio.get_event_loop().create_task(_run_scan(actor))
                     await flash("Scan started in the background. Refresh this page to see progress.", "success")
+                else:
+                    await flash("Bot is not ready.", "error")
+            elif action == "cleanup_orphans":
+                if app.cleanup_status["running"]:
+                    await flash("A cleanup is already in progress.", "error")
+                elif bot and bot.is_ready():
+                    asyncio.get_event_loop().create_task(_run_orphan_cleanup())
+                    await flash("Orphan cleanup started. Refresh this page to see progress.", "success")
                 else:
                     await flash("Bot is not ready.", "error")
             elif action == "delete_all_songs":
@@ -1172,6 +1245,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 stats=stats,
                 filter_channel=filter_channel,
                 scan_status=app.scan_status,
+                cleanup_status=app.cleanup_status,
             )
         except Exception as e:
             traceback.print_exc()

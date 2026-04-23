@@ -142,6 +142,23 @@ class SlowmodeCog(commands.Cog):
 
 
     @commands.Cog.listener()
+    async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent):
+        """Remove song_posts entries when a tracked message is deleted manually or by mods."""
+        try:
+            await self.bot.db.delete_song_posts_by_message_id(payload.message_id)
+        except Exception:
+            pass
+
+    @commands.Cog.listener()
+    async def on_raw_bulk_message_delete(self, payload: discord.RawBulkMessageDeleteEvent):
+        """Clean up song_posts for bulk-deleted messages."""
+        for mid in payload.message_ids:
+            try:
+                await self.bot.db.delete_song_posts_by_message_id(mid)
+            except Exception:
+                pass
+
+    @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
         if not payload.guild_id or payload.member.bot:
             return
