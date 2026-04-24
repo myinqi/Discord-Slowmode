@@ -359,6 +359,17 @@ async def run_corax_turn(
     ]
 
     system_blocks = [persona]
+    if use_tools:
+        system_blocks.append(
+            "TOOL USAGE RULES:\n"
+            "- When the user asks about songs, artists, reactions, top lists, "
+            "or what a specific user posted, you MUST call one of the provided "
+            "tools. Never invent or guess an answer. Never claim 'no results' "
+            "without calling a tool first.\n"
+            "- After the tool returns, just add a short friendly intro "
+            "(max 1 sentence). The frontend renders the song list itself; "
+            "do NOT repeat the list in text."
+        )
     if mentioned_users:
         lines = [
             f"- {u.get('display') or u.get('name') or 'user'} "
@@ -367,8 +378,8 @@ async def run_corax_turn(
         ]
         system_blocks.append(
             "Mentioned users in the current message (use these IDs when the "
-            "user asks about them — e.g. call the `songs_by_user` tool with "
-            "the user_id from this list):\n" + "\n".join(lines)
+            "user asks about them — call the `songs_by_user` tool with the "
+            "user_id from this list):\n" + "\n".join(lines)
         )
 
     messages = [
@@ -413,6 +424,10 @@ async def run_corax_turn(
                     except Exception:
                         args = {}
                 result = await tool_runner.run(name, args or {})
+                print(
+                    f"[corax] tool={name} args={args} -> "
+                    f"{'songs=' + str(len(result.get('songs') or [])) if 'songs' in result else result}"
+                )
                 tools_used.append(name)
                 if isinstance(result, dict) and "songs" in result:
                     songs_out = result["songs"]
@@ -424,6 +439,11 @@ async def run_corax_turn(
             continue
 
         # No more tool calls — final answer.
+        if use_tools and not tools_used:
+            print(
+                f"[corax] model returned no tool_calls despite tools "
+                f"being offered. prompt={user_prompt[:120]!r}"
+            )
         return {
             "text": (msg.get("content") or "").strip(),
             "songs": songs_out,
