@@ -274,6 +274,54 @@ class Database:
         """)
         await self.db.commit()
 
+        # --- LLM / Corax chat ---
+        await self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS llm_config (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                enabled INTEGER DEFAULT 0,
+                model TEXT DEFAULT 'gemma3:4b',
+                persona TEXT DEFAULT '',
+                retention_days INTEGER DEFAULT 30,
+                rate_per_user_min INTEGER DEFAULT 3,
+                rate_per_channel_min INTEGER DEFAULT 10,
+                max_tokens INTEGER DEFAULT 512,
+                tools_enabled TEXT DEFAULT '[]',
+                default_result_limit INTEGER DEFAULT 10,
+                updated_at REAL DEFAULT (unixepoch())
+            );
+            INSERT OR IGNORE INTO llm_config (id) VALUES (1);
+
+            CREATE TABLE IF NOT EXISTS llm_allowed_channels (
+                channel_id INTEGER PRIMARY KEY,
+                channel_name TEXT,
+                added_at REAL DEFAULT (unixepoch())
+            );
+
+            CREATE TABLE IF NOT EXISTS llm_allowed_roles (
+                role_id INTEGER PRIMARY KEY,
+                role_name TEXT,
+                added_at REAL DEFAULT (unixepoch())
+            );
+
+            CREATE TABLE IF NOT EXISTS llm_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL DEFAULT (unixepoch()),
+                user_id INTEGER,
+                user_name TEXT,
+                channel_id INTEGER,
+                prompt TEXT,
+                response TEXT,
+                tools_used TEXT,
+                error TEXT,
+                latency_ms INTEGER,
+                blocked INTEGER DEFAULT 0,
+                block_reason TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_llm_audit_ts ON llm_audit_log(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_llm_audit_user ON llm_audit_log(user_id);
+        """)
+        await self.db.commit()
+
     # --- Settings ---
 
     async def get_setting(self, key: str, default: str = "") -> str:
@@ -1638,3 +1686,218 @@ class Database:
     async def delete_suno_playlist(self, playlist_id: int):
         await self.db.execute("DELETE FROM suno_playlists WHERE id = ?", (playlist_id,))
         await self.db.commit()
+
+    # --- LLM Config ---
+
+    async def get_llm_config(self) -> dict:
+        async with self.db.execute("SELECT * FROM llm_config WHERE id = 1") as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else {}
+
+    async def update_llm_config(self, **fields):
+        if not fields:
+            return
+        allowed = {
+            "enabled", "model", "persona", "retention_days",
+            "rate_per_user_min", "rate_per_channel_min",
+            "max_tokens", "tools_enabled", "default_result_limit",
+        }
+        sets, params = [], []
+        for k, v in fields.items():
+            if k not in allowed:
+                continue
+            sets.append(f"{k} = ?")
+            params.append(v)
+        if not sets:
+            return
+        sets.append("updated_at = unixepoch()")
+        params.append(1)
+        await self.db.execute(
+            f"UPDATE llm_config SET {', '.join(sets)} WHERE id = ?", params
+        )
+        await self.db.commit()
+
+    async def get_llm_allowed_channels(self) -> list:
+        async with self.db.execute(
+            "SELECT channel_id, channel_name FROM llm_allowed_channels ORDER BY channel_name"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def set_llm_allowed_channels(self, channels: list):
+        # channels: list of (channel_id, channel_name)
+        await self.db.execute("DELETE FROM llm_allowed_channels")
+        for cid, cname in channels:
+            await self.db.execute(
+                "INSERT OR REPLACE INTO llm_allowed_channels (channel_id, channel_name) VALUES (?, ?)",
+                (cid, cname),
+            )
+        await self.db.commit()
+
+    async def is_llm_channel_allowed(self, channel_id: int) -> bool:
+        async with self.db.execute(
+            "SELECT 1 FROM llm_allowed_channels WHERE channel_id = ?", (channel_id,)
+        ) as cur:
+            return await cur.fetchone() is not None
+
+    async def get_llm_allowed_roles(self) -> list:
+        async with self.db.execute(
+            "SELECT role_id, role_name FROM llm_allowed_roles ORDER BY role_name"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def set_llm_allowed_roles(self, roles: list):
+        await self.db.execute("DELETE FROM llm_allowed_roles")
+        for rid, rname in roles:
+            await self.db.execute(
+                "INSERT OR REPLACE INTO llm_allowed_roles (role_id, role_name) VALUES (?, ?)",
+                (rid, rname),
+            )
+        await self.db.commit()
+
+    async def get_llm_allowed_role_ids(self) -> set:
+        async with self.db.execute("SELECT role_id FROM llm_allowed_roles") as cur:
+            return {r["role_id"] for r in await cur.fetchall()}
+
+    async def log_llm_interaction(
+        self,
+        user_id: int = None,
+        user_name: str = None,
+        channel_id: int = None,
+        prompt: str = None,
+        response: str = None,
+        tools_used: str = None,
+        error: str = None,
+        latency_ms: int = None,
+        blocked: bool = False,
+        block_reason: str = None,
+    ):
+        await self.db.execute(
+            """INSERT INTO llm_audit_log
+               (user_id, user_name, channel_id, prompt, response, tools_used,
+                error, latency_ms, blocked, block_reason)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, user_name, channel_id, prompt, response, tools_used,
+             error, latency_ms, 1 if blocked else 0, block_reason),
+        )
+        await self.db.commit()
+
+    async def get_llm_audit_log(self, limit: int = 200) -> list:
+        async with self.db.execute(
+            "SELECT * FROM llm_audit_log ORDER BY id DESC LIMIT ?", (limit,)
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def count_llm_user_recent(self, user_id: int, since_ts: float) -> int:
+        async with self.db.execute(
+            "SELECT COUNT(*) c FROM llm_audit_log WHERE user_id = ? AND timestamp >= ? AND blocked = 0",
+            (user_id, since_ts),
+        ) as cur:
+            row = await cur.fetchone()
+            return row["c"] if row else 0
+
+    async def count_llm_channel_recent(self, channel_id: int, since_ts: float) -> int:
+        async with self.db.execute(
+            "SELECT COUNT(*) c FROM llm_audit_log WHERE channel_id = ? AND timestamp >= ? AND blocked = 0",
+            (channel_id, since_ts),
+        ) as cur:
+            row = await cur.fetchone()
+            return row["c"] if row else 0
+
+    async def search_songs_by_artist(self, artist: str, channel_ids: list = None,
+                                     days: int = None, limit: int = 10,
+                                     order: str = "recent") -> list[dict]:
+        """Search songs where title/user_name contains the artist substring.
+        order: 'recent' | 'reactions'
+        """
+        cond = ["(LOWER(sp.song_title) LIKE ? OR LOWER(sp.user_name) LIKE ?)"]
+        pat = f"%{artist.lower()}%"
+        params = [pat, pat]
+        if channel_ids:
+            placeholders = ",".join("?" for _ in channel_ids)
+            cond.append(f"sp.channel_id IN ({placeholders})")
+            params.extend(channel_ids)
+        if days and days > 0:
+            cond.append("sp.posted_at >= ?")
+            params.append(time.time() - days * 86400)
+        order_sql = "COUNT(sr.id) DESC, sp.posted_at DESC" if order == "reactions" \
+                    else "sp.posted_at DESC"
+        sql = f"""
+            SELECT sp.id, sp.url, sp.song_title, sp.user_name, sp.posted_at,
+                   sp.channel_id, sp.message_id,
+                   COUNT(sr.id) AS reaction_count
+            FROM song_posts sp
+            LEFT JOIN song_reactions sr
+              ON sr.message_id = sp.message_id AND sp.message_id IS NOT NULL
+            WHERE {' AND '.join(cond)}
+            GROUP BY sp.id
+            ORDER BY {order_sql}
+            LIMIT ?
+        """
+        params.append(max(1, min(25, int(limit))))
+        async with self.db.execute(sql, params) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def get_recent_songs(self, channel_ids: list = None, days: int = 7,
+                               limit: int = 10) -> list[dict]:
+        cond = []
+        params = []
+        if channel_ids:
+            placeholders = ",".join("?" for _ in channel_ids)
+            cond.append(f"sp.channel_id IN ({placeholders})")
+            params.extend(channel_ids)
+        if days and days > 0:
+            cond.append("sp.posted_at >= ?")
+            params.append(time.time() - days * 86400)
+        where = ("WHERE " + " AND ".join(cond)) if cond else ""
+        sql = f"""
+            SELECT sp.id, sp.url, sp.song_title, sp.user_name, sp.posted_at,
+                   sp.channel_id, sp.message_id,
+                   COUNT(sr.id) AS reaction_count
+            FROM song_posts sp
+            LEFT JOIN song_reactions sr
+              ON sr.message_id = sp.message_id AND sp.message_id IS NOT NULL
+            {where}
+            GROUP BY sp.id
+            ORDER BY sp.posted_at DESC
+            LIMIT ?
+        """
+        params.append(max(1, min(25, int(limit))))
+        async with self.db.execute(sql, params) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def get_top_reacted_songs(self, channel_ids: list = None,
+                                    days: int = None, limit: int = 10) -> list[dict]:
+        cond = []
+        params = []
+        if channel_ids:
+            placeholders = ",".join("?" for _ in channel_ids)
+            cond.append(f"sp.channel_id IN ({placeholders})")
+            params.extend(channel_ids)
+        if days and days > 0:
+            cond.append("sp.posted_at >= ?")
+            params.append(time.time() - days * 86400)
+        where = ("WHERE " + " AND ".join(cond)) if cond else ""
+        sql = f"""
+            SELECT sp.id, sp.url, sp.song_title, sp.user_name, sp.posted_at,
+                   sp.channel_id, sp.message_id,
+                   COUNT(sr.id) AS reaction_count
+            FROM song_posts sp
+            LEFT JOIN song_reactions sr
+              ON sr.message_id = sp.message_id AND sp.message_id IS NOT NULL
+            {where}
+            GROUP BY sp.id
+            HAVING reaction_count > 0
+            ORDER BY reaction_count DESC, sp.posted_at DESC
+            LIMIT ?
+        """
+        params.append(max(1, min(25, int(limit))))
+        async with self.db.execute(sql, params) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def purge_llm_audit_log(self, retention_days: int) -> int:
+        cutoff = time.time() - retention_days * 86400
+        cur = await self.db.execute(
+            "DELETE FROM llm_audit_log WHERE timestamp < ?", (cutoff,)
+        )
+        await self.db.commit()
+        return cur.rowcount or 0

@@ -64,6 +64,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('suno_analyzer', 'Suno Analyzer'),
         ('audit', 'Audit Log'),
         ('settings', 'Settings'),
+        ('llm', 'Corax Chat (LLM)'),
     ]
 
     def admin_required(f):
@@ -667,6 +668,143 @@ def create_app(db: Database, bot=None) -> Quart:
             page=page,
             total_pages=total_pages,
             total=total,
+        )
+
+    # --- LLM / Corax chat ---
+
+    @app.route("/llm", methods=["GET", "POST"])
+    @permission_required('llm')
+    async def llm():
+        import json as _json
+        from bot.llm import DEFAULT_PERSONA, AVAILABLE_TOOL_NAMES
+
+        if request.method == "POST":
+            form = await request.form
+            action = form.get("action", "save")
+
+            if action == "purge_audit":
+                cfg = await db.get_llm_config()
+                days = int((cfg or {}).get("retention_days") or 30)
+                deleted = await db.purge_llm_audit_log(days)
+                await flash(f"{deleted} audit entries purged.", "success")
+                return redirect(url_for("llm"))
+
+            if action == "reset_persona":
+                await db.update_llm_config(persona=DEFAULT_PERSONA)
+                await flash("Persona auf Default zurückgesetzt.", "success")
+                return redirect(url_for("llm"))
+
+            # save main config
+            def _i(key, default):
+                try:
+                    return int(form.get(key, default))
+                except Exception:
+                    return default
+
+            tools_selected = [
+                name for name in AVAILABLE_TOOL_NAMES
+                if form.get(f"tool_{name}")
+            ]
+            await db.update_llm_config(
+                enabled=1 if form.get("enabled") else 0,
+                model=(form.get("model") or "gemma3:4b").strip()[:64],
+                persona=(form.get("persona") or "").strip()[:4000],
+                retention_days=max(1, min(365, _i("retention_days", 30))),
+                rate_per_user_min=max(1, min(60, _i("rate_per_user_min", 3))),
+                rate_per_channel_min=max(1, min(500, _i("rate_per_channel_min", 10))),
+                max_tokens=max(64, min(2048, _i("max_tokens", 512))),
+                default_result_limit=max(1, min(25, _i("default_result_limit", 10))),
+                tools_enabled=_json.dumps(tools_selected),
+            )
+
+            # channels
+            channel_ids = form.getlist("channels")
+            guild = get_guild()
+            ch_entries = []
+            for cid in channel_ids:
+                try:
+                    cid_i = int(cid)
+                except Exception:
+                    continue
+                cname = f"channel-{cid_i}"
+                if guild:
+                    ch = guild.get_channel(cid_i)
+                    if ch:
+                        cname = ch.name
+                ch_entries.append((cid_i, cname))
+            await db.set_llm_allowed_channels(ch_entries)
+
+            # roles
+            role_ids = form.getlist("roles")
+            role_entries = []
+            for rid in role_ids:
+                try:
+                    rid_i = int(rid)
+                except Exception:
+                    continue
+                rname = f"role-{rid_i}"
+                if guild:
+                    r = guild.get_role(rid_i)
+                    if r:
+                        rname = r.name
+                role_entries.append((rid_i, rname))
+            await db.set_llm_allowed_roles(role_entries)
+
+            await db.add_audit_log(
+                event_type="llm_config_updated",
+                actor=session.get("username", "unknown"),
+                details=(
+                    f"enabled={bool(form.get('enabled'))}, "
+                    f"channels={len(ch_entries)}, roles={len(role_entries)}, "
+                    f"tools={tools_selected}"
+                ),
+            )
+            await flash("Corax-Einstellungen gespeichert.", "success")
+            return redirect(url_for("llm"))
+
+        cfg = await db.get_llm_config()
+        try:
+            tools_enabled = set(_json.loads(cfg.get("tools_enabled") or "[]"))
+        except Exception:
+            tools_enabled = set()
+        allowed_channels = await db.get_llm_allowed_channels()
+        allowed_role_ids = await db.get_llm_allowed_role_ids()
+        allowed_channel_ids = {c["channel_id"] for c in allowed_channels}
+
+        guild = get_guild()
+        guild_channels = []
+        guild_roles = []
+        if guild:
+            for ch in sorted(guild.text_channels, key=lambda c: c.name.lower()):
+                guild_channels.append({"id": ch.id, "name": ch.name})
+            for r in sorted(guild.roles, key=lambda r: r.name.lower()):
+                if r.is_default():
+                    continue
+                guild_roles.append({"id": r.id, "name": r.name})
+
+        # fall back to stored names for any channels/roles not visible in guild
+        known_ids = {c["id"] for c in guild_channels}
+        for c in allowed_channels:
+            if c["channel_id"] not in known_ids:
+                guild_channels.append({"id": c["channel_id"], "name": c.get("channel_name") or f"channel-{c['channel_id']}"})
+        known_role_ids = {r["id"] for r in guild_roles}
+        for r in await db.get_llm_allowed_roles():
+            if r["role_id"] not in known_role_ids:
+                guild_roles.append({"id": r["role_id"], "name": r.get("role_name") or f"role-{r['role_id']}"})
+
+        audit_log = await db.get_llm_audit_log(limit=100)
+
+        return await render_template(
+            "llm.html",
+            cfg=cfg,
+            default_persona=DEFAULT_PERSONA,
+            tools_all=sorted(AVAILABLE_TOOL_NAMES),
+            tools_enabled=tools_enabled,
+            guild_channels=guild_channels,
+            guild_roles=guild_roles,
+            allowed_channel_ids=allowed_channel_ids,
+            allowed_role_ids=allowed_role_ids,
+            audit_log=audit_log,
         )
 
     async def _get_player_channels():

@@ -1,0 +1,219 @@
+{% extends "base.html" %}
+{% block title %}Corax Chat (LLM){% endblock %}
+{% block content %}
+<h2 class="text-2xl font-bold text-white mb-6">🤖 Corax Chat (LLM)</h2>
+
+<div class="bg-discord-dark rounded-xl border border-gray-700/50 mb-6">
+    <div class="px-5 py-4 border-b border-gray-700/50">
+        <h3 class="text-white font-semibold">Konfiguration</h3>
+        <p class="text-gray-400 text-xs mt-1">
+            Corax antwortet nur, wenn er <b>ausdrücklich erwähnt</b> wird
+            (@Corax) oder ein Nutzer direkt auf eine Nachricht von ihm
+            antwortet – und ausschließlich in den unten freigegebenen
+            Channels.
+        </p>
+    </div>
+    <div class="p-5">
+        <form method="POST" class="space-y-6">
+            <input type="hidden" name="action" value="save">
+
+            <!-- Enable + model -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div class="flex items-center gap-3 md:col-span-1">
+                    <input type="checkbox" id="enabled" name="enabled" value="1"
+                        {% if cfg.enabled %}checked{% endif %}
+                        class="w-5 h-5 rounded border-gray-600 bg-discord-darker text-discord-blurple focus:ring-discord-blurple">
+                    <label for="enabled" class="text-sm font-medium text-gray-300">Corax-Chat aktiv</label>
+                </div>
+                <div class="md:col-span-2">
+                    <label class="block text-sm font-medium text-gray-300 mb-1">Ollama-Modell</label>
+                    <input type="text" name="model" value="{{ cfg.model or 'gemma3:4b' }}"
+                        class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple">
+                    <p class="text-xs text-gray-500 mt-1">Muss im Ollama-Container verfügbar sein (wird beim ersten Start gepullt).</p>
+                </div>
+            </div>
+
+            <!-- Channels -->
+            <div class="border-t border-gray-700/50 pt-5">
+                <label class="block text-sm font-medium text-gray-300 mb-2">Erlaubte Channels</label>
+                <p class="text-xs text-gray-500 mb-3">Mehrfachauswahl. Corax hört nur in diesen Channels auf Mentions.</p>
+                <div class="max-h-64 overflow-y-auto bg-discord-darker border border-gray-700 rounded-lg p-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                    {% for ch in guild_channels %}
+                    <label class="flex items-center gap-2 text-sm text-gray-200 hover:bg-gray-800/50 rounded px-2 py-1 cursor-pointer">
+                        <input type="checkbox" name="channels" value="{{ ch.id }}"
+                            {% if ch.id in allowed_channel_ids %}checked{% endif %}
+                            class="w-4 h-4 rounded border-gray-600 bg-discord-dark text-discord-blurple focus:ring-discord-blurple">
+                        <span class="truncate">#{{ ch.name }}</span>
+                    </label>
+                    {% else %}
+                    <p class="text-xs text-gray-500 col-span-full">Keine Channels verfügbar – ist der Bot im Server online?</p>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <!-- Roles -->
+            <div class="border-t border-gray-700/50 pt-5">
+                <label class="block text-sm font-medium text-gray-300 mb-2">Erlaubte Rollen</label>
+                <p class="text-xs text-gray-500 mb-3">
+                    Nur Nutzer mit mindestens einer dieser Rollen dürfen Corax anfragen.
+                    <b>Leer lassen</b> = alle Nutzer in den erlaubten Channels.
+                </p>
+                <div class="max-h-64 overflow-y-auto bg-discord-darker border border-gray-700 rounded-lg p-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                    {% for r in guild_roles %}
+                    <label class="flex items-center gap-2 text-sm text-gray-200 hover:bg-gray-800/50 rounded px-2 py-1 cursor-pointer">
+                        <input type="checkbox" name="roles" value="{{ r.id }}"
+                            {% if r.id in allowed_role_ids %}checked{% endif %}
+                            class="w-4 h-4 rounded border-gray-600 bg-discord-dark text-discord-blurple focus:ring-discord-blurple">
+                        <span class="truncate">{{ r.name }}</span>
+                    </label>
+                    {% else %}
+                    <p class="text-xs text-gray-500 col-span-full">Keine Rollen verfügbar.</p>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <!-- Tools -->
+            <div class="border-t border-gray-700/50 pt-5">
+                <label class="block text-sm font-medium text-gray-300 mb-2">Freigegebene Tools</label>
+                <p class="text-xs text-gray-500 mb-3">
+                    Nur diese Aktionen darf Corax ausführen. Alle Tools sind
+                    schreibgeschützt und auf die erlaubten Channels beschränkt.
+                </p>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {% for t in tools_all %}
+                    <label class="flex items-center gap-2 text-sm text-gray-200 bg-discord-darker border border-gray-700 rounded px-3 py-2">
+                        <input type="checkbox" name="tool_{{ t }}"
+                            {% if t in tools_enabled %}checked{% endif %}
+                            class="w-4 h-4 rounded border-gray-600 bg-discord-dark text-discord-blurple focus:ring-discord-blurple">
+                        <code class="text-xs text-gray-300">{{ t }}</code>
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <!-- Rate limits + result limit + tokens -->
+            <div class="border-t border-gray-700/50 pt-5 grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div>
+                    <label class="block text-xs font-medium text-gray-300 mb-1">Limit / Nutzer / min</label>
+                    <input type="number" min="1" max="60" name="rate_per_user_min"
+                        value="{{ cfg.rate_per_user_min or 3 }}"
+                        class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-300 mb-1">Limit / Channel / min</label>
+                    <input type="number" min="1" max="500" name="rate_per_channel_min"
+                        value="{{ cfg.rate_per_channel_min or 10 }}"
+                        class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-300 mb-1">Default-Songliste</label>
+                    <input type="number" min="1" max="25" name="default_result_limit"
+                        value="{{ cfg.default_result_limit or 10 }}"
+                        class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-300 mb-1">Max. Tokens</label>
+                    <input type="number" min="64" max="2048" name="max_tokens"
+                        value="{{ cfg.max_tokens or 512 }}"
+                        class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white">
+                </div>
+            </div>
+
+            <!-- Retention -->
+            <div>
+                <label class="block text-xs font-medium text-gray-300 mb-1">Audit-Log Retention (Tage)</label>
+                <input type="number" min="1" max="365" name="retention_days"
+                    value="{{ cfg.retention_days or 30 }}"
+                    class="w-40 px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white">
+            </div>
+
+            <!-- Persona -->
+            <div class="border-t border-gray-700/50 pt-5">
+                <div class="flex items-center justify-between mb-2">
+                    <label class="block text-sm font-medium text-gray-300">Persona / System-Prompt</label>
+                    <button type="button" onclick="loadDefaultPersona()"
+                        class="text-xs text-discord-blurple hover:underline">Default-Entwurf einfügen</button>
+                </div>
+                <textarea name="persona" rows="10" id="persona"
+                    class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white font-mono text-xs focus:outline-none focus:border-discord-blurple">{{ cfg.persona or default_persona }}</textarea>
+                <p class="text-xs text-gray-500 mt-1">
+                    Wird jedem Gespräch vorangestellt. Der Default-Entwurf enthält
+                    bereits Prompt-Hardening gegen Manipulation – vorsichtig
+                    anpassen.
+                </p>
+            </div>
+
+            <div class="flex items-center gap-3 pt-2">
+                <button type="submit" class="px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg text-sm font-medium">
+                    Speichern
+                </button>
+                <button type="submit" name="action" value="reset_persona"
+                    class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm">
+                    Persona auf Default zurücksetzen
+                </button>
+            </div>
+        </form>
+
+        <form method="POST" class="mt-4">
+            <input type="hidden" name="action" value="purge_audit">
+            <button type="submit" onclick="return confirm('Alte Audit-Einträge jetzt löschen?')"
+                class="px-3 py-2 bg-discord-red/20 hover:bg-discord-red/30 text-red-300 rounded-lg text-xs">
+                Audit-Log jetzt nach Retention bereinigen
+            </button>
+        </form>
+    </div>
+</div>
+
+<!-- Audit log -->
+<div class="bg-discord-dark rounded-xl border border-gray-700/50">
+    <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between">
+        <h3 class="text-white font-semibold">Audit-Log (letzte 100)</h3>
+        <span class="text-xs text-gray-400">Retention: {{ cfg.retention_days or 30 }} Tage</span>
+    </div>
+    <div class="p-2 overflow-x-auto">
+        <table class="w-full text-xs text-gray-300">
+            <thead class="text-gray-400">
+                <tr>
+                    <th class="text-left px-3 py-2">Zeit</th>
+                    <th class="text-left px-3 py-2">Nutzer</th>
+                    <th class="text-left px-3 py-2">Channel</th>
+                    <th class="text-left px-3 py-2">Tools</th>
+                    <th class="text-left px-3 py-2">Latenz</th>
+                    <th class="text-left px-3 py-2">Status</th>
+                    <th class="text-left px-3 py-2">Prompt</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for l in audit_log %}
+                <tr class="border-t border-gray-800 {% if l.blocked %}bg-discord-red/10{% endif %}">
+                    <td class="px-3 py-2 whitespace-nowrap">{{ (l.timestamp or 0)|int }}</td>
+                    <td class="px-3 py-2 whitespace-nowrap">{{ l.user_name or l.user_id or '—' }}</td>
+                    <td class="px-3 py-2 whitespace-nowrap">{{ l.channel_id or '—' }}</td>
+                    <td class="px-3 py-2 whitespace-nowrap"><code class="text-gray-400">{{ l.tools_used or '' }}</code></td>
+                    <td class="px-3 py-2 whitespace-nowrap">{{ l.latency_ms or 0 }} ms</td>
+                    <td class="px-3 py-2 whitespace-nowrap">
+                        {% if l.blocked %}
+                            <span class="text-red-300">blocked: {{ l.block_reason }}</span>
+                        {% elif l.error %}
+                            <span class="text-yellow-300">err</span>
+                        {% else %}
+                            <span class="text-green-300">ok</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-3 py-2 max-w-md truncate" title="{{ l.prompt or '' }}">{{ (l.prompt or '')[:120] }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="7" class="px-3 py-6 text-center text-gray-500">Noch keine Einträge.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    const DEFAULT_PERSONA = {{ default_persona|tojson }};
+    function loadDefaultPersona() {
+        document.getElementById('persona').value = DEFAULT_PERSONA;
+    }
+</script>
+{% endblock %}

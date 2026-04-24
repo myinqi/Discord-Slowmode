@@ -22,6 +22,7 @@ class SlowmodeBot(commands.Bot):
     async def setup_hook(self):
         await self.load_extension("bot.cogs.slowmode")
         await self.load_extension("bot.cogs.commands")
+        await self.load_extension("bot.cogs.llm_chat")
 
         if self.config.GUILD_ID:
             guild = discord.Object(id=self.config.GUILD_ID)
