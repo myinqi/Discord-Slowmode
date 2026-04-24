@@ -101,17 +101,26 @@ TOOL_SCHEMAS = [
                 "from the 'Mentioned users' context block. Prefer this tool "
                 "whenever the user @-mentions someone. Omit 'days' to search "
                 "across all time — only set 'days' if the user explicitly "
-                "mentions a time window."
+                "mentions a time window. Omit 'limit' to use the default; "
+                "only set it if the user asks for a specific number. "
+                "Use 'channel_ids' to restrict to specific channels when the "
+                "user mentions a channel by name — pick IDs from the "
+                "'Available channels' context block."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "user_id": {"type": "string", "description": "Discord user ID as a string."},
                     "days": {"type": "integer", "description": "Optional. Omit for all-time."},
-                    "limit": {"type": "integer"},
+                    "limit": {"type": "integer", "description": "Optional."},
                     "order": {
                         "type": "string",
                         "enum": ["recent", "reactions"],
+                    },
+                    "channel_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional. Restrict search to these channel IDs.",
                     },
                 },
                 "required": ["user_id"],
@@ -191,10 +200,22 @@ class ToolRunner:
         self.enabled_tools = enabled_tools
 
     async def run(self, name: str, args: dict) -> dict:
-        if name not in AVAILABLE_TOOL_NAMES:
-            return {"error": f"unknown tool: {name}"}
         if name not in self.enabled_tools:
-            return {"error": "tool disabled by admin"}
+            return {"error": f"tool '{name}' is disabled by admin"}
+
+        # Shared optional channel filter: args.channel_ids overrides default.
+        arg_ch = args.get("channel_ids")
+        if isinstance(arg_ch, list) and arg_ch:
+            parsed: list[int] = []
+            for v in arg_ch:
+                try:
+                    parsed.append(int(str(v).strip()))
+                except Exception:
+                    continue
+            scoped_channels = parsed or self.channel_ids
+        else:
+            scoped_channels = self.channel_ids
+
         if not isinstance(args, dict):
             args = {}
 
@@ -204,7 +225,7 @@ class ToolRunner:
                 return {"error": "missing artist"}
             rows = await self.db.search_songs_by_artist(
                 artist=artist,
-                channel_ids=self.channel_ids,
+                channel_ids=scoped_channels,
                 days=_clamp_days(args.get("days")),
                 limit=_clamp_limit(args.get("limit"), self.default_limit),
                 order=args.get("order") if args.get("order") in ("recent", "reactions") else "recent",
@@ -213,7 +234,7 @@ class ToolRunner:
 
         if name == "recent_songs":
             rows = await self.db.get_recent_songs(
-                channel_ids=self.channel_ids,
+                channel_ids=scoped_channels,
                 days=_clamp_days(args.get("days"), 7) or 7,
                 limit=_clamp_limit(args.get("limit"), self.default_limit),
             )
@@ -224,11 +245,12 @@ class ToolRunner:
                 uid = int(str(args.get("user_id") or "").strip())
             except Exception:
                 return {"error": "invalid user_id"}
-            # Don't restrict to allowed channels here — the user is asking
-            # for a specific author's posts by explicit ID, which is safe.
+            # When the user did NOT pick specific channels, allow all —
+            # the author ID alone is a safe filter.
+            ch_ids = scoped_channels if arg_ch else None
             rows = await self.db.get_songs_by_user_id(
                 user_id=uid,
-                channel_ids=None,
+                channel_ids=ch_ids,
                 days=_clamp_days(args.get("days")),
                 limit=_clamp_limit(args.get("limit"), self.default_limit),
                 order=args.get("order") if args.get("order") in ("recent", "reactions") else "recent",
@@ -237,7 +259,7 @@ class ToolRunner:
 
         if name == "top_reacted_songs":
             rows = await self.db.get_top_reacted_songs(
-                channel_ids=self.channel_ids,
+                channel_ids=scoped_channels,
                 days=_clamp_days(args.get("days")),
                 limit=_clamp_limit(args.get("limit"), self.default_limit),
             )
@@ -309,6 +331,7 @@ async def run_corax_turn(
     user_id: int,
     channel_id: int,
     mentioned_users: list[dict] | None = None,
+    mentioned_channels: list[dict] | None = None,
 ) -> dict:
     """Single-turn chat with optional tool use.
 
@@ -335,7 +358,9 @@ async def run_corax_turn(
     # needs them. Plain small-talk stays on the cheap chat model and skips
     # tool-calling entirely (Gemma 3 etc. reject requests with `tools`).
     wants_tools = bool(enabled_tools) and (
-        _needs_tools(user_prompt) or bool(mentioned_users)
+        _needs_tools(user_prompt)
+        or bool(mentioned_users)
+        or bool(mentioned_channels)
     )
     if wants_tools and tools_model:
         active_model = tools_model
@@ -351,6 +376,10 @@ async def run_corax_turn(
 
     allowed_channels = await db.get_llm_allowed_channels()
     channel_ids = [c["channel_id"] for c in allowed_channels] or None
+    allowed_channels_info = [
+        {"id": str(c["channel_id"]), "name": c.get("channel_name") or ""}
+        for c in allowed_channels
+    ]
 
     tool_runner = ToolRunner(
         db=db,
@@ -374,6 +403,15 @@ async def run_corax_turn(
             "(max 1 sentence). The frontend renders the song list itself; "
             "do NOT repeat the list in text."
         )
+        if allowed_channels_info:
+            ch_lines = "\n".join(
+                f"- name=#{c['name']}, id={c['id']}"
+                for c in allowed_channels_info
+            )
+            system_blocks.append(
+                "Available channels (use 'channel_ids' tool arg when the user "
+                "mentions a channel by name):\n" + ch_lines
+            )
     if mentioned_users:
         lines = [
             f"- {u.get('display') or u.get('name') or 'user'} "
@@ -427,7 +465,12 @@ async def run_corax_turn(
                         args = json.loads(args)
                     except Exception:
                         args = {}
-                result = await tool_runner.run(name, args or {})
+                args = dict(args or {})
+                # Hard override: explicit #channel mentions in the user
+                # message take precedence over whatever the LLM chose.
+                if mentioned_channels:
+                    args["channel_ids"] = [c["id"] for c in mentioned_channels]
+                result = await tool_runner.run(name, args)
                 print(
                     f"[corax] tool={name} args={args} -> "
                     f"{'songs=' + str(len(result.get('songs') or [])) if 'songs' in result else result}"
@@ -443,6 +486,13 @@ async def run_corax_turn(
             # Short-circuit: if we already have songs from a tool call, skip
             # the expensive second LLM turn — the carousel speaks for itself.
             if songs_out is not None:
+                # Lazy-fetch missing titles from Suno embeds (older posts).
+                if songs_out:
+                    try:
+                        from bot.suno_meta import enrich_songs
+                        await enrich_songs(songs_out)
+                    except Exception as e:
+                        print(f"[corax] enrich_songs failed: {e}")
                 intro = (
                     f"Hier kommen {len(songs_out)} Songs:" if songs_out
                     else "Dazu habe ich leider nichts in der Datenbank gefunden."

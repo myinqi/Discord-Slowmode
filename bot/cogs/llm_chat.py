@@ -61,8 +61,10 @@ class SongCarouselView(discord.ui.View):
         url = s.get("url")
         e = discord.Embed(title=title, url=url, color=0x7c3aed)
         meta = []
+        if s.get("artist"):
+            meta.append(f"by {s['artist']}")
         if s.get("posted_by"):
-            meta.append(f"by {s['posted_by']}")
+            meta.append(f"shared by {s['posted_by']}")
         if s.get("posted_at"):
             try:
                 dt = datetime.fromtimestamp(float(s["posted_at"]), tz=timezone.utc)
@@ -205,6 +207,12 @@ class LLMChatCog(commands.Cog):
                 "display": getattr(m, "display_name", None) or m.name,
             })
 
+        # Explicit #channel references in the message → hard filter.
+        mentioned_channels = [
+            {"id": str(ch.id), "name": ch.name}
+            for ch in getattr(message, "channel_mentions", []) or []
+        ]
+
         # If the user asks for a specific number of results, override default.
         num_match = _NUMBER_RE.search(prompt)
         if num_match:
@@ -230,6 +238,7 @@ class LLMChatCog(commands.Cog):
                     user_id=message.author.id,
                     channel_id=message.channel.id,
                     mentioned_users=mentioned_users,
+                    mentioned_channels=mentioned_channels,
                 )
         except Exception as e:
             import traceback
