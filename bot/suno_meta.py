@@ -33,31 +33,52 @@ async def _fetch_one(session: aiohttp.ClientSession, url: str) -> dict:
     """Returns {'title': ..., 'artist': ...} or {} on failure."""
     sid = extract_suno_id(url)
     if not sid:
+        print(f"[suno-meta] no suno id in url: {url!r}")
         return {}
+    target = f"https://suno.com/song/{sid}"
     try:
         async with session.get(
-            f"https://suno.com/song/{sid}",
-            timeout=aiohttp.ClientTimeout(total=8),
-            headers={"User-Agent": "Mozilla/5.0 (CoraxBot)"},
+            target,
+            timeout=aiohttp.ClientTimeout(total=10),
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
         ) as resp:
             if resp.status != 200:
+                print(f"[suno-meta] http {resp.status} for {target}")
                 return {}
             body = await resp.text()
-    except Exception:
+    except Exception as e:
+        print(f"[suno-meta] fetch error {type(e).__name__}: {e} url={target}")
         return {}
 
     out: dict[str, str] = {}
     mt = _OG_TITLE_RE.search(body)
     if mt:
         raw = _html.unescape(mt.group(1)).strip()
-        # Typical format: "Song Title by Artist | Suno"
-        raw = re.sub(r"\s*\|\s*Suno\s*$", "", raw)
+        # Typical format: "Song Title by Artist | Suno" or "Song Title | Suno AI"
+        raw = re.sub(r"\s*\|\s*Suno(?:\s*AI)?\s*$", "", raw, flags=re.I)
         m2 = re.match(r"^(.*?)\s+by\s+(.+)$", raw, re.I)
         if m2:
             out["title"] = m2.group(1).strip()
             out["artist"] = m2.group(2).strip()
         else:
             out["title"] = raw
+    else:
+        # Fallback: look for <title>…</title>
+        mt2 = re.search(r"<title[^>]*>([^<]+)</title>", body, re.I)
+        if mt2:
+            raw = _html.unescape(mt2.group(1)).strip()
+            raw = re.sub(r"\s*\|\s*Suno(?:\s*AI)?\s*$", "", raw, flags=re.I)
+            if raw and raw.lower() != "suno":
+                out["title"] = raw
+        if not out:
+            print(f"[suno-meta] no og:title found on {target} (body {len(body)} bytes)")
     return out
 
 
