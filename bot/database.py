@@ -1847,6 +1847,37 @@ class Database:
         async with self.db.execute(sql, params) as cur:
             return [dict(r) for r in await cur.fetchall()]
 
+    async def get_songs_by_user_id(self, user_id: int, channel_ids: list = None,
+                                   days: int = None, limit: int = 10,
+                                   order: str = "recent") -> list[dict]:
+        """Songs posted by a specific Discord user."""
+        cond = ["sp.user_id = ?"]
+        params = [int(user_id)]
+        if channel_ids:
+            placeholders = ",".join("?" for _ in channel_ids)
+            cond.append(f"sp.channel_id IN ({placeholders})")
+            params.extend(channel_ids)
+        if days and days > 0:
+            cond.append("sp.posted_at >= ?")
+            params.append(time.time() - days * 86400)
+        order_sql = "COUNT(sr.id) DESC, sp.posted_at DESC" if order == "reactions" \
+                    else "sp.posted_at DESC"
+        sql = f"""
+            SELECT sp.id, sp.url, sp.song_title, sp.user_name, sp.posted_at,
+                   sp.channel_id, sp.message_id,
+                   COUNT(sr.id) AS reaction_count
+            FROM song_posts sp
+            LEFT JOIN song_reactions sr
+              ON sr.message_id = sp.message_id AND sp.message_id IS NOT NULL
+            WHERE {' AND '.join(cond)}
+            GROUP BY sp.id
+            ORDER BY {order_sql}
+            LIMIT ?
+        """
+        params.append(max(1, min(25, int(limit))))
+        async with self.db.execute(sql, params) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
     async def get_recent_songs(self, channel_ids: list = None, days: int = 7,
                                limit: int = 10) -> list[dict]:
         cond = []

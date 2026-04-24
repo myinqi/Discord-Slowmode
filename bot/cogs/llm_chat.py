@@ -194,6 +194,17 @@ class LLMChatCog(commands.Cog):
         if not prompt:
             prompt = "Sag hi."
 
+        # Collect non-bot Discord mentions so the LLM can reference them by ID.
+        mentioned_users = []
+        for m in message.mentions:
+            if m.bot or m.id == me.id:
+                continue
+            mentioned_users.append({
+                "id": str(m.id),
+                "name": str(m),
+                "display": getattr(m, "display_name", None) or m.name,
+            })
+
         # If the user asks for a specific number of results, override default.
         num_match = _NUMBER_RE.search(prompt)
         if num_match:
@@ -218,6 +229,7 @@ class LLMChatCog(commands.Cog):
                     user_display=message.author.display_name,
                     user_id=message.author.id,
                     channel_id=message.channel.id,
+                    mentioned_users=mentioned_users,
                 )
         except Exception as e:
             import traceback
