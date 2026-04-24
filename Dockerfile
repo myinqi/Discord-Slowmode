@@ -18,5 +18,8 @@ RUN mkdir -p /app/data
 # Expose web interface port
 EXPOSE 5000
 
+# Ensure print() flushes immediately so `docker compose logs` shows output live.
+ENV PYTHONUNBUFFERED=1
+
 # Run the bot + web server
 CMD ["python", "run.py"]

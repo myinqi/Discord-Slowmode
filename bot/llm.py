@@ -97,15 +97,17 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "songs_by_user",
             "description": (
-                "Songs, die ein bestimmter Discord-Nutzer gepostet hat. "
-                "Nutze die user_id aus dem Kontext 'Mentioned users'. "
-                "Ideal, wenn der Nutzer einen anderen User @-mentioned."
+                "Songs posted by a specific Discord user. Use the user_id "
+                "from the 'Mentioned users' context block. Prefer this tool "
+                "whenever the user @-mentions someone. Omit 'days' to search "
+                "across all time — only set 'days' if the user explicitly "
+                "mentions a time window."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "user_id": {"type": "string", "description": "Discord-User-ID als String."},
-                    "days": {"type": "integer"},
+                    "user_id": {"type": "string", "description": "Discord user ID as a string."},
+                    "days": {"type": "integer", "description": "Optional. Omit for all-time."},
                     "limit": {"type": "integer"},
                     "order": {
                         "type": "string",
@@ -222,9 +224,11 @@ class ToolRunner:
                 uid = int(str(args.get("user_id") or "").strip())
             except Exception:
                 return {"error": "invalid user_id"}
+            # Don't restrict to allowed channels here — the user is asking
+            # for a specific author's posts by explicit ID, which is safe.
             rows = await self.db.get_songs_by_user_id(
                 user_id=uid,
-                channel_ids=self.channel_ids,
+                channel_ids=None,
                 days=_clamp_days(args.get("days")),
                 limit=_clamp_limit(args.get("limit"), self.default_limit),
                 order=args.get("order") if args.get("order") in ("recent", "reactions") else "recent",
