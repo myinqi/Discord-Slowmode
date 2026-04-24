@@ -1908,23 +1908,30 @@ class Database:
 
     async def get_top_reacted_songs(self, channel_ids: list = None,
                                     days: int = None, limit: int = 10) -> list[dict]:
-        cond = []
-        params = []
+        """Songs ranked by reactions. When `days` is given, the window
+        applies to the reactions themselves (reacted_at) — so 'top this
+        week' means 'songs that collected the most reactions this week',
+        regardless of when they were originally posted."""
+        params: list = []
+        join_cond = "sr.message_id = sp.message_id AND sp.message_id IS NOT NULL"
+        if days and days > 0:
+            join_cond += " AND sr.reacted_at >= ?"
+            params.append(time.time() - days * 86400)
+
+        where_parts: list[str] = []
         if channel_ids:
             placeholders = ",".join("?" for _ in channel_ids)
-            cond.append(f"sp.channel_id IN ({placeholders})")
+            where_parts.append(f"sp.channel_id IN ({placeholders})")
             params.extend(channel_ids)
-        if days and days > 0:
-            cond.append("sp.posted_at >= ?")
-            params.append(time.time() - days * 86400)
-        where = ("WHERE " + " AND ".join(cond)) if cond else ""
+        where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
         sql = f"""
             SELECT sp.id, sp.url, sp.song_title, sp.user_name, sp.posted_at,
                    sp.channel_id, sp.message_id,
                    COUNT(sr.id) AS reaction_count
             FROM song_posts sp
             LEFT JOIN song_reactions sr
-              ON sr.message_id = sp.message_id AND sp.message_id IS NOT NULL
+              ON {join_cond}
             {where}
             GROUP BY sp.id
             HAVING reaction_count > 0
