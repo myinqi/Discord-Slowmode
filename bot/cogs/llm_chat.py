@@ -261,22 +261,39 @@ class LLMChatCog(commands.Cog):
                 if songs:
                     view = SongCarouselView(songs, invoker_id=message.author.id)
                     header = text if text else f"{len(songs)} Treffer:"
-                    await message.reply(
-                        content=header[:500],
-                        embed=view.current_embed(),
-                        view=view,
-                        mention_author=False,
-                    )
+                    try:
+                        await message.reply(
+                            content=header[:500],
+                            embed=view.current_embed(),
+                            view=view,
+                            mention_author=False,
+                        )
+                    except Exception as e:
+                        import traceback
+                        print(f"[corax] reply with embed failed: {type(e).__name__}: {e}")
+                        traceback.print_exc()
+                        # Fallback: send without embed so the user at least sees
+                        # something — the view (buttons) can still paginate.
+                        try:
+                            await message.reply(
+                                content=(header + "\n_(embed rendering failed — "
+                                        "use the arrows to browse)_")[:1500],
+                                view=view,
+                                mention_author=False,
+                            )
+                        except Exception as e2:
+                            print(f"[corax] fallback reply also failed: {e2}")
                 elif text:
-                    # Keep under Discord's 2000 char message cap.
                     await message.reply(text[:1900], mention_author=False)
                 else:
                     await message.reply(
                         "…hm, dazu fällt mir gerade nichts ein.",
                         mention_author=False,
                     )
-        except Exception:
-            pass
+        except Exception as e:
+            import traceback
+            print(f"[corax] outer reply error: {type(e).__name__}: {e}")
+            traceback.print_exc()
 
         await db.log_llm_interaction(
             user_id=message.author.id,
