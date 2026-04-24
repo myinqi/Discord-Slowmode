@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from typing import Any
 
@@ -109,6 +110,27 @@ TOOL_SCHEMAS = [
 
 
 AVAILABLE_TOOL_NAMES = {t["function"]["name"] for t in TOOL_SCHEMAS}
+
+
+# Keywords that strongly suggest the user wants Corax to query the song DB.
+# If none of these match the user prompt, we skip the tools entirely and
+# route the turn to the chat model — which keeps casual chat fast.
+_TOOL_INTENT_RE = re.compile(
+    r"\b("
+    r"song|songs|track|tracks|lied|lieder|st[üu]ck|st[üu]cke|"
+    r"artist|k[üu]nstler|band|suno|playlist|"
+    r"reaktion|reaktionen|reactions?|likes?|herz|hearts?|fav(oriten)?|"
+    r"top|beste(n)?|most|meisten|meiste|popul[aä]r(sten)?|"
+    r"zuletzt|k[üu]rzlich|letzte[nr]?|recent|latest|new(est)?|neu(e|este)?|"
+    r"diese woche|this week|letzte woche|last week|heute|today|gestern|yesterday|"
+    r"von\s+\w+|by\s+\w+|from\s+\w+|search|suche|finde|zeig(e|t)?|show|list"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _needs_tools(prompt: str) -> bool:
+    return bool(_TOOL_INTENT_RE.search(prompt or ""))
 
 
 def _clamp_limit(val: Any, default: int) -> int:
@@ -263,9 +285,22 @@ async def run_corax_turn(
 
     chat_model = (cfg.get("model") or "").strip() or None
     tools_model = (cfg.get("tools_model") or "").strip() or None
-    # When tools are enabled and a dedicated tools model is configured,
-    # route the request to it — chat-only turns still use the chat model.
-    active_model = tools_model if (enabled_tools and tools_model) else chat_model
+
+    # Intent router: only attach tool schemas when the user message plausibly
+    # needs them. Plain small-talk stays on the cheap chat model and skips
+    # tool-calling entirely (Gemma 3 etc. reject requests with `tools`).
+    wants_tools = bool(enabled_tools) and _needs_tools(user_prompt)
+    if wants_tools and tools_model:
+        active_model = tools_model
+        use_tools = True
+    elif wants_tools:
+        # tools wanted but no dedicated tools model — fall back to chat model
+        # but still try with tools; if the model rejects them, we retry below.
+        active_model = chat_model
+        use_tools = True
+    else:
+        active_model = chat_model
+        use_tools = False
 
     allowed_channels = await db.get_llm_allowed_channels()
     channel_ids = [c["channel_id"] for c in allowed_channels] or None
@@ -299,14 +334,14 @@ async def run_corax_turn(
     for _ in range(3):
         resp = await client.chat(
             messages,
-            tools=active_tool_schemas or None,
+            tools=(active_tool_schemas if use_tools else None) or None,
             max_tokens=max_tokens,
             model=active_model,
         )
         msg = resp.get("message") or {}
         tool_calls = msg.get("tool_calls") or []
 
-        if tool_calls and active_tool_schemas:
+        if tool_calls and active_tool_schemas and use_tools:
             messages.append({
                 "role": "assistant",
                 "content": msg.get("content") or "",
