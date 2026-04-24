@@ -440,6 +440,19 @@ async def run_corax_turn(
                     "name": name,
                     "content": json.dumps(result, ensure_ascii=False)[:6000],
                 })
+            # Short-circuit: if we already have songs from a tool call, skip
+            # the expensive second LLM turn — the carousel speaks for itself.
+            if songs_out is not None:
+                intro = (
+                    f"Hier kommen {len(songs_out)} Songs:" if songs_out
+                    else "Dazu habe ich leider nichts in der Datenbank gefunden."
+                )
+                return {
+                    "text": intro,
+                    "songs": songs_out,
+                    "tools_used": tools_used,
+                    "error": None,
+                }
             continue
 
         # No more tool calls — final answer.
