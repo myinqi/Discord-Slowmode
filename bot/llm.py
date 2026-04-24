@@ -201,9 +201,9 @@ class OllamaClient:
         self.timeout = timeout
 
     async def chat(self, messages: list[dict], tools: list[dict] | None = None,
-                   max_tokens: int = 512) -> dict:
+                   max_tokens: int = 512, model: str | None = None) -> dict:
         payload = {
-            "model": self.model,
+            "model": model or self.model,
             "messages": messages,
             "stream": False,
             "options": {
@@ -216,7 +216,11 @@ class OllamaClient:
         timeout = aiohttp.ClientTimeout(total=self.timeout)
         async with aiohttp.ClientSession(timeout=timeout) as sess:
             async with sess.post(f"{self.base_url}/api/chat", json=payload) as resp:
-                resp.raise_for_status()
+                if resp.status >= 400:
+                    body = await resp.text()
+                    raise RuntimeError(
+                        f"ollama {resp.status}: {body[:500]}"
+                    )
                 return await resp.json()
 
 
@@ -257,6 +261,12 @@ async def run_corax_turn(
     except Exception:
         enabled_tools = set()
 
+    chat_model = (cfg.get("model") or "").strip() or None
+    tools_model = (cfg.get("tools_model") or "").strip() or None
+    # When tools are enabled and a dedicated tools model is configured,
+    # route the request to it — chat-only turns still use the chat model.
+    active_model = tools_model if (enabled_tools and tools_model) else chat_model
+
     allowed_channels = await db.get_llm_allowed_channels()
     channel_ids = [c["channel_id"] for c in allowed_channels] or None
 
@@ -291,6 +301,7 @@ async def run_corax_turn(
             messages,
             tools=active_tool_schemas or None,
             max_tokens=max_tokens,
+            model=active_model,
         )
         msg = resp.get("message") or {}
         tool_calls = msg.get("tool_calls") or []

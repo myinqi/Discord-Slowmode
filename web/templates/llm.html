@@ -16,21 +16,31 @@
         <form method="POST" class="space-y-6">
             <input type="hidden" name="action" value="save">
 
-            <!-- Enable + model -->
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div class="flex items-center gap-3 md:col-span-1">
-                    <input type="checkbox" id="enabled" name="enabled" value="1"
-                        {% if cfg.enabled %}checked{% endif %}
-                        class="w-5 h-5 rounded border-gray-600 bg-discord-darker text-discord-blurple focus:ring-discord-blurple">
-                    <label for="enabled" class="text-sm font-medium text-gray-300">Enable Corax chat</label>
-                </div>
-                <div class="md:col-span-2">
-                    <label class="block text-sm font-medium text-gray-300 mb-1">Ollama model</label>
+            <!-- Enable + models -->
+            <div class="flex items-center gap-3 mb-4">
+                <input type="checkbox" id="enabled" name="enabled" value="1"
+                    {% if cfg.enabled %}checked{% endif %}
+                    class="w-5 h-5 rounded border-gray-600 bg-discord-darker text-discord-blurple focus:ring-discord-blurple">
+                <label for="enabled" class="text-sm font-medium text-gray-300">Enable Corax chat</label>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-300 mb-1">Chat model</label>
                     <input type="text" name="model" value="{{ cfg.model or 'gemma3:4b' }}"
                         class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple">
-                    <p class="text-xs text-gray-500 mt-1">Must be available inside the Ollama container (pulled automatically on first start).</p>
+                    <p class="text-xs text-gray-500 mt-1">Used for plain conversation. e.g. <code>gemma3:4b</code>.</p>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-300 mb-1">Tools model <span class="text-gray-500 font-normal">(optional)</span></label>
+                    <input type="text" name="tools_model" value="{{ cfg.tools_model or '' }}" placeholder="qwen2.5:3b"
+                        class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple">
+                    <p class="text-xs text-gray-500 mt-1">
+                        Used when tools are enabled. Leave empty to always use the chat model.
+                        Not every model supports tool-calling — <code>qwen2.5:3b</code> or <code>llama3.1:8b</code> are good picks.
+                    </p>
                 </div>
             </div>
+            <p class="text-xs text-gray-500 mt-2">Both models must be pulled inside the Ollama container: <code>docker compose exec ollama ollama pull &lt;name&gt;</code>.</p>
 
             <!-- Channels -->
             <div class="border-t border-gray-700/50 pt-5">

@@ -280,6 +280,7 @@ class Database:
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 enabled INTEGER DEFAULT 0,
                 model TEXT DEFAULT 'gemma3:4b',
+                tools_model TEXT DEFAULT '',
                 persona TEXT DEFAULT '',
                 retention_days INTEGER DEFAULT 30,
                 rate_per_user_min INTEGER DEFAULT 3,
@@ -321,6 +322,15 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_llm_audit_user ON llm_audit_log(user_id);
         """)
         await self.db.commit()
+
+        # Migrate older llm_config schemas (add tools_model if missing).
+        async with self.db.execute("PRAGMA table_info(llm_config)") as cur:
+            cols = {row["name"] for row in await cur.fetchall()}
+        if "tools_model" not in cols:
+            await self.db.execute(
+                "ALTER TABLE llm_config ADD COLUMN tools_model TEXT DEFAULT ''"
+            )
+            await self.db.commit()
 
     # --- Settings ---
 
@@ -1698,7 +1708,7 @@ class Database:
         if not fields:
             return
         allowed = {
-            "enabled", "model", "persona", "retention_days",
+            "enabled", "model", "tools_model", "persona", "retention_days",
             "rate_per_user_min", "rate_per_channel_min",
             "max_tokens", "tools_enabled", "default_result_limit",
         }

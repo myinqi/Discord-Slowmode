@@ -220,7 +220,10 @@ class LLMChatCog(commands.Cog):
                     channel_id=message.channel.id,
                 )
         except Exception as e:
+            import traceback
             error = f"{type(e).__name__}: {e}"
+            print(f"[corax] LLM call failed: {error}")
+            traceback.print_exc()
 
         latency_ms = int((time.monotonic() - t0) * 1000)
 
