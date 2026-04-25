@@ -153,7 +153,39 @@ AVAILABLE_TOOL_NAMES = {t["function"]["name"] for t in TOOL_SCHEMAS}
 # Keywords that strongly suggest the user wants Corax to query the song DB.
 # If none of these match the user prompt, we skip the tools entirely and
 # route the turn to the chat model — which keeps casual chat fast.
-_TOOL_INTENT_RE = re.compile(
+_TOOL_USER_COUNT_RE = re.compile(
+    r"\b(\d{1,3})\s*(?:songs?|lieder|st[üu]cke|tracks?|ergebnisse?|results?)\b",
+    re.IGNORECASE,
+)
+_TIME_KEYWORD_RE = re.compile(
+    r"\b(?:tag(?:e|en)?|wochen?|monat(?:e|en)?|jahr(?:e|en)?|"
+    r"day|days|week|weeks|month|months|year|years|"
+    r"heute|today|gestern|yesterday|hour|stunde|stunden)\b",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_tool_args(prompt: str, args: dict) -> dict:
+    """Patch LLM-provided tool args against common misinterpretations.
+
+    - If the user said 'N songs' in the prompt, force limit=N (Qwen often
+      misreads this number as `days`).
+    - If the prompt has NO time keyword at all, strip any `days` arg —
+      the LLM shouldn't impose a time window the user didn't ask for.
+    """
+    args = dict(args or {})
+    m = _TOOL_USER_COUNT_RE.search(prompt or "")
+    if m:
+        try:
+            args["limit"] = max(1, min(25, int(m.group(1))))
+        except Exception:
+            pass
+    if "days" in args and not _TIME_KEYWORD_RE.search(prompt or ""):
+        args.pop("days", None)
+    return args
+
+
+_NEEDS_TOOLS_RE = re.compile(
     r"\b("
     r"song|songs|track|tracks|lied|lieder|st[üu]ck|st[üu]cke|"
     r"artist|k[üu]nstler|band|suno|playlist|"
