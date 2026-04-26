@@ -498,6 +498,8 @@ async def run_corax_turn(
                     except Exception:
                         args = {}
                 args = dict(args or {})
+                # Patch common Qwen misreads (treats 'N songs' as days, etc.).
+                args = _sanitize_tool_args(user_prompt, args)
                 # Hard override: explicit #channel mentions in the user
                 # message take precedence over whatever the LLM chose.
                 if mentioned_channels:

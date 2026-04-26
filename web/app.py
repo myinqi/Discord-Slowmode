@@ -2747,6 +2747,11 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.party_mark_heard(song_id)
                 return redirect(request.referrer or url_for("party_playlist"))
 
+            elif action == "mark_unheard":
+                song_id = int(form.get("song_id", 0))
+                await db.party_mark_unheard(song_id)
+                return redirect(request.referrer or url_for("party_playlist"))
+
             elif action == "delete_song":
                 song_id = int(form.get("song_id", 0))
                 await db.db.execute("DELETE FROM party_playlist WHERE id = ?", (song_id,))

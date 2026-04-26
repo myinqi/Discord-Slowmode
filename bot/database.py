@@ -1511,6 +1511,10 @@ class Database:
         await self.db.execute("UPDATE party_playlist SET heard = 1 WHERE id = ?", (song_id,))
         await self.db.commit()
 
+    async def party_mark_unheard(self, song_id: int):
+        await self.db.execute("UPDATE party_playlist SET heard = 0 WHERE id = ?", (song_id,))
+        await self.db.commit()
+
     async def party_reset(self) -> int:
         """Delete all songs from the party playlist. Returns count."""
         async with self.db.execute("SELECT COUNT(*) FROM party_playlist") as cursor:
