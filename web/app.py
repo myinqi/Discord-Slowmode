@@ -62,6 +62,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('polls', 'Polls'),
         ('radio', 'Twitch Radio'),
         ('suno_analyzer', 'Suno Analyzer'),
+        ('suno_userlist', 'Suno User List'),
         ('audit', 'Audit Log'),
         ('settings', 'Settings'),
         ('llm', 'Corax Chat (LLM)'),
@@ -2897,5 +2898,249 @@ def create_app(db: Database, bot=None) -> Quart:
         except Exception as e:
             traceback.print_exc()
             return f"<pre>Error: {e}\n\n{traceback.format_exc()}</pre>", 500
+
+    # --- Suno User List (per logged-in web user) ---
+
+    SUNO_PROFILE_PATTERN = re.compile(r'^https?://(?:www\.)?suno\.com/@([A-Za-z0-9_.\-]+)/?$')
+
+    def _normalize_suno_profile_url(raw: str) -> tuple[str | None, str | None]:
+        """Returns (canonical_url, handle_lower) or (None, None) if invalid."""
+        if not raw:
+            return None, None
+        raw = raw.strip()
+        # Allow bare handle input "@tarja_ravenveil" or "tarja_ravenveil"
+        if raw.startswith("@"):
+            raw = "https://suno.com/" + raw
+        elif not raw.startswith("http") and re.fullmatch(r'[A-Za-z0-9_.\-]+', raw):
+            raw = f"https://suno.com/@{raw}"
+        m = SUNO_PROFILE_PATTERN.match(raw)
+        if not m:
+            return None, None
+        handle = m.group(1)
+        canonical = f"https://suno.com/@{handle}"
+        return canonical, handle.lower()
+
+    async def _fetch_suno_profile(profile_url: str) -> dict:
+        """Fetch a Suno profile page and extract display name, avatar, and last song.
+
+        Returns dict with keys: display_name, avatar_url, last_song_url, last_song_title.
+        Best-effort; missing fields are None.
+        """
+        import html as _html
+        out = {
+            "display_name": None,
+            "avatar_url": None,
+            "last_song_url": None,
+            "last_song_title": None,
+        }
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+            )
+        }
+        try:
+            async with aiohttp.ClientSession(headers=headers) as sess:
+                async with sess.get(profile_url, timeout=aiohttp.ClientTimeout(total=12)) as resp:
+                    if resp.status != 200:
+                        return out
+                    html = await resp.text()
+        except Exception as e:
+            print(f"[suno_userlist] fetch failed for {profile_url}: {e}")
+            return out
+
+        # og:title — typically "Display Name | Suno" or just "Display Name"
+        m = re.search(
+            r'<meta\s+property=["\']og:title["\']\s+content=["\']([^"\']+)["\']', html
+        )
+        if not m:
+            m = re.search(
+                r'<meta\s+content=["\']([^"\']+)["\']\s+property=["\']og:title["\']', html
+            )
+        if m:
+            raw = _html.unescape(m.group(1).strip())
+            raw = re.sub(r'\s*[|\-–]\s*Suno\s*$', '', raw).strip()
+            # Some pages format as "Display Name | Suno AI" or "Display Name's profile"
+            raw = re.sub(r"\s*'?s\s+(?:Suno\s+)?profile\s*$", '', raw, flags=re.IGNORECASE)
+            if raw:
+                out["display_name"] = raw
+
+        # Fallback: <title>
+        if not out["display_name"]:
+            m = re.search(r'<title>([^<]+)</title>', html)
+            if m:
+                raw = _html.unescape(m.group(1).strip())
+                raw = re.sub(r'\s*[|\-–]\s*Suno\s*$', '', raw).strip()
+                if raw:
+                    out["display_name"] = raw
+
+        # og:image — avatar
+        m = re.search(
+            r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']', html
+        )
+        if not m:
+            m = re.search(
+                r'<meta\s+content=["\']([^"\']+)["\']\s+property=["\']og:image["\']', html
+            )
+        if m:
+            out["avatar_url"] = m.group(1).strip()
+
+        # Avatar fallback: first cdn2.suno.ai/<uuid>.jpeg image referenced in HTML
+        if not out["avatar_url"]:
+            m = re.search(r'https://cdn[12]\.suno\.ai/([a-f0-9-]{36})\.jpeg', html)
+            if m:
+                out["avatar_url"] = m.group(0)
+
+        # Last song: first /song/<uuid> reference on the profile page
+        m = re.search(r'https?://suno\.com/song/([a-f0-9-]{36})', html)
+        if m:
+            song_uuid = m.group(1)
+            out["last_song_url"] = f"https://suno.com/song/{song_uuid}"
+            # Try to fetch the song's title quickly
+            try:
+                meta = await _fetch_suno_meta(song_uuid)
+                if meta and meta.get("title"):
+                    out["last_song_title"] = meta["title"]
+            except Exception:
+                pass
+
+        return out
+
+    @app.route("/suno-userlist", methods=["GET", "POST"])
+    @permission_required('suno_userlist')
+    async def suno_userlist():
+        owner_id = session["user_id"]
+        if request.method == "POST":
+            form = await request.form
+            action = form.get("action")
+
+            if action == "add":
+                raw_url = (form.get("profile_url") or "").strip()
+                priority = form.get("priority", "medium")
+                if priority not in ("high", "medium", "low"):
+                    priority = "medium"
+                canonical, handle = _normalize_suno_profile_url(raw_url)
+                if not canonical:
+                    await flash("Ungültige Suno-Profil-URL. Erwartet: https://suno.com/@handle", "error")
+                else:
+                    info = await _fetch_suno_profile(canonical)
+                    new_id = await db.suno_userlist_add(
+                        owner_user_id=owner_id,
+                        profile_url=canonical,
+                        handle=handle,
+                        display_name=info.get("display_name"),
+                        avatar_url=info.get("avatar_url"),
+                        last_song_url=info.get("last_song_url"),
+                        last_song_title=info.get("last_song_title"),
+                        priority=priority,
+                    )
+                    if new_id is None:
+                        await flash(f"@{handle} ist bereits in deiner Liste.", "error")
+                    else:
+                        await flash(f"@{handle} hinzugefügt.", "success")
+
+            elif action == "delete":
+                entry_id = int(form.get("entry_id", "0"))
+                if await db.suno_userlist_delete(owner_id, entry_id):
+                    await flash("Eintrag entfernt.", "success")
+
+            elif action == "set_priority":
+                entry_id = int(form.get("entry_id", "0"))
+                priority = form.get("priority", "medium")
+                await db.suno_userlist_set_priority(owner_id, entry_id, priority)
+
+            elif action == "mark_done":
+                entry_id = int(form.get("entry_id", "0"))
+                await db.suno_userlist_set_done(owner_id, entry_id, True)
+
+            elif action == "mark_undone":
+                entry_id = int(form.get("entry_id", "0"))
+                await db.suno_userlist_set_done(owner_id, entry_id, False)
+
+            elif action == "pause":
+                entry_id = int(form.get("entry_id", "0"))
+                await db.suno_userlist_set_paused(owner_id, entry_id, True)
+
+            elif action == "unpause":
+                entry_id = int(form.get("entry_id", "0"))
+                await db.suno_userlist_set_paused(owner_id, entry_id, False)
+
+            elif action == "edit_url":
+                entry_id = int(form.get("entry_id", "0"))
+                raw_url = (form.get("profile_url") or "").strip()
+                canonical, handle = _normalize_suno_profile_url(raw_url)
+                if not canonical:
+                    await flash("Ungültige Suno-Profil-URL.", "error")
+                else:
+                    info = await _fetch_suno_profile(canonical)
+                    ok = await db.suno_userlist_update_url(
+                        owner_user_id=owner_id,
+                        entry_id=entry_id,
+                        profile_url=canonical,
+                        handle=handle,
+                        display_name=info.get("display_name"),
+                        avatar_url=info.get("avatar_url"),
+                        last_song_url=info.get("last_song_url"),
+                        last_song_title=info.get("last_song_title"),
+                    )
+                    if ok:
+                        await flash(f"Eintrag aktualisiert: @{handle}.", "success")
+                    else:
+                        await flash("Aktualisierung fehlgeschlagen (Handle bereits vorhanden?).", "error")
+
+            elif action == "refresh":
+                entry_id = int(form.get("entry_id", "0"))
+                entry = await db.suno_userlist_get(owner_id, entry_id)
+                if entry:
+                    info = await _fetch_suno_profile(entry["profile_url"])
+                    await db.suno_userlist_update_meta(
+                        owner_user_id=owner_id,
+                        entry_id=entry_id,
+                        display_name=info.get("display_name") or entry.get("display_name"),
+                        avatar_url=info.get("avatar_url") or entry.get("avatar_url"),
+                        last_song_url=info.get("last_song_url") or entry.get("last_song_url"),
+                        last_song_title=info.get("last_song_title") or entry.get("last_song_title"),
+                    )
+
+            # Preserve current filter state
+            qs = {k: v for k, v in (await request.form).items()
+                  if k in ("filter_priority", "filter_status", "hide_paused")}
+            return redirect(url_for("suno_userlist", **qs))
+
+        # GET — apply filters
+        all_entries = await db.suno_userlist_list(owner_id)
+        filter_priority = request.args.get("filter_priority", "all")
+        filter_status = request.args.get("filter_status", "open")  # open | done | all
+        hide_paused = request.args.get("hide_paused", "0") == "1"
+
+        def keep(e):
+            if filter_priority in ("high", "medium", "low") and e["priority"] != filter_priority:
+                return False
+            if filter_status == "open" and e["done"]:
+                return False
+            if filter_status == "done" and not e["done"]:
+                return False
+            if hide_paused and e["paused"]:
+                return False
+            return True
+
+        entries = [e for e in all_entries if keep(e)]
+        total = len(all_entries)
+        open_count = sum(1 for e in all_entries if not e["done"])
+        done_count = total - open_count
+        paused_count = sum(1 for e in all_entries if e["paused"])
+
+        return await render_template(
+            "suno_userlist.html",
+            entries=entries,
+            total=total,
+            open_count=open_count,
+            done_count=done_count,
+            paused_count=paused_count,
+            shown_count=len(entries),
+            filter_priority=filter_priority,
+            filter_status=filter_status,
+            hide_paused=hide_paused,
+        )
 
     return app

@@ -263,6 +263,28 @@ class Database:
         """)
         await self.db.commit()
 
+        # Create suno_userlist table — per web user "todo list" of Suno creators
+        await self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS suno_userlist (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_user_id INTEGER NOT NULL,
+                profile_url TEXT NOT NULL,
+                handle TEXT NOT NULL,
+                display_name TEXT,
+                avatar_url TEXT,
+                priority TEXT NOT NULL DEFAULT 'medium',
+                done INTEGER NOT NULL DEFAULT 0,
+                paused INTEGER NOT NULL DEFAULT 0,
+                last_song_url TEXT,
+                last_song_title TEXT,
+                last_fetched_at REAL,
+                added_at REAL DEFAULT (unixepoch()),
+                UNIQUE(owner_user_id, handle)
+            );
+            CREATE INDEX IF NOT EXISTS idx_suno_userlist_owner ON suno_userlist(owner_user_id);
+        """)
+        await self.db.commit()
+
         # Create suno_playlists table for radio Suno playlist sources
         await self.db.executescript("""
             CREATE TABLE IF NOT EXISTS suno_playlists (
@@ -1945,6 +1967,135 @@ class Database:
         params.append(max(1, min(25, int(limit))))
         async with self.db.execute(sql, params) as cur:
             return [dict(r) for r in await cur.fetchall()]
+
+    # --- Suno Userlist (per web user) ---
+
+    async def suno_userlist_add(
+        self,
+        owner_user_id: int,
+        profile_url: str,
+        handle: str,
+        display_name: str | None = None,
+        avatar_url: str | None = None,
+        last_song_url: str | None = None,
+        last_song_title: str | None = None,
+        priority: str = "medium",
+    ) -> int | None:
+        try:
+            cur = await self.db.execute(
+                "INSERT INTO suno_userlist "
+                "(owner_user_id, profile_url, handle, display_name, avatar_url, "
+                " priority, last_song_url, last_song_title, last_fetched_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (owner_user_id, profile_url, handle, display_name, avatar_url,
+                 priority, last_song_url, last_song_title, time.time()),
+            )
+            await self.db.commit()
+            return cur.lastrowid
+        except aiosqlite.IntegrityError:
+            return None
+
+    async def suno_userlist_list(self, owner_user_id: int) -> list[dict]:
+        async with self.db.execute(
+            "SELECT * FROM suno_userlist WHERE owner_user_id = ? "
+            "ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 "
+            "  WHEN 'low' THEN 2 ELSE 3 END, "
+            "  done ASC, LOWER(COALESCE(display_name, handle)) ASC",
+            (owner_user_id,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def suno_userlist_get(self, owner_user_id: int, entry_id: int) -> dict | None:
+        async with self.db.execute(
+            "SELECT * FROM suno_userlist WHERE owner_user_id = ? AND id = ?",
+            (owner_user_id, entry_id),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def suno_userlist_delete(self, owner_user_id: int, entry_id: int) -> bool:
+        cur = await self.db.execute(
+            "DELETE FROM suno_userlist WHERE owner_user_id = ? AND id = ?",
+            (owner_user_id, entry_id),
+        )
+        await self.db.commit()
+        return (cur.rowcount or 0) > 0
+
+    async def suno_userlist_set_priority(
+        self, owner_user_id: int, entry_id: int, priority: str
+    ) -> bool:
+        if priority not in ("high", "medium", "low"):
+            return False
+        cur = await self.db.execute(
+            "UPDATE suno_userlist SET priority = ? WHERE owner_user_id = ? AND id = ?",
+            (priority, owner_user_id, entry_id),
+        )
+        await self.db.commit()
+        return (cur.rowcount or 0) > 0
+
+    async def suno_userlist_set_done(
+        self, owner_user_id: int, entry_id: int, done: bool
+    ) -> bool:
+        cur = await self.db.execute(
+            "UPDATE suno_userlist SET done = ? WHERE owner_user_id = ? AND id = ?",
+            (1 if done else 0, owner_user_id, entry_id),
+        )
+        await self.db.commit()
+        return (cur.rowcount or 0) > 0
+
+    async def suno_userlist_set_paused(
+        self, owner_user_id: int, entry_id: int, paused: bool
+    ) -> bool:
+        cur = await self.db.execute(
+            "UPDATE suno_userlist SET paused = ? WHERE owner_user_id = ? AND id = ?",
+            (1 if paused else 0, owner_user_id, entry_id),
+        )
+        await self.db.commit()
+        return (cur.rowcount or 0) > 0
+
+    async def suno_userlist_update_url(
+        self,
+        owner_user_id: int,
+        entry_id: int,
+        profile_url: str,
+        handle: str,
+        display_name: str | None,
+        avatar_url: str | None,
+        last_song_url: str | None,
+        last_song_title: str | None,
+    ) -> bool:
+        try:
+            cur = await self.db.execute(
+                "UPDATE suno_userlist SET profile_url = ?, handle = ?, display_name = ?, "
+                "  avatar_url = ?, last_song_url = ?, last_song_title = ?, last_fetched_at = ? "
+                "WHERE owner_user_id = ? AND id = ?",
+                (profile_url, handle, display_name, avatar_url,
+                 last_song_url, last_song_title, time.time(),
+                 owner_user_id, entry_id),
+            )
+            await self.db.commit()
+            return (cur.rowcount or 0) > 0
+        except aiosqlite.IntegrityError:
+            return False
+
+    async def suno_userlist_update_meta(
+        self,
+        owner_user_id: int,
+        entry_id: int,
+        display_name: str | None,
+        avatar_url: str | None,
+        last_song_url: str | None,
+        last_song_title: str | None,
+    ) -> bool:
+        cur = await self.db.execute(
+            "UPDATE suno_userlist SET display_name = ?, avatar_url = ?, "
+            "  last_song_url = ?, last_song_title = ?, last_fetched_at = ? "
+            "WHERE owner_user_id = ? AND id = ?",
+            (display_name, avatar_url, last_song_url, last_song_title, time.time(),
+             owner_user_id, entry_id),
+        )
+        await self.db.commit()
+        return (cur.rowcount or 0) > 0
 
     async def purge_llm_audit_log(self, retention_days: int) -> int:
         cutoff = time.time() - retention_days * 86400

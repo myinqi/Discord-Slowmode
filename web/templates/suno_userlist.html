@@ -1,0 +1,251 @@
+{% extends "base.html" %}
+{% block title %}Suno User List{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between mb-6 flex-wrap gap-3">
+    <h2 class="text-2xl font-bold text-white flex items-center gap-3">
+        <span class="text-3xl">⭐</span>
+        Suno User List
+        <span class="text-gray-500 text-sm font-normal">{{ shown_count }} / {{ total }}</span>
+    </h2>
+    <div class="text-xs text-gray-400 flex flex-wrap items-center gap-3">
+        <span><span class="text-yellow-400">●</span> Offen: {{ open_count }}</span>
+        <span><span class="text-green-400">●</span> Erledigt: {{ done_count }}</span>
+        <span><span class="text-purple-400">●</span> Pausiert: {{ paused_count }}</span>
+    </div>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div class="space-y-6">
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            <div class="px-5 py-4 border-b border-gray-700/50">
+                <h3 class="text-white font-semibold">Suno-User hinzufügen</h3>
+            </div>
+            <div class="p-5">
+                <form method="POST" class="space-y-3">
+                    <input type="hidden" name="action" value="add">
+                    <input type="hidden" name="filter_priority" value="{{ filter_priority }}">
+                    <input type="hidden" name="filter_status" value="{{ filter_status }}">
+                    <input type="hidden" name="hide_paused" value="{{ '1' if hide_paused else '0' }}">
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">Profil-URL</label>
+                        <input type="text" name="profile_url" required
+                            placeholder="https://suno.com/@handle"
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">Priorität</label>
+                        <select name="priority" class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                            <option value="high">High</option>
+                            <option value="medium" selected>Medium</option>
+                            <option value="low">Low</option>
+                        </select>
+                    </div>
+                    <button type="submit"
+                        class="w-full px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg font-medium text-sm transition-colors">
+                        Hinzufügen
+                    </button>
+                </form>
+                <p class="text-gray-500 text-xs mt-3 leading-relaxed">
+                    Beispiel: <code class="text-gray-400">https://suno.com/@tarja_ravenveil</code>.
+                    Name &amp; Avatar werden automatisch von Suno geholt.
+                </p>
+            </div>
+        </div>
+
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            <div class="px-5 py-4 border-b border-gray-700/50">
+                <h3 class="text-white font-semibold">Filter</h3>
+            </div>
+            <div class="p-5 space-y-4">
+                <div>
+                    <p class="text-gray-400 text-xs mb-2">Priorität</p>
+                    <div class="flex flex-wrap gap-2">
+                        {% for key, label, color in [
+                            ('all',    'Alle',   'blurple'),
+                            ('high',   'High',   'red'),
+                            ('medium', 'Medium', 'yellow'),
+                            ('low',    'Low',    'green')
+                        ] %}
+                        <a href="{{ url_for('suno_userlist', filter_priority=key, filter_status=filter_status, hide_paused='1' if hide_paused else '0') }}"
+                            class="px-3 py-1 rounded-lg text-xs font-medium transition-colors {% if filter_priority == key %}{% if color == 'red' %}bg-discord-red/30 text-red-300{% elif color == 'yellow' %}bg-yellow-500/30 text-yellow-300{% elif color == 'green' %}bg-green-500/30 text-green-300{% else %}bg-discord-blurple/30 text-discord-blurple{% endif %}{% else %}bg-discord-darker text-gray-400 hover:text-white{% endif %}">
+                            {{ label }}
+                        </a>
+                        {% endfor %}
+                    </div>
+                </div>
+                <div>
+                    <p class="text-gray-400 text-xs mb-2">Status</p>
+                    <div class="flex flex-wrap gap-2">
+                        {% for key, label in [('open','Offen'),('done','Erledigt'),('all','Alle')] %}
+                        <a href="{{ url_for('suno_userlist', filter_priority=filter_priority, filter_status=key, hide_paused='1' if hide_paused else '0') }}"
+                            class="px-3 py-1 rounded-lg text-xs font-medium transition-colors {% if filter_status == key %}bg-discord-blurple/30 text-discord-blurple{% else %}bg-discord-darker text-gray-400 hover:text-white{% endif %}">
+                            {{ label }}
+                        </a>
+                        {% endfor %}
+                    </div>
+                </div>
+                <div>
+                    <a href="{{ url_for('suno_userlist', filter_priority=filter_priority, filter_status=filter_status, hide_paused='0' if hide_paused else '1') }}"
+                        class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors {% if hide_paused %}bg-purple-500/30 text-purple-300{% else %}bg-discord-darker text-gray-400 hover:text-white{% endif %}">
+                        {% if hide_paused %}✓ Pausierte ausgeblendet{% else %}Pausierte ausblenden{% endif %}
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="lg:col-span-2">
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            <div class="px-5 py-4 border-b border-gray-700/50">
+                <h3 class="text-white font-semibold">
+                    Liste
+                    <span class="text-gray-500 text-sm font-normal ml-2">({{ shown_count }} angezeigt)</span>
+                </h3>
+            </div>
+            <div class="p-5">
+                {% if entries %}
+                <div class="space-y-3">
+                    {% for e in entries %}
+                    <div class="bg-discord-darker rounded-lg p-4 border-l-4 {% if e.priority == 'high' %}border-discord-red{% elif e.priority == 'medium' %}border-yellow-500{% else %}border-green-500{% endif %} {% if e.done %}opacity-60{% endif %} {% if e.paused %}ring-1 ring-purple-500/50{% endif %}">
+                        <div class="flex items-start gap-4">
+                            {% if e.avatar_url %}
+                            <img src="{{ e.avatar_url }}" alt=""
+                                class="w-16 h-16 rounded-full object-cover bg-black shrink-0 border border-gray-700"
+                                referrerpolicy="no-referrer"
+                                onerror="this.style.display='none'">
+                            {% else %}
+                            <div class="w-16 h-16 rounded-full bg-discord-dark flex items-center justify-center shrink-0 border border-gray-700">
+                                <span class="text-gray-500 text-2xl">👤</span>
+                            </div>
+                            {% endif %}
+
+                            <div class="min-w-0 flex-1">
+                                <div class="flex items-center gap-2 flex-wrap">
+                                    {% if e.done %}<span class="text-green-400 text-sm" title="Erledigt">✅</span>{% endif %}
+                                    {% if e.paused %}<span class="text-purple-300 text-sm" title="Pausiert">⏸</span>{% endif %}
+                                    <span class="text-white font-semibold truncate">{{ e.display_name or ('@' + e.handle) }}</span>
+                                    <span class="text-gray-500 text-xs">@{{ e.handle }}</span>
+                                    <span class="ml-1 px-2 py-0.5 rounded text-[10px] uppercase tracking-wide font-bold {% if e.priority == 'high' %}bg-discord-red/20 text-red-300{% elif e.priority == 'medium' %}bg-yellow-500/20 text-yellow-300{% else %}bg-green-500/20 text-green-300{% endif %}">{{ e.priority }}</span>
+                                </div>
+                                {% if e.last_song_title or e.last_song_url %}
+                                <p class="text-gray-400 text-xs mt-1 truncate">Letzter Song: {{ e.last_song_title or 'unbekannt' }}</p>
+                                {% endif %}
+
+                                <div class="flex flex-wrap gap-2 mt-3">
+                                    <a href="{{ e.profile_url }}" target="_blank" rel="noopener"
+                                        class="px-3 py-1.5 bg-discord-blurple/20 hover:bg-discord-blurple/40 text-discord-blurple rounded-lg text-xs font-medium transition-colors">👤 Profil</a>
+                                    {% if e.last_song_url %}
+                                    <a href="{{ e.last_song_url }}" target="_blank" rel="noopener"
+                                        class="px-3 py-1.5 bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 rounded-lg text-xs font-medium transition-colors">🎵 Last Song</a>
+                                    {% endif %}
+
+                                    {% if not e.done %}
+                                    <form method="POST" class="inline">
+                                        <input type="hidden" name="action" value="mark_done">
+                                        <input type="hidden" name="entry_id" value="{{ e.id }}">
+                                        <input type="hidden" name="filter_priority" value="{{ filter_priority }}">
+                                        <input type="hidden" name="filter_status" value="{{ filter_status }}">
+                                        <input type="hidden" name="hide_paused" value="{{ '1' if hide_paused else '0' }}">
+                                        <button type="submit" class="px-3 py-1.5 bg-green-600/20 hover:bg-green-600/40 text-green-400 rounded-lg text-xs font-medium transition-colors">✓ Erledigt</button>
+                                    </form>
+                                    {% else %}
+                                    <form method="POST" class="inline">
+                                        <input type="hidden" name="action" value="mark_undone">
+                                        <input type="hidden" name="entry_id" value="{{ e.id }}">
+                                        <input type="hidden" name="filter_priority" value="{{ filter_priority }}">
+                                        <input type="hidden" name="filter_status" value="{{ filter_status }}">
+                                        <input type="hidden" name="hide_paused" value="{{ '1' if hide_paused else '0' }}">
+                                        <button type="submit" class="px-3 py-1.5 bg-yellow-600/20 hover:bg-yellow-600/40 text-yellow-400 rounded-lg text-xs font-medium transition-colors">↺ Offen</button>
+                                    </form>
+                                    {% endif %}
+
+                                    {% if not e.paused %}
+                                    <form method="POST" class="inline">
+                                        <input type="hidden" name="action" value="pause">
+                                        <input type="hidden" name="entry_id" value="{{ e.id }}">
+                                        <input type="hidden" name="filter_priority" value="{{ filter_priority }}">
+                                        <input type="hidden" name="filter_status" value="{{ filter_status }}">
+                                        <input type="hidden" name="hide_paused" value="{{ '1' if hide_paused else '0' }}">
+                                        <button type="submit" class="px-3 py-1.5 bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 rounded-lg text-xs font-medium transition-colors">⏸ Pause</button>
+                                    </form>
+                                    {% else %}
+                                    <form method="POST" class="inline">
+                                        <input type="hidden" name="action" value="unpause">
+                                        <input type="hidden" name="entry_id" value="{{ e.id }}">
+                                        <input type="hidden" name="filter_priority" value="{{ filter_priority }}">
+                                        <input type="hidden" name="filter_status" value="{{ filter_status }}">
+                                        <input type="hidden" name="hide_paused" value="{{ '1' if hide_paused else '0' }}">
+                                        <button type="submit" class="px-3 py-1.5 bg-purple-600/30 hover:bg-purple-600/50 text-purple-200 rounded-lg text-xs font-medium transition-colors">▶ Aktiv</button>
+                                    </form>
+                                    {% endif %}
+
+                                    <form method="POST" class="inline">
+                                        <input type="hidden" name="action" value="set_priority">
+                                        <input type="hidden" name="entry_id" value="{{ e.id }}">
+                                        <input type="hidden" name="filter_priority" value="{{ filter_priority }}">
+                                        <input type="hidden" name="filter_status" value="{{ filter_status }}">
+                                        <input type="hidden" name="hide_paused" value="{{ '1' if hide_paused else '0' }}">
+                                        <select name="priority" onchange="this.form.submit()"
+                                            class="bg-discord-dark border border-gray-600 rounded-lg px-2 py-1.5 text-white text-xs focus:border-discord-blurple focus:outline-none">
+                                            <option value="high"   {% if e.priority == 'high'   %}selected{% endif %}>Prio: High</option>
+                                            <option value="medium" {% if e.priority == 'medium' %}selected{% endif %}>Prio: Medium</option>
+                                            <option value="low"    {% if e.priority == 'low'    %}selected{% endif %}>Prio: Low</option>
+                                        </select>
+                                    </form>
+
+                                    <form method="POST" class="inline">
+                                        <input type="hidden" name="action" value="refresh">
+                                        <input type="hidden" name="entry_id" value="{{ e.id }}">
+                                        <input type="hidden" name="filter_priority" value="{{ filter_priority }}">
+                                        <input type="hidden" name="filter_status" value="{{ filter_status }}">
+                                        <input type="hidden" name="hide_paused" value="{{ '1' if hide_paused else '0' }}">
+                                        <button type="submit" title="Suno-Daten neu abrufen"
+                                            class="px-3 py-1.5 bg-gray-600/20 hover:bg-gray-600/40 text-gray-300 rounded-lg text-xs font-medium transition-colors">↻ Refresh</button>
+                                    </form>
+
+                                    <button type="button"
+                                        onclick="document.getElementById('edit-{{ e.id }}').classList.toggle('hidden')"
+                                        class="px-3 py-1.5 bg-gray-600/20 hover:bg-gray-600/40 text-gray-300 rounded-lg text-xs font-medium transition-colors">✎ URL bearbeiten</button>
+
+                                    <form method="POST" class="inline" onsubmit="return confirm('Eintrag wirklich entfernen?');">
+                                        <input type="hidden" name="action" value="delete">
+                                        <input type="hidden" name="entry_id" value="{{ e.id }}">
+                                        <input type="hidden" name="filter_priority" value="{{ filter_priority }}">
+                                        <input type="hidden" name="filter_status" value="{{ filter_status }}">
+                                        <input type="hidden" name="hide_paused" value="{{ '1' if hide_paused else '0' }}">
+                                        <button type="submit" title="Entfernen" class="px-2 py-1.5 text-gray-500 hover:text-discord-red text-xs transition-colors">✕</button>
+                                    </form>
+                                </div>
+
+                                <div id="edit-{{ e.id }}" class="hidden mt-3">
+                                    <form method="POST" class="flex gap-2">
+                                        <input type="hidden" name="action" value="edit_url">
+                                        <input type="hidden" name="entry_id" value="{{ e.id }}">
+                                        <input type="hidden" name="filter_priority" value="{{ filter_priority }}">
+                                        <input type="hidden" name="filter_status" value="{{ filter_status }}">
+                                        <input type="hidden" name="hide_paused" value="{{ '1' if hide_paused else '0' }}">
+                                        <input type="text" name="profile_url" value="{{ e.profile_url }}" required
+                                            class="flex-1 bg-discord-dark border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                                        <button type="submit"
+                                            class="px-3 py-1.5 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg text-sm font-medium transition-colors">Speichern</button>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-gray-500 text-sm text-center py-12">
+                    {% if total == 0 %}
+                    Noch keine Suno-User in deiner Liste — füge links den ersten hinzu.
+                    {% else %}
+                    Keine Einträge passen zu den aktuellen Filtern.
+                    {% endif %}
+                </p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
