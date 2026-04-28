@@ -169,6 +169,80 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_time",
+            "description": (
+                "Get the current date and time in a given timezone. "
+                "Use this for any 'what time is it / wie spät ist es' "
+                "question. The timezone must be an IANA name like "
+                "'Europe/Berlin', 'America/New_York', 'Asia/Tokyo'. If the "
+                "user mentions a country or city, pick the matching IANA "
+                "zone. Default to 'Europe/Berlin' when unclear."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g. 'Europe/Berlin'.",
+                    },
+                },
+                "required": ["timezone"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": (
+                "Get a short weather forecast for a city via the free "
+                "Open-Meteo API. Use this for any weather/temperature/rain "
+                "question. 'when' selects the time horizon."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "City or place name, e.g. 'Nürnberg', 'Berlin', 'Paris'.",
+                    },
+                    "when": {
+                        "type": "string",
+                        "enum": ["now", "today", "tomorrow", "week"],
+                        "description": "Time horizon. Defaults to 'today'.",
+                    },
+                },
+                "required": ["location"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": (
+                "Search the public web for general-knowledge facts the bot "
+                "doesn't know. Uses DuckDuckGo Instant Answers and "
+                "Wikipedia as a fallback. Use ONLY when neither time, "
+                "weather nor the song-database tools fit, and the answer "
+                "requires real-world facts (people, places, history, "
+                "definitions). Keep the query short and specific."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query, max 12 words.",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 
@@ -212,20 +286,30 @@ def _sanitize_tool_args(prompt: str, args: dict) -> dict:
 
 _NEEDS_TOOLS_RE = re.compile(
     r"\b("
+    # song/community DB tools
     r"song|songs|track|tracks|lied|lieder|st[üu]ck|st[üu]cke|"
     r"artist|k[üu]nstler|band|suno|playlist|"
     r"reaktion|reaktionen|reactions?|likes?|herz|hearts?|fav(oriten)?|"
     r"top|beste(n)?|most|meisten|meiste|popul[aä]r(sten)?|"
     r"zuletzt|k[üu]rzlich|letzte[nr]?|recent|latest|new(est)?|neu(e|este)?|"
     r"diese woche|this week|letzte woche|last week|heute|today|gestern|yesterday|"
-    r"von\s+\w+|by\s+\w+|from\s+\w+|search|suche|finde|zeig(e|t)?|show|list"
+    r"von\s+\w+|by\s+\w+|from\s+\w+|search|suche|finde|zeig(e|t)?|show|list|"
+    # time tool
+    r"uhr|uhrzeit|zeit|time|clock|jetzt|gerade|now|"
+    # weather tool
+    r"wetter|temperatur|regen|schnee|wind|sonne|bew[öo]lkt|"
+    r"weather|temperature|rain|snow|sunny|cloudy|forecast|vorhersage|"
+    r"morgen|tomorrow|woche|week|"
+    # general web search
+    r"wiki|wikipedia|wer ist|what is|who is|wann (war|ist)|when (was|is)|"
+    r"wo (liegt|ist)|where is|wieso|warum|why|how many|wie viele"
     r")\b",
     re.IGNORECASE,
 )
 
 
 def _needs_tools(prompt: str) -> bool:
-    return bool(_TOOL_INTENT_RE.search(prompt or ""))
+    return bool(_NEEDS_TOOLS_RE.search(prompt or ""))
 
 
 def _clamp_limit(val: Any, default: int) -> int:
@@ -322,7 +406,217 @@ class ToolRunner:
             )
             return {"songs": [_song_row(r) for r in rows]}
 
+        if name == "get_current_time":
+            return await _tool_get_current_time(args)
+
+        if name == "get_weather":
+            return await _tool_get_weather(args)
+
+        if name == "web_search":
+            return await _tool_web_search(args)
+
         return {"error": "not implemented"}
+
+
+# --- External-tool helpers ---------------------------------------------------
+
+# Open-Meteo WMO weather codes → human label. Source:
+# https://open-meteo.com/en/docs (WMO 4677 condition codes, abridged).
+_WMO_CODES = {
+    0: "klar",
+    1: "überwiegend klar",
+    2: "teilweise bewölkt",
+    3: "bewölkt",
+    45: "Nebel",
+    48: "gefrierender Nebel",
+    51: "leichter Nieselregen",
+    53: "Nieselregen",
+    55: "starker Nieselregen",
+    61: "leichter Regen",
+    63: "Regen",
+    65: "starker Regen",
+    71: "leichter Schneefall",
+    73: "Schneefall",
+    75: "starker Schneefall",
+    77: "Schneegriesel",
+    80: "leichte Regenschauer",
+    81: "Regenschauer",
+    82: "kräftige Regenschauer",
+    85: "Schneeschauer",
+    86: "kräftige Schneeschauer",
+    95: "Gewitter",
+    96: "Gewitter mit leichtem Hagel",
+    99: "Gewitter mit Hagel",
+}
+
+
+async def _tool_get_current_time(args: dict) -> dict:
+    from datetime import datetime
+    try:
+        from zoneinfo import ZoneInfo
+    except Exception:
+        return {"error": "zoneinfo unavailable on this Python build"}
+    tz = str(args.get("timezone") or "Europe/Berlin").strip() or "Europe/Berlin"
+    try:
+        zone = ZoneInfo(tz)
+    except Exception:
+        return {"error": f"unknown timezone: {tz!r}"}
+    now = datetime.now(zone)
+    return {
+        "timezone": tz,
+        "iso": now.isoformat(timespec="seconds"),
+        "date": now.strftime("%Y-%m-%d"),
+        "time": now.strftime("%H:%M"),
+        "weekday": now.strftime("%A"),
+        "utc_offset": now.strftime("%z"),
+    }
+
+
+async def _tool_get_weather(args: dict) -> dict:
+    location = str(args.get("location") or "").strip()
+    if not location:
+        return {"error": "missing location"}
+    when = str(args.get("when") or "today").strip().lower()
+    if when not in {"now", "today", "tomorrow", "week"}:
+        when = "today"
+
+    timeout = aiohttp.ClientTimeout(total=8)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            # 1. Geocode location.
+            async with sess.get(
+                "https://geocoding-api.open-meteo.com/v1/search",
+                params={"name": location[:80], "count": 1, "language": "de"},
+            ) as resp:
+                geo = await resp.json()
+            results = geo.get("results") or []
+            if not results:
+                return {"error": f"location not found: {location!r}"}
+            place = results[0]
+            lat, lon = place["latitude"], place["longitude"]
+
+            # 2. Forecast.
+            params = {
+                "latitude": lat,
+                "longitude": lon,
+                "timezone": "auto",
+                "current": "temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m",
+                "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum",
+                "forecast_days": 7,
+            }
+            async with sess.get(
+                "https://api.open-meteo.com/v1/forecast", params=params
+            ) as resp:
+                fc = await resp.json()
+    except Exception as e:
+        return {"error": f"weather API failed: {type(e).__name__}: {e}"}
+
+    out: dict = {
+        "location": place.get("name") or location,
+        "country": place.get("country"),
+        "admin": place.get("admin1"),
+        "when": when,
+    }
+    cur = fc.get("current") or {}
+    out["current"] = {
+        "temperature_c": cur.get("temperature_2m"),
+        "humidity_pct": cur.get("relative_humidity_2m"),
+        "wind_kmh": cur.get("wind_speed_10m"),
+        "condition": _WMO_CODES.get(int(cur.get("weather_code") or -1), "unbekannt"),
+    }
+    daily = fc.get("daily") or {}
+    days = []
+    times = daily.get("time") or []
+    for i, day in enumerate(times):
+        days.append({
+            "date": day,
+            "min_c": (daily.get("temperature_2m_min") or [None])[i],
+            "max_c": (daily.get("temperature_2m_max") or [None])[i],
+            "precip_mm": (daily.get("precipitation_sum") or [None])[i],
+            "condition": _WMO_CODES.get(
+                int((daily.get("weather_code") or [-1])[i]), "unbekannt"
+            ),
+        })
+
+    if when == "now":
+        # current already included
+        pass
+    elif when == "today":
+        out["today"] = days[0] if days else None
+    elif when == "tomorrow":
+        out["tomorrow"] = days[1] if len(days) > 1 else None
+    elif when == "week":
+        out["week"] = days[:7]
+    return out
+
+
+async def _tool_web_search(args: dict) -> dict:
+    query = str(args.get("query") or "").strip()[:200]
+    if not query:
+        return {"error": "missing query"}
+
+    timeout = aiohttp.ClientTimeout(total=8)
+    headers = {"User-Agent": "CoraxBot/1.0 (Discord community assistant)"}
+    out: dict = {"query": query, "results": []}
+
+    try:
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as sess:
+            # 1. DuckDuckGo Instant Answer API.
+            async with sess.get(
+                "https://api.duckduckgo.com/",
+                params={"q": query, "format": "json", "no_html": 1, "skip_disambig": 1},
+            ) as resp:
+                # DDG returns text/javascript content-type, force json parse.
+                ddg = await resp.json(content_type=None)
+
+            if ddg.get("AbstractText"):
+                out["results"].append({
+                    "source": "duckduckgo",
+                    "title": ddg.get("Heading") or query,
+                    "snippet": ddg["AbstractText"][:600],
+                    "url": ddg.get("AbstractURL") or "",
+                })
+            for topic in (ddg.get("RelatedTopics") or [])[:3]:
+                if isinstance(topic, dict) and topic.get("Text"):
+                    out["results"].append({
+                        "source": "duckduckgo_related",
+                        "snippet": topic["Text"][:300],
+                        "url": topic.get("FirstURL") or "",
+                    })
+
+            # 2. Wikipedia summary fallback (works when DDG has no answer).
+            if not out["results"]:
+                async with sess.get(
+                    f"https://de.wikipedia.org/api/rest_v1/page/summary/{query.replace(' ', '_')}"
+                ) as resp:
+                    if resp.status == 200:
+                        wiki = await resp.json()
+                        if wiki.get("extract"):
+                            out["results"].append({
+                                "source": "wikipedia_de",
+                                "title": wiki.get("title") or query,
+                                "snippet": wiki["extract"][:600],
+                                "url": (wiki.get("content_urls") or {}).get("desktop", {}).get("page", ""),
+                            })
+            if not out["results"]:
+                async with sess.get(
+                    f"https://en.wikipedia.org/api/rest_v1/page/summary/{query.replace(' ', '_')}"
+                ) as resp:
+                    if resp.status == 200:
+                        wiki = await resp.json()
+                        if wiki.get("extract"):
+                            out["results"].append({
+                                "source": "wikipedia_en",
+                                "title": wiki.get("title") or query,
+                                "snippet": wiki["extract"][:600],
+                                "url": (wiki.get("content_urls") or {}).get("desktop", {}).get("page", ""),
+                            })
+    except Exception as e:
+        return {"error": f"search failed: {type(e).__name__}: {e}"}
+
+    if not out["results"]:
+        out["note"] = "No usable results — answer with 'I don't know' rather than guessing."
+    return out
 
 
 def _song_row(r: dict) -> dict:
