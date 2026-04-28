@@ -7,3 +7,4 @@ hypercorn==0.16.0
 itsdangerous==2.1.2
 deep-translator==1.11.4
 aiohttp>=3.9.0
+langdetect==1.0.9

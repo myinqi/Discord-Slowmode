@@ -382,6 +382,43 @@ SANDWICH_USER_PREFIX = (
 SANDWICH_USER_SUFFIX = "\n<<USER MESSAGE END>>"
 
 
+# Friendly names for the most likely community languages. Anything else falls
+# through with its ISO 639-1 code, which the model can still handle.
+_LANG_NAMES = {
+    "en": "English",
+    "de": "German (Deutsch)",
+    "fr": "French (Français)",
+    "es": "Spanish (Español)",
+    "it": "Italian (Italiano)",
+    "nl": "Dutch (Nederlands)",
+    "pl": "Polish (Polski)",
+    "pt": "Portuguese (Português)",
+    "no": "Norwegian (Norsk)",
+    "sv": "Swedish (Svenska)",
+    "da": "Danish (Dansk)",
+    "fi": "Finnish (Suomi)",
+    "ja": "Japanese (日本語)",
+}
+
+
+def _detect_reply_language(text: str) -> tuple[str, str]:
+    """Detect the language of the user's message.
+
+    Returns (iso_code, friendly_name). Falls back to ('en', 'English') on any
+    error or for very short messages where detection is unreliable.
+    """
+    cleaned = (text or "").strip()
+    if len(cleaned) < 4:
+        return "en", _LANG_NAMES["en"]
+    try:
+        from langdetect import detect, DetectorFactory
+        DetectorFactory.seed = 0  # deterministic
+        code = detect(cleaned)
+    except Exception:
+        return "en", _LANG_NAMES["en"]
+    return code, _LANG_NAMES.get(code, code)
+
+
 async def run_corax_turn(
     *,
     db,
@@ -452,7 +489,21 @@ async def run_corax_turn(
         t for t in TOOL_SCHEMAS if t["function"]["name"] in enabled_tools
     ]
 
+    # Detect the user's language and pin it as a hard, per-turn instruction.
+    # This overrides any persona-level bias (e.g. lots of German Tarja
+    # examples making the model default to German for English input).
+    lang_code, lang_name = _detect_reply_language(user_prompt)
+
     system_blocks = [persona]
+    system_blocks.append(
+        f"REPLY LANGUAGE FOR THIS TURN: {lang_name} (ISO code: {lang_code}).\n"
+        f"You MUST write your ENTIRE reply in {lang_name}. This is a hard "
+        f"requirement that overrides every other rule, including the Tarja "
+        f"block, persona examples, and any earlier language. Do not switch "
+        f"languages mid-reply. If the user explicitly asks for a different "
+        f"language inside their message, that explicit request wins — "
+        f"otherwise stick to {lang_name}."
+    )
     if use_tools:
         system_blocks.append(
             "TOOL USAGE RULES:\n"
