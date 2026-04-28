@@ -264,6 +264,118 @@ class PartyCarouselView(discord.ui.View):
         pass
 
 
+class UserSongsCarouselView(discord.ui.View):
+    """Carousel view for /find-usersongs — browse a user's songs with cover, title, link."""
+
+    def __init__(self, bot, songs: list[dict], target_user: discord.Member, guild: discord.Guild, bot_name: str, fetch_info):
+        super().__init__(timeout=600)
+        self.bot = bot
+        self.songs = songs  # newest first; mutated in-place to cache title/artist/image
+        self.target_user = target_user
+        self.guild = guild
+        self.bot_name = bot_name
+        self._fetch_info = fetch_info  # async (url) -> (title, artist, image_url)
+        self.index = 0
+        self._rebuild_buttons()
+
+    def _rebuild_buttons(self):
+        self.clear_items()
+        song = self.songs[self.index]
+        url = song.get("url", "")
+
+        prev_btn = discord.ui.Button(label="◀ Prev", style=discord.ButtonStyle.secondary, row=0,
+                                     disabled=(self.index == 0))
+        prev_btn.callback = self._prev_callback
+        self.add_item(prev_btn)
+
+        counter = discord.ui.Button(
+            label=f"{self.index + 1} / {len(self.songs)}",
+            style=discord.ButtonStyle.secondary, row=0, disabled=True,
+        )
+        self.add_item(counter)
+
+        next_btn = discord.ui.Button(label="Next ▶", style=discord.ButtonStyle.secondary, row=0,
+                                     disabled=(self.index >= len(self.songs) - 1))
+        next_btn.callback = self._next_callback
+        self.add_item(next_btn)
+
+        self.add_item(discord.ui.Button(
+            label="Listen on Suno", emoji="▶️",
+            style=discord.ButtonStyle.link, url=url, row=1,
+        ))
+
+    async def _ensure_meta(self, song: dict):
+        if song.get("_meta_fetched"):
+            return
+        song["_meta_fetched"] = True
+        try:
+            title, artist, image_url = await self._fetch_info(song.get("url", ""))
+        except Exception:
+            title, artist, image_url = None, None, None
+        song["_title"] = title
+        song["_artist"] = artist
+        song["_image_url"] = image_url
+
+    def build_embed(self) -> discord.Embed:
+        song = self.songs[self.index]
+        url = song.get("url", "")
+        title = song.get("_title") or song.get("song_title") or "Unknown Title"
+        artist = song.get("_artist")
+
+        ch = self.guild.get_channel(song["channel_id"]) if self.guild else None
+        ch_name = f"#{ch.name}" if ch else f"channel-{song['channel_id']}"
+
+        posted_ts = song.get("posted_at")
+        try:
+            posted_dt = datetime.fromtimestamp(float(posted_ts), tz=timezone.utc) if posted_ts else None
+        except Exception:
+            posted_dt = None
+
+        header = f"🎵 Song {self.index + 1} / {len(self.songs)} from {self.target_user.mention}"
+
+        desc_parts = [f"**[{title}]({url})**"]
+        if artist:
+            desc_parts.append(f"by **{artist}**")
+        desc_parts.append(f"posted in {ch_name}" + (f" • {discord.utils.format_dt(posted_dt, style='R')}" if posted_dt else ""))
+        desc_parts.append(url)
+
+        embed = discord.Embed(
+            title=header,
+            description="\n".join(desc_parts),
+            color=discord.Color.blurple(),
+        )
+
+        image_url = song.get("_image_url")
+        if not image_url:
+            song_id_match = re.search(r'suno\.com/(?:s|song)/([\w-]+)', url)
+            if song_id_match:
+                image_url = f"https://cdn2.suno.ai/image_{song_id_match.group(1)}.jpeg"
+        if image_url:
+            embed.set_image(url=image_url)
+
+        embed.set_footer(text=f"{self.bot_name}")
+        if posted_dt:
+            embed.timestamp = posted_dt
+        return embed
+
+    async def _prev_callback(self, interaction: discord.Interaction):
+        if self.index > 0:
+            self.index -= 1
+        await self._ensure_meta(self.songs[self.index])
+        self._rebuild_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def _next_callback(self, interaction: discord.Interaction):
+        if self.index < len(self.songs) - 1:
+            self.index += 1
+        await self._ensure_meta(self.songs[self.index])
+        self._rebuild_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def on_timeout(self):
+        pass
+
+
 class CommandsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -1104,6 +1216,50 @@ class CommandsCog(commands.Cog):
             print(f"[find-song] Error: {e}")
             await interaction.followup.send(f"Error: {e}", ephemeral=True)
 
+    @app_commands.command(name="find-usersongs", description="Browse a user's recent songs (carousel, newest first)")
+    @app_commands.describe(
+        user="User whose songs to browse",
+        count="How many of the most recent songs to show (1–25, default 1)",
+    )
+    async def find_usersongs(self, interaction: discord.Interaction, user: discord.Member, count: int = 1):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            if count < 1:
+                count = 1
+            if count > 25:
+                count = 25
+
+            songs = await self.bot.db.find_songs(user_id=user.id, limit=count, random=False)
+            if not songs:
+                await interaction.followup.send(f"No songs found for {user.mention}.", ephemeral=True)
+                return
+
+            # Pre-fetch metadata for the first song so the initial embed shows cover/title.
+            first = songs[0]
+            try:
+                title, artist, image_url = await self._fetch_suno_info(first.get("url", ""))
+                first["_meta_fetched"] = True
+                first["_title"] = title
+                first["_artist"] = artist
+                first["_image_url"] = image_url
+            except Exception as e:
+                print(f"[find-usersongs] meta fetch failed: {e}")
+
+            bot_name = await self.bot.db.get_setting("bot_name") or "Slowmode Bot"
+            view = UserSongsCarouselView(
+                bot=self.bot,
+                songs=songs,
+                target_user=user,
+                guild=interaction.guild,
+                bot_name=bot_name,
+                fetch_info=self._fetch_suno_info,
+            )
+            await interaction.followup.send(embed=view.build_embed(), view=view, ephemeral=True)
+
+        except Exception as e:
+            print(f"[find-usersongs] Error: {e}")
+            await interaction.followup.send(f"Error: {e}", ephemeral=True)
+
 
     @app_commands.command(name="talk", description="Let the bot speak for you in the current channel")
     @app_commands.describe(
@@ -1482,6 +1638,7 @@ class CommandsCog(commands.Cog):
         song_cmds = (
             "**`/find-list <search>`** — Search Suno playlists by artist/user/keyword\n"
             "**`/find-song [@user] [title]`** — Find songs by user, title, or random\n"
+            "**`/find-usersongs <@user> [count]`** — Browse a user's recent songs in a carousel\n"
             "**`/random-song [#channel]`** — Post a random Suno song from a listening party\n"
             "**`/new`** — Browse unreacted songs from the last 2 days (carousel)\n"
             "**`/top <period>`** — Top 10 most reacted songs (today/7/30/90/all)\n"
