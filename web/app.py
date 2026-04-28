@@ -62,7 +62,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('polls', 'Polls'),
         ('radio', 'Twitch Radio'),
         ('suno_analyzer', 'Suno Analyzer'),
-        ('suno_userlist', 'Suno User List'),
+        ('suno_promotion', 'Suno Promotion'),
         ('audit', 'Audit Log'),
         ('settings', 'Settings'),
         ('llm', 'Corax Chat (LLM)'),
@@ -2899,7 +2899,7 @@ def create_app(db: Database, bot=None) -> Quart:
             traceback.print_exc()
             return f"<pre>Error: {e}\n\n{traceback.format_exc()}</pre>", 500
 
-    # --- Suno User List (per logged-in web user) ---
+    # --- Suno Promotion (per logged-in web user) ---
 
     SUNO_PROFILE_PATTERN = re.compile(r'^https?://(?:www\.)?suno\.com/@([A-Za-z0-9_.\-]+)/?$')
 
@@ -2946,7 +2946,7 @@ def create_app(db: Database, bot=None) -> Quart:
                         return out
                     html = await resp.text()
         except Exception as e:
-            print(f"[suno_userlist] fetch failed for {profile_url}: {e}")
+            print(f"[suno_promotion] fetch failed for {profile_url}: {e}")
             return out
 
         # og:title — typically "Display Name | Suno" or just "Display Name"
@@ -2991,10 +2991,18 @@ def create_app(db: Database, bot=None) -> Quart:
             if m:
                 out["avatar_url"] = m.group(0)
 
-        # Last song: first /song/<uuid> reference on the profile page
-        m = re.search(r'https?://suno\.com/song/([a-f0-9-]{36})', html)
+        # Last song: first /song/<uuid> reference on the profile page.
+        # Match both absolute and relative URLs, and also raw clip-id patterns
+        # commonly embedded in Suno's SSR HTML JSON blobs.
+        song_uuid = None
+        m = re.search(r'/song/([a-f0-9-]{36})', html)
         if m:
             song_uuid = m.group(1)
+        if not song_uuid:
+            m = re.search(r'"clip_id"\s*:\s*"([a-f0-9-]{36})"', html)
+            if m:
+                song_uuid = m.group(1)
+        if song_uuid:
             out["last_song_url"] = f"https://suno.com/song/{song_uuid}"
             # Try to fetch the song's title quickly
             try:
@@ -3006,9 +3014,9 @@ def create_app(db: Database, bot=None) -> Quart:
 
         return out
 
-    @app.route("/suno-userlist", methods=["GET", "POST"])
-    @permission_required('suno_userlist')
-    async def suno_userlist():
+    @app.route("/suno-promotion", methods=["GET", "POST"])
+    @permission_required('suno_promotion')
+    async def suno_promotion():
         owner_id = session["user_id"]
         if request.method == "POST":
             form = await request.form
@@ -3021,7 +3029,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     priority = "medium"
                 canonical, handle = _normalize_suno_profile_url(raw_url)
                 if not canonical:
-                    await flash("Ungültige Suno-Profil-URL. Erwartet: https://suno.com/@handle", "error")
+                    await flash("Invalid Suno profile URL. Expected: https://suno.com/@handle", "error")
                 else:
                     info = await _fetch_suno_profile(canonical)
                     new_id = await db.suno_userlist_add(
@@ -3035,14 +3043,14 @@ def create_app(db: Database, bot=None) -> Quart:
                         priority=priority,
                     )
                     if new_id is None:
-                        await flash(f"@{handle} ist bereits in deiner Liste.", "error")
+                        await flash(f"@{handle} is already in your list.", "error")
                     else:
-                        await flash(f"@{handle} hinzugefügt.", "success")
+                        await flash(f"Added @{handle}.", "success")
 
             elif action == "delete":
                 entry_id = int(form.get("entry_id", "0"))
                 if await db.suno_userlist_delete(owner_id, entry_id):
-                    await flash("Eintrag entfernt.", "success")
+                    await flash("Entry removed.", "success")
 
             elif action == "set_priority":
                 entry_id = int(form.get("entry_id", "0"))
@@ -3070,7 +3078,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 raw_url = (form.get("profile_url") or "").strip()
                 canonical, handle = _normalize_suno_profile_url(raw_url)
                 if not canonical:
-                    await flash("Ungültige Suno-Profil-URL.", "error")
+                    await flash("Invalid Suno profile URL.", "error")
                 else:
                     info = await _fetch_suno_profile(canonical)
                     ok = await db.suno_userlist_update_url(
@@ -3084,9 +3092,9 @@ def create_app(db: Database, bot=None) -> Quart:
                         last_song_title=info.get("last_song_title"),
                     )
                     if ok:
-                        await flash(f"Eintrag aktualisiert: @{handle}.", "success")
+                        await flash(f"Entry updated: @{handle}.", "success")
                     else:
-                        await flash("Aktualisierung fehlgeschlagen (Handle bereits vorhanden?).", "error")
+                        await flash("Update failed (handle already in list?).", "error")
 
             elif action == "refresh":
                 entry_id = int(form.get("entry_id", "0"))
@@ -3105,7 +3113,7 @@ def create_app(db: Database, bot=None) -> Quart:
             # Preserve current filter state
             qs = {k: v for k, v in (await request.form).items()
                   if k in ("filter_priority", "filter_status", "hide_paused")}
-            return redirect(url_for("suno_userlist", **qs))
+            return redirect(url_for("suno_promotion", **qs))
 
         # GET — apply filters
         all_entries = await db.suno_userlist_list(owner_id)
@@ -3131,7 +3139,7 @@ def create_app(db: Database, bot=None) -> Quart:
         paused_count = sum(1 for e in all_entries if e["paused"])
 
         return await render_template(
-            "suno_userlist.html",
+            "suno_promotion.html",
             entries=entries,
             total=total,
             open_count=open_count,

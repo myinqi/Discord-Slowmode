@@ -358,19 +358,30 @@ class UserSongsCarouselView(discord.ui.View):
             embed.timestamp = posted_dt
         return embed
 
-    async def _prev_callback(self, interaction: discord.Interaction):
-        if self.index > 0:
-            self.index -= 1
+    async def _navigate(self, interaction: discord.Interaction, delta: int):
+        # Defer the component interaction immediately (silent update) so we have
+        # time to fetch metadata for songs whose cover wasn't pre-cached yet.
+        # Without this, slow Suno responses exceed the 3s interaction window
+        # and the embed edit (with cover image) is silently dropped.
+        try:
+            await interaction.response.defer()
+        except discord.InteractionResponded:
+            pass
+        new_idx = self.index + delta
+        if 0 <= new_idx < len(self.songs):
+            self.index = new_idx
         await self._ensure_meta(self.songs[self.index])
         self._rebuild_buttons()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        try:
+            await interaction.edit_original_response(embed=self.build_embed(), view=self)
+        except discord.HTTPException as e:
+            print(f"[find-usersongs] edit failed: {e}")
+
+    async def _prev_callback(self, interaction: discord.Interaction):
+        await self._navigate(interaction, -1)
 
     async def _next_callback(self, interaction: discord.Interaction):
-        if self.index < len(self.songs) - 1:
-            self.index += 1
-        await self._ensure_meta(self.songs[self.index])
-        self._rebuild_buttons()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await self._navigate(interaction, +1)
 
     async def on_timeout(self):
         pass
