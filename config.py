@@ -26,5 +26,5 @@ class Config:
 
     # LLM (Corax chat)
     OLLAMA_URL: str = os.getenv("OLLAMA_URL", "http://ollama:11434")
-    LLM_MODEL: str = os.getenv("LLM_MODEL", "gemma3:4b")
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "qwen2.5:7b-instruct")
     LLM_REQUEST_TIMEOUT: int = int(os.getenv("LLM_REQUEST_TIMEOUT", "180"))

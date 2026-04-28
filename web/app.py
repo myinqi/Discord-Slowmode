@@ -708,7 +708,7 @@ def create_app(db: Database, bot=None) -> Quart:
             ]
             await db.update_llm_config(
                 enabled=1 if form.get("enabled") else 0,
-                model=(form.get("model") or "gemma3:4b").strip()[:64],
+                model=(form.get("model") or "qwen2.5:7b-instruct").strip()[:64],
                 tools_model=(form.get("tools_model") or "").strip()[:64],
                 persona=(form.get("persona") or "").strip()[:4000],
                 retention_days=max(1, min(365, _i("retention_days", 30))),

@@ -301,7 +301,7 @@ class Database:
             CREATE TABLE IF NOT EXISTS llm_config (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 enabled INTEGER DEFAULT 0,
-                model TEXT DEFAULT 'gemma3:4b',
+                model TEXT DEFAULT 'qwen2.5:7b-instruct',
                 tools_model TEXT DEFAULT '',
                 persona TEXT DEFAULT '',
                 retention_days INTEGER DEFAULT 30,
@@ -351,6 +351,27 @@ class Database:
         if "tools_model" not in cols:
             await self.db.execute(
                 "ALTER TABLE llm_config ADD COLUMN tools_model TEXT DEFAULT ''"
+            )
+            await self.db.commit()
+
+        # One-time migration: bump prior small-model defaults to qwen2.5:7b
+        # and clear the now-unused tools model. Only touches rows that still
+        # match the previous defaults exactly, so custom configs are preserved.
+        async with self.db.execute(
+            "SELECT value FROM settings WHERE key = 'llm_migration_v2'"
+        ) as cur:
+            done = await cur.fetchone()
+        if not done:
+            await self.db.execute(
+                "UPDATE llm_config SET model = 'qwen2.5:7b-instruct' "
+                "WHERE id = 1 AND (model IS NULL OR model = '' OR model = 'gemma3:4b')"
+            )
+            await self.db.execute(
+                "UPDATE llm_config SET tools_model = '' "
+                "WHERE id = 1 AND tools_model = 'qwen2.5:3b'"
+            )
+            await self.db.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('llm_migration_v2', '1')"
             )
             await self.db.commit()
 
