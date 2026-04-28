@@ -401,22 +401,49 @@ _LANG_NAMES = {
 }
 
 
+_LANG_TRUSTED = {"en", "de", "fr", "es", "it", "nl", "pl", "pt", "no", "sv",
+                 "da", "fi", "ja"}
+_GERMAN_HINT_RE = re.compile(r"[äöüÄÖÜß]")
+
+
 def _detect_reply_language(text: str) -> tuple[str, str]:
     """Detect the language of the user's message.
 
-    Returns (iso_code, friendly_name). Falls back to ('en', 'English') on any
-    error or for very short messages where detection is unreliable.
+    langdetect is unreliable on short, generic English phrases (it happily
+    returns Somali, Tagalog, Afrikaans etc. for "how are you today?"). To
+    avoid pinning the model to a language it can't speak, we combine three
+    heuristics:
+
+    1. Strong German-specific characters (ä ö ü ß) → German.
+    2. langdetect with a confidence threshold AND a whitelist of languages
+       we trust the chat model to actually produce.
+    3. Anything else → English fallback (the model's strongest language).
     """
     cleaned = (text or "").strip()
-    if len(cleaned) < 4:
+    if len(cleaned) < 8:
         return "en", _LANG_NAMES["en"]
+    if _GERMAN_HINT_RE.search(cleaned):
+        return "de", _LANG_NAMES["de"]
     try:
-        from langdetect import detect, DetectorFactory
+        from langdetect import detect_langs, DetectorFactory
         DetectorFactory.seed = 0  # deterministic
-        code = detect(cleaned)
+        candidates = detect_langs(cleaned)
     except Exception:
         return "en", _LANG_NAMES["en"]
-    return code, _LANG_NAMES.get(code, code)
+
+    if not candidates:
+        return "en", _LANG_NAMES["en"]
+
+    top = candidates[0]
+    code = top.lang
+    prob = float(getattr(top, "prob", 0.0))
+
+    # Only trust the detector when it is very confident AND the language is
+    # one the chat model is known to handle well. Otherwise default to
+    # English to avoid forcing the model into a language it can't produce.
+    if code in _LANG_TRUSTED and prob >= 0.90:
+        return code, _LANG_NAMES.get(code, code)
+    return "en", _LANG_NAMES["en"]
 
 
 async def run_corax_turn(

@@ -13,7 +13,7 @@ services:
     environment:
       - DATABASE_PATH=/app/data/bot.db
       - OLLAMA_URL=http://ollama:11434
-      - LLM_MODEL=gemma3:4b
+      - LLM_MODEL=qwen2.5:7b-instruct
     depends_on:
       - ollama
 
@@ -37,7 +37,7 @@ services:
       "ollama serve &
        pid=$!;
        until ollama list >/dev/null 2>&1; do sleep 1; done;
-       ollama pull gemma3:4b || true;
+       ollama pull qwen2.5:7b-instruct || true;
        wait $pid"
 
 volumes:
