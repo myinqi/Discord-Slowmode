@@ -143,11 +143,13 @@
                     <button type="button" onclick="loadDefaultPersona()"
                         class="text-xs text-discord-blurple hover:underline">Insert default draft</button>
                 </div>
-                <textarea name="persona" rows="10" id="persona"
+                <textarea name="persona" rows="20" id="persona" maxlength="16000"
+                    oninput="document.getElementById('persona-count').textContent = this.value.length"
                     class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white font-mono text-xs focus:outline-none focus:border-discord-blurple">{{ cfg.persona or default_persona }}</textarea>
-                <p class="text-xs text-gray-500 mt-1">
-                    Prepended to every conversation. The default draft already
-                    contains prompt-hardening against injection — edit with care.
+                <p class="text-xs text-gray-500 mt-1 flex justify-between">
+                    <span>Prepended to every conversation. The default draft already
+                    contains prompt-hardening against injection — edit with care.</span>
+                    <span><span id="persona-count">{{ (cfg.persona or default_persona)|length }}</span> / 16000</span>
                 </p>
             </div>
 
