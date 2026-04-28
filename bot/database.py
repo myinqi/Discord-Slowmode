@@ -1003,10 +1003,17 @@ class Database:
 
         return stats
 
-    async def find_songs(self, user_id: int = None, limit: int = 1, random: bool = False) -> list[dict]:
-        """Find songs, optionally filtered by user. Can return random results."""
-        where = "WHERE user_id = ?" if user_id else ""
-        params = (user_id,) if user_id else ()
+    async def find_songs(self, user_id: int = None, channel_id: int = None, limit: int = 1, random: bool = False) -> list[dict]:
+        """Find songs, optionally filtered by user and/or channel. Can return random results."""
+        clauses = []
+        params: list = []
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(user_id)
+        if channel_id is not None:
+            clauses.append("channel_id = ?")
+            params.append(channel_id)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         order = "ORDER BY RANDOM()" if random else "ORDER BY posted_at DESC"
         async with self.db.execute(
             f"SELECT channel_id, user_id, user_name, url, posted_at FROM song_posts {where} {order} LIMIT ?",
@@ -2042,6 +2049,15 @@ class Database:
         )
         await self.db.commit()
         return (cur.rowcount or 0) > 0
+
+    async def suno_userlist_reset_done(self, owner_user_id: int) -> int:
+        """Reset all entries of the given owner to done=0. Returns affected row count."""
+        cur = await self.db.execute(
+            "UPDATE suno_userlist SET done = 0 WHERE owner_user_id = ? AND done = 1",
+            (owner_user_id,),
+        )
+        await self.db.commit()
+        return cur.rowcount or 0
 
     async def suno_userlist_set_paused(
         self, owner_user_id: int, entry_id: int, paused: bool

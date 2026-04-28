@@ -2,6 +2,7 @@ import re
 import time
 import math
 import random
+import asyncio
 from datetime import datetime, timedelta, timezone
 import aiohttp
 import discord
@@ -1231,8 +1232,15 @@ class CommandsCog(commands.Cog):
     @app_commands.describe(
         user="User whose songs to browse",
         count="How many of the most recent songs to show (1–25, default 1)",
+        channel="Limit search to one monitored channel (default: all channels)",
     )
-    async def find_usersongs(self, interaction: discord.Interaction, user: discord.Member, count: int = 1):
+    async def find_usersongs(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member,
+        count: int = 1,
+        channel: discord.TextChannel = None,
+    ):
         await interaction.response.defer(ephemeral=True)
         try:
             if count < 1:
@@ -1240,21 +1248,30 @@ class CommandsCog(commands.Cog):
             if count > 25:
                 count = 25
 
-            songs = await self.bot.db.find_songs(user_id=user.id, limit=count, random=False)
+            channel_id = channel.id if channel else None
+            songs = await self.bot.db.find_songs(
+                user_id=user.id, channel_id=channel_id, limit=count, random=False
+            )
             if not songs:
-                await interaction.followup.send(f"No songs found for {user.mention}.", ephemeral=True)
+                where = f" in {channel.mention}" if channel else ""
+                await interaction.followup.send(f"No songs found for {user.mention}{where}.", ephemeral=True)
                 return
 
-            # Pre-fetch metadata for the first song so the initial embed shows cover/title.
-            first = songs[0]
-            try:
-                title, artist, image_url = await self._fetch_suno_info(first.get("url", ""))
-                first["_meta_fetched"] = True
-                first["_title"] = title
-                first["_artist"] = artist
-                first["_image_url"] = image_url
-            except Exception as e:
-                print(f"[find-usersongs] meta fetch failed: {e}")
+            # Pre-fetch metadata for ALL songs in parallel so every cover is cached
+            # before the carousel is shown. This avoids per-click race-conditions
+            # against Discord's interaction window.
+            async def _prefetch(song):
+                try:
+                    title, artist, image_url = await self._fetch_suno_info(song.get("url", ""))
+                except Exception as e:
+                    print(f"[find-usersongs] prefetch failed for {song.get('url')}: {e}")
+                    title, artist, image_url = None, None, None
+                song["_meta_fetched"] = True
+                song["_title"] = title
+                song["_artist"] = artist
+                song["_image_url"] = image_url
+
+            await asyncio.gather(*(_prefetch(s) for s in songs))
 
             bot_name = await self.bot.db.get_setting("bot_name") or "Slowmode Bot"
             view = UserSongsCarouselView(

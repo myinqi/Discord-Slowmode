@@ -3096,6 +3096,13 @@ def create_app(db: Database, bot=None) -> Quart:
                     else:
                         await flash("Update failed (handle already in list?).", "error")
 
+            elif action == "reset_cycle":
+                affected = await db.suno_userlist_reset_done(owner_id)
+                if affected:
+                    await flash(f"Cycle ended — {affected} entr{'y' if affected == 1 else 'ies'} reopened.", "success")
+                else:
+                    await flash("No entries to reset.", "error")
+
             elif action == "refresh":
                 entry_id = int(form.get("entry_id", "0"))
                 entry = await db.suno_userlist_get(owner_id, entry_id)

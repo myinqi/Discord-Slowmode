@@ -7,10 +7,24 @@
         Suno Promotion
         <span class="text-gray-500 text-sm font-normal">{{ shown_count }} / {{ total }}</span>
     </h2>
-    <div class="text-xs text-gray-400 flex flex-wrap items-center gap-3">
-        <span><span class="text-yellow-400">●</span> Open: {{ open_count }}</span>
-        <span><span class="text-green-400">●</span> Done: {{ done_count }}</span>
-        <span><span class="text-purple-400">●</span> Paused: {{ paused_count }}</span>
+    <div class="flex items-center gap-4 flex-wrap">
+        <div class="text-xs text-gray-400 flex flex-wrap items-center gap-3">
+            <span><span class="text-yellow-400">●</span> Open: {{ open_count }}</span>
+            <span><span class="text-green-400">●</span> Done: {{ done_count }}</span>
+            <span><span class="text-purple-400">●</span> Paused: {{ paused_count }}</span>
+        </div>
+        <form method="POST" class="inline" onsubmit="return confirm('End the current cycle? This reopens all {{ done_count }} done {{ 'entry' if done_count == 1 else 'entries' }}.');">
+            <input type="hidden" name="action" value="reset_cycle">
+            <input type="hidden" name="filter_priority" value="{{ filter_priority }}">
+            <input type="hidden" name="filter_status" value="{{ filter_status }}">
+            <input type="hidden" name="hide_paused" value="{{ '1' if hide_paused else '0' }}">
+            <button type="submit"
+                {% if done_count == 0 %}disabled{% endif %}
+                class="px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors {% if done_count == 0 %}bg-discord-darker text-gray-600 cursor-not-allowed{% else %}bg-discord-red/20 hover:bg-discord-red/40 text-red-300{% endif %}"
+                title="Reopen all done entries (start a new promotion cycle)">
+                🔁 End cycle
+            </button>
+        </form>
     </div>
 </div>
 
