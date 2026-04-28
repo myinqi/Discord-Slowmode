@@ -312,6 +312,84 @@ def _needs_tools(prompt: str) -> bool:
     return bool(_NEEDS_TOOLS_RE.search(prompt or ""))
 
 
+# --- Intent classifier for tool subsetting ----------------------------------
+#
+# Offering all 7 tool schemas at once makes qwen2.5:7b on CPU slow and
+# indecisive (often it picks the wrong tool, or none at all, and we hit the
+# 180s request timeout). We pre-filter the schemas to the smallest plausible
+# subset based on simple keyword intent buckets.
+
+_INTENT_TIME_RE = re.compile(
+    r"\b(uhr|uhrzeit|zeit|sp[äa]t|now|jetzt|gerade|clock|time|"
+    r"datum|date|wochentag|weekday|sommerzeit|winterzeit|timezone|"
+    r"zeitzone|tag|day)\b",
+    re.IGNORECASE,
+)
+_INTENT_WEATHER_RE = re.compile(
+    r"\b(wetter|temperatur|regen|schnee|wind|sonne|bew[öo]lkt|"
+    r"weather|temperature|rain|snow|sunny|cloudy|forecast|vorhersage|"
+    r"hitze|k[äa]lte|grad|degrees?|°c|umbrella|regenschirm)\b",
+    re.IGNORECASE,
+)
+_INTENT_SONGS_RE = re.compile(
+    r"\b(song|songs|track|tracks|lied|lieder|st[üu]ck|st[üu]cke|"
+    r"artist|k[üu]nstler|band|suno|playlist|"
+    r"reaktion|reaktionen|reactions?|likes?|herz|hearts?|fav(oriten)?|"
+    r"top|beste(n)?|popul[aä]r(sten)?|charts?|"
+    r"posten|posted|shared|geteilt)\b",
+    re.IGNORECASE,
+)
+_INTENT_SEARCH_RE = re.compile(
+    r"\b(wer (ist|war)|who (is|was)|wann (war|ist)|when (was|is)|"
+    r"wo (liegt|ist)|where is|wikipedia|wiki|definiere|define|"
+    r"erkl[äa]r(e|en)|explain|fakten|facts|geschichte|history|"
+    r"hauptstadt|capital|einwohner|population|how many|wie viele|"
+    r"gr[üu]nder|founder|erfinder|inventor)\b",
+    re.IGNORECASE,
+)
+
+_TIME_TOOLS = {"get_current_time"}
+_WEATHER_TOOLS = {"get_weather"}
+_SONG_TOOLS = {
+    "search_songs_by_artist", "recent_songs", "songs_by_user",
+    "top_reacted_songs",
+}
+_SEARCH_TOOLS = {"web_search"}
+
+
+def _filter_tools_by_intent(
+    prompt: str,
+    schemas: list[dict],
+    has_user_mentions: bool,
+    has_channel_mentions: bool,
+) -> list[dict]:
+    """Pick the smallest plausible set of tool schemas for this prompt.
+
+    Reduces the schema list from up to 7 entries to typically 1–4, which
+    speeds up qwen2.5:7b dramatically on CPU and makes its tool choice much
+    more reliable.
+    """
+    p = prompt or ""
+    keep: set[str] = set()
+
+    if _INTENT_TIME_RE.search(p):
+        keep |= _TIME_TOOLS
+    if _INTENT_WEATHER_RE.search(p):
+        keep |= _WEATHER_TOOLS
+    if _INTENT_SONGS_RE.search(p) or has_user_mentions or has_channel_mentions:
+        keep |= _SONG_TOOLS
+    if _INTENT_SEARCH_RE.search(p):
+        keep |= _SEARCH_TOOLS
+
+    # Nothing matched — fall back to offering all schemas. The orchestrator
+    # only attaches tools at all when `_needs_tools()` already returned True,
+    # so we know SOMETHING tool-shaped is wanted.
+    if not keep:
+        return schemas
+
+    return [s for s in schemas if s["function"]["name"] in keep]
+
+
 def _clamp_limit(val: Any, default: int) -> int:
     try:
         n = int(val)
@@ -809,6 +887,15 @@ async def run_corax_turn(
     active_tool_schemas = [
         t for t in TOOL_SCHEMAS if t["function"]["name"] in enabled_tools
     ]
+    # Reduce 7 tool schemas to the relevant 1–4 based on prompt intent. This
+    # is the single biggest perf + accuracy win on CPU-only setups.
+    if use_tools and active_tool_schemas:
+        active_tool_schemas = _filter_tools_by_intent(
+            user_prompt,
+            active_tool_schemas,
+            has_user_mentions=bool(mentioned_users),
+            has_channel_mentions=bool(mentioned_channels),
+        )
 
     # Detect the user's language and pin it as a hard, per-turn instruction.
     # This overrides any persona-level bias (e.g. lots of German Tarja
@@ -827,14 +914,26 @@ async def run_corax_turn(
     )
     if use_tools:
         system_blocks.append(
-            "TOOL USAGE RULES:\n"
-            "- When the user asks about songs, artists, reactions, top lists, "
-            "or what a specific user posted, you MUST call one of the provided "
-            "tools. Never invent or guess an answer. Never claim 'no results' "
-            "without calling a tool first.\n"
-            "- After the tool returns, just add a short friendly intro "
-            "(max 1 sentence). The frontend renders the song list itself; "
-            "do NOT repeat the list in text."
+            "TOOL USAGE RULES — read carefully:\n"
+            "- You MUST call exactly one of the listed tools whenever the "
+            "user's question matches its purpose. Pick the FIRST one that "
+            "fits and call it immediately. Do not chat first.\n"
+            "- `get_current_time`: ANY question about the current time, "
+            "date, or timezone → call this. Pick a sensible IANA zone "
+            "(`Europe/Berlin` for Germany, `America/New_York` for US East, "
+            "etc.).\n"
+            "- `get_weather`: ANY question about weather, temperature, "
+            "rain, snow, or forecast → call this. Extract the city name "
+            "from the user's message.\n"
+            "- Song/artist/reactions/top-lists/who-posted-what → call the "
+            "matching song tool. After the tool returns, add only a short "
+            "friendly intro (max 1 sentence) — the frontend renders the "
+            "song list, do NOT list songs in text.\n"
+            "- `web_search`: ONLY for general-knowledge facts that none of "
+            "the tools above cover (history, definitions, facts about "
+            "people/places).\n"
+            "- Never invent or guess an answer when a tool fits. Never "
+            "claim a tool returned nothing without actually calling it."
         )
         if allowed_channels_info:
             ch_lines = "\n".join(
