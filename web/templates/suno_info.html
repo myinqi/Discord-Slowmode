@@ -61,9 +61,12 @@
 
     /* Lyrics */
     #lyrics-box{max-height:380px;overflow-y:auto;white-space:pre-wrap;font-family:ui-sans-serif,system-ui;font-size:13px;line-height:1.7;color:#ccc;padding:6px 4px;scroll-behavior:smooth}
-    #lyrics-box .ly-line{padding:2px 6px;border-radius:4px;transition:all .25s}
-    #lyrics-box .ly-line.active{background:#2d2456;color:#fff;font-weight:500}
-    #lyrics-box .ly-line.past{color:#666}
+    #lyrics-box .ly-line{padding:2px 6px;border-radius:4px}
+    #lyrics-box .ly-marker{color:#888;font-style:italic;font-size:11px;letter-spacing:.05em;text-transform:uppercase;margin-top:6px}
+    /* Highlights only apply when auto-scroll is enabled (.ly-auto). */
+    #lyrics-box.ly-auto .ly-line{transition:background .25s,color .25s}
+    #lyrics-box.ly-auto .ly-line.active{background:#2d2456;color:#fff;font-weight:500}
+    #lyrics-box.ly-auto .ly-line.past{color:#666}
 
     /* Prompt + tags panel */
     .si-prompt-block{padding:10px 12px;background:#16161a;border:1px solid #2a2a2e;border-radius:8px;font-family:ui-monospace,monospace;font-size:12px;color:#cfc8ff;white-space:pre-wrap;line-height:1.55}
@@ -150,7 +153,6 @@
             </a>
         </div>
         <div class="np-stats" id="np-stats"></div>
-        <div class="np-tags" id="np-tags"></div>
 
         <!-- Transport -->
         <div class="si-transport">
@@ -188,6 +190,7 @@
             <div id="lyrics-box">Pick a song to see its lyrics.</div>
         </div>
         <div class="si-panel" data-panel="style">
+            <div class="np-tags mb-3" id="np-tags"></div>
             <div class="si-prompt-block" id="prompt-box">—</div>
             <dl class="si-meta-grid" id="meta-grid"></dl>
         </div>
@@ -398,60 +401,112 @@ function setNowPlaying(m){
     }).join('');
 }
 
-/* --- Lyrics scrolling ----------------------------------------------------- */
-var LY_LINES = [];   // [{text, el}]
+/* --- Lyrics scrolling -----------------------------------------------------
+   Two modes:
+     • Auto-scroll OFF (default): plain static text. No highlight, no auto
+       scroll — user reads / scrolls manually.
+     • Auto-scroll ON:  the active line (estimated from current playback
+       progress) is highlighted and kept centered in the box.
+
+   Sync is approximate — Suno does not expose timed lyrics publicly. We
+   distribute non-empty lines (skipping blank separators and section markers
+   like `[Verse]`) evenly across the song duration, which feels noticeably
+   more accurate than counting every line.                                  */
+var LY_LINES = [];     // every <div> (incl. blanks) — for layout
+var LY_SYNC = [];      // indices into LY_LINES that count for sync
 function renderLyrics(text){
     var box = document.getElementById('lyrics-box');
     if(!text){
         box.innerHTML = '<div style="color:#666">No lyrics available.</div>';
-        LY_LINES = [];
+        LY_LINES = []; LY_SYNC = [];
+        applyAutoscrollMode();
         return;
     }
     var lines = text.split(/\r?\n/);
     box.innerHTML = lines.map(function(ln){
-        return '<div class="ly-line">'+(ln ? esc(ln) : '&nbsp;')+'</div>';
+        var isBlank = !ln.trim();
+        var isMarker = /^\s*\[[^\]]+\]\s*$/.test(ln);
+        var cls = 'ly-line' + (isBlank ? ' ly-blank' : '') + (isMarker ? ' ly-marker' : '');
+        return '<div class="'+cls+'">'+(ln ? esc(ln) : '&nbsp;')+'</div>';
     }).join('');
     LY_LINES = Array.prototype.slice.call(box.querySelectorAll('.ly-line'))
-        .map(function(el){return {text: el.textContent, el: el};});
+        .map(function(el){return {el: el};});
+    LY_SYNC = LY_LINES
+        .map(function(l, i){return l.el.classList.contains('ly-blank') ||
+                                   l.el.classList.contains('ly-marker') ? -1 : i;})
+        .filter(function(i){return i>=0;});
+    applyAutoscrollMode();
 }
 
-/* Time-based pseudo-sync: distribute lines over song duration. Suno does
-   not expose timed lyrics publicly, so we approximate with even spacing —
-   it still feels alive while reading along. */
-audio.addEventListener('timeupdate', function(){
-    if(!LY_LINES.length || !audio.duration) return;
-    var pct = audio.currentTime / audio.duration;
-    var idx = Math.min(LY_LINES.length-1, Math.floor(pct * LY_LINES.length));
-    LY_LINES.forEach(function(l, i){
-        l.el.classList.toggle('active', i===idx);
-        l.el.classList.toggle('past', i<idx);
+function isAutoOn(){
+    var el = document.getElementById('ly-autoscroll');
+    return !!(el && el.checked);
+}
+
+/* Clear all highlight classes — used when auto-scroll is off. */
+function clearLyHighlights(){
+    LY_LINES.forEach(function(l){
+        l.el.classList.remove('active','past');
     });
-    // Auto-scroll active line into view (smooth, only when enabled and needed).
-    // The user can disable this to read freely / scroll manually.
-    var autoEl = document.getElementById('ly-autoscroll');
-    if(autoEl && !autoEl.checked) return;
-    var active = LY_LINES[idx] && LY_LINES[idx].el;
-    if(active){
-        var box = document.getElementById('lyrics-box');
-        var top = active.offsetTop - box.clientHeight/2 + active.clientHeight/2;
-        if(Math.abs(box.scrollTop - top) > 80){
-            box.scrollTo({top: Math.max(0,top), behavior:'smooth'});
+}
+
+/* Compute the currently-active sync index (into LY_SYNC). */
+function currentLyIdx(){
+    if(!LY_SYNC.length || !audio.duration) return -1;
+    var pct = Math.max(0, Math.min(1, audio.currentTime / audio.duration));
+    return Math.min(LY_SYNC.length-1, Math.floor(pct * LY_SYNC.length));
+}
+
+/* Center a given line element inside the lyrics box. */
+function centerLine(el, smooth){
+    var box = document.getElementById('lyrics-box');
+    var top = el.offsetTop - box.clientHeight/2 + el.clientHeight/2;
+    box.scrollTo({top: Math.max(0,top), behavior: smooth ? 'smooth' : 'auto'});
+}
+
+/* Apply / undo the visuals when the mode flips or new lyrics load. */
+function applyAutoscrollMode(){
+    var box = document.getElementById('lyrics-box');
+    if(!box) return;
+    if(isAutoOn()){
+        box.classList.add('ly-auto');
+        // Highlight + center current line right away.
+        var si = currentLyIdx();
+        if(si >= 0){
+            highlightSync(si);
+            centerLine(LY_LINES[LY_SYNC[si]].el, true);
         }
+    } else {
+        box.classList.remove('ly-auto');
+        clearLyHighlights();
+        // Reset scroll to top so the user starts at the beginning.
+        box.scrollTop = 0;
+    }
+}
+
+function highlightSync(syncIdx){
+    // Active = LY_SYNC[syncIdx]; everything before its index in LY_LINES is "past".
+    var activeLineIdx = LY_SYNC[syncIdx];
+    LY_LINES.forEach(function(l, i){
+        l.el.classList.toggle('active', i===activeLineIdx);
+        l.el.classList.toggle('past',   i<activeLineIdx && !l.el.classList.contains('ly-blank'));
+    });
+}
+
+audio.addEventListener('timeupdate', function(){
+    if(!isAutoOn() || !LY_SYNC.length) return;
+    var si = currentLyIdx();
+    if(si < 0) return;
+    highlightSync(si);
+    var active = LY_LINES[LY_SYNC[si]].el;
+    var box = document.getElementById('lyrics-box');
+    var target = active.offsetTop - box.clientHeight/2 + active.clientHeight/2;
+    if(Math.abs(box.scrollTop - target) > 40){
+        box.scrollTo({top: Math.max(0,target), behavior:'smooth'});
     }
 });
 
-/* When user re-enables auto-scroll, jump back to the active line immediately. */
-document.getElementById('ly-autoscroll').addEventListener('change', function(){
-    if(!this.checked || !LY_LINES.length || !audio.duration) return;
-    var pct = audio.currentTime / audio.duration;
-    var idx = Math.min(LY_LINES.length-1, Math.floor(pct * LY_LINES.length));
-    var active = LY_LINES[idx] && LY_LINES[idx].el;
-    if(active){
-        var box = document.getElementById('lyrics-box');
-        var top = active.offsetTop - box.clientHeight/2 + active.clientHeight/2;
-        box.scrollTo({top: Math.max(0,top), behavior:'smooth'});
-    }
-});
+document.getElementById('ly-autoscroll').addEventListener('change', applyAutoscrollMode);
 
 /* --- Audio bindings ------------------------------------------------------- */
 audio.addEventListener('timeupdate', function(){
