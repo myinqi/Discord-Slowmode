@@ -3283,7 +3283,8 @@ def create_app(db: Database, bot=None) -> Quart:
                 result["tags"] = [
                     t.strip() for t in m.group(1).split(",") if t.strip()
                 ]
-            # Style prompt
+            # Style prompt — usually inline, but for longer prompts (or with
+            # emojis) Suno stores it as an RSC chunk reference like `$3d`.
             m = _re.search(
                 r'\\"gpt_description_prompt\\":\\"((?:[^\\]|\\.)*?)\\"', html
             )
@@ -3292,9 +3293,45 @@ def create_app(db: Database, bot=None) -> Quart:
                     r'"gpt_description_prompt":"((?:[^"\\]|\\.)*)"', html
                 )
             if m:
-                result["prompt"] = (
-                    m.group(1).replace('\\n', '\n').replace('\\"', '"')
-                )
+                raw_prompt = m.group(1).replace('\\n', '\n').replace('\\"', '"')
+            else:
+                raw_prompt = ""
+            if raw_prompt and not _RSC_REF_RE.match(raw_prompt):
+                result["prompt"] = raw_prompt
+            else:
+                # Resolve RSC reference from the flight payload
+                try:
+                    import json as _json
+                    chunks = _re.findall(
+                        r'self\.__next_f\.push\(\[1,"(.*?)"\]\)',
+                        html, _re.DOTALL,
+                    )
+                    decoded = []
+                    for c in chunks:
+                        try:
+                            decoded.append(_json.loads('"' + c + '"'))
+                        except Exception:
+                            decoded.append(
+                                c.replace('\\n', '\n')
+                                 .replace('\\"', '"')
+                                 .replace('\\\\', '\\')
+                            )
+                    full = "".join(decoded)
+                    mref = _re.search(
+                        r'"gpt_description_prompt":"\$([0-9a-f]+)"', full
+                    )
+                    if mref:
+                        ref = mref.group(1)
+                        tpat = _re.compile(
+                            r'(?:^|\n)' + _re.escape(ref) +
+                            r':T[0-9a-f]+,(.*?)(?=\n[0-9a-f]+:|\Z)',
+                            _re.S,
+                        )
+                        tfnd = tpat.search(full)
+                        if tfnd:
+                            result["prompt"] = tfnd.group(1).rstrip()
+                except Exception:
+                    pass
             # Stats
             for key, pat in [
                 ("plays", r'\\"play_count\\":(\d+)'),

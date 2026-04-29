@@ -130,8 +130,25 @@
             <img id="np-img" src="" alt="cover">
             <video id="np-video" autoplay loop muted playsinline></video>
         </div>
-        <div class="np-title" id="np-title">—</div>
-        <div class="np-artist" id="np-artist"></div>
+        <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0 flex-1">
+                <div class="np-title" id="np-title">—</div>
+                <div class="np-artist" id="np-artist"></div>
+            </div>
+            <a id="np-suno-link" href="#" target="_blank" rel="noopener"
+                class="shrink-0 mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg
+                       bg-discord-blurple/20 hover:bg-discord-blurple/40 text-discord-blurple
+                       hover:text-white text-xs font-medium transition-colors
+                       border border-discord-blurple/40 pointer-events-none opacity-50"
+                title="Open on Suno">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 3h7v7"/><path d="M10 14 21 3"/>
+                    <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/>
+                </svg>
+                <span>Open on Suno</span>
+            </a>
+        </div>
         <div class="np-stats" id="np-stats"></div>
         <div class="np-tags" id="np-tags"></div>
 
@@ -161,6 +178,13 @@
             <button class="si-tab" data-tab="style">Style &amp; Info</button>
         </div>
         <div class="si-panel active" data-panel="lyrics">
+            <div class="flex items-center justify-end gap-2 mb-2">
+                <label class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer select-none">
+                    <input type="checkbox" id="ly-autoscroll"
+                        class="w-3.5 h-3.5 accent-discord-blurple cursor-pointer">
+                    <span>Auto-scroll</span>
+                </label>
+            </div>
             <div id="lyrics-box">Pick a song to see its lyrics.</div>
         </div>
         <div class="si-panel" data-panel="style">
@@ -317,6 +341,14 @@ async function playIndex(i){
 function setNowPlaying(m){
     document.getElementById('np-title').textContent = m.title || '—';
     document.getElementById('np-artist').textContent = m.artist || '';
+    var link = document.getElementById('np-suno-link');
+    if(m.uuid){
+        link.href = 'https://suno.com/song/' + m.uuid;
+        link.classList.remove('pointer-events-none','opacity-50');
+    } else {
+        link.href = '#';
+        link.classList.add('pointer-events-none','opacity-50');
+    }
     // Cover / video
     var wrap = document.getElementById('np-art-wrap');
     var img = document.getElementById('np-img');
@@ -394,7 +426,10 @@ audio.addEventListener('timeupdate', function(){
         l.el.classList.toggle('active', i===idx);
         l.el.classList.toggle('past', i<idx);
     });
-    // Auto-scroll active line into view (smooth, only when needed)
+    // Auto-scroll active line into view (smooth, only when enabled and needed).
+    // The user can disable this to read freely / scroll manually.
+    var autoEl = document.getElementById('ly-autoscroll');
+    if(autoEl && !autoEl.checked) return;
     var active = LY_LINES[idx] && LY_LINES[idx].el;
     if(active){
         var box = document.getElementById('lyrics-box');
@@ -402,6 +437,19 @@ audio.addEventListener('timeupdate', function(){
         if(Math.abs(box.scrollTop - top) > 80){
             box.scrollTo({top: Math.max(0,top), behavior:'smooth'});
         }
+    }
+});
+
+/* When user re-enables auto-scroll, jump back to the active line immediately. */
+document.getElementById('ly-autoscroll').addEventListener('change', function(){
+    if(!this.checked || !LY_LINES.length || !audio.duration) return;
+    var pct = audio.currentTime / audio.duration;
+    var idx = Math.min(LY_LINES.length-1, Math.floor(pct * LY_LINES.length));
+    var active = LY_LINES[idx] && LY_LINES[idx].el;
+    if(active){
+        var box = document.getElementById('lyrics-box');
+        var top = active.offsetTop - box.clientHeight/2 + active.clientHeight/2;
+        box.scrollTo({top: Math.max(0,top), behavior:'smooth'});
     }
 });
 
