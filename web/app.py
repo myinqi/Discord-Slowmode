@@ -838,8 +838,12 @@ def create_app(db: Database, bot=None) -> Quart:
         from quart import jsonify
         channel_id = request.args.get("channel_id", "").strip()
         limit = min(int(request.args.get("limit", "200")), 500)
+        try:
+            offset = max(0, int(request.args.get("offset", "0")))
+        except (TypeError, ValueError):
+            offset = 0
         ch_id = int(channel_id) if channel_id.isdigit() else None
-        songs = await db.get_player_songs(channel_id=ch_id, limit=limit)
+        songs = await db.get_player_songs(channel_id=ch_id, limit=limit, offset=offset)
         return jsonify(songs)
 
     @app.route("/public/api/suno-resolve/<short_id>")
@@ -3217,7 +3221,8 @@ def create_app(db: Database, bot=None) -> Quart:
     @app.route("/api/suno-info/playlist")
     @permission_required('suno_info')
     async def api_suno_info_playlist():
-        """Parse a Suno playlist URL and return its songs."""
+        """Parse a Suno playlist URL and return its songs + name."""
+        import aiohttp as _aiohttp, html as _html
         from quart import jsonify
         from bot.stream_manager import parse_suno_playlist
         url = (request.args.get("url") or "").strip()
@@ -3229,7 +3234,33 @@ def create_app(db: Database, bot=None) -> Quart:
             return jsonify({"error": f"parse failed: {e}"}), 502
         if not songs:
             return jsonify({"error": "no songs found in playlist"}), 404
-        return jsonify({"songs": songs})
+
+        # Best-effort: fetch the playlist's display name from the page's
+        # og:title — independent of which scraping path returned the songs.
+        name = ""
+        try:
+            async with _aiohttp.ClientSession() as sess:
+                async with sess.get(
+                    url,
+                    headers={"User-Agent": "Mozilla/5.0 (X11; Linux) AppleWebKit/537.36"},
+                    timeout=_aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status == 200:
+                        page = await resp.text()
+                        m = re.search(
+                            r'<meta\s+property="og:title"\s+content="([^"]+)"',
+                            page,
+                        )
+                        if not m:
+                            m = re.search(r'<title>([^<]+)</title>', page)
+                        if m:
+                            raw = _html.unescape(m.group(1).strip())
+                            # strip trailing "| Suno"
+                            raw = re.sub(r'\s*[|\-\u2013]\s*Suno\s*$', '', raw).strip()
+                            name = raw
+        except Exception:
+            pass
+        return jsonify({"songs": songs, "name": name})
 
     @app.route("/api/suno-info/song/<uuid>")
     @permission_required('suno_info')

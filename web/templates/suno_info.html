@@ -74,16 +74,20 @@
     .si-meta-grid dt{color:#888;font-weight:500}
     .si-meta-grid dd{color:#ddd;margin:0;word-break:break-word}
 
+    /* Spectrum analyzer (small, in player area) */
+    .si-spectrum{display:block;width:160px;height:40px;border-radius:6px;background:#0b0b0e;border:1px solid #2a2a2e}
+
     /* Loading state */
     .si-loading{padding:30px;text-align:center;color:#666;font-size:13px}
     .si-error{padding:14px;background:#3a1a1a;border:1px solid #5a2a2a;border-radius:8px;color:#f88;font-size:13px}
 </style>
 
 <div class="flex items-center justify-between mb-6 flex-wrap gap-3">
-    <h2 class="text-2xl font-bold text-white flex items-center gap-3">
+    <h2 class="text-2xl font-bold text-white flex items-center gap-3 flex-wrap min-w-0">
         <span class="text-3xl">ℹ️</span>
-        Suno Info
+        <span>Suno Info</span>
         <span id="song-count" class="text-gray-500 text-sm font-normal"></span>
+        <span id="playlist-name" class="text-discord-blurple text-base font-medium truncate max-w-md"></span>
     </h2>
 </div>
 
@@ -138,19 +142,22 @@
                 <div class="np-title" id="np-title">—</div>
                 <div class="np-artist" id="np-artist"></div>
             </div>
-            <a id="np-suno-link" href="#" target="_blank" rel="noopener"
-                class="shrink-0 mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg
-                       bg-discord-blurple/20 hover:bg-discord-blurple/40 text-discord-blurple
-                       hover:text-white text-xs font-medium transition-colors
-                       border border-discord-blurple/40 pointer-events-none opacity-50"
-                title="Open on Suno">
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
-                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M14 3h7v7"/><path d="M10 14 21 3"/>
-                    <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/>
-                </svg>
-                <span>Open on Suno</span>
-            </a>
+            <div class="shrink-0 flex flex-col items-end gap-1.5">
+                <canvas id="si-spectrum" class="si-spectrum" width="160" height="40"></canvas>
+                <a id="np-suno-link" href="#" target="_blank" rel="noopener"
+                    class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md
+                           bg-discord-blurple/20 hover:bg-discord-blurple/40 text-discord-blurple
+                           hover:text-white text-[11px] font-medium transition-colors
+                           border border-discord-blurple/40 pointer-events-none opacity-50"
+                    title="Open on Suno">
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M14 3h7v7"/><path d="M10 14 21 3"/>
+                        <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/>
+                    </svg>
+                    <span>Open on Suno</span>
+                </a>
+            </div>
         </div>
         <div class="np-stats" id="np-stats"></div>
 
@@ -172,6 +179,19 @@
                 <span class="si-seek-time" id="time-dur">0:00</span>
             </div>
             <input type="range" class="si-vol" id="vol" min="0" max="100" value="80" title="Volume">
+        </div>
+
+        <!-- Playback mode -->
+        <div class="flex items-center gap-3 mt-2 text-xs text-gray-400">
+            <span class="text-gray-500">After song:</span>
+            <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="radio" name="si-mode" value="next" class="accent-discord-blurple" checked>
+                <span>Play next</span>
+            </label>
+            <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="radio" name="si-mode" value="stop" class="accent-discord-blurple">
+                <span>Stop after current</span>
+            </label>
         </div>
 
         <!-- Detail tabs -->
@@ -234,7 +254,11 @@ async function loadPlaylist(){
         }
         SONGS = data.songs || [];
         document.getElementById('song-count').textContent = SONGS.length+' songs';
+        document.getElementById('playlist-name').textContent =
+            data.name ? '— ' + data.name : '';
         setStatus(SONGS.length+' loaded');
+        // Persist successfully loaded URL for next session.
+        try { localStorage.setItem('suno-info-last-url', url); } catch(e){}
         renderTable();
         // Lazily fetch covers for visible rows in the background.
         prefetchCovers();
@@ -274,7 +298,12 @@ function renderTable(){
     tbody.querySelectorAll('tr[data-i]').forEach(function(tr){
         tr.addEventListener('click', function(){
             var i = parseInt(tr.getAttribute('data-i'),10);
-            playIndex(i);
+            // If clicking the currently-playing row, toggle pause/play.
+            if(i===CUR){
+                if(audio.paused) audio.play(); else audio.pause();
+            } else {
+                playIndex(i);
+            }
         });
     });
 }
@@ -520,7 +549,12 @@ audio.addEventListener('loadedmetadata', function(){
 });
 audio.addEventListener('play', updatePlayBtn);
 audio.addEventListener('pause', updatePlayBtn);
-audio.addEventListener('ended', function(){ playIndex(CUR+1); });
+audio.addEventListener('ended', function(){
+    // Honor the playback mode: stop after current = no auto-advance.
+    var mode = document.querySelector('input[name="si-mode"]:checked');
+    if(mode && mode.value==='stop') return;
+    playIndex(CUR+1);
+});
 
 function updatePlayBtn(){
     var btn = document.getElementById('btn-play');
@@ -553,5 +587,85 @@ document.querySelectorAll('.si-tab').forEach(function(btn){
         });
     });
 });
+
+/* --- Live Frequency Spectrum (small, ported from Suno Player) ------------- */
+var _specCtx=null, _specAnalyser=null, _specSrc=null, _specFrame=null;
+function initSpectrum(){
+    if(_specSrc) return true;
+    try{
+        _specCtx = new (window.AudioContext||window.webkitAudioContext)();
+        _specSrc = _specCtx.createMediaElementSource(audio);
+        _specAnalyser = _specCtx.createAnalyser();
+        _specAnalyser.fftSize = 1024;
+        _specSrc.connect(_specAnalyser);
+        _specAnalyser.connect(_specCtx.destination);
+        return true;
+    } catch(e){ console.warn('Spectrum init failed', e); return false; }
+}
+function drawSpectrum(){
+    var c = document.getElementById('si-spectrum');
+    if(!c || !_specAnalyser) return;
+    var ctx = c.getContext('2d');
+    // Match canvas pixel size to its CSS box for crispness.
+    var rect = c.getBoundingClientRect();
+    if(c.width !== Math.floor(rect.width) || c.height !== Math.floor(rect.height)){
+        c.width = Math.floor(rect.width); c.height = Math.floor(rect.height);
+    }
+    var data = new Uint8Array(_specAnalyser.frequencyBinCount);
+    var bars = 28;
+    var minBin = 1, maxBin = Math.min(data.length, Math.floor(data.length*0.7));
+    var logMin = Math.log(minBin), logMax = Math.log(maxBin);
+    var binEdges = new Array(bars+1);
+    for(var k=0;k<=bars;k++){
+        binEdges[k] = Math.floor(Math.exp(logMin+(logMax-logMin)*k/bars));
+    }
+    function loop(){
+        _specFrame = requestAnimationFrame(loop);
+        _specAnalyser.getByteFrequencyData(data);
+        var w = c.width, h = c.height;
+        ctx.clearRect(0,0,w,h);
+        var gap = 1, barW = (w - gap*(bars-1))/bars;
+        for(var i=0;i<bars;i++){
+            var start = binEdges[i], end = Math.max(binEdges[i+1], start+1);
+            var peak = 0;
+            for(var j=start;j<end;j++){ if(data[j]>peak) peak = data[j]; }
+            var bh = (peak/255)*h*0.95;
+            var x = i*(barW+gap);
+            var y = h - bh;
+            var g = ctx.createLinearGradient(0,y,0,h);
+            g.addColorStop(0,'#a78bfa'); g.addColorStop(1,'#4c2a8a');
+            ctx.fillStyle = g;
+            ctx.fillRect(x,y,barW,bh);
+        }
+    }
+    loop();
+}
+audio.addEventListener('play', function(){
+    if(initSpectrum()){
+        if(_specCtx && _specCtx.state==='suspended') _specCtx.resume();
+        if(!_specFrame) drawSpectrum();
+    }
+});
+
+/* --- Persist playback mode + restore last URL ----------------------------- */
+(function(){
+    // After-song mode (Play next / Stop after current)
+    var saved = localStorage.getItem('suno-info-mode');
+    if(saved){
+        var el = document.querySelector('input[name="si-mode"][value="'+saved+'"]');
+        if(el) el.checked = true;
+    }
+    document.querySelectorAll('input[name="si-mode"]').forEach(function(r){
+        r.addEventListener('change', function(){
+            try { localStorage.setItem('suno-info-mode', r.value); } catch(e){}
+        });
+    });
+    // Last loaded playlist URL — restore the input but do NOT auto-load,
+    // user has to click Load to fetch (avoids surprise network use).
+    var lastUrl = localStorage.getItem('suno-info-last-url');
+    if(lastUrl){
+        document.getElementById('playlist-url').value = lastUrl;
+    }
+})();
 </script>
 {% endblock %}
