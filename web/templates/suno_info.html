@@ -17,12 +17,12 @@
     .si-title{font-weight:500;color:#eee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:340px}
     .si-artist{color:#999;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px}
     .si-dur{color:#888;font-size:12px;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
-    .si-table-wrap{max-height:calc(100vh - 290px);min-height:420px;overflow-y:auto;border:1px solid #2a2a2e;border-radius:10px;background:#0f0f12}
+    .si-table-wrap{max-height:calc(100vh - 240px);min-height:360px;overflow-y:auto;border:1px solid #2a2a2e;border-radius:10px;background:#0f0f12}
 
     /* Now-playing card */
     .si-card{background:#0f0f12;border:1px solid #2a2a2e;border-radius:10px;padding:14px}
-    .np-art-wrap{position:relative;width:100%;aspect-ratio:1/1;border-radius:8px;overflow:hidden;background:#1a1a1a;cursor:pointer;transition:aspect-ratio .2s}
-    .np-art-wrap.has-video{aspect-ratio:9/16;max-height:560px;margin:0 auto;width:auto}
+    .np-art-wrap{position:relative;aspect-ratio:1/1;max-height:calc(100vh - 540px);max-width:100%;margin:0 auto;border-radius:8px;overflow:hidden;background:#1a1a1a;cursor:pointer;transition:aspect-ratio .2s}
+    .np-art-wrap.has-video{aspect-ratio:9/16}
     .np-art-wrap img,.np-art-wrap video{width:100%;height:100%;object-fit:cover;display:block}
     .np-art-wrap video{display:none}
     .np-art-wrap.has-video img{display:none}
@@ -61,7 +61,7 @@
     .si-panel.active{display:block}
 
     /* Lyrics */
-    #lyrics-box{max-height:380px;overflow-y:auto;white-space:pre-wrap;font-family:ui-sans-serif,system-ui;font-size:13px;line-height:1.7;color:#ccc;padding:6px 4px;scroll-behavior:smooth}
+    #lyrics-box{max-height:calc(100vh - 760px);min-height:140px;overflow-y:auto;white-space:pre-wrap;font-family:ui-sans-serif,system-ui;font-size:13px;line-height:1.7;color:#ccc;padding:6px 4px;scroll-behavior:smooth}
     #lyrics-box .ly-line{padding:2px 6px;border-radius:4px}
     #lyrics-box .ly-marker{color:#888;font-style:italic;font-size:11px;letter-spacing:.05em;text-transform:uppercase;margin-top:6px}
     /* Highlights only apply when auto-scroll is enabled (.ly-auto). */
@@ -86,39 +86,35 @@
 
 <div class="flex items-center justify-between mb-6 flex-wrap gap-3">
     <h2 class="text-2xl font-bold text-white flex items-center gap-3 flex-wrap min-w-0">
-        <span class="text-3xl">ℹ️</span>
+        <img src="{{ url_for('static', filename='TrYa_logo.png') }}" alt=""
+            class="w-9 h-9 rounded-md object-cover shrink-0">
         <span>Suno Info</span>
         <span id="song-count" class="text-gray-500 text-sm font-normal"></span>
         <span id="playlist-name" class="text-discord-blurple text-base font-medium truncate max-w-md"></span>
     </h2>
 </div>
 
-<!-- Playlist input -->
-<div class="bg-discord-dark rounded-xl border border-gray-700/50 p-4 mb-4">
-    <div class="flex flex-col sm:flex-row gap-2">
-        <input type="text" id="playlist-url" placeholder="https://suno.com/playlist/UUID"
-            class="flex-1 bg-discord-darker border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none"
-            value="">
-        <button id="btn-load"
-            class="px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50">
-            Load playlist
-        </button>
-    </div>
-    <p class="text-gray-500 text-xs mt-2">
-        Paste any public Suno playlist URL — songs are loaded once,
-        per-song details (lyrics, style prompt, video) are fetched on play.
-    </p>
-</div>
-
 <div class="si-grid">
-    <!-- Left: songs table -->
-    <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-4">
+    <!-- Left: playlist input + songs table -->
+    <div class="flex flex-col gap-3 min-w-0">
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-3">
+            <div class="flex flex-col sm:flex-row gap-2">
+                <input type="text" id="playlist-url" placeholder="https://suno.com/playlist/UUID"
+                    class="flex-1 bg-discord-darker border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none"
+                    value="">
+                <button id="btn-load"
+                    class="px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50">
+                    Load playlist
+                </button>
+            </div>
+        </div>
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-4">
         <h3 class="text-white font-semibold text-sm mb-3 flex items-center gap-2">
             <span>Songs</span>
             <span id="songs-status" class="text-gray-500 font-normal text-xs"></span>
         </h3>
         <div class="si-table-wrap">
-            <table class="si-table">
+            <table class="si-table" id="si-table">
                 <thead>
                     <tr>
                         <th style="width:60px"></th>
@@ -131,6 +127,7 @@
                     <tr><td colspan="4" class="si-loading">Paste a playlist URL above and click <b>Load playlist</b>.</td></tr>
                 </tbody>
             </table>
+        </div>
         </div>
     </div>
 
