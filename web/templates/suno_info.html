@@ -76,7 +76,7 @@
 
     /* Spectrum analyzer (small, transparent, just bars) */
     .si-spectrum-row{margin-top:8px}
-    .si-spectrum{display:block;width:100%;max-width:220px;height:36px;background:transparent}
+    .si-spectrum{display:block;flex:1;min-width:160px;max-width:420px;height:40px;background:transparent}
 
     /* Loading state */
     .si-loading{padding:30px;text-align:center;color:#666;font-size:13px}
@@ -159,7 +159,7 @@
         </div>
         <div class="flex items-end justify-between gap-3">
             <div class="np-stats min-w-0" id="np-stats"></div>
-            <canvas id="si-spectrum" class="si-spectrum si-spectrum-row shrink-0" width="220" height="36"></canvas>
+            <canvas id="si-spectrum" class="si-spectrum si-spectrum-row" width="420" height="40"></canvas>
         </div>
 
         <!-- Transport -->
@@ -613,7 +613,7 @@ function drawSpectrum(){
         c.width = Math.floor(rect.width); c.height = Math.floor(rect.height);
     }
     var data = new Uint8Array(_specAnalyser.frequencyBinCount);
-    var bars = 28;
+    var bars = 44;
     var minBin = 1, maxBin = Math.min(data.length, Math.floor(data.length*0.7));
     var logMin = Math.log(minBin), logMax = Math.log(maxBin);
     var binEdges = new Array(bars+1);
