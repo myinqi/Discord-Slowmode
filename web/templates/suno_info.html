@@ -16,7 +16,7 @@
     .si-cover{width:44px;height:44px;border-radius:6px;object-fit:cover;background:#1a1a1a;display:block}
     .si-title{font-weight:500;color:#eee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:340px}
     .si-artist{color:#999;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px}
-    .si-table-wrap{max-height:560px;overflow-y:auto;border:1px solid #2a2a2e;border-radius:10px;background:#0f0f12}
+    .si-table-wrap{max-height:calc(100vh - 290px);min-height:420px;overflow-y:auto;border:1px solid #2a2a2e;border-radius:10px;background:#0f0f12}
 
     /* Now-playing card */
     .si-card{background:#0f0f12;border:1px solid #2a2a2e;border-radius:10px;padding:14px}
@@ -74,8 +74,9 @@
     .si-meta-grid dt{color:#888;font-weight:500}
     .si-meta-grid dd{color:#ddd;margin:0;word-break:break-word}
 
-    /* Spectrum analyzer (small, in player area) */
-    .si-spectrum{display:block;width:160px;height:40px;border-radius:6px;background:#0b0b0e;border:1px solid #2a2a2e}
+    /* Spectrum analyzer (small, transparent, just bars) */
+    .si-spectrum-row{margin-top:8px}
+    .si-spectrum{display:block;width:100%;max-width:220px;height:36px;background:transparent}
 
     /* Loading state */
     .si-loading{padding:30px;text-align:center;color:#666;font-size:13px}
@@ -142,24 +143,24 @@
                 <div class="np-title" id="np-title">—</div>
                 <div class="np-artist" id="np-artist"></div>
             </div>
-            <div class="shrink-0 flex flex-col items-end gap-1.5">
-                <canvas id="si-spectrum" class="si-spectrum" width="160" height="40"></canvas>
-                <a id="np-suno-link" href="#" target="_blank" rel="noopener"
-                    class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md
-                           bg-discord-blurple/20 hover:bg-discord-blurple/40 text-discord-blurple
-                           hover:text-white text-[11px] font-medium transition-colors
-                           border border-discord-blurple/40 pointer-events-none opacity-50"
-                    title="Open on Suno">
-                    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor"
-                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M14 3h7v7"/><path d="M10 14 21 3"/>
-                        <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/>
-                    </svg>
-                    <span>Open on Suno</span>
-                </a>
-            </div>
+            <a id="np-suno-link" href="#" target="_blank" rel="noopener"
+                class="shrink-0 mt-1 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md
+                       bg-discord-blurple/20 hover:bg-discord-blurple/40 text-discord-blurple
+                       hover:text-white text-[11px] font-medium transition-colors
+                       border border-discord-blurple/40 pointer-events-none opacity-50"
+                title="Open on Suno">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor"
+                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 3h7v7"/><path d="M10 14 21 3"/>
+                    <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/>
+                </svg>
+                <span>Open on Suno</span>
+            </a>
         </div>
-        <div class="np-stats" id="np-stats"></div>
+        <div class="flex items-end justify-between gap-3">
+            <div class="np-stats min-w-0" id="np-stats"></div>
+            <canvas id="si-spectrum" class="si-spectrum si-spectrum-row shrink-0" width="220" height="36"></canvas>
+        </div>
 
         <!-- Transport -->
         <div class="si-transport">
