@@ -16,6 +16,7 @@
     .si-cover{width:44px;height:44px;border-radius:6px;object-fit:cover;background:#1a1a1a;display:block}
     .si-title{font-weight:500;color:#eee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:340px}
     .si-artist{color:#999;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px}
+    .si-dur{color:#888;font-size:12px;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
     .si-table-wrap{max-height:calc(100vh - 290px);min-height:420px;overflow-y:auto;border:1px solid #2a2a2e;border-radius:10px;background:#0f0f12}
 
     /* Now-playing card */
@@ -123,10 +124,11 @@
                         <th style="width:60px"></th>
                         <th>Title</th>
                         <th>Artist</th>
+                        <th style="width:60px;text-align:right">Time</th>
                     </tr>
                 </thead>
                 <tbody id="songs-tbody">
-                    <tr><td colspan="3" class="si-loading">Paste a playlist URL above and click <b>Load playlist</b>.</td></tr>
+                    <tr><td colspan="4" class="si-loading">Paste a playlist URL above and click <b>Load playlist</b>.</td></tr>
                 </tbody>
             </table>
         </div>
@@ -245,7 +247,7 @@ async function loadPlaylist(){
     btn.disabled = true; btn.textContent = 'Loading…';
     setStatus('Fetching playlist…');
     document.getElementById('songs-tbody').innerHTML =
-        '<tr><td colspan="3" class="si-loading">Fetching playlist…</td></tr>';
+        '<tr><td colspan="4" class="si-loading">Fetching playlist…</td></tr>';
     try {
         var r = await fetch('/api/suno-info/playlist?url='+encodeURIComponent(url));
         var data = await r.json();
@@ -272,15 +274,39 @@ async function loadPlaylist(){
 
 function renderError(msg){
     document.getElementById('songs-tbody').innerHTML =
-        '<tr><td colspan="3"><div class="si-error">'+esc(msg)+'</div></td></tr>';
+        '<tr><td colspan="4"><div class="si-error">'+esc(msg)+'</div></td></tr>';
     setStatus('error');
+}
+
+/* Total runtime — sum every song's duration we currently know about. */
+function updateTotalRuntime(){
+    var total = 0, known = 0;
+    SONGS.forEach(function(s){
+        var d = (s._meta && s._meta.duration) || s.duration;
+        if(typeof d === 'number' && isFinite(d)){
+            total += d; known++;
+        }
+    });
+    var el = document.getElementById('songs-status');
+    var base = SONGS.length + ' loaded';
+    if(total > 0){
+        var hh = Math.floor(total/3600);
+        var mm = Math.floor((total%3600)/60);
+        var ss = Math.floor(total%60);
+        var str = hh>0 ? (hh+':'+(mm<10?'0':'')+mm+':'+(ss<10?'0':'')+ss)
+                       : (mm+':'+(ss<10?'0':'')+ss);
+        var partial = known < SONGS.length ? ' (±, '+known+'/'+SONGS.length+')' : '';
+        el.textContent = base + ' • ' + str + partial;
+    } else {
+        el.textContent = base;
+    }
 }
 
 /* --- Table ---------------------------------------------------------------- */
 function renderTable(){
     var tbody = document.getElementById('songs-tbody');
     if(!SONGS.length){
-        tbody.innerHTML = '<tr><td colspan="3" class="si-loading">No songs.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="4" class="si-loading">No songs.</td></tr>';
         return;
     }
     var rows = SONGS.map(function(s, i){
@@ -288,14 +314,18 @@ function renderTable(){
             || ('https://cdn1.suno.ai/image_'+s.uuid+'.jpeg');
         var artist = (s._meta && s._meta.artist) || s.artist || '';
         var title = (s._meta && s._meta.title) || s.title || s.uuid.slice(0,8);
+        var dur = (s._meta && s._meta.duration) || s.duration;
+        var durTxt = (typeof dur === 'number' && isFinite(dur)) ? fmt(dur) : '—';
         return '<tr data-i="'+i+'"'+(i===CUR?' class="on"':'')+'>'+
             '<td><img class="si-cover" src="'+esc(cover)+'" loading="lazy" '+
                 'onerror="this.onerror=null;this.src=\'https://cdn1.suno.ai/image_'+esc(s.uuid)+'.jpeg\'"></td>'+
             '<td><div class="si-title">'+esc(title)+'</div></td>'+
             '<td><div class="si-artist">'+esc(artist)+'</div></td>'+
+            '<td><div class="si-dur">'+esc(durTxt)+'</div></td>'+
             '</tr>';
     }).join('');
     tbody.innerHTML = rows;
+    updateTotalRuntime();
     tbody.querySelectorAll('tr[data-i]').forEach(function(tr){
         tr.addEventListener('click', function(){
             var i = parseInt(tr.getAttribute('data-i'),10);

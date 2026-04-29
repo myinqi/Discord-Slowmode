@@ -3293,6 +3293,7 @@ def create_app(db: Database, bot=None) -> Quart:
             "plays": None,
             "likes": None,
             "created_at": "",
+            "duration": None,
         }
         try:
             async with _aiohttp.ClientSession() as sess:
@@ -3381,6 +3382,20 @@ def create_app(db: Database, bot=None) -> Quart:
             m = _re.search(r'\\"created_at\\":\\"([^\\]+)\\"', html)
             if m:
                 result["created_at"] = m.group(1)
+            # Duration in seconds (float). Stored as `audio_duration` or `duration`.
+            for pat in (
+                r'\\"audio_duration\\":([0-9.]+)',
+                r'\\"duration\\":([0-9.]+)',
+                r'"audio_duration":([0-9.]+)',
+                r'"duration":([0-9.]+)',
+            ):
+                m = _re.search(pat, html)
+                if m:
+                    try:
+                        result["duration"] = float(m.group(1))
+                    except ValueError:
+                        pass
+                    break
             # Author fallback if og:description didn't have it
             if not result.get("artist"):
                 m = _re.search(r'\\"display_name\\":\\"([^\\]+)\\"', html)

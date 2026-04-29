@@ -176,10 +176,22 @@ async def _parse_suno_api(playlist_uuid: str) -> list[dict]:
                 continue
             title = clip.get("title") or clip_id[:12]
             artist = clip.get("display_name") or ""
+            # Duration: try several common field names — Suno's API has used
+            # `audio_duration` (top-level) and `metadata.duration` historically.
+            duration = (
+                clip.get("audio_duration")
+                or clip.get("duration")
+                or (clip.get("metadata") or {}).get("duration")
+            )
+            try:
+                duration = float(duration) if duration is not None else None
+            except (TypeError, ValueError):
+                duration = None
             songs.append({
                 "uuid": clip_id,
                 "title": title,
                 "artist": artist,
+                "duration": duration,
                 "suno_url": f"https://suno.com/song/{clip_id}",
             })
 
