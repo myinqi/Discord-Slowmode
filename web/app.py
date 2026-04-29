@@ -1003,6 +1003,8 @@ def create_app(db: Database, bot=None) -> Quart:
         except Exception as e:
             return jsonify({"uuid": None, "error": str(e)}), 500
 
+    _RSC_REF_RE = re.compile(r'^\$[0-9a-f]+$')
+
     async def _fetch_suno_meta(uuid):
         """Shared helper to fetch song metadata from Suno embed page."""
         import aiohttp, re, html as _html
@@ -1072,6 +1074,48 @@ def create_app(db: Database, bot=None) -> Quart:
                             candidate = m.group(1).replace("\\\\n", "\n").replace('\\\\"', '"').replace("\\n", "\n")
                             if _valid_lyrics(candidate):
                                 lyrics = candidate
+
+                    # RSC-reference lyrics: longer prompts (or those containing
+                    # emojis / non-ASCII chars that Next.js splits out) are stored
+                    # in a separate flight chunk like `3d:T1aef,<content>` and
+                    # the song JSON only carries `"prompt":"$3d"`. Resolve that.
+                    if not lyrics or _RSC_REF_RE.match(lyrics or ""):
+                        try:
+                            import json as _json
+                            chunks = re.findall(
+                                r'self\.__next_f\.push\(\[1,"(.*?)"\]\)',
+                                html, re.DOTALL,
+                            )
+                            if chunks:
+                                # Each chunk is a JS string literal — decode via JSON.
+                                decoded = []
+                                for c in chunks:
+                                    try:
+                                        decoded.append(_json.loads('"' + c + '"'))
+                                    except Exception:
+                                        decoded.append(
+                                            c.replace('\\n', '\n')
+                                             .replace('\\"', '"')
+                                             .replace('\\\\', '\\')
+                                        )
+                                full = "".join(decoded)
+                                mref = re.search(
+                                    r'"prompt":"\$([0-9a-f]+)"', full
+                                )
+                                if mref:
+                                    ref = mref.group(1)
+                                    tpat = re.compile(
+                                        r'(?:^|\n)' + re.escape(ref) +
+                                        r':T[0-9a-f]+,(.*?)(?=\n[0-9a-f]+:|\Z)',
+                                        re.S,
+                                    )
+                                    tfnd = tpat.search(full)
+                                    if tfnd:
+                                        candidate = tfnd.group(1).rstrip()
+                                        if _valid_lyrics(candidate):
+                                            lyrics = candidate
+                        except Exception:
+                            pass
 
                     # Video cover (user-uploaded video cover, typically 9:16)
                     m = re.search(r'"video_cover_url"\s*:\s*"([^"]+)"', html)
