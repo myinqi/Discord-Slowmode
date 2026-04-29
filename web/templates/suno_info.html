@@ -1,0 +1,454 @@
+{% extends "base.html" %}
+{% block title %}Suno Info{% endblock %}
+{% block content %}
+<style>
+    .si-grid{display:grid;grid-template-columns:1fr;gap:16px}
+    @media(min-width:1100px){.si-grid{grid-template-columns:minmax(0,1.4fr) minmax(0,1fr)}}
+
+    /* Songs table */
+    .si-table{width:100%;border-collapse:collapse;font-size:13px}
+    .si-table th{position:sticky;top:0;background:#1a1a1a;color:#888;font-weight:500;text-align:left;padding:8px 10px;border-bottom:1px solid #333;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+    .si-table td{padding:8px 10px;border-bottom:1px solid #232325;color:#ddd;vertical-align:middle}
+    .si-table tr{cursor:pointer;transition:background .12s}
+    .si-table tr:hover td{background:#1c1d23}
+    .si-table tr.on td{background:#2d2456;color:#cfc8ff}
+    .si-table tr.on td:first-child{box-shadow:inset 3px 0 0 #5865F2}
+    .si-cover{width:44px;height:44px;border-radius:6px;object-fit:cover;background:#1a1a1a;display:block}
+    .si-title{font-weight:500;color:#eee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:340px}
+    .si-artist{color:#999;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px}
+    .si-table-wrap{max-height:560px;overflow-y:auto;border:1px solid #2a2a2e;border-radius:10px;background:#0f0f12}
+
+    /* Now-playing card */
+    .si-card{background:#0f0f12;border:1px solid #2a2a2e;border-radius:10px;padding:14px}
+    .np-art-wrap{position:relative;width:100%;aspect-ratio:1/1;border-radius:8px;overflow:hidden;background:#1a1a1a;cursor:pointer;transition:aspect-ratio .2s}
+    .np-art-wrap.has-video{aspect-ratio:9/16;max-height:560px;margin:0 auto;width:auto}
+    .np-art-wrap img,.np-art-wrap video{width:100%;height:100%;object-fit:cover;display:block}
+    .np-art-wrap video{display:none}
+    .np-art-wrap.has-video img{display:none}
+    .np-art-wrap.has-video video{display:block}
+    .np-title{font-size:18px;font-weight:600;color:#eee;margin-top:10px;line-height:1.3}
+    .np-artist{font-size:13px;color:#a8a4d8;margin-top:2px}
+    .np-stats{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:#888;margin-top:6px}
+    .np-stats span{display:inline-flex;gap:4px;align-items:center}
+    .np-tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+    .np-tag{padding:2px 8px;border-radius:10px;font-size:11px;background:#2a2154;color:#cfc8ff;border:1px solid #3d3470}
+
+    /* Transport */
+    .si-transport{display:flex;align-items:center;gap:10px;margin-top:10px}
+    .si-btn{border:1px solid #2a2a2e;background:#1a1a1f;color:#eee;width:38px;height:38px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:all .15s}
+    .si-btn:hover:not(:disabled){background:#2d2456;border-color:#5561e4}
+    .si-btn:disabled{opacity:.4;cursor:not-allowed}
+    .si-btn svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+    .si-btn .fill{fill:currentColor;stroke:none}
+    .si-btn.lg{width:48px;height:48px;border-radius:10px}
+    .si-btn.lg svg{width:22px;height:22px}
+    .si-btn .pause-icon{display:none}
+    .si-btn.playing .play-icon{display:none}
+    .si-btn.playing .pause-icon{display:inline-block}
+    .si-seek{flex:1;display:flex;align-items:center;gap:8px}
+    .si-seek-time{font-size:11px;color:#777;min-width:36px;text-align:center}
+    .si-seek-track{flex:1;height:4px;background:#2a2a2e;border-radius:2px;cursor:pointer;position:relative}
+    .si-seek-fill{height:100%;background:#5561e4;border-radius:2px;width:0%}
+    .si-vol{width:80px;accent-color:#5561e4}
+
+    /* Detail tabs */
+    .si-tabs{display:flex;gap:2px;margin-top:12px;border-bottom:1px solid #2a2a2e}
+    .si-tab{padding:8px 14px;font-size:12px;color:#888;cursor:pointer;border-bottom:2px solid transparent;transition:all .15s;background:transparent;border-top:0;border-left:0;border-right:0}
+    .si-tab:hover{color:#ccc}
+    .si-tab.active{color:#cfc8ff;border-bottom-color:#5561e4}
+    .si-panel{display:none;padding:12px 4px;font-size:13px;color:#bbb;line-height:1.6}
+    .si-panel.active{display:block}
+
+    /* Lyrics */
+    #lyrics-box{max-height:380px;overflow-y:auto;white-space:pre-wrap;font-family:ui-sans-serif,system-ui;font-size:13px;line-height:1.7;color:#ccc;padding:6px 4px;scroll-behavior:smooth}
+    #lyrics-box .ly-line{padding:2px 6px;border-radius:4px;transition:all .25s}
+    #lyrics-box .ly-line.active{background:#2d2456;color:#fff;font-weight:500}
+    #lyrics-box .ly-line.past{color:#666}
+
+    /* Prompt + tags panel */
+    .si-prompt-block{padding:10px 12px;background:#16161a;border:1px solid #2a2a2e;border-radius:8px;font-family:ui-monospace,monospace;font-size:12px;color:#cfc8ff;white-space:pre-wrap;line-height:1.55}
+    .si-meta-grid{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:12px;margin-top:10px}
+    .si-meta-grid dt{color:#888;font-weight:500}
+    .si-meta-grid dd{color:#ddd;margin:0;word-break:break-word}
+
+    /* Loading state */
+    .si-loading{padding:30px;text-align:center;color:#666;font-size:13px}
+    .si-error{padding:14px;background:#3a1a1a;border:1px solid #5a2a2a;border-radius:8px;color:#f88;font-size:13px}
+</style>
+
+<div class="flex items-center justify-between mb-6 flex-wrap gap-3">
+    <h2 class="text-2xl font-bold text-white flex items-center gap-3">
+        <span class="text-3xl">ℹ️</span>
+        Suno Info
+        <span id="song-count" class="text-gray-500 text-sm font-normal"></span>
+    </h2>
+</div>
+
+<!-- Playlist input -->
+<div class="bg-discord-dark rounded-xl border border-gray-700/50 p-4 mb-4">
+    <div class="flex flex-col sm:flex-row gap-2">
+        <input type="text" id="playlist-url" placeholder="https://suno.com/playlist/UUID"
+            class="flex-1 bg-discord-darker border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none"
+            value="">
+        <button id="btn-load"
+            class="px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50">
+            Load playlist
+        </button>
+    </div>
+    <p class="text-gray-500 text-xs mt-2">
+        Paste any public Suno playlist URL — songs are loaded once,
+        per-song details (lyrics, style prompt, video) are fetched on play.
+    </p>
+</div>
+
+<div class="si-grid">
+    <!-- Left: songs table -->
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-4">
+        <h3 class="text-white font-semibold text-sm mb-3 flex items-center gap-2">
+            <span>Songs</span>
+            <span id="songs-status" class="text-gray-500 font-normal text-xs"></span>
+        </h3>
+        <div class="si-table-wrap">
+            <table class="si-table">
+                <thead>
+                    <tr>
+                        <th style="width:60px"></th>
+                        <th>Title</th>
+                        <th>Artist</th>
+                    </tr>
+                </thead>
+                <tbody id="songs-tbody">
+                    <tr><td colspan="3" class="si-loading">Paste a playlist URL above and click <b>Load playlist</b>.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Right: now-playing + details -->
+    <div class="si-card">
+        <div class="np-art-wrap" id="np-art-wrap">
+            <img id="np-img" src="" alt="cover">
+            <video id="np-video" autoplay loop muted playsinline></video>
+        </div>
+        <div class="np-title" id="np-title">—</div>
+        <div class="np-artist" id="np-artist"></div>
+        <div class="np-stats" id="np-stats"></div>
+        <div class="np-tags" id="np-tags"></div>
+
+        <!-- Transport -->
+        <div class="si-transport">
+            <button class="si-btn" id="btn-prev" disabled title="Previous">
+                <svg viewBox="0 0 24 24"><path class="fill" d="M10.8 6.5 4 12l6.8 5.5V6.5Z"/><path class="fill" d="M19 6.5 12.2 12l6.8 5.5V6.5Z"/></svg>
+            </button>
+            <button class="si-btn lg" id="btn-play" disabled title="Play/Pause">
+                <svg class="play-icon" viewBox="0 0 24 24"><path class="fill" d="M8 6.5v11l8-5.5-8-5.5Z"/></svg>
+                <svg class="pause-icon" viewBox="0 0 24 24"><path d="M9 6.8v10.4"/><path d="M15 6.8v10.4"/></svg>
+            </button>
+            <button class="si-btn" id="btn-next" disabled title="Next">
+                <svg viewBox="0 0 24 24"><path class="fill" d="M13.2 6.5 20 12l-6.8 5.5V6.5Z"/><path class="fill" d="M5 6.5 11.8 12 5 17.5V6.5Z"/></svg>
+            </button>
+            <div class="si-seek">
+                <span class="si-seek-time" id="time-now">0:00</span>
+                <div class="si-seek-track" id="seek-track"><div class="si-seek-fill" id="seek-fill"></div></div>
+                <span class="si-seek-time" id="time-dur">0:00</span>
+            </div>
+            <input type="range" class="si-vol" id="vol" min="0" max="100" value="80" title="Volume">
+        </div>
+
+        <!-- Detail tabs -->
+        <div class="si-tabs">
+            <button class="si-tab active" data-tab="lyrics">Lyrics</button>
+            <button class="si-tab" data-tab="style">Style &amp; Info</button>
+        </div>
+        <div class="si-panel active" data-panel="lyrics">
+            <div id="lyrics-box">Pick a song to see its lyrics.</div>
+        </div>
+        <div class="si-panel" data-panel="style">
+            <div class="si-prompt-block" id="prompt-box">—</div>
+            <dl class="si-meta-grid" id="meta-grid"></dl>
+        </div>
+    </div>
+</div>
+
+<audio id="audio" preload="none" crossorigin="anonymous" style="display:none"></audio>
+
+<script>
+/* --- State ---------------------------------------------------------------- */
+var SONGS = [];           // [{uuid,title,artist,suno_url, _meta?}]
+var CUR = -1;             // current song index in SONGS
+var META_CACHE = {};      // uuid -> rich metadata
+var audio = document.getElementById('audio');
+
+/* --- Helpers -------------------------------------------------------------- */
+function esc(s){return (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function fmt(s){if(!isFinite(s))return '0:00';var m=Math.floor(s/60),ss=Math.floor(s%60);return m+':'+(ss<10?'0':'')+ss;}
+function setStatus(t){document.getElementById('songs-status').textContent=t||'';}
+
+/* --- Playlist loading ----------------------------------------------------- */
+document.getElementById('btn-load').addEventListener('click', loadPlaylist);
+document.getElementById('playlist-url').addEventListener('keydown', function(e){
+    if(e.key==='Enter') loadPlaylist();
+});
+
+async function loadPlaylist(){
+    var url = document.getElementById('playlist-url').value.trim();
+    if(!url){return;}
+    var btn = document.getElementById('btn-load');
+    btn.disabled = true; btn.textContent = 'Loading…';
+    setStatus('Fetching playlist…');
+    document.getElementById('songs-tbody').innerHTML =
+        '<tr><td colspan="3" class="si-loading">Fetching playlist…</td></tr>';
+    try {
+        var r = await fetch('/api/suno-info/playlist?url='+encodeURIComponent(url));
+        var data = await r.json();
+        if(!r.ok){
+            renderError(data.error || ('HTTP '+r.status));
+            return;
+        }
+        SONGS = data.songs || [];
+        document.getElementById('song-count').textContent = SONGS.length+' songs';
+        setStatus(SONGS.length+' loaded');
+        renderTable();
+        // Lazily fetch covers for visible rows in the background.
+        prefetchCovers();
+    } catch(e) {
+        renderError(e.message || String(e));
+    } finally {
+        btn.disabled = false; btn.textContent = 'Load playlist';
+    }
+}
+
+function renderError(msg){
+    document.getElementById('songs-tbody').innerHTML =
+        '<tr><td colspan="3"><div class="si-error">'+esc(msg)+'</div></td></tr>';
+    setStatus('error');
+}
+
+/* --- Table ---------------------------------------------------------------- */
+function renderTable(){
+    var tbody = document.getElementById('songs-tbody');
+    if(!SONGS.length){
+        tbody.innerHTML = '<tr><td colspan="3" class="si-loading">No songs.</td></tr>';
+        return;
+    }
+    var rows = SONGS.map(function(s, i){
+        var cover = (s._meta && s._meta.image_url)
+            || ('https://cdn1.suno.ai/image_'+s.uuid+'.jpeg');
+        var artist = (s._meta && s._meta.artist) || s.artist || '';
+        var title = (s._meta && s._meta.title) || s.title || s.uuid.slice(0,8);
+        return '<tr data-i="'+i+'"'+(i===CUR?' class="on"':'')+'>'+
+            '<td><img class="si-cover" src="'+esc(cover)+'" loading="lazy" '+
+                'onerror="this.onerror=null;this.src=\'https://cdn1.suno.ai/image_'+esc(s.uuid)+'.jpeg\'"></td>'+
+            '<td><div class="si-title">'+esc(title)+'</div></td>'+
+            '<td><div class="si-artist">'+esc(artist)+'</div></td>'+
+            '</tr>';
+    }).join('');
+    tbody.innerHTML = rows;
+    tbody.querySelectorAll('tr[data-i]').forEach(function(tr){
+        tr.addEventListener('click', function(){
+            var i = parseInt(tr.getAttribute('data-i'),10);
+            playIndex(i);
+        });
+    });
+}
+
+/* Background cover prefetch for the first ~30 rows (cheap UX boost). */
+async function prefetchCovers(){
+    var pending = SONGS.slice(0,30).filter(function(s){return !s._meta;});
+    var done = 0;
+    for(var b=0;b<pending.length;b+=4){
+        var batch = pending.slice(b,b+4);
+        await Promise.all(batch.map(function(s){
+            return loadMeta(s.uuid).then(function(m){
+                if(!m) return;
+                s._meta = m;
+                done++;
+            });
+        }));
+        renderTable();
+    }
+}
+
+/* --- Per-song metadata fetch & cache -------------------------------------- */
+async function loadMeta(uuid){
+    if(META_CACHE[uuid]) return META_CACHE[uuid];
+    try {
+        var r = await fetch('/api/suno-info/song/'+encodeURIComponent(uuid));
+        if(!r.ok) return null;
+        var m = await r.json();
+        META_CACHE[uuid] = m;
+        return m;
+    } catch(e){ return null; }
+}
+
+/* --- Playback ------------------------------------------------------------- */
+async function playIndex(i){
+    if(i<0 || i>=SONGS.length) return;
+    CUR = i;
+    var s = SONGS[i];
+    // Highlight row
+    document.querySelectorAll('#songs-tbody tr').forEach(function(tr,idx){
+        tr.classList.toggle('on', idx===i);
+    });
+    // Set audio source & play
+    audio.src = 'https://cdn1.suno.ai/'+s.uuid+'.mp3';
+    audio.play().catch(function(){});
+    document.getElementById('btn-prev').disabled = i===0;
+    document.getElementById('btn-next').disabled = i===SONGS.length-1;
+    document.getElementById('btn-play').disabled = false;
+    // Optimistic UI from playlist data
+    setNowPlaying({
+        uuid: s.uuid,
+        title: s.title || s.uuid.slice(0,8),
+        artist: s.artist || '',
+        image_url: 'https://cdn1.suno.ai/image_large_'+s.uuid+'.jpeg',
+        video_url: null, lyrics: null, prompt: '', tags: [],
+        plays: null, likes: null, model: '', type: '', created_at: '', handle: null,
+    });
+    // Fetch full metadata
+    var meta = await loadMeta(s.uuid);
+    if(meta && CUR===i){
+        SONGS[i]._meta = meta;
+        setNowPlaying(meta);
+        renderTable();
+    }
+}
+
+function setNowPlaying(m){
+    document.getElementById('np-title').textContent = m.title || '—';
+    document.getElementById('np-artist').textContent = m.artist || '';
+    // Cover / video
+    var wrap = document.getElementById('np-art-wrap');
+    var img = document.getElementById('np-img');
+    var vid = document.getElementById('np-video');
+    if(m.video_url){
+        if(vid.src !== m.video_url){ vid.src = m.video_url; vid.load(); }
+        wrap.classList.add('has-video');
+        vid.onloadedmetadata = function(){
+            if(vid.videoWidth && vid.videoHeight){
+                wrap.style.aspectRatio = vid.videoWidth+' / '+vid.videoHeight;
+            }
+        };
+        vid.onerror = function(){ wrap.classList.remove('has-video'); wrap.style.aspectRatio=''; };
+    } else {
+        wrap.classList.remove('has-video'); wrap.style.aspectRatio='';
+        vid.removeAttribute('src'); vid.load();
+    }
+    img.src = m.image_url || 'https://cdn1.suno.ai/image_large_'+m.uuid+'.jpeg';
+    img.onerror = function(){ this.onerror=null; this.src = 'https://cdn1.suno.ai/image_'+m.uuid+'.jpeg'; };
+
+    // Stats line
+    var stats = [];
+    if(m.plays!=null) stats.push('▶ '+m.plays.toLocaleString()+' plays');
+    if(m.likes!=null) stats.push('♥ '+m.likes.toLocaleString());
+    if(m.model)       stats.push(m.model);
+    if(m.type)        stats.push(m.type);
+    document.getElementById('np-stats').innerHTML =
+        stats.map(function(t){return '<span>'+esc(t)+'</span>';}).join('');
+
+    // Tags
+    var tagsHtml = (m.tags||[]).map(function(t){
+        return '<span class="np-tag">'+esc(t)+'</span>';
+    }).join('');
+    document.getElementById('np-tags').innerHTML = tagsHtml;
+
+    // Lyrics — render line-by-line so we can highlight while playing.
+    renderLyrics(m.lyrics || '');
+
+    // Style + info panel
+    document.getElementById('prompt-box').textContent = m.prompt || '(no style prompt available)';
+    var meta = [];
+    if(m.created_at) meta.push(['Created', new Date(m.created_at).toLocaleString()]);
+    if(m.handle)     meta.push(['Artist handle', '@'+m.handle]);
+    if(m.uuid)       meta.push(['UUID', m.uuid]);
+    document.getElementById('meta-grid').innerHTML = meta.map(function(p){
+        return '<dt>'+esc(p[0])+'</dt><dd>'+esc(p[1])+'</dd>';
+    }).join('');
+}
+
+/* --- Lyrics scrolling ----------------------------------------------------- */
+var LY_LINES = [];   // [{text, el}]
+function renderLyrics(text){
+    var box = document.getElementById('lyrics-box');
+    if(!text){
+        box.innerHTML = '<div style="color:#666">No lyrics available.</div>';
+        LY_LINES = [];
+        return;
+    }
+    var lines = text.split(/\r?\n/);
+    box.innerHTML = lines.map(function(ln){
+        return '<div class="ly-line">'+(ln ? esc(ln) : '&nbsp;')+'</div>';
+    }).join('');
+    LY_LINES = Array.prototype.slice.call(box.querySelectorAll('.ly-line'))
+        .map(function(el){return {text: el.textContent, el: el};});
+}
+
+/* Time-based pseudo-sync: distribute lines over song duration. Suno does
+   not expose timed lyrics publicly, so we approximate with even spacing —
+   it still feels alive while reading along. */
+audio.addEventListener('timeupdate', function(){
+    if(!LY_LINES.length || !audio.duration) return;
+    var pct = audio.currentTime / audio.duration;
+    var idx = Math.min(LY_LINES.length-1, Math.floor(pct * LY_LINES.length));
+    LY_LINES.forEach(function(l, i){
+        l.el.classList.toggle('active', i===idx);
+        l.el.classList.toggle('past', i<idx);
+    });
+    // Auto-scroll active line into view (smooth, only when needed)
+    var active = LY_LINES[idx] && LY_LINES[idx].el;
+    if(active){
+        var box = document.getElementById('lyrics-box');
+        var top = active.offsetTop - box.clientHeight/2 + active.clientHeight/2;
+        if(Math.abs(box.scrollTop - top) > 80){
+            box.scrollTo({top: Math.max(0,top), behavior:'smooth'});
+        }
+    }
+});
+
+/* --- Audio bindings ------------------------------------------------------- */
+audio.addEventListener('timeupdate', function(){
+    if(!audio.duration) return;
+    var pct = (audio.currentTime/audio.duration)*100;
+    document.getElementById('seek-fill').style.width = pct+'%';
+    document.getElementById('time-now').textContent = fmt(audio.currentTime);
+});
+audio.addEventListener('loadedmetadata', function(){
+    document.getElementById('time-dur').textContent = fmt(audio.duration);
+});
+audio.addEventListener('play', updatePlayBtn);
+audio.addEventListener('pause', updatePlayBtn);
+audio.addEventListener('ended', function(){ playIndex(CUR+1); });
+
+function updatePlayBtn(){
+    var btn = document.getElementById('btn-play');
+    btn.classList.toggle('playing', !audio.paused && !audio.ended);
+}
+
+document.getElementById('btn-play').onclick = function(){
+    if(CUR<0){ if(SONGS.length) playIndex(0); return; }
+    if(audio.paused) audio.play(); else audio.pause();
+};
+document.getElementById('btn-prev').onclick = function(){ playIndex(CUR-1); };
+document.getElementById('btn-next').onclick = function(){ playIndex(CUR+1); };
+document.getElementById('seek-track').addEventListener('click', function(ev){
+    if(!audio.duration) return;
+    var rect = this.getBoundingClientRect();
+    audio.currentTime = ((ev.clientX - rect.left)/rect.width) * audio.duration;
+});
+document.getElementById('vol').oninput = function(){ audio.volume = this.value/100; };
+audio.volume = 0.8;
+
+/* --- Tabs ----------------------------------------------------------------- */
+document.querySelectorAll('.si-tab').forEach(function(btn){
+    btn.addEventListener('click', function(){
+        var tab = btn.getAttribute('data-tab');
+        document.querySelectorAll('.si-tab').forEach(function(b){
+            b.classList.toggle('active', b===btn);
+        });
+        document.querySelectorAll('.si-panel').forEach(function(p){
+            p.classList.toggle('active', p.getAttribute('data-panel')===tab);
+        });
+    });
+});
+</script>
+{% endblock %}

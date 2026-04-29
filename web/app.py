@@ -63,6 +63,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('radio', 'Twitch Radio'),
         ('suno_analyzer', 'Suno Analyzer'),
         ('suno_promotion', 'Suno Promotion'),
+        ('suno_info', 'Suno Info'),
         ('audit', 'Audit Log'),
         ('settings', 'Settings'),
         ('llm', 'Corax Chat (LLM)'),
@@ -3157,5 +3158,126 @@ def create_app(db: Database, bot=None) -> Quart:
             filter_status=filter_status,
             hide_paused=hide_paused,
         )
+
+    # --- Suno Info -----------------------------------------------------------
+    #
+    # Loads a public Suno playlist URL and shows every song in a table, with
+    # an integrated player (audio + optional video cover), full lyrics, and
+    # the style prompt / tags used to generate the song.
+
+    @app.route("/suno-info")
+    @permission_required('suno_info')
+    async def suno_info():
+        return await render_template("suno_info.html")
+
+    @app.route("/api/suno-info/playlist")
+    @permission_required('suno_info')
+    async def api_suno_info_playlist():
+        """Parse a Suno playlist URL and return its songs."""
+        from quart import jsonify
+        from bot.stream_manager import parse_suno_playlist
+        url = (request.args.get("url") or "").strip()
+        if not url:
+            return jsonify({"error": "missing url"}), 400
+        try:
+            songs = await parse_suno_playlist(url)
+        except Exception as e:
+            return jsonify({"error": f"parse failed: {e}"}), 502
+        if not songs:
+            return jsonify({"error": "no songs found in playlist"}), 404
+        return jsonify({"songs": songs})
+
+    @app.route("/api/suno-info/song/<uuid>")
+    @permission_required('suno_info')
+    async def api_suno_info_song(uuid):
+        """Return rich metadata for a single Suno song: title, artist, cover,
+        video_url, lyrics, style prompt, tags, model, stats."""
+        import aiohttp as _aiohttp, re as _re, html as _html
+        from quart import jsonify
+
+        # Reuse the embed-based helper for the basics (lyrics, image, video).
+        base = await _fetch_suno_meta(uuid)
+
+        # Now fetch the public song page for richer fields (gpt_description_prompt,
+        # tags, model, stats). This is the same scraping strategy used in the
+        # Suno Analyzer route.
+        url = f"https://suno.com/song/{uuid}"
+        headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
+        result: dict = {
+            "uuid": uuid,
+            "title": base.get("title"),
+            "artist": base.get("artist"),
+            "image_url": base.get("image_url"),
+            "video_url": base.get("video_url"),
+            "lyrics": base.get("lyrics"),
+            "handle": base.get("handle"),
+            "tags": [],
+            "prompt": "",
+            "model": "",
+            "type": "",
+            "plays": None,
+            "likes": None,
+            "created_at": "",
+        }
+        try:
+            async with _aiohttp.ClientSession() as sess:
+                async with sess.get(url, headers=headers,
+                                    timeout=_aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status == 200:
+                        html = await resp.text()
+                    else:
+                        html = ""
+        except Exception:
+            html = ""
+
+        if html:
+            # Tags / genre — comma-separated string in JSON
+            m = _re.search(r'\\"tags\\":\\"([^\\]+)\\"', html)
+            if not m:
+                m = _re.search(r'"tags":"([^"]+)"', html)
+            if m:
+                result["tags"] = [
+                    t.strip() for t in m.group(1).split(",") if t.strip()
+                ]
+            # Style prompt
+            m = _re.search(
+                r'\\"gpt_description_prompt\\":\\"((?:[^\\]|\\.)*?)\\"', html
+            )
+            if not m:
+                m = _re.search(
+                    r'"gpt_description_prompt":"((?:[^"\\]|\\.)*)"', html
+                )
+            if m:
+                result["prompt"] = (
+                    m.group(1).replace('\\n', '\n').replace('\\"', '"')
+                )
+            # Stats
+            for key, pat in [
+                ("plays", r'\\"play_count\\":(\d+)'),
+                ("likes", r'\\"upvote_count\\":(\d+)'),
+            ]:
+                m = _re.search(pat, html)
+                if m:
+                    result[key] = int(m.group(1))
+            # Model + type + created_at
+            m = _re.search(r'\\"major_model_version\\":\\"([^\\]+)\\"', html)
+            if m:
+                result["model"] = m.group(1)
+            m = _re.search(r'\\"type\\":\\"([^\\]+)\\"', html)
+            if m:
+                result["type"] = m.group(1)
+            m = _re.search(r'\\"created_at\\":\\"([^\\]+)\\"', html)
+            if m:
+                result["created_at"] = m.group(1)
+            # Author fallback if og:description didn't have it
+            if not result.get("artist"):
+                m = _re.search(r'\\"display_name\\":\\"([^\\]+)\\"', html)
+                if m:
+                    result["artist"] = m.group(1)
+
+        # Final image fallback to the standard Suno CDN path
+        if not result.get("image_url"):
+            result["image_url"] = f"https://cdn1.suno.ai/image_large_{uuid}.jpeg"
+        return jsonify(result)
 
     return app
