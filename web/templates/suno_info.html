@@ -3,7 +3,13 @@
 {% block content %}
 <style>
     .si-grid{display:grid;grid-template-columns:1fr;gap:16px}
-    @media(min-width:1100px){.si-grid{grid-template-columns:minmax(0,1.4fr) minmax(0,1fr)}}
+    @media(min-width:1100px){
+        .si-grid{grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);
+                 height:calc(100vh - 130px);min-height:520px}
+    }
+    /* Left column: fills the grid row, table-wrap takes the remaining space */
+    .si-left-col{display:flex;flex-direction:column;gap:12px;min-width:0;min-height:0;height:100%}
+    .si-left-col > .si-songs-card{flex:1;min-height:0;display:flex;flex-direction:column}
 
     /* Songs table */
     .si-table{width:100%;border-collapse:collapse;font-size:13px}
@@ -17,11 +23,11 @@
     .si-title{font-weight:500;color:#eee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:340px}
     .si-artist{color:#999;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px}
     .si-dur{color:#888;font-size:12px;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
-    .si-table-wrap{max-height:calc(100vh - 240px);min-height:360px;overflow-y:auto;border:1px solid #2a2a2e;border-radius:10px;background:#0f0f12}
+    .si-table-wrap{flex:1;min-height:0;overflow-y:auto;border:1px solid #2a2a2e;border-radius:10px;background:#0f0f12}
 
-    /* Now-playing card — flex column that fits the viewport exactly */
+    /* Now-playing card — flex column that exactly matches the left column's height */
     .si-card{background:#0f0f12;border:1px solid #2a2a2e;border-radius:10px;padding:14px;
-             display:flex;flex-direction:column;height:calc(100vh - 130px);min-height:520px;overflow:hidden}
+             display:flex;flex-direction:column;height:100%;min-height:0;overflow:hidden}
     .np-art-wrap{position:relative;aspect-ratio:1/1;max-width:100%;margin:0 auto;border-radius:8px;
                  overflow:hidden;background:#1a1a1a;cursor:pointer;transition:aspect-ratio .2s,max-height .2s,height .2s;
                  flex-shrink:0;max-height:min(60vh, 540px)}
@@ -110,7 +116,7 @@
 
 <div class="si-grid">
     <!-- Left: playlist input + songs table -->
-    <div class="flex flex-col gap-3 min-w-0">
+    <div class="si-left-col">
         <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-3">
             <div class="flex flex-col sm:flex-row gap-2">
                 <input type="text" id="playlist-url" placeholder="https://suno.com/playlist/UUID"
@@ -122,7 +128,7 @@
                 </button>
             </div>
         </div>
-        <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-4">
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-4 si-songs-card">
         <h3 class="text-white font-semibold text-sm mb-3 flex items-center gap-2">
             <span>Songs</span>
             <span id="songs-status" class="text-gray-500 font-normal text-xs"></span>
