@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Suno Info{% endblock %}
+{% block title %}Suno Playlist Player{% endblock %}
 {% block content %}
 <style>
     .si-grid{display:grid;grid-template-columns:1fr;gap:16px}
@@ -19,10 +19,16 @@
     .si-dur{color:#888;font-size:12px;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
     .si-table-wrap{max-height:calc(100vh - 240px);min-height:360px;overflow-y:auto;border:1px solid #2a2a2e;border-radius:10px;background:#0f0f12}
 
-    /* Now-playing card */
-    .si-card{background:#0f0f12;border:1px solid #2a2a2e;border-radius:10px;padding:14px}
-    .np-art-wrap{position:relative;aspect-ratio:1/1;max-height:calc(100vh - 540px);max-width:100%;margin:0 auto;border-radius:8px;overflow:hidden;background:#1a1a1a;cursor:pointer;transition:aspect-ratio .2s}
+    /* Now-playing card — flex column that fits the viewport exactly */
+    .si-card{background:#0f0f12;border:1px solid #2a2a2e;border-radius:10px;padding:14px;
+             display:flex;flex-direction:column;height:calc(100vh - 130px);min-height:520px;overflow:hidden}
+    .np-art-wrap{position:relative;aspect-ratio:1/1;max-width:100%;margin:0 auto;border-radius:8px;
+                 overflow:hidden;background:#1a1a1a;cursor:pointer;transition:aspect-ratio .2s,max-height .2s,height .2s;
+                 flex-shrink:0;max-height:min(60vh, 540px)}
     .np-art-wrap.has-video{aspect-ratio:9/16}
+    /* Compact mode — cover shrinks so the lyrics get more vertical space */
+    .si-card.compact .np-art-wrap{max-height:140px;height:140px;width:140px;aspect-ratio:1/1;margin:0}
+    .si-card.compact .np-art-wrap.has-video{aspect-ratio:9/16;width:auto;height:140px}
     .np-art-wrap img,.np-art-wrap video{width:100%;height:100%;object-fit:cover;display:block}
     .np-art-wrap video{display:none}
     .np-art-wrap.has-video img{display:none}
@@ -60,8 +66,9 @@
     .si-panel{display:none;padding:12px 4px;font-size:13px;color:#bbb;line-height:1.6}
     .si-panel.active{display:block}
 
-    /* Lyrics */
-    #lyrics-box{max-height:calc(100vh - 760px);min-height:140px;overflow-y:auto;white-space:pre-wrap;font-family:ui-sans-serif,system-ui;font-size:13px;line-height:1.7;color:#ccc;padding:6px 4px;scroll-behavior:smooth}
+    /* Lyrics — flex:1 fills the remaining card height, never grows beyond it */
+    .si-panel.active{display:flex;flex-direction:column;min-height:0;flex:1}
+    #lyrics-box{flex:1;min-height:0;overflow-y:auto;white-space:pre-wrap;font-family:ui-sans-serif,system-ui;font-size:13px;line-height:1.7;color:#ccc;padding:6px 4px;scroll-behavior:smooth}
     #lyrics-box .ly-line{padding:2px 6px;border-radius:4px}
     #lyrics-box .ly-marker{color:#888;font-style:italic;font-size:11px;letter-spacing:.05em;text-transform:uppercase;margin-top:6px}
     /* Highlights only apply when auto-scroll is enabled (.ly-auto). */
@@ -79,6 +86,13 @@
     .si-spectrum-row{margin-top:8px}
     .si-spectrum{display:block;flex:1;min-width:160px;max-width:420px;height:40px;background:transparent}
 
+    /* Compact-cover toggle button */
+    .si-compact-btn{display:inline-flex;align-items:center;gap:4px;padding:4px 8px;border-radius:6px;
+                    background:#1a1a1f;border:1px solid #2a2a2e;color:#aaa;font-size:11px;cursor:pointer;
+                    transition:all .15s}
+    .si-compact-btn:hover{color:#fff;border-color:#444}
+    .si-compact-btn.is-on{background:#2a2154;border-color:#3d3470;color:#cfc8ff}
+
     /* Loading state */
     .si-loading{padding:30px;text-align:center;color:#666;font-size:13px}
     .si-error{padding:14px;background:#3a1a1a;border:1px solid #5a2a2a;border-radius:8px;color:#f88;font-size:13px}
@@ -88,7 +102,7 @@
     <h2 class="text-2xl font-bold text-white flex items-center gap-3 flex-wrap min-w-0">
         <img src="{{ url_for('static', filename='TrYa_logo.png') }}" alt=""
             class="w-9 h-9 rounded-md object-cover shrink-0">
-        <span>Suno Info</span>
+        <span>Suno Playlist Player</span>
         <span id="song-count" class="text-gray-500 text-sm font-normal"></span>
         <span id="playlist-name" class="text-discord-blurple text-base font-medium truncate max-w-md"></span>
     </h2>
@@ -137,11 +151,17 @@
             <img id="np-img" src="" alt="cover">
             <video id="np-video" autoplay loop muted playsinline></video>
         </div>
-        <div class="flex items-start justify-between gap-3">
+        <div class="flex items-start justify-between gap-3 mt-2">
             <div class="min-w-0 flex-1">
                 <div class="np-title" id="np-title">—</div>
                 <div class="np-artist" id="np-artist"></div>
             </div>
+            <button id="btn-compact" class="si-compact-btn shrink-0 mt-1" title="Toggle compact cover">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="m4 20 6-6"/><path d="M14 10 20 4"/>
+                </svg>
+                <span id="compact-label">Compact</span>
+            </button>
             <a id="np-suno-link" href="#" target="_blank" rel="noopener"
                 class="shrink-0 mt-1 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md
                        bg-discord-blurple/20 hover:bg-discord-blurple/40 text-discord-blurple
@@ -260,7 +280,10 @@ async function loadPlaylist(){
         // Persist successfully loaded URL for next session.
         try { localStorage.setItem('suno-info-last-url', url); } catch(e){}
         renderTable();
-        // Lazily fetch covers for visible rows in the background.
+        // Lazily fetch metadata for ALL rows in the background — fills in
+        // titles / artists / durations that may have been missing from
+        // the initial playlist response (esp. for very large playlists
+        // where Suno's API only returns clip IDs on later pages).
         prefetchCovers();
     } catch(e) {
         renderError(e.message || String(e));
@@ -336,9 +359,10 @@ function renderTable(){
     });
 }
 
-/* Background cover prefetch for the first ~30 rows (cheap UX boost). */
+/* Background prefetch for ALL rows. Fills in missing titles/artists/durations
+   plus cover URLs. Runs with limited concurrency to avoid hammering Suno. */
 async function prefetchCovers(){
-    var pending = SONGS.slice(0,30).filter(function(s){return !s._meta;});
+    var pending = SONGS.filter(function(s){return !s._meta;});
     var done = 0;
     for(var b=0;b<pending.length;b+=4){
         var batch = pending.slice(b,b+4);
@@ -694,6 +718,22 @@ audio.addEventListener('play', function(){
     if(lastUrl){
         document.getElementById('playlist-url').value = lastUrl;
     }
+
+    // Compact-cover toggle: shrinks the cover so the lyrics use the freed space.
+    var card = document.querySelector('.si-card');
+    var btn = document.getElementById('btn-compact');
+    function applyCompact(on){
+        card.classList.toggle('compact', !!on);
+        btn.classList.toggle('is-on', !!on);
+        document.getElementById('compact-label').textContent = on ? 'Expand' : 'Compact';
+    }
+    var savedCompact = localStorage.getItem('suno-info-compact') === '1';
+    applyCompact(savedCompact);
+    btn.addEventListener('click', function(){
+        var on = !card.classList.contains('compact');
+        applyCompact(on);
+        try { localStorage.setItem('suno-info-compact', on ? '1' : '0'); } catch(e){}
+    });
 })();
 </script>
 {% endblock %}

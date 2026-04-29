@@ -81,7 +81,11 @@
                 {{ nav_link('radio_admin', '📻', 'Twitch', 'radio') }}
                 {{ nav_link('suno_analyzer', '🔬', 'Suno Analyzer', 'suno_analyzer') }}
                 {{ nav_link('suno_promotion', '⭐', 'Suno Promotion', 'suno_promotion') }}
-                {{ nav_link('suno_info', 'ℹ️', 'Suno Info', 'suno_info') }}
+                {% if is_admin or 'suno_info' in perms %}
+                <a href="{{ url_for('suno_info') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'suno_info' %}active{% endif %}">
+                    <span class="sidebar-icon mr-3"><img src="{{ url_for('static', filename='TrYa_logo.png') }}" alt="" class="w-5 h-5 rounded object-cover inline-block"></span><span class="sidebar-label">Suno Playlist Player</span>
+                </a>
+                {% endif %}
                 {{ nav_link('audit', '📋', 'Audit Log', 'audit') }}
                 {{ nav_link('llm', '🤖', 'Corax Chat', 'llm') }}
                 {{ nav_link('settings', '⚙️', 'Settings', 'settings') }}
