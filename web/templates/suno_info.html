@@ -458,6 +458,8 @@ async function playIndex(i){
     if(_rmsRecordingUuid && _rmsRecordingUuid !== s.uuid){
         _rmsBuf = null; _rmsRecording = false; _rmsRecordingUuid = null;
     }
+    // Reset live onset tracking for the new song.
+    _liveFirstT = null; _liveLastT = null; _liveActiveStreak = 0;
     // Try to load a cached RMS profile for this song (built during a past
     // full playthrough) so the very first auto-scroll already accounts for
     // intro silence and outro fades.
@@ -586,6 +588,11 @@ var _rmsBuf = null;            // recording buffer (sparse array)
 var _rmsLastIdx = -1;
 var _rmsRecording = false;
 var _rmsRecordingUuid = null;
+/* Live (in-flight) onset detection — gives us a usable first-vocal estimate
+   already on the *first* play of a song, before any cached profile exists. */
+var _liveFirstT = null;        // earliest detected vocal onset (seconds)
+var _liveLastT  = null;        // most recent vocal-active timestamp (seconds)
+var _liveActiveStreak = 0;     // consecutive above-threshold samples
 
 function rebuildSyncWeights(){
     /* Word-weighted timing: each syncable line gets a weight equal to its
@@ -638,40 +645,50 @@ function clearLyHighlights(){
     });
 }
 
+/* Sentinel returned by currentLyIdx() when playback is still in the song's
+   leading silence (intro). The lyrics view stays scrolled to the top so the
+   `[Intro …]` marker is visible and no line is highlighted yet.            */
+var LY_IDX_PRE = -2;
+
 /* Compute the currently-active sync index (into LY_SYNC).
    Strategy:
-     1. Determine "effective progress" — by default just `currentTime/duration`.
-        If a cached RMS profile exists for this song, transform progress so
-        that it advances only during vocal-active regions (skipping intros /
-        outros / instrumental breaks).
-     2. Multiply effective progress by the total word weight, then locate the
-        line whose cumulative weight crosses that target. Long lines therefore
-        receive proportionally more time than short ones. */
+     1. Determine the song's "vocal span" `[firstT, lastT]`. We use, in
+        order of preference: a cached RMS profile for this song; the
+        live-detected onsets we are currently capturing; or fall back to
+        `[0, duration]` if neither is available.
+     2. While `currentTime < firstT` we return LY_IDX_PRE — the lyrics view
+        scrolls to the top so the `[Intro]` marker is visible.
+     3. Otherwise, map `(t - firstT) / (lastT - firstT)` onto the cumulative
+        word weight of the syncable lines. Long lines therefore receive
+        proportionally more time than short ones; intro silence and outro
+        fades no longer waste lyric "slots".                                 */
 function currentLyIdx(){
     if(!LY_SYNC.length || !audio.duration || LY_TOTAL_W <= 0) return -1;
     var t = audio.currentTime;
     var dur = audio.duration;
-    var fraction;
+    var firstT, lastT;
     if(LY_ACTIVE){
-        fraction = activeFractionAt(t, dur);
+        // We have a cached vocal-span profile — use it directly.
+        if(t + 0.05 < LY_ACTIVE.firstT) return LY_IDX_PRE;
+        firstT = LY_ACTIVE.firstT;
+        lastT  = LY_ACTIVE.lastT;
+    } else if(_rmsRecording && _rmsRecordingUuid === LY_PROFILE_UUID){
+        // First listen — use whatever the live detector has so far.
+        if(_liveFirstT == null) return LY_IDX_PRE;   // still waiting for vocals
+        firstT = _liveFirstT;
+        lastT  = (_liveLastT != null && _liveLastT > firstT + 1) ? _liveLastT : dur;
     } else {
-        fraction = t / dur;
+        // No info at all (seek into a song without recording active).
+        firstT = 0; lastT = dur;
     }
-    fraction = Math.max(0, Math.min(0.99999, fraction));
+    if(lastT - firstT < 1) lastT = dur;
+    var span = Math.max(1, lastT - firstT);
+    var fraction = Math.max(0, Math.min(0.99999, (t - firstT) / span));
     var target = fraction * LY_TOTAL_W;
     for(var i=0;i<LY_WEIGHTS.length;i++){
         if(LY_CUMW[i+1] > target) return i;
     }
     return LY_WEIGHTS.length - 1;
-}
-
-/* Map raw playback time to the fraction of *vocal-active* time elapsed,
-   using the cached RMS profile of this song. */
-function activeFractionAt(t, dur){
-    if(!LY_ACTIVE || !LY_ACTIVE.total) return t/dur;
-    var idx = Math.max(0, Math.min(LY_ACTIVE.n,
-                                   Math.floor(t * LY_PROFILE_RATE)));
-    return LY_ACTIVE.cum[idx] / LY_ACTIVE.total;
 }
 
 /* --- RMS profile (per-UUID localStorage cache) ---------------------------- */
@@ -687,12 +704,22 @@ function computeActiveProfile(profile){
     var thr = Math.max(8, max * 0.22);
     var n = profile.length;
     var cum = new Uint32Array(n + 1);
+    var firstIdx = -1, lastIdx = -1;
     for(var i=0;i<n;i++){
-        cum[i+1] = cum[i] + (profile[i] >= thr ? 1 : 0);
+        var on = profile[i] >= thr ? 1 : 0;
+        cum[i+1] = cum[i] + on;
+        if(on){
+            if(firstIdx < 0) firstIdx = i;
+            lastIdx = i;
+        }
     }
     var total = cum[n];
     if(total < n * 0.10) return null;  // nonsense profile, ignore
-    return {cum:cum, total:total, n:n};
+    return {
+        cum: cum, total: total, n: n,
+        firstT: firstIdx >= 0 ? firstIdx / LY_PROFILE_RATE : 0,
+        lastT:  lastIdx  >= 0 ? (lastIdx + 1) / LY_PROFILE_RATE : (n / LY_PROFILE_RATE),
+    };
 }
 
 function loadProfileForUuid(uuid){
@@ -771,9 +798,12 @@ function applyAutoscrollMode(){
     if(!box) return;
     if(isAutoOn()){
         box.classList.add('ly-auto');
-        // Highlight + center current line right away.
         var si = currentLyIdx();
-        if(si >= 0){
+        if(si === LY_IDX_PRE){
+            // Still in the leading silence — show the start of the lyrics.
+            clearLyHighlights();
+            box.scrollTo({top: 0, behavior: 'smooth'});
+        } else if(si >= 0){
             highlightSync(si);
             centerLine(LY_LINES[LY_SYNC[si]].el, true);
         }
@@ -797,10 +827,18 @@ function highlightSync(syncIdx){
 audio.addEventListener('timeupdate', function(){
     if(!isAutoOn() || !LY_SYNC.length) return;
     var si = currentLyIdx();
+    var box = document.getElementById('lyrics-box');
+    if(si === LY_IDX_PRE){
+        // Pre-vocal silence — keep the lyric view pinned to the top so the
+        // `[Intro …]` marker (or the first line) stays visible, and clear
+        // any active/past highlights from a previous song.
+        clearLyHighlights();
+        if(box.scrollTop > 4) box.scrollTo({top:0, behavior:'smooth'});
+        return;
+    }
     if(si < 0) return;
     highlightSync(si);
     var active = LY_LINES[LY_SYNC[si]].el;
-    var box = document.getElementById('lyrics-box');
     var target = active.offsetTop - box.clientHeight/2 + active.clientHeight/2;
     if(Math.abs(box.scrollTop - target) > 40){
         box.scrollTo({top: Math.max(0,target), behavior:'smooth'});
@@ -1034,14 +1072,30 @@ function drawSpectrum(){
             var sIdx = Math.floor(audio.currentTime * LY_PROFILE_RATE);
             if(sIdx !== _rmsLastIdx && sIdx >= 0){
                 _rmsLastIdx = sIdx;
-                /* Average the upper half of the frequency-bin range —
-                   vocals dominate there, instruments below 200Hz carry
-                   constant rumble and would mask silences.            */
+                /* Average the mid-band of the frequency spectrum —
+                   vocals dominate there, instruments below ~200Hz
+                   carry constant rumble and would mask silences.   */
                 var sum = 0, cnt = 0;
                 for(var k=Math.floor(data.length*0.05); k<Math.floor(data.length*0.7); k++){
                     sum += data[k]; cnt++;
                 }
-                _rmsBuf[sIdx] = cnt ? Math.round(sum/cnt) : 0;
+                var avg = cnt ? Math.round(sum/cnt) : 0;
+                _rmsBuf[sIdx] = avg;
+                /* Live onset tracking: as soon as 3 consecutive samples
+                   (~750ms) are above an absolute energy floor, declare
+                   the first vocal moment. This lets us correctly skip
+                   the leading silence on the very FIRST listen, before
+                   any cached profile exists.                          */
+                var liveThr = 14;  // ~5% of full scale — robust against silence
+                if(avg >= liveThr){
+                    _liveActiveStreak++;
+                    if(_liveFirstT == null && _liveActiveStreak >= 3){
+                        _liveFirstT = Math.max(0, audio.currentTime - 0.5);
+                    }
+                    _liveLastT = audio.currentTime;
+                } else {
+                    _liveActiveStreak = 0;
+                }
             }
         }
         var w = c.width, h = c.height;
