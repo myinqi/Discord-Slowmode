@@ -673,10 +673,15 @@ function currentLyIdx(){
         firstT = LY_ACTIVE.firstT;
         lastT  = LY_ACTIVE.lastT;
     } else if(_rmsRecording && _rmsRecordingUuid === LY_PROFILE_UUID){
-        // First listen — use whatever the live detector has so far.
-        if(_liveFirstT == null) return LY_IDX_PRE;   // still waiting for vocals
+        // First listen — only the LIVE *onset* is reliable, the live "last
+        // active" timestamp is just `currentTime`, so using it would shrink
+        // the mapping to [firstT, currentTime] and instantly jump us to
+        // the final lyric. We therefore stretch the timeline to the full
+        // remaining duration and let outro silence be re-fitted by the
+        // cached profile on the *next* play.
+        if(_liveFirstT == null) return LY_IDX_PRE;
         firstT = _liveFirstT;
-        lastT  = (_liveLastT != null && _liveLastT > firstT + 1) ? _liveLastT : dur;
+        lastT  = dur;
     } else {
         // No info at all (seek into a song without recording active).
         firstT = 0; lastT = dur;

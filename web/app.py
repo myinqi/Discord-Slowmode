@@ -1108,14 +1108,22 @@ def create_app(db: Database, bot=None) -> Quart:
                                 )
                                 if mref:
                                     ref = mref.group(1)
+                                    # RSC text chunks carry their exact length
+                                    # in hex right after the `T`, e.g.
+                                    # `3d:T1aef,<6895 chars of content>`.
+                                    # Using that length avoids accidentally
+                                    # capturing the *next* chunk (which used
+                                    # to happen when the content didn't end
+                                    # with a newline before the next id).
                                     tpat = re.compile(
                                         r'(?:^|\n)' + re.escape(ref) +
-                                        r':T[0-9a-f]+,(.*?)(?=\n[0-9a-f]+:|\Z)',
-                                        re.S,
+                                        r':T([0-9a-f]+),',
                                     )
                                     tfnd = tpat.search(full)
                                     if tfnd:
-                                        candidate = tfnd.group(1).rstrip()
+                                        length = int(tfnd.group(1), 16)
+                                        start = tfnd.end()
+                                        candidate = full[start:start + length].rstrip()
                                         if _valid_lyrics(candidate):
                                             lyrics = candidate
                         except Exception:
@@ -3354,14 +3362,18 @@ def create_app(db: Database, bot=None) -> Quart:
                     )
                     if mref:
                         ref = mref.group(1)
+                        # Use the explicit hex length prefix (`T<hex>,`) so we
+                        # never bleed into the *next* RSC chunk if the chunk
+                        # content happens to lack a trailing newline.
                         tpat = _re.compile(
                             r'(?:^|\n)' + _re.escape(ref) +
-                            r':T[0-9a-f]+,(.*?)(?=\n[0-9a-f]+:|\Z)',
-                            _re.S,
+                            r':T([0-9a-f]+),',
                         )
                         tfnd = tpat.search(full)
                         if tfnd:
-                            result["prompt"] = tfnd.group(1).rstrip()
+                            length = int(tfnd.group(1), 16)
+                            start = tfnd.end()
+                            result["prompt"] = full[start:start + length].rstrip()
                 except Exception:
                     pass
             # Stats
