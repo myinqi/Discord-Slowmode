@@ -18,6 +18,9 @@ def create_app(db: Database, bot=None) -> Quart:
         template_folder="templates",
         static_folder="static",
     )
+    # Allow larger uploads (PiP videos, radio backgrounds). Default is 16 MB.
+    app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024   # 50 MB
+    app.config["BODY_TIMEOUT"]       = 120                # 2 min for slow uplinks
     app.db = db
     app.bot = bot
     app.scan_status = {"running": False, "progress": "", "result": ""}
