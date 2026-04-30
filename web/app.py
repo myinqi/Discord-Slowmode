@@ -1110,20 +1110,24 @@ def create_app(db: Database, bot=None) -> Quart:
                                     ref = mref.group(1)
                                     # RSC text chunks carry their exact length
                                     # in hex right after the `T`, e.g.
-                                    # `3d:T1aef,<6895 chars of content>`.
-                                    # Using that length avoids accidentally
-                                    # capturing the *next* chunk (which used
-                                    # to happen when the content didn't end
-                                    # with a newline before the next id).
-                                    tpat = re.compile(
-                                        r'(?:^|\n)' + re.escape(ref) +
-                                        r':T([0-9a-f]+),',
+                                    # `3d:T1aef,<bytes of content>`. The hex
+                                    # value is the **UTF-8 byte length** of
+                                    # the payload, so we have to slice on a
+                                    # bytes view — slicing on the decoded
+                                    # str would over-capture (and bleed into
+                                    # the next chunk) for emoji / special
+                                    # characters.
+                                    full_bytes = full.encode("utf-8")
+                                    tpat_b = re.compile(
+                                        rb'(?:^|\n)' + re.escape(ref).encode() +
+                                        rb':T([0-9a-f]+),'
                                     )
-                                    tfnd = tpat.search(full)
+                                    tfnd = tpat_b.search(full_bytes)
                                     if tfnd:
                                         length = int(tfnd.group(1), 16)
-                                        start = tfnd.end()
-                                        candidate = full[start:start + length].rstrip()
+                                        b_start = tfnd.end()
+                                        candidate = full_bytes[b_start:b_start + length] \
+                                            .decode("utf-8", errors="replace").rstrip()
                                         if _valid_lyrics(candidate):
                                             lyrics = candidate
                         except Exception:
@@ -3362,18 +3366,20 @@ def create_app(db: Database, bot=None) -> Quart:
                     )
                     if mref:
                         ref = mref.group(1)
-                        # Use the explicit hex length prefix (`T<hex>,`) so we
-                        # never bleed into the *next* RSC chunk if the chunk
-                        # content happens to lack a trailing newline.
-                        tpat = _re.compile(
-                            r'(?:^|\n)' + _re.escape(ref) +
-                            r':T([0-9a-f]+),',
+                        # The hex prefix is the UTF-8 byte length of the
+                        # payload — slice on a bytes view to avoid
+                        # over-capturing on emoji / non-ASCII characters.
+                        full_bytes = full.encode("utf-8")
+                        tpat_b = _re.compile(
+                            rb'(?:^|\n)' + _re.escape(ref).encode() +
+                            rb':T([0-9a-f]+),'
                         )
-                        tfnd = tpat.search(full)
+                        tfnd = tpat_b.search(full_bytes)
                         if tfnd:
                             length = int(tfnd.group(1), 16)
-                            start = tfnd.end()
-                            result["prompt"] = full[start:start + length].rstrip()
+                            b_start = tfnd.end()
+                            result["prompt"] = full_bytes[b_start:b_start + length] \
+                                .decode("utf-8", errors="replace").rstrip()
                 except Exception:
                     pass
             # Stats
