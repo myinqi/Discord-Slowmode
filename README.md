@@ -36,7 +36,7 @@ Ein modularer Discord-Bot, der benutzerdefinierte Cooldowns pro Kanal durchsetzt
    - ✅ **MESSAGE CONTENT INTENT** (Zugriff auf Nachrichteninhalte)
 6. Gehe zu **„OAuth2“ → „URL Generator“**:
    - **Anwendungsbereiche (Scopes)**: `bot`, `applications.commands`
-   - **Bot-Berechtigungen**: `Nachrichten senden`, `Nachrichten verwalten`, `Nachrichtenverlauf lesen`, `Kanäle ansehen`
+   - **Bot-Berechtigungen**: `Nachrichten senden`, `Nachrichten verwalten`, `Nachrichtenverlauf lesen`, `Kanäle ansehen`, `Rollen verwalten`, `Reaktionen hinzufügen`
 7. Kopiere die generierte URL und öffne sie im Browser, um den Bot auf deinen Server einzuladen
 
 ---

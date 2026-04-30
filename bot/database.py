@@ -352,6 +352,7 @@ class Database:
                 emoji TEXT NOT NULL,
                 emoji_id INTEGER,
                 content TEXT NOT NULL DEFAULT '',
+                all_message_ids TEXT NOT NULL DEFAULT '',
                 created_at REAL DEFAULT (unixepoch()),
                 UNIQUE(message_id, emoji)
             );
@@ -359,6 +360,15 @@ class Database:
                 ON reaction_roles(message_id);
         """)
         await self.db.commit()
+
+        # Migrate reaction_roles: add all_message_ids if missing.
+        async with self.db.execute("PRAGMA table_info(reaction_roles)") as cur:
+            rr_cols = {row["name"] for row in await cur.fetchall()}
+        if "all_message_ids" not in rr_cols:
+            await self.db.execute(
+                "ALTER TABLE reaction_roles ADD COLUMN all_message_ids TEXT NOT NULL DEFAULT ''"
+            )
+            await self.db.commit()
 
         # Migrate older llm_config schemas (add tools_model if missing).
         async with self.db.execute("PRAGMA table_info(llm_config)") as cur:
@@ -2169,12 +2179,13 @@ class Database:
         emoji: str,
         emoji_id: int | None,
         content: str,
+        all_message_ids: str = "",
     ) -> int:
         cur = await self.db.execute(
             "INSERT INTO reaction_roles "
-            "  (channel_id, message_id, role_id, role_name, emoji, emoji_id, content) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (channel_id, message_id, role_id, role_name, emoji, emoji_id, content),
+            "  (channel_id, message_id, role_id, role_name, emoji, emoji_id, content, all_message_ids) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (channel_id, message_id, role_id, role_name, emoji, emoji_id, content, all_message_ids),
         )
         await self.db.commit()
         return cur.lastrowid

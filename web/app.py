@@ -1925,16 +1925,85 @@ def create_app(db: Database, bot=None) -> Quart:
                     await flash("Emoji ist nicht (mehr) auf diesem Server verfügbar.", "error")
                     return redirect(url_for("reaction_roles"))
 
-                # Post the message + add the reaction
+                # --- Resolve #channel-name → <#id> mentions ---
+                channel_map = {}
+                if guild:
+                    for ch in guild.text_channels:
+                        channel_map[ch.name.lower()] = ch.id
+                    for ch in guild.voice_channels:
+                        channel_map[ch.name.lower()] = ch.id
+                    for ch in guild.forums:
+                        channel_map[ch.name.lower()] = ch.id
+
+                def resolve_channel_mentions(text):
+                    import re as _re2
+                    def _repl(m):
+                        name = m.group(1).lower()
+                        cid = channel_map.get(name)
+                        return f"<#{cid}>" if cid else m.group(0)
+                    return _re2.sub(r'#([a-zA-Z0-9_-]+)', _repl, text)
+
+                # --- Resolve :emoji_name: → <:name:id> custom emoji mentions ---
+                emoji_map = {}
+                if guild:
+                    for e in guild.emojis:
+                        emoji_map[e.name.lower()] = str(e)
+
+                def resolve_emoji_mentions(text):
+                    import re as _re3
+                    def _repl(m):
+                        name = m.group(1).lower()
+                        tag = emoji_map.get(name)
+                        return tag if tag else m.group(0)
+                    return _re3.sub(r':([A-Za-z0-9_]+):', _repl, text)
+
+                content = resolve_channel_mentions(content)
+                content = resolve_emoji_mentions(content)
+
+                # --- Split content into ≤2000 char chunks at paragraph boundaries ---
+                def split_message(text, limit=2000):
+                    if len(text) <= limit:
+                        return [text]
+                    chunks = []
+                    while text:
+                        if len(text) <= limit:
+                            chunks.append(text)
+                            break
+                        # Find last double-newline within limit
+                        cut = text.rfind('\n\n', 0, limit)
+                        if cut <= 0:
+                            # Fall back to single newline
+                            cut = text.rfind('\n', 0, limit)
+                        if cut <= 0:
+                            # Hard cut at limit
+                            cut = limit
+                        chunks.append(text[:cut].rstrip())
+                        text = text[cut:].lstrip('\n')
+                    return chunks
+
+                chunks = split_message(content)
+
+                # Post all chunks; react only on the last one
+                sent_messages = []
                 try:
-                    msg = await channel.send(content)
+                    for i, chunk in enumerate(chunks):
+                        msg = await channel.send(chunk)
+                        sent_messages.append(msg)
                     await msg.add_reaction(emoji_obj)
                 except Exception as ex:
+                    # Cleanup already-sent messages on failure
+                    for m in sent_messages:
+                        try:
+                            await m.delete()
+                        except Exception:
+                            pass
                     await flash(f"Konnte Beitrag nicht senden: {ex}", "error")
                     return redirect(url_for("reaction_roles"))
 
-                # str(discord.Emoji) → "<:name:id>" (or "<a:name:id>" for animated)
+                # Store: message_id = last message (the one with the reaction)
+                # all_message_ids = comma-separated list of ALL message IDs for cleanup
                 stored_emoji = str(emoji_obj)
+                all_ids = ",".join(str(m.id) for m in sent_messages)
                 try:
                     await db.add_reaction_role(
                         channel_id=channel_id,
@@ -1944,13 +2013,14 @@ def create_app(db: Database, bot=None) -> Quart:
                         emoji=stored_emoji,
                         emoji_id=emoji_id,
                         content=content,
+                        all_message_ids=all_ids,
                     )
                 except Exception as ex:
-                    # Compensate: delete the message if DB write failed.
-                    try:
-                        await msg.delete()
-                    except Exception:
-                        pass
+                    for m in sent_messages:
+                        try:
+                            await m.delete()
+                        except Exception:
+                            pass
                     await flash(f"Konnte Eintrag nicht speichern: {ex}", "error")
                     return redirect(url_for("reaction_roles"))
 
@@ -1970,11 +2040,19 @@ def create_app(db: Database, bot=None) -> Quart:
                 if entry and bot and bot.is_ready() and guild:
                     ch = guild.get_channel(entry["channel_id"]) or guild.get_thread(entry["channel_id"])
                     if ch:
-                        try:
-                            msg = await ch.fetch_message(entry["message_id"])
-                            await msg.delete()
-                        except Exception:
-                            pass
+                        # Delete ALL messages that belong to this reaction-role
+                        ids_to_delete = []
+                        all_ids_str = entry.get("all_message_ids", "")
+                        if all_ids_str:
+                            ids_to_delete = [int(x) for x in all_ids_str.split(",") if x.strip().isdigit()]
+                        if not ids_to_delete:
+                            ids_to_delete = [entry["message_id"]]
+                        for mid in ids_to_delete:
+                            try:
+                                m = await ch.fetch_message(mid)
+                                await m.delete()
+                            except Exception:
+                                pass
                 if entry:
                     await db.add_audit_log(
                         event_type="reaction_role_deleted",

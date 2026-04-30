@@ -64,9 +64,14 @@
 
             <div>
                 <label class="block text-gray-400 text-xs mb-1">Beitrag</label>
-                <textarea name="content" required rows="5"
-                    placeholder="Text des Beitrags, der im Channel gepostet wird…"
+                <textarea name="content" required rows="15"
+                    placeholder="Text des Beitrags, der im Channel gepostet wird.&#10;&#10;Lange Texte werden automatisch auf mehrere Nachrichten aufgeteilt.&#10;#channel-name wird zu klickbaren Channel-Links.&#10;:EmojiName: wird zu Custom-Server-Emojis."
                     class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none resize-y"></textarea>
+                <p class="text-gray-500 text-xs mt-1">
+                    Texte &gt; 2000 Zeichen werden automatisch auf mehrere Nachrichten aufgeteilt.
+                    <code>#channel-name</code> → Channel-Links &nbsp;·&nbsp;
+                    <code>:EmojiName:</code> → Custom-Emojis
+                </p>
             </div>
 
             <button type="submit"
