@@ -61,6 +61,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('song_stats', 'Song Stats'),
         ('user_stats', 'User Stats'),
         ('reaction_stats', 'Reaction Stats'),
+        ('reaction_roles', 'Reaction Roles'),
         ('image_posting', 'Image Posting'),
         ('polls', 'Polls'),
         ('radio', 'Twitch Radio'),
@@ -1876,6 +1877,157 @@ def create_app(db: Database, bot=None) -> Quart:
         except Exception as e:
             traceback.print_exc()
             return f"<pre>Error: {e}\n\n{traceback.format_exc()}</pre>", 500
+
+    # --- Reaction Roles ---
+
+    @app.route("/reaction-roles", methods=["GET", "POST"])
+    @permission_required('reaction_roles')
+    async def reaction_roles():
+        guild = get_guild()
+
+        if request.method == "POST":
+            form = await request.form
+            action = form.get("action", "")
+
+            if action == "create":
+                if not bot or not bot.is_ready() or not guild:
+                    await flash("Discord-Bot ist nicht verbunden.", "error")
+                    return redirect(url_for("reaction_roles"))
+
+                channel_id_raw = form.get("channel_id", "").strip()
+                role_id_raw    = form.get("role_id", "").strip()
+                emoji_tag      = form.get("emoji", "").strip()
+                content        = form.get("content", "").strip()
+
+                if not (channel_id_raw.isdigit() and role_id_raw.isdigit()
+                        and emoji_tag and content):
+                    await flash("Bitte alle Felder ausfüllen.", "error")
+                    return redirect(url_for("reaction_roles"))
+
+                channel_id = int(channel_id_raw)
+                role_id    = int(role_id_raw)
+                channel    = guild.get_channel(channel_id) or guild.get_thread(channel_id)
+                role       = guild.get_role(role_id)
+                if not channel or not role:
+                    await flash("Channel oder Rolle nicht gefunden.", "error")
+                    return redirect(url_for("reaction_roles"))
+
+                # Resolve emoji from <:name:id> tag back to a guild emoji we own
+                import re as _re
+                m = _re.match(r"<a?:([A-Za-z0-9_]+):(\d+)>", emoji_tag)
+                if not m:
+                    await flash("Ungültiges Emoji.", "error")
+                    return redirect(url_for("reaction_roles"))
+                emoji_name = m.group(1)
+                emoji_id   = int(m.group(2))
+                emoji_obj  = next((e for e in guild.emojis if e.id == emoji_id), None)
+                if not emoji_obj:
+                    await flash("Emoji ist nicht (mehr) auf diesem Server verfügbar.", "error")
+                    return redirect(url_for("reaction_roles"))
+
+                # Post the message + add the reaction
+                try:
+                    msg = await channel.send(content)
+                    await msg.add_reaction(emoji_obj)
+                except Exception as ex:
+                    await flash(f"Konnte Beitrag nicht senden: {ex}", "error")
+                    return redirect(url_for("reaction_roles"))
+
+                # str(discord.Emoji) → "<:name:id>" (or "<a:name:id>" for animated)
+                stored_emoji = str(emoji_obj)
+                try:
+                    await db.add_reaction_role(
+                        channel_id=channel_id,
+                        message_id=msg.id,
+                        role_id=role_id,
+                        role_name=role.name,
+                        emoji=stored_emoji,
+                        emoji_id=emoji_id,
+                        content=content,
+                    )
+                except Exception as ex:
+                    # Compensate: delete the message if DB write failed.
+                    try:
+                        await msg.delete()
+                    except Exception:
+                        pass
+                    await flash(f"Konnte Eintrag nicht speichern: {ex}", "error")
+                    return redirect(url_for("reaction_roles"))
+
+                await db.add_audit_log(
+                    event_type="reaction_role_created",
+                    details=f"#{channel.name} message {msg.id} → {role.name} via {emoji_name}",
+                    actor=session.get("username", "unknown"),
+                )
+                await flash("Reaction-Role erstellt.", "success")
+                return redirect(url_for("reaction_roles"))
+
+            elif action == "delete":
+                entry_id_raw = form.get("entry_id", "").strip()
+                if not entry_id_raw.isdigit():
+                    return redirect(url_for("reaction_roles"))
+                entry = await db.delete_reaction_role(int(entry_id_raw))
+                if entry and bot and bot.is_ready() and guild:
+                    ch = guild.get_channel(entry["channel_id"]) or guild.get_thread(entry["channel_id"])
+                    if ch:
+                        try:
+                            msg = await ch.fetch_message(entry["message_id"])
+                            await msg.delete()
+                        except Exception:
+                            pass
+                if entry:
+                    await db.add_audit_log(
+                        event_type="reaction_role_deleted",
+                        details=f"message {entry['message_id']} → {entry['role_name']}",
+                        actor=session.get("username", "unknown"),
+                    )
+                    await flash("Reaction-Role gelöscht.", "success")
+                return redirect(url_for("reaction_roles"))
+
+            return redirect(url_for("reaction_roles"))
+
+        # --- GET ---
+        text_channels   = []
+        available_roles = []
+        guild_emojis    = []
+        if guild:
+            for ch in sorted(guild.text_channels, key=lambda c: c.position):
+                text_channels.append({"id": ch.id, "name": ch.name})
+            for r in guild.roles:
+                if r.id != guild.default_role.id and not r.managed:
+                    available_roles.append({"id": r.id, "name": r.name})
+            for e in guild.emojis:
+                if e.available:
+                    # str(e) → "<:name:id>" / "<a:name:id>"
+                    guild_emojis.append({"name": e.name, "tag": str(e)})
+
+        rows = await db.get_all_reaction_roles()
+        # Decorate with channel name & jump URL for the UI
+        entries = []
+        for r in rows:
+            ch_name = None
+            jump_url = None
+            if guild:
+                ch = guild.get_channel(r["channel_id"]) or guild.get_thread(r["channel_id"])
+                if ch:
+                    ch_name = ch.name
+                    jump_url = f"https://discord.com/channels/{guild.id}/{r['channel_id']}/{r['message_id']}"
+            entries.append({
+                **r,
+                "channel_name": ch_name,
+                "jump_url": jump_url,
+                # For display: just the emoji tag as-is (Discord renders custom emojis in plain text fine).
+                "emoji_display": r["emoji"],
+            })
+
+        return await render_template(
+            "reaction_roles.html",
+            text_channels=text_channels,
+            available_roles=available_roles,
+            guild_emojis=guild_emojis,
+            entries=entries,
+            bot_ready=bool(bot and bot.is_ready() and guild),
+        )
 
     # --- Image Posting ---
 

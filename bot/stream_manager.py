@@ -699,12 +699,20 @@ class StreamManager:
                         if cleaned:
                             lines.append(cleaned)
                     print(f"[radio] Scraped {len(lines)} lyrics lines from {suno_url}")
-                    # Diagnostic: dump first 3 lines char-by-char in hex so we
-                    # can hunt down stray glyph-box characters that survive
-                    # the whitelist+typographic_map pipeline.
-                    for ln in lines[:3]:
-                        codepoints = " ".join(f"U+{ord(c):04X}" for c in ln)
-                        print(f"[radio] LYRIC HEX | {ln!r} -> {codepoints}")
+                    # Diagnostic: report any line whose LAST char isn't basic
+                    # ASCII printable — that's our prime suspect for the stray
+                    # glyph-boxes visible at the end of rendered lyric lines.
+                    suspicious = [
+                        (i, ln) for i, ln in enumerate(lines)
+                        if ln and (ord(ln[-1]) > 0x7E or ord(ln[-1]) < 0x20)
+                    ]
+                    if suspicious:
+                        for i, ln in suspicious[:8]:
+                            tail = ln[-5:] if len(ln) >= 5 else ln
+                            cps = " ".join(f"U+{ord(c):04X}" for c in tail)
+                            print(f"[radio] LYRIC TAIL #{i} | …{tail!r} -> {cps}")
+                    else:
+                        print(f"[radio] LYRIC TAIL: all {len(lines)} lines end with ASCII")
                     return lines
         except Exception as e:
             print(f"[radio] Lyrics scrape error: {e}")

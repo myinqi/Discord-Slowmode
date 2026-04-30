@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}Reaction Roles{% endblock %}
+{% block content %}
+<h2 class="text-2xl font-bold text-white mb-1">🎭 Reaction Roles</h2>
+<p class="text-gray-400 text-sm mb-6">Beitrag erstellen und bestehende Reaction-Roles verwalten</p>
+
+{% if not bot_ready %}
+<div class="bg-discord-red/20 border border-discord-red rounded-xl p-4 mb-6">
+    <p class="text-white text-sm">⚠️ Der Discord-Bot ist nicht verbunden. Neue Beiträge können erst gesendet werden, wenn der Bot online ist.</p>
+</div>
+{% endif %}
+
+<!-- Create new -->
+<div class="bg-discord-dark rounded-xl border border-gray-700/50 mb-6">
+    <div class="px-5 py-4 border-b border-gray-700/50">
+        <h3 class="text-white font-semibold">Reaction-Role erstellen</h3>
+    </div>
+    <div class="p-5">
+        <form method="POST" class="space-y-4">
+            <input type="hidden" name="action" value="create">
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-gray-400 text-xs mb-1">Channel</label>
+                    <select name="channel_id" required
+                        class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                        <option value="">Channel wählen…</option>
+                        {% for ch in text_channels %}
+                        <option value="{{ ch.id }}">#{{ ch.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block text-gray-400 text-xs mb-1">Rolle</label>
+                    <select name="role_id" required
+                        class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                        <option value="">Rolle wählen…</option>
+                        {% for r in available_roles %}
+                        <option value="{{ r.id }}">{{ r.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-gray-400 text-xs mb-1">Reaktion (Custom-Emoji)</label>
+                {% if guild_emojis %}
+                <select name="emoji" required
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                    <option value="">Emoji wählen…</option>
+                    {% for e in guild_emojis %}
+                    <option value="{{ e.tag }}">:{{ e.name }}:</option>
+                    {% endfor %}
+                </select>
+                {% else %}
+                <p class="text-gray-500 text-xs italic">
+                    Keine Custom-Emojis auf diesem Server gefunden.
+                    Lade welche im Discord-Server-Settings hoch oder warte, bis der Bot
+                    verbunden ist.
+                </p>
+                {% endif %}
+            </div>
+
+            <div>
+                <label class="block text-gray-400 text-xs mb-1">Beitrag</label>
+                <textarea name="content" required rows="5"
+                    placeholder="Text des Beitrags, der im Channel gepostet wird…"
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none resize-y"></textarea>
+            </div>
+
+            <button type="submit"
+                {% if not bot_ready %}disabled{% endif %}
+                class="w-full px-4 py-2.5 bg-discord-green hover:bg-discord-green/80 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg font-medium text-sm transition-colors">
+                Senden und speichern
+            </button>
+        </form>
+    </div>
+</div>
+
+<!-- Existing -->
+<div class="bg-discord-dark rounded-xl border border-gray-700/50">
+    <div class="px-5 py-4 border-b border-gray-700/50">
+        <h3 class="text-white font-semibold">Existierende Reaction-Roles</h3>
+    </div>
+    <div class="p-5">
+        {% if entries %}
+        <div class="space-y-3">
+            {% for e in entries %}
+            <div class="bg-discord-darker rounded-lg p-4 flex items-start justify-between gap-4">
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 text-sm text-white">
+                        <span class="font-mono">{{ e.emoji_display }}</span>
+                        <span class="text-gray-400">→</span>
+                        <span class="font-medium">{{ e.role_name or ('role-' ~ e.role_id) }}</span>
+                    </div>
+                    <p class="text-gray-500 text-xs mt-1 truncate">
+                        #{{ e.channel_name or e.channel_id }} ·
+                        Nachricht
+                        {% if e.jump_url %}
+                        <a href="{{ e.jump_url }}" target="_blank" rel="noopener"
+                           class="text-discord-blurple hover:underline">{{ e.message_id }}</a>
+                        {% else %}
+                        {{ e.message_id }}
+                        {% endif %}
+                    </p>
+                    {% if e.content %}
+                    <p class="text-gray-400 text-xs mt-2 line-clamp-2 whitespace-pre-line">{{ e.content }}</p>
+                    {% endif %}
+                </div>
+                <form method="POST" onsubmit="return confirm('Reaction-Role wirklich löschen? Der Discord-Beitrag wird mit gelöscht.');">
+                    <input type="hidden" name="action" value="delete">
+                    <input type="hidden" name="entry_id" value="{{ e.id }}">
+                    <button type="submit"
+                        class="px-3 py-1.5 bg-discord-red hover:bg-discord-red/80 text-white rounded-lg text-xs font-medium transition-colors">
+                        Löschen
+                    </button>
+                </form>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-gray-500 text-sm">Noch keine Reaction-Roles angelegt.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

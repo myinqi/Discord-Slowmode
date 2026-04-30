@@ -23,6 +23,7 @@ class SlowmodeBot(commands.Bot):
         await self.load_extension("bot.cogs.slowmode")
         await self.load_extension("bot.cogs.commands")
         await self.load_extension("bot.cogs.llm_chat")
+        await self.load_extension("bot.cogs.reaction_roles")
 
         if self.config.GUILD_ID:
             guild = discord.Object(id=self.config.GUILD_ID)

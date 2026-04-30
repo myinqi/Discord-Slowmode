@@ -342,6 +342,21 @@ class Database:
             );
             CREATE INDEX IF NOT EXISTS idx_llm_audit_ts ON llm_audit_log(timestamp);
             CREATE INDEX IF NOT EXISTS idx_llm_audit_user ON llm_audit_log(user_id);
+
+            CREATE TABLE IF NOT EXISTS reaction_roles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                role_id INTEGER NOT NULL,
+                role_name TEXT NOT NULL DEFAULT '',
+                emoji TEXT NOT NULL,
+                emoji_id INTEGER,
+                content TEXT NOT NULL DEFAULT '',
+                created_at REAL DEFAULT (unixepoch()),
+                UNIQUE(message_id, emoji)
+            );
+            CREATE INDEX IF NOT EXISTS idx_reaction_roles_msg
+                ON reaction_roles(message_id);
         """)
         await self.db.commit()
 
@@ -2141,3 +2156,56 @@ class Database:
         )
         await self.db.commit()
         return cur.rowcount or 0
+
+    # --- Reaction Roles ---
+
+    async def add_reaction_role(
+        self,
+        *,
+        channel_id: int,
+        message_id: int,
+        role_id: int,
+        role_name: str,
+        emoji: str,
+        emoji_id: int | None,
+        content: str,
+    ) -> int:
+        cur = await self.db.execute(
+            "INSERT INTO reaction_roles "
+            "  (channel_id, message_id, role_id, role_name, emoji, emoji_id, content) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (channel_id, message_id, role_id, role_name, emoji, emoji_id, content),
+        )
+        await self.db.commit()
+        return cur.lastrowid
+
+    async def get_all_reaction_roles(self) -> list[dict]:
+        async with self.db.execute(
+            "SELECT * FROM reaction_roles ORDER BY created_at DESC"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def get_reaction_role(
+        self, message_id: int, emoji: str
+    ) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM reaction_roles WHERE message_id = ? AND emoji = ?",
+            (message_id, emoji),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def delete_reaction_role(self, entry_id: int) -> Optional[dict]:
+        """Delete a reaction-role entry; returns the deleted row (or None)."""
+        async with self.db.execute(
+            "SELECT * FROM reaction_roles WHERE id = ?", (entry_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            if not row:
+                return None
+            data = dict(row)
+        await self.db.execute(
+            "DELETE FROM reaction_roles WHERE id = ?", (entry_id,)
+        )
+        await self.db.commit()
+        return data
