@@ -36,6 +36,14 @@ _CHAT_URL = "https://api.twitch.tv/helix/chat/messages"
 _REFRESH_LEAD_TIME = 300
 
 
+def _normalize_login(value: str) -> str:
+    """Accept 'name', '#name', or 'https://twitch.tv/name' → return 'name'."""
+    v = (value or "").strip().rstrip("/").lstrip("#").lower()
+    if "twitch.tv/" in v:
+        v = v.split("twitch.tv/", 1)[1].split("/")[0]
+    return v
+
+
 class TwitchBot:
     """Lightweight Twitch chat poster + (later) command listener.
 
@@ -193,9 +201,9 @@ class TwitchBot:
     async def _resolve_user_ids(self) -> Tuple[bool, str]:
         if not self._access_token or not self._client_id:
             return False, "No access token yet"
-        broadcaster_login = (
+        broadcaster_login = _normalize_login(
             await self.db.get_setting(self.SETTING_KEYS["broadcaster_login"]) or ""
-        ).lstrip("#").lower()
+        )
         if not broadcaster_login:
             return False, "broadcaster_login not configured"
         try:
