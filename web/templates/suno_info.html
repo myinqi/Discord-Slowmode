@@ -454,6 +454,16 @@ async function playIndex(i){
             }
         }
     }
+    // Discard any in-flight RMS recording from a previous song (incomplete).
+    if(_rmsRecordingUuid && _rmsRecordingUuid !== s.uuid){
+        _rmsBuf = null; _rmsRecording = false; _rmsRecordingUuid = null;
+    }
+    // Try to load a cached RMS profile for this song (built during a past
+    // full playthrough) so the very first auto-scroll already accounts for
+    // intro silence and outro fades.
+    loadProfileForUuid(s.uuid);
+    // If we don't yet have a profile, start recording one for this song.
+    if(!LY_PROFILE) startRmsRecording(s.uuid);
     // Set audio source & play
     audio.src = 'https://cdn1.suno.ai/'+s.uuid+'.mp3';
     audio.play().catch(function(){});
@@ -561,7 +571,36 @@ function setNowPlaying(m){
    like `[Verse]`) evenly across the song duration, which feels noticeably
    more accurate than counting every line.                                  */
 var LY_LINES = [];     // every <div> (incl. blanks) — for layout
-var LY_SYNC = [];      // indices into LY_LINES that count for sync
+var LY_SYNC = [];      // indices into LY_LINES that count for sync (non-blank, non-marker)
+var LY_WEIGHTS = [];   // word-count weight per LY_SYNC entry
+var LY_CUMW = [0];     // cumulative weight, length = LY_SYNC.length + 1
+var LY_TOTAL_W = 0;    // total weight (sum of all line weights)
+
+/* RMS playback profile — cached per UUID to remember vocal-energy regions
+   so that intro silence / outro fades don't waste lyric "slots".          */
+var LY_PROFILE_RATE = 4;       // samples per second
+var LY_PROFILE = null;         // Uint8Array of energy values (0–255)
+var LY_ACTIVE  = null;         // {cum:Uint32, total, n} derived from LY_PROFILE
+var LY_PROFILE_UUID = null;    // uuid the profile was loaded for
+var _rmsBuf = null;            // recording buffer (sparse array)
+var _rmsLastIdx = -1;
+var _rmsRecording = false;
+var _rmsRecordingUuid = null;
+
+function rebuildSyncWeights(){
+    /* Word-weighted timing: each syncable line gets a weight equal to its
+       word count, so long lines occupy proportionally more song time than
+       short lines. Empty lines and `[Section]` markers are excluded.       */
+    LY_WEIGHTS = LY_SYNC.map(function(idx){
+        var el = LY_LINES[idx].el;
+        var words = (el.textContent.match(/\S+/g) || []).length;
+        return Math.max(1, words);
+    });
+    LY_CUMW = [0];
+    LY_WEIGHTS.forEach(function(w, i){ LY_CUMW.push(LY_CUMW[i] + w); });
+    LY_TOTAL_W = LY_CUMW[LY_CUMW.length - 1];
+}
+
 function renderLyrics(text){
     var box = document.getElementById('lyrics-box');
     if(!text){
@@ -583,6 +622,7 @@ function renderLyrics(text){
         .map(function(l, i){return l.el.classList.contains('ly-blank') ||
                                    l.el.classList.contains('ly-marker') ? -1 : i;})
         .filter(function(i){return i>=0;});
+    rebuildSyncWeights();
     applyAutoscrollMode();
 }
 
@@ -598,11 +638,124 @@ function clearLyHighlights(){
     });
 }
 
-/* Compute the currently-active sync index (into LY_SYNC). */
+/* Compute the currently-active sync index (into LY_SYNC).
+   Strategy:
+     1. Determine "effective progress" — by default just `currentTime/duration`.
+        If a cached RMS profile exists for this song, transform progress so
+        that it advances only during vocal-active regions (skipping intros /
+        outros / instrumental breaks).
+     2. Multiply effective progress by the total word weight, then locate the
+        line whose cumulative weight crosses that target. Long lines therefore
+        receive proportionally more time than short ones. */
 function currentLyIdx(){
-    if(!LY_SYNC.length || !audio.duration) return -1;
-    var pct = Math.max(0, Math.min(1, audio.currentTime / audio.duration));
-    return Math.min(LY_SYNC.length-1, Math.floor(pct * LY_SYNC.length));
+    if(!LY_SYNC.length || !audio.duration || LY_TOTAL_W <= 0) return -1;
+    var t = audio.currentTime;
+    var dur = audio.duration;
+    var fraction;
+    if(LY_ACTIVE){
+        fraction = activeFractionAt(t, dur);
+    } else {
+        fraction = t / dur;
+    }
+    fraction = Math.max(0, Math.min(0.99999, fraction));
+    var target = fraction * LY_TOTAL_W;
+    for(var i=0;i<LY_WEIGHTS.length;i++){
+        if(LY_CUMW[i+1] > target) return i;
+    }
+    return LY_WEIGHTS.length - 1;
+}
+
+/* Map raw playback time to the fraction of *vocal-active* time elapsed,
+   using the cached RMS profile of this song. */
+function activeFractionAt(t, dur){
+    if(!LY_ACTIVE || !LY_ACTIVE.total) return t/dur;
+    var idx = Math.max(0, Math.min(LY_ACTIVE.n,
+                                   Math.floor(t * LY_PROFILE_RATE)));
+    return LY_ACTIVE.cum[idx] / LY_ACTIVE.total;
+}
+
+/* --- RMS profile (per-UUID localStorage cache) ---------------------------- */
+function lyProfileKey(uuid){ return 'ly-rms:' + uuid; }
+
+function computeActiveProfile(profile){
+    if(!profile || profile.length < 10) return null;
+    var max = 0;
+    for(var i=0;i<profile.length;i++) if(profile[i]>max) max = profile[i];
+    if(max < 12) return null;
+    /* "Active" = energy at least 22% of song peak. Threshold floor of 8/255
+       prevents very quiet songs from falsely flagging silence. */
+    var thr = Math.max(8, max * 0.22);
+    var n = profile.length;
+    var cum = new Uint32Array(n + 1);
+    for(var i=0;i<n;i++){
+        cum[i+1] = cum[i] + (profile[i] >= thr ? 1 : 0);
+    }
+    var total = cum[n];
+    if(total < n * 0.10) return null;  // nonsense profile, ignore
+    return {cum:cum, total:total, n:n};
+}
+
+function loadProfileForUuid(uuid){
+    LY_PROFILE = null; LY_ACTIVE = null;
+    LY_PROFILE_UUID = uuid;
+    if(!uuid) return;
+    try {
+        var s = localStorage.getItem(lyProfileKey(uuid));
+        if(!s) return;
+        var bin = atob(s);
+        var arr = new Uint8Array(bin.length);
+        for(var i=0;i<bin.length;i++) arr[i] = bin.charCodeAt(i);
+        LY_PROFILE = arr;
+        LY_ACTIVE = computeActiveProfile(arr);
+    } catch(e){}
+}
+
+function saveProfileForUuid(uuid){
+    if(!uuid || !LY_PROFILE || LY_PROFILE.length < 20) return;
+    try {
+        var bin = '';
+        for(var i=0;i<LY_PROFILE.length;i++) bin += String.fromCharCode(LY_PROFILE[i]);
+        localStorage.setItem(lyProfileKey(uuid), btoa(bin));
+    } catch(e){
+        /* localStorage quota — silently ignore */
+    }
+}
+
+function startRmsRecording(uuid){
+    if(!uuid) return;
+    if(LY_PROFILE) return;        // already have a stored profile
+    if(_rmsRecordingUuid === uuid) return;
+    _rmsRecording = true;
+    _rmsRecordingUuid = uuid;
+    _rmsBuf = [];
+    _rmsLastIdx = -1;
+}
+
+function finalizeRmsRecording(reason){
+    if(!_rmsRecording || !_rmsRecordingUuid){ _rmsBuf=null; _rmsRecording=false; return; }
+    var recordedUuid = _rmsRecordingUuid;
+    var n = _rmsBuf ? _rmsBuf.length : 0;
+    /* Only persist when the song ended naturally (full coverage). Skipping or
+       seeking partway through would yield a profile with holes. */
+    if(reason === 'ended' && n >= 20){
+        var arr = new Uint8Array(n);
+        for(var i=0;i<n;i++) arr[i] = _rmsBuf[i] || 0;
+        // Persist to localStorage.
+        try {
+            var bin = '';
+            for(var k=0;k<arr.length;k++) bin += String.fromCharCode(arr[k]);
+            localStorage.setItem(lyProfileKey(recordedUuid), btoa(bin));
+        } catch(e){}
+        // If still on the same song, activate immediately for next replay.
+        if(LY_PROFILE_UUID === recordedUuid){
+            LY_PROFILE = arr;
+            LY_ACTIVE  = computeActiveProfile(arr);
+        }
+    }
+    _rmsBuf = null;
+    _rmsRecording = false;
+    _rmsRecordingUuid = null;
+    _rmsLastIdx = -1;
 }
 
 /* Center a given line element inside the lyrics box. */
@@ -668,7 +821,18 @@ audio.addEventListener('loadedmetadata', function(){
 });
 audio.addEventListener('play', updatePlayBtn);
 audio.addEventListener('pause', updatePlayBtn);
+audio.addEventListener('seeking', function(){
+    // Any user-initiated seek leaves a hole in the RMS recording, so the
+    // resulting profile would misrepresent silences. Drop the recording.
+    if(_rmsRecording){
+        _rmsBuf = null; _rmsRecording = false;
+        _rmsRecordingUuid = null; _rmsLastIdx = -1;
+    }
+});
 audio.addEventListener('ended', function(){
+    // Persist the RMS profile we recorded during this play. If a profile
+    // already existed we never started a recording, so this is a no-op.
+    finalizeRmsRecording('ended');
     // Honor the playback mode: stop after current = no auto-advance.
     var mode = document.querySelector('input[name="si-mode"]:checked');
     if(mode && mode.value==='stop') return;
@@ -863,6 +1027,23 @@ function drawSpectrum(){
     function loop(){
         _specFrame = requestAnimationFrame(loop);
         _specAnalyser.getByteFrequencyData(data);
+        // Piggyback on the spectrum loop to record per-song RMS energy
+        // for the Lyrics auto-scroll profile (one sample per
+        // 1/LY_PROFILE_RATE seconds of playback).
+        if(_rmsRecording && audio.duration && !audio.paused){
+            var sIdx = Math.floor(audio.currentTime * LY_PROFILE_RATE);
+            if(sIdx !== _rmsLastIdx && sIdx >= 0){
+                _rmsLastIdx = sIdx;
+                /* Average the upper half of the frequency-bin range —
+                   vocals dominate there, instruments below 200Hz carry
+                   constant rumble and would mask silences.            */
+                var sum = 0, cnt = 0;
+                for(var k=Math.floor(data.length*0.05); k<Math.floor(data.length*0.7); k++){
+                    sum += data[k]; cnt++;
+                }
+                _rmsBuf[sIdx] = cnt ? Math.round(sum/cnt) : 0;
+            }
+        }
         var w = c.width, h = c.height;
         ctx.clearRect(0,0,w,h);
         var gap = 1, barW = (w - gap*(bars-1))/bars;
