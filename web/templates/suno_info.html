@@ -92,6 +92,24 @@
     .si-spectrum-row{margin-top:8px}
     .si-spectrum{display:block;flex:1;min-width:160px;max-width:420px;height:40px;background:transparent}
 
+    /* Comments panel */
+    .cmt-list{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding-right:4px}
+    .cmt-item{display:flex;gap:10px;padding:8px;border-radius:8px;background:#16161a;border:1px solid #232325}
+    .cmt-avatar{width:32px;height:32px;border-radius:50%;object-fit:cover;background:#222;flex-shrink:0}
+    .cmt-body{flex:1;min-width:0}
+    .cmt-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px;margin-bottom:3px}
+    .cmt-name{color:#cfc8ff;font-weight:600}
+    .cmt-handle{color:#888;font-size:11px}
+    .cmt-time{color:#666;font-size:11px;margin-left:auto}
+    .cmt-content{color:#ddd;font-size:13px;line-height:1.5;white-space:pre-wrap;word-wrap:break-word}
+    .cmt-meta{display:flex;gap:12px;margin-top:6px;font-size:11px;color:#888}
+    .cmt-meta .cmt-jump{color:#a78bfa;cursor:pointer;text-decoration:underline;text-decoration-color:#5561e455}
+    .cmt-meta .cmt-jump:hover{color:#cfc8ff}
+    .cmt-load-more-wrap{display:flex;justify-content:center;margin-top:10px}
+    .cmt-load-more{padding:6px 14px;border-radius:6px;background:#1a1a1f;border:1px solid #2a2a2e;color:#aaa;font-size:11px;cursor:pointer}
+    .cmt-load-more:hover{color:#fff;border-color:#444}
+    .cmt-load-more:disabled{opacity:.5;cursor:default}
+
     /* Compact-cover toggle button */
     .si-compact-btn{display:inline-flex;align-items:center;gap:4px;padding:4px 8px;border-radius:6px;
                     background:#1a1a1f;border:1px solid #2a2a2e;color:#aaa;font-size:11px;cursor:pointer;
@@ -224,6 +242,9 @@
         <div class="si-tabs">
             <button class="si-tab active" data-tab="lyrics">Lyrics</button>
             <button class="si-tab" data-tab="style">Style &amp; Info</button>
+            <button class="si-tab" data-tab="comments">
+                Comments <span id="cmt-count" class="text-gray-500 text-[10px] ml-1"></span>
+            </button>
         </div>
         <div class="si-panel active" data-panel="lyrics">
             <div class="flex items-center justify-end gap-2 mb-2">
@@ -239,6 +260,14 @@
             <div class="np-tags mb-3" id="np-tags"></div>
             <div class="si-prompt-block" id="prompt-box">—</div>
             <dl class="si-meta-grid" id="meta-grid"></dl>
+        </div>
+        <div class="si-panel" data-panel="comments">
+            <div id="cmt-list" class="cmt-list">
+                <div class="si-loading">Pick a song to see its comments.</div>
+            </div>
+            <div class="cmt-load-more-wrap">
+                <button id="cmt-load-more" class="cmt-load-more" style="display:none">Load more</button>
+            </div>
         </div>
     </div>
 </div>
@@ -440,6 +469,17 @@ async function playIndex(i){
         video_url: null, lyrics: null, prompt: '', tags: [],
         plays: null, likes: null, model: '', type: '', created_at: '', handle: null,
     });
+    // Reset comments tab state and reload if it's currently open.
+    document.getElementById('cmt-count').textContent = '';
+    if(document.querySelector('.si-panel.active[data-panel="comments"]')){
+        loadComments(s.uuid, false);
+    } else {
+        // Invalidate so a later open re-fetches for the new song.
+        CMT_UUID = null;
+        document.getElementById('cmt-list').innerHTML =
+            '<div class="si-loading">Pick a song to see its comments.</div>';
+        document.getElementById('cmt-load-more').style.display = 'none';
+    }
     // Fetch full metadata
     var meta = await loadMeta(s.uuid);
     if(meta && CUR===i){
@@ -664,7 +704,129 @@ document.querySelectorAll('.si-tab').forEach(function(btn){
         document.querySelectorAll('.si-panel').forEach(function(p){
             p.classList.toggle('active', p.getAttribute('data-panel')===tab);
         });
+        // Lazy-load comments when the user opens the tab.
+        if(tab==='comments') ensureCommentsLoaded();
     });
+});
+
+/* --- Comments ------------------------------------------------------------- */
+var CMT_UUID = null;       // UUID currently loaded in the comments panel
+var CMT_CURSOR = null;     // pagination cursor for next page
+var CMT_LOADING = false;
+
+function escapeHtml(s){
+    return String(s||'').replace(/[&<>"']/g, function(c){
+        return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
+    });
+}
+function fmtCommentTime(iso){
+    if(!iso) return '';
+    var d = new Date(iso);
+    if(isNaN(d)) return '';
+    var diff = (Date.now() - d.getTime())/1000;
+    if(diff < 60)   return Math.floor(diff)+'s ago';
+    if(diff < 3600) return Math.floor(diff/60)+'m ago';
+    if(diff < 86400) return Math.floor(diff/3600)+'h ago';
+    if(diff < 86400*30) return Math.floor(diff/86400)+'d ago';
+    return d.toLocaleDateString();
+}
+function renderComment(c){
+    var avatar = c.user_avatar_url
+        ? '<img class="cmt-avatar" src="'+escapeHtml(c.user_avatar_url)+'" loading="lazy" alt="">'
+        : '<div class="cmt-avatar" style="display:flex;align-items:center;justify-content:center;color:#666;font-size:11px">'+
+          escapeHtml((c.user_display_name||'?').slice(0,1).toUpperCase())+'</div>';
+    var verified = c.user_is_verified
+        ? ' <span title="Verified" style="color:#5561e4">✔</span>' : '';
+    var ts = (typeof c.track_timestamp === 'number') ? c.track_timestamp : null;
+    var jump = (ts !== null)
+        ? '<span class="cmt-jump" data-ts="'+ts+'" title="Jump to '+fmt(ts)+'">@'+fmt(ts)+'</span>'
+        : '';
+    var likes = c.num_likes ? ('♥ '+c.num_likes) : '';
+    return '<div class="cmt-item">'+avatar+
+        '<div class="cmt-body">'+
+            '<div class="cmt-head">'+
+                '<span class="cmt-name">'+escapeHtml(c.user_display_name||'')+'</span>'+verified+
+                '<span class="cmt-handle">@'+escapeHtml(c.user_handle||'')+'</span>'+
+                '<span class="cmt-time">'+escapeHtml(fmtCommentTime(c.created_at))+'</span>'+
+            '</div>'+
+            '<div class="cmt-content">'+escapeHtml(c.content||'')+'</div>'+
+            '<div class="cmt-meta">'+
+                (likes ? '<span>'+likes+'</span>' : '')+
+                jump+
+            '</div>'+
+        '</div></div>';
+}
+function bindCommentJumps(root){
+    root.querySelectorAll('.cmt-jump').forEach(function(el){
+        el.addEventListener('click', function(){
+            var t = parseFloat(el.getAttribute('data-ts'));
+            if(!isFinite(t)) return;
+            try { audio.currentTime = t; audio.play(); } catch(e){}
+        });
+    });
+}
+async function loadComments(uuid, append){
+    if(CMT_LOADING) return;
+    CMT_LOADING = true;
+    var list = document.getElementById('cmt-list');
+    var btn  = document.getElementById('cmt-load-more');
+    if(!append){
+        list.innerHTML = '<div class="si-loading">Loading comments…</div>';
+        btn.style.display = 'none';
+        CMT_CURSOR = null;
+        CMT_UUID = uuid;
+    } else {
+        btn.disabled = true; btn.textContent = 'Loading…';
+    }
+    try {
+        var url = '/api/suno-info/comments/'+encodeURIComponent(uuid);
+        if(append && CMT_CURSOR) url += '?cursor='+encodeURIComponent(CMT_CURSOR);
+        var r = await fetch(url);
+        var data = await r.json();
+        if(CMT_UUID !== uuid){ CMT_LOADING=false; return; } // user switched
+        if(!r.ok){
+            list.innerHTML = '<div class="si-error">'+escapeHtml(data.error||'Failed')+'</div>';
+            return;
+        }
+        var results = data.results || [];
+        if(typeof data.count === 'number'){
+            document.getElementById('cmt-count').textContent = '('+data.count+')';
+        }
+        if(!append){
+            if(!results.length){
+                list.innerHTML = '<div class="si-loading">No comments yet.</div>';
+            } else {
+                list.innerHTML = results.map(renderComment).join('');
+                bindCommentJumps(list);
+            }
+        } else {
+            // append new items
+            var frag = document.createElement('div');
+            frag.innerHTML = results.map(renderComment).join('');
+            while(frag.firstChild) list.appendChild(frag.firstChild);
+            bindCommentJumps(list);
+        }
+        CMT_CURSOR = data.next_cursor || null;
+        if(CMT_CURSOR){
+            btn.style.display = ''; btn.disabled = false; btn.textContent = 'Load more';
+        } else {
+            btn.style.display = 'none';
+        }
+    } catch(e){
+        list.innerHTML = '<div class="si-error">Error: '+escapeHtml(e.message||String(e))+'</div>';
+    } finally {
+        CMT_LOADING = false;
+    }
+}
+function ensureCommentsLoaded(){
+    if(CUR < 0) return;
+    var s = SONGS[CUR];
+    if(!s) return;
+    if(CMT_UUID === s.uuid) return; // already loaded for this song
+    loadComments(s.uuid, false);
+}
+document.getElementById('cmt-load-more').addEventListener('click', function(){
+    if(CMT_UUID && CMT_CURSOR) loadComments(CMT_UUID, true);
 });
 
 /* --- Live Frequency Spectrum (small, ported from Suno Player) ------------- */

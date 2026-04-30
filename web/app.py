@@ -3407,4 +3407,52 @@ def create_app(db: Database, bot=None) -> Quart:
             result["image_url"] = f"https://cdn1.suno.ai/image_large_{uuid}.jpeg"
         return jsonify(result)
 
+    @app.route("/api/suno-info/comments/<uuid>")
+    @permission_required('suno_info')
+    async def api_suno_info_comments(uuid):
+        """Proxy Suno's public comments endpoint for a clip.
+
+        Suno exposes `GET /api/gen/{clip_id}/comments` on `studio-api.prod.suno.com`
+        without authentication. Response shape:
+            {"next_cursor": "<base64>"|null, "results": [ {comment...}, ... ]}
+        We pass through the cursor for pagination.
+        """
+        import aiohttp as _aiohttp
+        from quart import jsonify
+        cursor = (request.args.get("cursor") or "").strip()
+        api_url = (
+            f"https://studio-api.prod.suno.com/api/gen/{uuid}/comments"
+        )
+        params = {"cursor": cursor} if cursor else {}
+        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+        try:
+            async with _aiohttp.ClientSession() as sess:
+                async with sess.get(api_url, params=params, headers=headers,
+                                    timeout=_aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return jsonify({"error": f"upstream HTTP {resp.status}",
+                                        "results": [], "next_cursor": None}), resp.status
+                    data = await resp.json()
+        except Exception as e:
+            return jsonify({"error": str(e), "results": [],
+                            "next_cursor": None}), 502
+        # Also fetch total count (cheap, separate small endpoint).
+        count = None
+        try:
+            async with _aiohttp.ClientSession() as sess:
+                async with sess.get(
+                    f"https://studio-api.prod.suno.com/api/gen/{uuid}/comments/count",
+                    headers=headers, timeout=_aiohttp.ClientTimeout(total=8),
+                ) as r:
+                    if r.status == 200:
+                        cdata = await r.json()
+                        count = cdata.get("count")
+        except Exception:
+            pass
+        return jsonify({
+            "results": data.get("results") or [],
+            "next_cursor": data.get("next_cursor"),
+            "count": count,
+        })
+
     return app
