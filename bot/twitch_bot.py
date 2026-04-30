@@ -272,7 +272,7 @@ class TwitchBot:
         if not ok:
             out["message"] = msg
             return out
-        out["broadcaster_login"] = (
+        out["broadcaster_login"] = _normalize_login(
             await self.db.get_setting(self.SETTING_KEYS["broadcaster_login"]) or ""
         )
         # Verify required scopes
