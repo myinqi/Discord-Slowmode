@@ -61,19 +61,41 @@ _TYPOGRAPHIC_MAP = str.maketrans({
 _LYRICS_MAX_LINE_CHARS = 85
 
 
+def _renderable_char(ch: str) -> bool:
+    """Whitelist code-points that ffmpeg drawtext + Noto Sans can render
+    without producing glyph boxes (\"tofu\"). Anything decorative or in
+    scripts we don't ship a font for is dropped silently."""
+    if ch == "\n":
+        return True
+    cp = ord(ch)
+    if cp < 0x0020:                              # C0 controls
+        return False
+    if cp <= 0x024F:                             # Basic Latin … Latin Extended-B
+        return True
+    if 0x0300 <= cp <= 0x036F:                   # Combining diacritics
+        return True
+    if 0x0370 <= cp <= 0x03FF:                   # Greek
+        return True
+    if 0x0400 <= cp <= 0x04FF:                   # Cyrillic
+        return True
+    if 0x2010 <= cp <= 0x205E:                   # General punctuation (en-dash etc.)
+        return True
+    if 0x20A0 <= cp <= 0x20CF:                   # Currency symbols
+        return True
+    if 0x3040 <= cp <= 0x30FF:                   # Hiragana + Katakana
+        return True
+    if 0x4E00 <= cp <= 0x9FFF:                   # CJK Unified Ideographs
+        return True
+    return False
+
+
 def _normalize_text(text: str) -> str:
-    """Normalize fancy Unicode and strip anything that wouldn't render
-    cleanly in ffmpeg drawtext (emoji, control chars, format chars,
-    private-use code-points, unpaired surrogates)."""
+    """Normalize fancy Unicode and strip anything ffmpeg drawtext cannot
+    render with the Noto Sans family (emoji, decorative scripts, control
+    chars, private-use, unpaired surrogates, etc.)."""
     text = unicodedata.normalize("NFKC", text)
-    text = _EMOJI_RE.sub("", text)
     text = text.translate(_TYPOGRAPHIC_MAP)
-    # Drop unicode general categories that produce glyph boxes:
-    #   Cc=control, Cf=format, Cs=surrogate, Co=private, Cn=unassigned
-    text = "".join(
-        ch for ch in text
-        if ch == "\n" or unicodedata.category(ch)[0] != "C"
-    )
+    text = "".join(ch for ch in text if _renderable_char(ch))
     return text.strip()
 
 
@@ -685,9 +707,13 @@ class StreamManager:
                 for ln in visible
             ]
             text = "\n".join(visible) or " "
+        # Atomic write: ffmpeg reads this file every frame (reload=1), so a
+        # mid-write read can corrupt drawtext's parser and crash the encoder.
         try:
-            with open(self._lyrics_path, "w", encoding="utf-8") as fh:
+            tmp = self._lyrics_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
                 fh.write(text)
+            os.replace(tmp, self._lyrics_path)
         except Exception as e:
             print(f"[radio] Lyrics write error: {e}")
 
@@ -730,8 +756,10 @@ class StreamManager:
             title = "Submissions Playlist"
         title = _normalize_text(title)
         try:
-            with open(self._header_path, "w", encoding="utf-8") as fh:
+            tmp = self._header_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
                 fh.write(title)
+            os.replace(tmp, self._header_path)
             print(f"[radio] Header overlay: {title}")
         except Exception as e:
             print(f"[radio] Header write error: {e}")
@@ -740,8 +768,10 @@ class StreamManager:
         text = f"{song['title']}  \u2014  {song['artist']}"
         text = _normalize_text(text)
         try:
-            with open(self._overlay_path, "w", encoding="utf-8") as fh:
+            tmp = self._overlay_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
                 fh.write(text)
+            os.replace(tmp, self._overlay_path)
         except Exception as e:
             print(f"[radio] Overlay write error: {e}")
 
