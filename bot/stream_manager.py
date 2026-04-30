@@ -67,10 +67,17 @@ def _renderable_char(ch: str) -> bool:
     scripts we don't ship a font for is dropped silently."""
     if ch == "\n":
         return True
+    # Always reject control/format/surrogate/private-use/unassigned. This
+    # catches U+202A-U+202E (BIDI controls) and friends that would otherwise
+    # slip through the General Punctuation range below.
+    if unicodedata.category(ch)[0] == "C":
+        return False
     cp = ord(ch)
-    if cp < 0x0020:                              # C0 controls
+    if cp < 0x0020:                              # leftover C0 controls
         return False
     if cp <= 0x024F:                             # Basic Latin … Latin Extended-B
+        return True
+    if 0x0250 <= cp <= 0x02FF:                   # IPA Extensions + spacing modifiers
         return True
     if 0x0300 <= cp <= 0x036F:                   # Combining diacritics
         return True
@@ -92,11 +99,35 @@ def _renderable_char(ch: str) -> bool:
 def _normalize_text(text: str) -> str:
     """Normalize fancy Unicode and strip anything ffmpeg drawtext cannot
     render with the Noto Sans family (emoji, decorative scripts, control
-    chars, private-use, unpaired surrogates, etc.)."""
+    chars, private-use, unpaired surrogates, etc.). Used for *lyrics* where
+    we keep the original script if it's renderable."""
     text = unicodedata.normalize("NFKC", text)
     text = text.translate(_TYPOGRAPHIC_MAP)
     text = "".join(ch for ch in text if _renderable_char(ch))
     return text.strip()
+
+
+def _transliterate_for_overlay(text: str) -> str:
+    """Like _normalize_text, but instead of dropping non-renderable chars we
+    transliterate them to ASCII equivalents via Unidecode. Used for the
+    Now-Playing line (title + artist) where exotic decorations like
+    \"꧁༺ Tαɾʝα ༻꧂\" should still produce something readable."""
+    from unidecode import unidecode
+    text = unicodedata.normalize("NFKC", text)
+    text = text.translate(_TYPOGRAPHIC_MAP)
+    out = []
+    for ch in text:
+        if _renderable_char(ch):
+            out.append(ch)
+        else:
+            # unidecode never returns None — it falls back to "" for chars
+            # it has no mapping for, which is fine.
+            out.append(unidecode(ch))
+    # Collapse the runs of whitespace / decoration noise that transliterate
+    # may have introduced (e.g. "꧁༺" → "{[").
+    result = "".join(out)
+    result = re.sub(r"\s+", " ", result).strip()
+    return result
 
 
 _UNICODE_ESCAPE_RE = re.compile(r"\\u([0-9a-fA-F]{4})")
@@ -765,8 +796,10 @@ class StreamManager:
             print(f"[radio] Header write error: {e}")
 
     def _write_overlay(self, song: dict):
+        # Transliterate exotic decorations so artist names like "꧁༺ Tαɾʝα ༻꧂"
+        # render as something legible instead of being aggressively stripped.
         text = f"{song['title']}  \u2014  {song['artist']}"
-        text = _normalize_text(text)
+        text = _transliterate_for_overlay(text)
         try:
             tmp = self._overlay_path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as fh:
