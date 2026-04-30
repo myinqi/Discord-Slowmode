@@ -2376,8 +2376,10 @@ def create_app(db: Database, bot=None) -> Quart:
                 shuffle = "1" if form.get("shuffle") else "0"
                 post_ch1 = form.get("post_channel_1_id", "").strip()
                 post_ch2 = form.get("post_channel_2_id", "").strip()
-                chat_token = form.get("twitch_chat_token", "").strip()
-                chat_channel = form.get("twitch_chat_channel", "").strip()
+                tw_client_id = form.get("twitch_client_id", "").strip()
+                tw_client_secret = form.get("twitch_client_secret", "").strip()
+                tw_refresh_token = form.get("twitch_refresh_token", "").strip()
+                tw_broadcaster = form.get("twitch_broadcaster_login", "").strip()
 
                 # Only update key if not masked placeholder
                 if twitch_key and not twitch_key.startswith("****"):
@@ -2388,10 +2390,20 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.set_setting("radio_shuffle", shuffle)
                 await db.set_setting("radio_post_channel_1_id", post_ch1)
                 await db.set_setting("radio_post_channel_2_id", post_ch2)
-                if chat_token and not chat_token.startswith("****"):
-                    await db.set_setting("radio_twitch_chat_token", chat_token)
-                if chat_channel:
-                    await db.set_setting("radio_twitch_chat_channel", chat_channel)
+                if tw_client_id:
+                    await db.set_setting("radio_twitch_client_id", tw_client_id)
+                if tw_client_secret and not tw_client_secret.startswith("****"):
+                    await db.set_setting("radio_twitch_client_secret", tw_client_secret)
+                if tw_refresh_token and not tw_refresh_token.startswith("****"):
+                    await db.set_setting("radio_twitch_refresh_token", tw_refresh_token)
+                    # Reset cached IDs so they get re-resolved on next start
+                    await db.set_setting("radio_twitch_bot_login", "")
+                    await db.set_setting("radio_twitch_bot_user_id", "")
+                if tw_broadcaster:
+                    await db.set_setting(
+                        "radio_twitch_broadcaster_login",
+                        tw_broadcaster.lstrip("#").lower(),
+                    )
 
                 # Background upload
                 files = await request.files
@@ -2555,9 +2567,14 @@ def create_app(db: Database, bot=None) -> Quart:
 
         post_channel_1_id = await db.get_setting("radio_post_channel_1_id") or ""
         post_channel_2_id = await db.get_setting("radio_post_channel_2_id") or ""
-        chat_token = await db.get_setting("radio_twitch_chat_token") or ""
-        masked_chat_token = f"****{chat_token[-4:]}" if len(chat_token) > 4 else ""
-        chat_channel = await db.get_setting("radio_twitch_chat_channel") or ""
+        # Twitch chat-bot (modern Helix flow)
+        tw_client_id     = await db.get_setting("radio_twitch_client_id") or ""
+        _tw_secret       = await db.get_setting("radio_twitch_client_secret") or ""
+        _tw_refresh      = await db.get_setting("radio_twitch_refresh_token") or ""
+        tw_secret_masked = f"****{_tw_secret[-4:]}" if len(_tw_secret) > 4 else ""
+        tw_refresh_masked = f"****{_tw_refresh[-4:]}" if len(_tw_refresh) > 4 else ""
+        tw_broadcaster_login = await db.get_setting("radio_twitch_broadcaster_login") or ""
+        tw_bot_login         = await db.get_setting("radio_twitch_bot_login") or ""
 
         source_mode = await db.get_setting("radio_source_mode") or "submissions"
         suno_playlists = await db.get_all_suno_playlists()
@@ -2579,8 +2596,11 @@ def create_app(db: Database, bot=None) -> Quart:
             post_channel_1_id=post_channel_1_id,
             post_channel_2_id=post_channel_2_id,
             shuffle=shuffle,
-            masked_chat_token=masked_chat_token,
-            chat_channel=chat_channel,
+            tw_client_id=tw_client_id,
+            tw_secret_masked=tw_secret_masked,
+            tw_refresh_masked=tw_refresh_masked,
+            tw_broadcaster_login=tw_broadcaster_login,
+            tw_bot_login=tw_bot_login,
             source_mode=source_mode,
             suno_playlists=suno_playlists,
             active_suno_playlist=active_suno_playlist,
@@ -2634,6 +2654,16 @@ def create_app(db: Database, bot=None) -> Quart:
     async def radio_stream_status():
         from quart import jsonify
         return jsonify(await stream_manager.get_status())
+
+    @app.route("/admin/twitch-radio/test-connection", methods=["POST"])
+    @permission_required('radio')
+    async def radio_twitch_test():
+        """One-shot health-check for the Twitch chat-bot credentials."""
+        from quart import jsonify
+        from bot.twitch_bot import TwitchBot
+        bot = TwitchBot(db)
+        result = await bot.diagnose()
+        return jsonify(result)
 
     @app.route("/radio/stream/<action>", methods=["POST"])
     @permission_required('radio')

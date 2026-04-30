@@ -15,6 +15,8 @@ import unicodedata
 
 import aiohttp
 
+from bot.twitch_bot import TwitchBot
+
 _EMOJI_RE = re.compile(
     "["
     "\U0001F600-\U0001FAFF"  # emoticons, symbols, pictographs, transport, maps
@@ -42,101 +44,6 @@ def _normalize_text(text: str) -> str:
     text = unicodedata.normalize("NFKC", text)
     text = _EMOJI_RE.sub("", text)
     return text.strip()
-
-
-class TwitchChat:
-    """Minimal async Twitch IRC client for posting chat messages."""
-
-    def __init__(self, oauth_token: str, channel: str):
-        self._token = oauth_token if oauth_token.startswith("oauth:") else f"oauth:{oauth_token}"
-        self._channel = channel.lower().lstrip("#")
-        self._reader = None
-        self._writer = None
-        self._connected = False
-        self._keepalive_task = None
-
-    async def connect(self):
-        try:
-            self._reader, self._writer = await asyncio.open_connection(
-                "irc.chat.twitch.tv", 6667,
-            )
-            self._writer.write(f"PASS {self._token}\r\n".encode())
-            self._writer.write(f"NICK bot\r\n".encode())
-            await self._writer.drain()
-            # Wait for server welcome or auth failure
-            authed = False
-            for _ in range(30):  # read up to 30 lines
-                line = await asyncio.wait_for(self._reader.readline(), timeout=5)
-                msg = line.decode(errors="replace").strip()
-                if not msg:
-                    continue
-                if "Welcome" in msg or "001" in msg:
-                    authed = True
-                    break
-                if "Login authentication failed" in msg:
-                    print(f"[radio] Twitch chat auth FAILED: {msg}")
-                    self._connected = False
-                    return
-            if not authed:
-                print("[radio] Twitch chat: no welcome received, auth may have failed")
-            self._writer.write(f"JOIN #{self._channel}\r\n".encode())
-            await self._writer.drain()
-            self._connected = True
-            self._keepalive_task = asyncio.create_task(self._keepalive())
-            print(f"[radio] Twitch chat connected and authenticated to #{self._channel}")
-        except Exception as e:
-            print(f"[radio] Twitch chat connect error: {e}")
-            self._connected = False
-
-    async def _keepalive(self):
-        """Read server messages and respond to PINGs to keep connection alive."""
-        try:
-            while self._connected and self._reader:
-                line = await asyncio.wait_for(self._reader.readline(), timeout=300)
-                msg = line.decode(errors="replace").strip()
-                if msg.startswith("PING"):
-                    pong = msg.replace("PING", "PONG", 1)
-                    self._writer.write(f"{pong}\r\n".encode())
-                    await self._writer.drain()
-        except asyncio.TimeoutError:
-            print("[radio] Twitch chat keepalive timeout")
-            self._connected = False
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            print(f"[radio] Twitch chat keepalive error: {e}")
-            self._connected = False
-
-    async def send(self, message: str):
-        if not self._connected or not self._writer:
-            print("[radio] Twitch chat: not connected, skipping message")
-            return
-        try:
-            self._writer.write(f"PRIVMSG #{self._channel} :{message}\r\n".encode())
-            await self._writer.drain()
-            print(f"[radio] Twitch chat sent: {message[:80]}")
-        except Exception as e:
-            print(f"[radio] Twitch chat send error: {e}")
-            self._connected = False
-
-    async def disconnect(self):
-        self._connected = False
-        if self._keepalive_task:
-            self._keepalive_task.cancel()
-            try:
-                await self._keepalive_task
-            except Exception:
-                pass
-            self._keepalive_task = None
-        if self._writer:
-            try:
-                self._writer.close()
-                await self._writer.wait_closed()
-            except Exception:
-                pass
-            self._writer = None
-            self._reader = None
-        print("[radio] Twitch chat disconnected")
 
 
 SUNO_PLAYLIST_UUID_RE = re.compile(r'suno\.com/playlist/([a-f0-9-]{36})')
@@ -512,12 +419,18 @@ class StreamManager:
             f.write(" ")
         # Write playlist title header
         await self._write_header()
-        # Connect to Twitch chat if configured
-        chat_token = await self.db.get_setting("radio_twitch_chat_token")
-        chat_channel = await self.db.get_setting("radio_twitch_chat_channel")
-        if chat_token and chat_channel:
-            self._twitch_chat = TwitchChat(chat_token, chat_channel)
-            await self._twitch_chat.connect()
+        # Connect to Twitch chat if configured (Helix-based bot, modern auth)
+        client_id = await self.db.get_setting("radio_twitch_client_id")
+        refresh_tok = await self.db.get_setting("radio_twitch_refresh_token")
+        broadcaster = await self.db.get_setting("radio_twitch_broadcaster_login")
+        if client_id and refresh_tok and broadcaster:
+            self._twitch_chat = TwitchBot(self.db)
+            ok, msg = await self._twitch_chat.start()
+            if not ok:
+                print(f"[radio] Twitch bot disabled: {msg}")
+                self._twitch_chat = None
+            else:
+                print(f"[radio] Twitch bot ready ({msg}).")
         self.is_running = True
         self._loading = False
         self.current_index = 0
@@ -529,7 +442,7 @@ class StreamManager:
         await self._teardown()
         self._cleanup_temp()
         if self._twitch_chat:
-            await self._twitch_chat.disconnect()
+            await self._twitch_chat.stop()
             self._twitch_chat = None
         self.current_song = None
         return await self.get_status()

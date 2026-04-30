@@ -49,17 +49,50 @@
                         {% endif %}
                     </div>
                     <div class="space-y-2 pt-2 border-t border-gray-700/50">
-                        <label class="block text-gray-400 text-xs mb-1">Twitch Chat OAuth Token</label>
-                        <input type="password" name="twitch_chat_token" value="{{ masked_chat_token }}"
-                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none"
-                            placeholder="oauth:xxxxxxxxxx">
-                        <p class="text-gray-500 text-xs mt-1">From <a href="https://twitchtokengenerator.com" target="_blank" class="text-discord-blurple hover:underline">twitchtokengenerator.com</a> — posts Now Playing to chat</p>
+                        <label class="block text-gray-300 text-sm font-medium">Twitch Chat Bot</label>
+                        <p class="text-gray-500 text-xs">
+                            Posts <em>Now Playing</em> messages to your chat.
+                            Run <code class="text-gray-400">python scripts/twitch_auth.py</code>
+                            once to get a refresh token, then paste it below.
+                            Make sure the bot account is a moderator in your channel
+                            (<code class="text-gray-400">/mod {{ tw_bot_login or 'botname' }}</code>).
+                        </p>
                     </div>
                     <div>
-                        <label class="block text-gray-400 text-xs mb-1">Twitch Chat Channel</label>
-                        <input type="text" name="twitch_chat_channel" value="{{ chat_channel }}"
+                        <label class="block text-gray-400 text-xs mb-1">Client ID</label>
+                        <input type="text" name="twitch_client_id" value="{{ tw_client_id }}"
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm font-mono focus:border-discord-blurple focus:outline-none"
+                            placeholder="from dev.twitch.tv/console">
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">Client Secret</label>
+                        <input type="password" name="twitch_client_secret" value="{{ tw_secret_masked }}"
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm font-mono focus:border-discord-blurple focus:outline-none"
+                            placeholder="from dev.twitch.tv/console">
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">Refresh Token</label>
+                        <input type="password" name="twitch_refresh_token" value="{{ tw_refresh_masked }}"
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm font-mono focus:border-discord-blurple focus:outline-none"
+                            placeholder="output of scripts/twitch_auth.py">
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">Broadcaster Login (channel name)</label>
+                        <input type="text" name="twitch_broadcaster_login" value="{{ tw_broadcaster_login }}"
                             class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none"
-                            placeholder="yourchannel">
+                            placeholder="streamer_login (where the bot posts)">
+                        {% if tw_bot_login %}
+                        <p class="text-gray-500 text-xs mt-1">
+                            Bot logged in as <span class="text-discord-blurple">{{ tw_bot_login }}</span>.
+                        </p>
+                        {% endif %}
+                    </div>
+                    <div>
+                        <button type="button" id="twitch-test-btn"
+                            class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded-lg transition-colors">
+                            Test Twitch connection
+                        </button>
+                        <span id="twitch-test-result" class="ml-2 text-xs"></span>
                     </div>
                     <div class="space-y-2 pt-2 border-t border-gray-700/50">
                         <label class="block text-gray-400 text-xs">Discord Channel 1 (for posts)</label>
@@ -473,5 +506,29 @@ async function pollStatus() {
 }
 setInterval(pollStatus, 5000);
 pollStatus();
+
+// Twitch connection test ----------------------------------------------------
+document.getElementById('twitch-test-btn')?.addEventListener('click', async function(){
+    var btn = this;
+    var out = document.getElementById('twitch-test-result');
+    btn.disabled = true; out.textContent = 'Testing…'; out.className = 'ml-2 text-xs text-gray-400';
+    try {
+        var r = await fetch('/admin/twitch-radio/test-connection', {method: 'POST'});
+        var d = await r.json();
+        if(d.ok){
+            out.textContent = '✓ ' + (d.message || 'OK') +
+                (d.bot_login ? ' (bot=' + d.bot_login + ', channel=' + (d.broadcaster_login || '?') + ')' : '');
+            out.className = 'ml-2 text-xs text-green-400';
+        } else {
+            out.textContent = '✗ ' + (d.message || 'Failed');
+            out.className = 'ml-2 text-xs text-red-400';
+        }
+    } catch(e){
+        out.textContent = '✗ ' + e.message;
+        out.className = 'ml-2 text-xs text-red-400';
+    } finally {
+        btn.disabled = false;
+    }
+});
 </script>
 {% endblock %}
