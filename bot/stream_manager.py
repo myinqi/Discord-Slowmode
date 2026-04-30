@@ -19,25 +19,26 @@ from bot.twitch_bot import TwitchBot
 
 _EMOJI_RE = re.compile(
     "["
-    "\U0001F600-\U0001FAFF"  # emoticons, symbols, pictographs, transport, maps
-    "\U00002702-\U000027B0"  # dingbats
+    "\U0001F000-\U0001FFFF"  # All supplemental symbols/pictographs/alchemy/etc.
+    "\U00002600-\U000027BF"  # Misc symbols + dingbats
     "\U0000FE00-\U0000FE0F"  # variation selectors
-    "\U0000200D"              # zero width joiner
-    "\U000020E3"              # combining enclosing keycap
-    "\U00002600-\U000026FF"  # misc symbols
-    "\U0000231A-\U0000231B"  # watch, hourglass
-    "\U00002934-\U00002935"  # arrows
-    "\U000025AA-\U000025AB"  # squares
-    "\U000025FB-\U000025FE"  # squares
-    "\U00003030\U0000303D"   # wavy dash, part alternation mark
-    "\U00003297\U00003299"   # circled ideograph
+    "\U0000200B-\U0000200D"  # zero-width joiner / non-joiners
+    "\U000020D0-\U000020FF"  # combining marks for symbols
+    "\U00002300-\U000023FF"  # misc technical (incl. ⌚⌛)
+    "\U00002460-\U000024FF"  # enclosed alphanumerics
+    "\U00002500-\U000025FF"  # box drawing + geometric shapes
+    "\U00002B00-\U00002BFF"  # misc symbols and arrows
+    "\U00003000-\U0000303F"  # CJK punctuation (incl. wavy dashes)
+    "\U00003200-\U000032FF"  # enclosed CJK
+    "\U0000FE0F"
+    "\U0000FFFC-\U0000FFFD"  # object replacement / replacement char
     "]+"
 )
 
 _PLAYLIST_REPEATS = 50
-_LYRICS_WINDOW_LINES = 5    # how many lyrics lines are visible at once
-_LYRICS_MIN_INTERVAL = 1.5  # min seconds between scroll steps (very short songs)
-_LYRICS_MAX_INTERVAL = 8.0  # max seconds between scroll steps (very long songs)
+_LYRICS_WINDOW_LINES = 10   # how many lyrics lines are visible at once
+_LYRICS_MIN_INTERVAL = 1.0  # min seconds between scroll steps (very short songs)
+_LYRICS_MAX_INTERVAL = 6.0  # max seconds between scroll steps (very long songs)
 
 # Map common typographic Unicode that some renderers / fonts handle poorly
 # back to their plain ASCII equivalents. We keep diacritics intact.
@@ -64,16 +65,28 @@ def _normalize_text(text: str) -> str:
 
 
 _UNICODE_ESCAPE_RE = re.compile(r"\\u([0-9a-fA-F]{4})")
+# Surrogate pair: high surrogate (D800-DBFF) + low surrogate (DC00-DFFF)
+_SURROGATE_PAIR_RE = re.compile(
+    r"\\u([dD][89aAbB][0-9a-fA-F]{2})\\u([dD][c-fC-F][0-9a-fA-F]{2})"
+)
+
+
+def _surrogate_pair_to_char(match) -> str:
+    high = int(match.group(1), 16)
+    low  = int(match.group(2), 16)
+    cp   = 0x10000 + (high - 0xD800) * 0x400 + (low - 0xDC00)
+    return chr(cp)
 
 
 def _decode_json_string(raw: str) -> str:
     """Properly decode all JSON-style backslash-escapes that Suno's RSC payload
-    contains — including \\uXXXX which the previous naive `.replace()` chain
-    missed (causing characters like ä, ü, smart quotes to appear literally as
-    `\\u00e4` in the lyrics overlay)."""
+    contains — including surrogate pairs for non-BMP code points (emoji etc.)
+    which were previously left half-decoded and produced glyph boxes."""
     raw = raw.replace("\\\\", "\x00")           # placeholder so we don't double-decode
     raw = raw.replace("\\n", "\n").replace("\\t", " ").replace("\\r", "")
     raw = raw.replace('\\"', '"').replace("\\/", "/")
+    # Decode surrogate pairs FIRST so we don't accidentally split them.
+    raw = _SURROGATE_PAIR_RE.sub(_surrogate_pair_to_char, raw)
     raw = _UNICODE_ESCAPE_RE.sub(
         lambda m: chr(int(m.group(1), 16)), raw
     )
@@ -780,9 +793,9 @@ class StreamManager:
             f"drawtext=font='{font}'"
             f":textfile='{self._lyrics_path}'"
             f":reload=1"
-            f":fontsize=30:fontcolor=white:line_spacing=10"
-            f":borderw=2:bordercolor=black@0.9"
-            f":box=1:boxcolor=black@0.35:boxborderw=24"
+            f":fontsize=46:fontcolor=white:line_spacing=14"
+            f":borderw=3:bordercolor=black@0.9"
+            f":box=1:boxcolor=black@0.45:boxborderw=32"
             f":x=(w-text_w)/2:y=(h-text_h)/2"
         )
         header = (
