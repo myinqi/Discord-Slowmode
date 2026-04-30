@@ -36,9 +36,9 @@ _EMOJI_RE = re.compile(
 )
 
 _PLAYLIST_REPEATS = 50
-_LYRICS_WINDOW_LINES = 10   # how many lyrics lines are visible at once
-_LYRICS_MIN_INTERVAL = 1.0  # min seconds between scroll steps (very short songs)
-_LYRICS_MAX_INTERVAL = 6.0  # max seconds between scroll steps (very long songs)
+_LYRICS_WINDOW_LINES = 20   # how many lyrics lines are visible at once
+_LYRICS_MIN_INTERVAL = 0.5  # min seconds between scroll steps (very short songs)
+_LYRICS_MAX_INTERVAL = 4.0  # max seconds between scroll steps (very long songs)
 
 # Map common typographic Unicode that some renderers / fonts handle poorly
 # back to their plain ASCII equivalents. We keep diacritics intact.
@@ -57,10 +57,18 @@ _TYPOGRAPHIC_MAP = str.maketrans({
 
 
 def _normalize_text(text: str) -> str:
-    """Normalize fancy Unicode (mathematical bold etc.) to plain text and strip emoji."""
+    """Normalize fancy Unicode and strip anything that wouldn't render
+    cleanly in ffmpeg drawtext (emoji, control chars, format chars,
+    private-use code-points, unpaired surrogates)."""
     text = unicodedata.normalize("NFKC", text)
     text = _EMOJI_RE.sub("", text)
     text = text.translate(_TYPOGRAPHIC_MAP)
+    # Drop unicode general categories that produce glyph boxes:
+    #   Cc=control, Cf=format, Cs=surrogate, Co=private, Cn=unassigned
+    text = "".join(
+        ch for ch in text
+        if ch == "\n" or unicodedata.category(ch)[0] != "C"
+    )
     return text.strip()
 
 
@@ -789,14 +797,16 @@ class StreamManager:
             f":borderw=2:bordercolor=black"
             f":x=(w-text_w)/2:y=h-60"
         )
+        # Lyrics: anchored to the left side so it doesn't overlap the PiP
+        # camera (which sits on the right). 20 visible lines @ ~22px high.
         lyrics = (
             f"drawtext=font='{font}'"
             f":textfile='{self._lyrics_path}'"
             f":reload=1"
-            f":fontsize=46:fontcolor=white:line_spacing=14"
-            f":borderw=3:bordercolor=black@0.9"
-            f":box=1:boxcolor=black@0.45:boxborderw=32"
-            f":x=(w-text_w)/2:y=(h-text_h)/2"
+            f":fontsize=22:fontcolor=white:line_spacing=4"
+            f":borderw=2:bordercolor=black@0.9"
+            f":box=1:boxcolor=black@0.45:boxborderw=18"
+            f":x=80:y=(h-text_h)/2"
         )
         header = (
             f"drawtext=font='{font}'"
