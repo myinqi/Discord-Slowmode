@@ -119,12 +119,13 @@ def _transliterate_for_overlay(text: str) -> str:
     for ch in text:
         if _renderable_char(ch):
             out.append(ch)
-        else:
-            # unidecode never returns None — it falls back to "" for chars
-            # it has no mapping for, which is fine.
+            continue
+        cat = unicodedata.category(ch)
+        # Only transliterate letters & numbers from non-supported scripts.
+        # Decorative punctuation/symbols (꧁, ༺, ꧂ …) get dropped silently
+        # so we never end up with stray "]" or "[" in artist names.
+        if cat[0] in ("L", "N"):
             out.append(unidecode(ch))
-    # Collapse the runs of whitespace / decoration noise that transliterate
-    # may have introduced (e.g. "꧁༺" → "{[").
     result = "".join(out)
     result = re.sub(r"\s+", " ", result).strip()
     return result
@@ -698,6 +699,12 @@ class StreamManager:
                         if cleaned:
                             lines.append(cleaned)
                     print(f"[radio] Scraped {len(lines)} lyrics lines from {suno_url}")
+                    # Diagnostic: dump first 3 lines char-by-char in hex so we
+                    # can hunt down stray glyph-box characters that survive
+                    # the whitelist+typographic_map pipeline.
+                    for ln in lines[:3]:
+                        codepoints = " ".join(f"U+{ord(c):04X}" for c in ln)
+                        print(f"[radio] LYRIC HEX | {ln!r} -> {codepoints}")
                     return lines
         except Exception as e:
             print(f"[radio] Lyrics scrape error: {e}")
