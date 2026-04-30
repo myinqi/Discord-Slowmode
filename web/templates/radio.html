@@ -457,15 +457,16 @@
 </div>
 
 <script>
-// Sync channel select to hidden form inputs
+// Sync channel select to hidden form inputs (legacy — element may not exist)
 const chSelect = document.getElementById('post-channel-select');
-document.querySelectorAll('.post-ch-input').forEach(el => el.value = chSelect.value);
-chSelect.addEventListener('change', function() {
-    document.querySelectorAll('.post-ch-input').forEach(el => el.value = this.value);
-    // Persist selection
-    fetch('/radio', { method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: 'action=save_post_channel&post_channel_id=' + this.value });
-});
+if (chSelect) {
+    document.querySelectorAll('.post-ch-input').forEach(el => el.value = chSelect.value);
+    chSelect.addEventListener('change', function() {
+        document.querySelectorAll('.post-ch-input').forEach(el => el.value = this.value);
+        fetch('/radio', { method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: 'action=save_post_channel&post_channel_id=' + this.value });
+    });
+}
 
 async function streamAction(action) {
     try {

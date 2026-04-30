@@ -2400,10 +2400,12 @@ def create_app(db: Database, bot=None) -> Quart:
                     await db.set_setting("radio_twitch_bot_login", "")
                     await db.set_setting("radio_twitch_bot_user_id", "")
                 if tw_broadcaster:
-                    await db.set_setting(
-                        "radio_twitch_broadcaster_login",
-                        tw_broadcaster.lstrip("#").lower(),
-                    )
+                    # Accept "name", "#name", or full "https://twitch.tv/name" —
+                    # always store just the bare login.
+                    bn = tw_broadcaster.strip().rstrip("/").lstrip("#").lower()
+                    if "twitch.tv/" in bn:
+                        bn = bn.split("twitch.tv/", 1)[1].split("/")[0]
+                    await db.set_setting("radio_twitch_broadcaster_login", bn)
 
                 # Background upload
                 files = await request.files
