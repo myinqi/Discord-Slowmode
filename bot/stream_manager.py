@@ -53,7 +53,12 @@ _TYPOGRAPHIC_MAP = str.maketrans({
     "\u00A0": " ",                    # nbsp
     "\u200B": "",   "\u200C": "",     # zero-width spaces
     "\u200D": "",   "\uFEFF": "",
+    "\u2028": "",   "\u2029": "",    # line / paragraph separators (render as box)
 })
+
+# Hard limit on how many chars we render per lyric line — anything longer is
+# truncated with an ellipsis so the visual lyrics box has a stable width.
+_LYRICS_MAX_LINE_CHARS = 85
 
 
 def _normalize_text(text: str) -> str:
@@ -673,6 +678,12 @@ class StreamManager:
             # Always keep `window` lines so the overlay height never jumps.
             while len(visible) < window:
                 visible.append("")
+            # Truncate over-long lines so they never escape the fixed box width.
+            visible = [
+                (ln if len(ln) <= _LYRICS_MAX_LINE_CHARS
+                 else ln[:_LYRICS_MAX_LINE_CHARS - 1].rstrip() + "…")
+                for ln in visible
+            ]
             text = "\n".join(visible) or " "
         try:
             with open(self._lyrics_path, "w", encoding="utf-8") as fh:
@@ -797,16 +808,25 @@ class StreamManager:
             f":borderw=2:bordercolor=black"
             f":x=(w-text_w)/2:y=h-60"
         )
-        # Lyrics: anchored to the left side so it doesn't overlap the PiP
-        # camera (which sits on the right). 20 visible lines @ ~22px high.
+        # Lyrics: fixed-width semi-transparent box on the left so it never
+        # resizes with content and never overlaps the PiP camera on the right.
+        # The 1920×1080 frame: PiP at x=1500–1880, lyrics box at x=40–1180.
+        lyrics_box_x, lyrics_box_y = 40, 140
+        lyrics_box_w, lyrics_box_h = 1140, 800
+        lyrics_pad = 24
+        lyrics_box = (
+            f"drawbox=x={lyrics_box_x}:y={lyrics_box_y}"
+            f":w={lyrics_box_w}:h={lyrics_box_h}"
+            f":color=black@0.45:t=fill"
+        )
         lyrics = (
             f"drawtext=font='{font}'"
             f":textfile='{self._lyrics_path}'"
             f":reload=1"
             f":fontsize=22:fontcolor=white:line_spacing=4"
             f":borderw=2:bordercolor=black@0.9"
-            f":box=1:boxcolor=black@0.45:boxborderw=18"
-            f":x=80:y=(h-text_h)/2"
+            f":x={lyrics_box_x + lyrics_pad}"
+            f":y={lyrics_box_y + lyrics_pad}"
         )
         header = (
             f"drawtext=font='{font}'"
@@ -852,7 +872,7 @@ class StreamManager:
                 f"[{pip_input_idx}:v]scale={pip_w}:{pip_h}:force_original_aspect_ratio=decrease,"
                 f"pad={pip_w}:{pip_h}:(ow-iw)/2:(oh-ih)/2[pip];"
                 f"[bg][pip]overlay={ox}:{oy},"
-                f"{header},{now_playing},{lyrics}[vout]"
+                f"{header},{now_playing},{lyrics_box},{lyrics}[vout]"
             )
             cmd += ["-filter_complex", fc, "-map", "[vout]", "-map", "1:a:0"]
         else:
@@ -861,7 +881,7 @@ class StreamManager:
             vf = (
                 "scale=1920:1080:force_original_aspect_ratio=decrease,"
                 "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,"
-                f"format=yuv420p,{header},{now_playing},{lyrics}"
+                f"format=yuv420p,{header},{now_playing},{lyrics_box},{lyrics}"
             )
             cmd += ["-vf", vf]
 
