@@ -35,15 +35,50 @@ _EMOJI_RE = re.compile(
 )
 
 _PLAYLIST_REPEATS = 50
-_LYRICS_LINE_DURATION = 6  # seconds per lyrics line on screen
-_LYRICS_MAX_LINES = 8      # max lines shown at once
+_LYRICS_WINDOW_LINES = 5    # how many lyrics lines are visible at once
+_LYRICS_MIN_INTERVAL = 1.5  # min seconds between scroll steps (very short songs)
+_LYRICS_MAX_INTERVAL = 8.0  # max seconds between scroll steps (very long songs)
+
+# Map common typographic Unicode that some renderers / fonts handle poorly
+# back to their plain ASCII equivalents. We keep diacritics intact.
+_TYPOGRAPHIC_MAP = str.maketrans({
+    "\u2018": "'",  "\u2019": "'",   # curly single quotes
+    "\u201A": "'",  "\u201B": "'",
+    "\u201C": '"',  "\u201D": '"',   # curly double quotes
+    "\u201E": '"',  "\u201F": '"',
+    "\u2032": "'",  "\u2033": '"',   # primes
+    "\u2013": "-",  "\u2014": "-",   # en/em dash
+    "\u2026": "...",                  # ellipsis
+    "\u00A0": " ",                    # nbsp
+    "\u200B": "",   "\u200C": "",     # zero-width spaces
+    "\u200D": "",   "\uFEFF": "",
+})
 
 
 def _normalize_text(text: str) -> str:
     """Normalize fancy Unicode (mathematical bold etc.) to plain text and strip emoji."""
     text = unicodedata.normalize("NFKC", text)
     text = _EMOJI_RE.sub("", text)
+    text = text.translate(_TYPOGRAPHIC_MAP)
     return text.strip()
+
+
+_UNICODE_ESCAPE_RE = re.compile(r"\\u([0-9a-fA-F]{4})")
+
+
+def _decode_json_string(raw: str) -> str:
+    """Properly decode all JSON-style backslash-escapes that Suno's RSC payload
+    contains — including \\uXXXX which the previous naive `.replace()` chain
+    missed (causing characters like ä, ü, smart quotes to appear literally as
+    `\\u00e4` in the lyrics overlay)."""
+    raw = raw.replace("\\\\", "\x00")           # placeholder so we don't double-decode
+    raw = raw.replace("\\n", "\n").replace("\\t", " ").replace("\\r", "")
+    raw = raw.replace('\\"', '"').replace("\\/", "/")
+    raw = _UNICODE_ESCAPE_RE.sub(
+        lambda m: chr(int(m.group(1), 16)), raw
+    )
+    raw = raw.replace("\x00", "\\")
+    return raw
 
 
 SUNO_PLAYLIST_UUID_RE = re.compile(r'suno\.com/playlist/([a-f0-9-]{36})')
@@ -574,9 +609,10 @@ class StreamManager:
                     if not match:
                         return []
                     raw = match.group(1)
-                    # Unescape JSON string escapes
-                    raw = raw.replace("\\n", "\n").replace("\\t", " ").replace('\\"', '"')
-                    # Split into lines, strip emoji, skip empty
+                    # Properly decode all JSON string escapes (incl. \uXXXX —
+                    # the old `.replace()` chain missed this and left literal
+                    # `\u00e4` etc. in the lyrics).
+                    raw = _decode_json_string(raw)
                     lines = []
                     for line in raw.split("\n"):
                         cleaned = _normalize_text(line)
@@ -588,17 +624,35 @@ class StreamManager:
             print(f"[radio] Lyrics scrape error: {e}")
             return []
 
-    def _write_lyrics(self, lines: list[str], offset: int):
-        """Write a window of lyrics lines to the lyrics overlay file."""
+    def _write_lyrics(self, lines: list[str], elapsed_in_song: float,
+                      song_duration: float, window: int = _LYRICS_WINDOW_LINES):
+        """Render a credits-roll style lyrics window.
+
+        Lyrics enter from the bottom and scroll up so that **all** lines pass
+        through the visible window exactly once during the song. Empty padding
+        is inserted before the first line and after the last line, so the song
+        starts with a calm empty window, then lyrics scroll in, all lines pass
+        through, and the window empties again towards the song's end.
+        """
         if not lines:
             text = " "
         else:
-            start = offset % len(lines)
-            window = []
-            for i in range(_LYRICS_MAX_LINES):
-                idx = (start + i) % len(lines)
-                window.append(lines[idx])
-            text = "\n".join(window)
+            n = len(lines)
+            # Total scroll positions: padding + lines + padding
+            total_steps = n + window
+            # Per-song step interval, clamped so very short or very long
+            # songs still look reasonable.
+            interval = max(_LYRICS_MIN_INTERVAL,
+                           min(_LYRICS_MAX_INTERVAL,
+                               max(song_duration, 1.0) / max(total_steps, 1)))
+            step = int(max(0.0, elapsed_in_song) / interval)
+            step = max(0, min(step, total_steps))
+            padded = [""] * window + lines + [""] * window
+            visible = padded[step:step + window]
+            # Always keep `window` lines so the overlay height never jumps.
+            while len(visible) < window:
+                visible.append("")
+            text = "\n".join(visible) or " "
         try:
             with open(self._lyrics_path, "w", encoding="utf-8") as fh:
                 fh.write(text)
@@ -726,9 +780,10 @@ class StreamManager:
             f"drawtext=font='{font}'"
             f":textfile='{self._lyrics_path}'"
             f":reload=1"
-            f":fontsize=22:fontcolor=white"
-            f":borderw=1:bordercolor=black"
-            f":x=40:y=(h-text_h)/2"
+            f":fontsize=30:fontcolor=white:line_spacing=10"
+            f":borderw=2:bordercolor=black@0.9"
+            f":box=1:boxcolor=black@0.35:boxborderw=24"
+            f":x=(w-text_w)/2:y=(h-text_h)/2"
         )
         header = (
             f"drawtext=font='{font}'"
@@ -852,21 +907,28 @@ class StreamManager:
                     if song_id not in self._lyrics_cache:
                         suno_url = actual.get("suno_url", "")
                         self._lyrics_cache[song_id] = await self._fetch_lyrics(suno_url)
-                    self._lyrics_offset = 0
-                    self._write_lyrics(self._lyrics_cache.get(song_id, []), 0)
-                # Rotate lyrics lines periodically
+                    # Mark when this song actually started, so the credits-roll
+                    # is anchored to the real song timeline.
+                    self._song_start_time = now
+                    # Boundary of the current song inside the concat sequence.
+                    prev_boundary = boundaries[i - 1] if i > 0 else 0.0
+                    self._song_duration = max(1.0, end_t - prev_boundary)
+                    self._write_lyrics(
+                        self._lyrics_cache.get(song_id, []),
+                        elapsed_in_song=0.0,
+                        song_duration=self._song_duration,
+                    )
+                # Continuously refresh the credits-roll position based on how
+                # far into the *current* song we are.
                 song_id = actual["id"]
                 lyrics = self._lyrics_cache.get(song_id, [])
-                if lyrics:
-                    if not hasattr(self, "_lyrics_offset"):
-                        self._lyrics_offset = 0
-                    if not hasattr(self, "_lyrics_timer"):
-                        self._lyrics_timer = 0.0
-                    self._lyrics_timer += 1.0
-                    if self._lyrics_timer >= _LYRICS_LINE_DURATION:
-                        self._lyrics_timer = 0.0
-                        self._lyrics_offset += 1
-                        self._write_lyrics(lyrics, self._lyrics_offset)
+                if lyrics and getattr(self, "_song_start_time", None):
+                    elapsed_in_song = max(0.0, time.monotonic() - self._song_start_time)
+                    self._write_lyrics(
+                        lyrics,
+                        elapsed_in_song=elapsed_in_song,
+                        song_duration=getattr(self, "_song_duration", 180.0),
+                    )
                 await asyncio.sleep(1)
         except asyncio.CancelledError:
             pass

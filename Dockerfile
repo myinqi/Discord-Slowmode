@@ -3,7 +3,10 @@ FROM python:3.12-slim
 WORKDIR /app
 
 # Install ffmpeg for audio validation and Twitch streaming
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg fontconfig fonts-noto fonts-noto-mono && rm -rf /var/lib/apt/lists/* && fc-cache -f
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ffmpeg fontconfig \
+        fonts-noto fonts-noto-mono fonts-noto-cjk fonts-noto-extra \
+    && rm -rf /var/lib/apt/lists/* && fc-cache -f
 
 # Install dependencies
 COPY requirements.txt .
