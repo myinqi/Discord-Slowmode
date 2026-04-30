@@ -120,6 +120,30 @@
     /* Loading state */
     .si-loading{padding:30px;text-align:center;color:#666;font-size:13px}
     .si-error{padding:14px;background:#3a1a1a;border:1px solid #5a2a2a;border-radius:8px;color:#f88;font-size:13px}
+
+    /* --- Theater mode -------------------------------------------------- */
+    .th-root{position:fixed;inset:0;z-index:1000;background:#08080a;
+             display:flex;flex-direction:column;color:#ddd}
+    .th-root[hidden]{display:none}
+    .th-stage{flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr;gap:24px;padding:24px}
+    @media(max-width:900px){.th-stage{grid-template-columns:1fr;grid-template-rows:1fr 1fr}}
+    .th-art{position:relative;display:flex;align-items:center;justify-content:center;
+            background:#000;border-radius:12px;overflow:hidden;min-height:0}
+    .th-art img,.th-art video{max-width:100%;max-height:100%;width:auto;height:auto;
+                              object-fit:contain;display:block}
+    .th-art video{display:none}
+    .th-art.has-video img{display:none}
+    .th-art.has-video video{display:block}
+    .th-side{display:flex;flex-direction:column;min-height:0;background:#0f0f12;
+             border:1px solid #2a2a2e;border-radius:12px;padding:18px 20px}
+    .th-head{flex-shrink:0;border-bottom:1px solid #232325;padding-bottom:10px;margin-bottom:10px}
+    .th-title{font-size:22px;font-weight:600;color:#fff;line-height:1.25}
+    .th-artist{font-size:14px;color:#a8a4d8;margin-top:3px}
+    .th-lyrics{flex:1;min-height:0;overflow-y:auto;white-space:pre-wrap;
+               font-family:ui-sans-serif,system-ui;font-size:15px;line-height:1.8;
+               color:#d4d4dc;padding:6px 10px 10px 4px}
+    .th-bar{flex-shrink:0;display:flex;align-items:center;gap:12px;
+            padding:12px 24px 18px;border-top:1px solid #1a1a1e;background:#0a0a0c}
 </style>
 
 <div class="flex items-center justify-between mb-6 flex-wrap gap-3">
@@ -197,8 +221,15 @@
                     <path d="M14 3h7v7"/><path d="M10 14 21 3"/>
                     <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/>
                 </svg>
-                <span>Open on Suno</span>
+                <span>Suno</span>
             </a>
+            <button id="btn-theater" class="si-compact-btn shrink-0 mt-1" title="Theater mode">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="5" width="18" height="12" rx="2"/>
+                    <path d="M7 21h10"/><path d="M12 17v4"/>
+                </svg>
+                <span>Theater</span>
+            </button>
         </div>
         <div class="flex items-end justify-between gap-3">
             <div class="np-stats min-w-0" id="np-stats"></div>
@@ -274,12 +305,52 @@
 
 <audio id="audio" preload="none" crossorigin="anonymous" style="display:none"></audio>
 
+<!-- Theater mode overlay ------------------------------------------------ -->
+<div id="theater" class="th-root" hidden>
+    <div class="th-stage">
+        <div class="th-art" id="th-art">
+            <img id="th-img" src="" alt="">
+            <video id="th-video" autoplay loop muted playsinline></video>
+        </div>
+        <div class="th-side">
+            <div class="th-head">
+                <div class="th-title" id="th-title">—</div>
+                <div class="th-artist" id="th-artist"></div>
+            </div>
+            <div class="th-lyrics" id="th-lyrics">
+                <div style="color:#666">Pick a song to see its lyrics.</div>
+            </div>
+        </div>
+    </div>
+    <div class="th-bar">
+        <button class="si-btn" id="th-prev" title="Previous">
+            <svg viewBox="0 0 24 24"><rect class="fill" x="5" y="6.5" width="1.8" height="11" rx="0.4"/><path class="fill" d="M19 6.5 12 12l7 5.5z"/><path class="fill" d="M12 6.5 7.2 12l4.8 5.5z"/></svg>
+        </button>
+        <button class="si-btn lg" id="th-play" title="Play/Pause">
+            <svg class="play-icon" viewBox="0 0 24 24"><path class="fill" d="M8 6.5v11l8-5.5-8-5.5Z"/></svg>
+            <svg class="pause-icon" viewBox="0 0 24 24"><path d="M9 6.8v10.4"/><path d="M15 6.8v10.4"/></svg>
+        </button>
+        <button class="si-btn" id="th-next" title="Next">
+            <svg viewBox="0 0 24 24"><path class="fill" d="M5 6.5 12 12 5 17.5z"/><path class="fill" d="M12 6.5 16.8 12 12 17.5z"/><rect class="fill" x="17.2" y="6.5" width="1.8" height="11" rx="0.4"/></svg>
+        </button>
+        <div class="si-seek">
+            <span class="si-seek-time" id="th-now">0:00</span>
+            <div class="si-seek-track" id="th-track"><div class="si-seek-fill" id="th-fill"></div></div>
+            <span class="si-seek-time" id="th-dur">0:00</span>
+        </div>
+        <button class="si-btn" id="th-close" title="Exit theater (Esc)">
+            <svg viewBox="0 0 24 24"><path d="M6 6 18 18"/><path d="M18 6 6 18"/></svg>
+        </button>
+    </div>
+</div>
+
 <script>
 /* --- State ---------------------------------------------------------------- */
 var SONGS = [];           // [{uuid,title,artist,suno_url, _meta?}]
 var CUR = -1;             // current song index in SONGS
 var META_CACHE = {};      // uuid -> rich metadata
 var audio = document.getElementById('audio');
+var LY_TEXT = '';         // raw lyrics for the current song (for theater mode)
 
 /* --- Helpers -------------------------------------------------------------- */
 function esc(s){return (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
@@ -504,6 +575,10 @@ async function playIndex(i){
 function setNowPlaying(m){
     document.getElementById('np-title').textContent = m.title || '—';
     document.getElementById('np-artist').textContent = m.artist || '';
+    // Mirror to theater header + art
+    document.getElementById('th-title').textContent = m.title || '—';
+    document.getElementById('th-artist').textContent = m.artist || '';
+    syncTheaterArt(m);
     var link = document.getElementById('np-suno-link');
     if(m.uuid){
         link.href = 'https://suno.com/song/' + m.uuid;
@@ -610,6 +685,8 @@ function rebuildSyncWeights(){
 
 function renderLyrics(text){
     var box = document.getElementById('lyrics-box');
+    LY_TEXT = text || '';
+    syncTheaterLyrics();
     if(!text){
         box.innerHTML = '<div style="color:#666">No lyrics available.</div>';
         LY_LINES = []; LY_SYNC = [];
@@ -1128,6 +1205,54 @@ audio.addEventListener('play', function(){
     }
 });
 
+/* --- Theater mode sync helpers (called from setNowPlaying / renderLyrics) - */
+function syncTheaterArt(m){
+    var art = document.getElementById('th-art');
+    var img = document.getElementById('th-img');
+    var vid = document.getElementById('th-video');
+    if(m.video_url){
+        if(vid.src !== m.video_url){ vid.src = m.video_url; vid.load(); }
+        art.classList.add('has-video');
+    } else {
+        art.classList.remove('has-video');
+        vid.removeAttribute('src'); vid.load();
+    }
+    img.src = m.image_url || (m.uuid ? 'https://cdn1.suno.ai/image_large_'+m.uuid+'.jpeg' : '');
+    img.onerror = function(){ if(m.uuid){ this.onerror=null; this.src='https://cdn1.suno.ai/image_'+m.uuid+'.jpeg'; }};
+}
+function syncTheaterLyrics(){
+    var box = document.getElementById('th-lyrics');
+    if(!LY_TEXT){ box.innerHTML = '<div style="color:#666">No lyrics available.</div>'; return; }
+    box.textContent = LY_TEXT;
+}
+function syncTheaterTime(){
+    var fill = document.getElementById('th-fill');
+    var now  = document.getElementById('th-now');
+    var dur  = document.getElementById('th-dur');
+    if(audio.duration){
+        fill.style.width = ((audio.currentTime/audio.duration)*100) + '%';
+        dur.textContent  = fmt(audio.duration);
+    } else {
+        fill.style.width = '0%';
+        dur.textContent  = '0:00';
+    }
+    now.textContent = fmt(audio.currentTime);
+}
+function syncTheaterPlay(){
+    document.getElementById('th-play').classList.toggle(
+        'playing', !audio.paused && !audio.ended);
+}
+function syncTheaterFromState(){
+    syncTheaterLyrics();
+    if(CUR >= 0 && SONGS[CUR]){
+        var s = SONGS[CUR];
+        var m = s._meta || {uuid:s.uuid, title:s.title, artist:s.artist};
+        document.getElementById('th-title').textContent = m.title || s.title || '—';
+        document.getElementById('th-artist').textContent = m.artist || s.artist || '';
+        syncTheaterArt(m);
+    }
+}
+
 /* --- Persist playback mode + restore last URL ----------------------------- */
 (function(){
     // After-song mode (Play next / Stop after current)
@@ -1147,6 +1272,40 @@ audio.addEventListener('play', function(){
     if(lastUrl){
         document.getElementById('playlist-url').value = lastUrl;
     }
+
+    // --- Theater mode --------------------------------------------------
+    var theater = document.getElementById('theater');
+    function theaterOpen(){
+        theater.hidden = false;
+        document.body.style.overflow = 'hidden';
+        // Make sure header / art / lyrics are in sync when (re-)opening.
+        syncTheaterFromState();
+        syncTheaterTime();
+        syncTheaterPlay();
+    }
+    function theaterClose(){
+        theater.hidden = true;
+        document.body.style.overflow = '';
+    }
+    document.getElementById('btn-theater').addEventListener('click', theaterOpen);
+    document.getElementById('th-close').addEventListener('click', theaterClose);
+    document.addEventListener('keydown', function(e){
+        if(e.key === 'Escape' && !theater.hidden){ theaterClose(); }
+    });
+    // Mini transport — delegate to the same handlers as the main controls.
+    document.getElementById('th-play').onclick = document.getElementById('btn-play').onclick;
+    document.getElementById('th-prev').onclick = document.getElementById('btn-prev').onclick;
+    document.getElementById('th-next').onclick = document.getElementById('btn-next').onclick;
+    document.getElementById('th-track').addEventListener('click', function(ev){
+        if(!audio.duration) return;
+        var rect = this.getBoundingClientRect();
+        audio.currentTime = ((ev.clientX - rect.left)/rect.width) * audio.duration;
+    });
+    // Keep theater UI synced with the audio element.
+    audio.addEventListener('timeupdate', syncTheaterTime);
+    audio.addEventListener('loadedmetadata', syncTheaterTime);
+    audio.addEventListener('play',  syncTheaterPlay);
+    audio.addEventListener('pause', syncTheaterPlay);
 
     // Compact-cover toggle: shrinks the cover so the lyrics use the freed space.
     var card = document.querySelector('.si-card');
