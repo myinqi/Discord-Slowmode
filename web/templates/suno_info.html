@@ -400,10 +400,31 @@ async function playIndex(i){
     if(i<0 || i>=SONGS.length) return;
     CUR = i;
     var s = SONGS[i];
-    // Highlight row
+    // Highlight row + scroll into view if it's outside the visible area.
+    var activeTr = null;
     document.querySelectorAll('#songs-tbody tr').forEach(function(tr,idx){
-        tr.classList.toggle('on', idx===i);
+        var on = idx===i;
+        tr.classList.toggle('on', on);
+        if(on) activeTr = tr;
     });
+    if(activeTr){
+        var wrap = document.querySelector('.si-table-wrap');
+        if(wrap){
+            // Account for the sticky <thead> when computing visibility.
+            var head = wrap.querySelector('thead');
+            var headH = head ? head.getBoundingClientRect().height : 0;
+            var rowTop = activeTr.offsetTop;
+            var rowBottom = rowTop + activeTr.offsetHeight;
+            var viewTop = wrap.scrollTop + headH;
+            var viewBottom = wrap.scrollTop + wrap.clientHeight;
+            if(rowTop < viewTop || rowBottom > viewBottom){
+                wrap.scrollTo({
+                    top: Math.max(0, rowTop - headH - 8),
+                    behavior: 'smooth'
+                });
+            }
+        }
+    }
     // Set audio source & play
     audio.src = 'https://cdn1.suno.ai/'+s.uuid+'.mp3';
     audio.play().catch(function(){});
