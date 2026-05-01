@@ -51,9 +51,16 @@ _TYPOGRAPHIC_MAP = str.maketrans({
     "\u2013": "-",  "\u2014": "-",   # en/em dash
     "\u2026": "...",                  # ellipsis
     "\u00A0": " ",                    # nbsp
+    "\u00AD": "",                      # soft-hyphen (invisible, renders as box)
+    "\u00B7": "",                      # middle dot (renders as tofu in drawtext)
     "\u200B": "",   "\u200C": "",     # zero-width spaces
     "\u200D": "",   "\uFEFF": "",
     "\u2028": "",   "\u2029": "",    # line / paragraph separators (render as box)
+    "\u2022": "-",                     # bullet → dash
+    "\u2027": "-",                     # hyphenation point → dash
+    "\u2043": "-",                     # hyphen bullet → dash
+    "\u00B6": "",                      # pilcrow sign (paragraph mark)
+    "\u00A7": "",                      # section sign
 })
 
 # Hard limit on how many chars we render per lyric line — anything longer is
