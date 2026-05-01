@@ -1723,17 +1723,22 @@ class Database:
             await self.db.execute("UPDATE radio_songs SET position = ? WHERE id = ?", (songs[idx]["position"], swap_id))
         await self.db.commit()
 
-    async def cleanup_expired_radio_songs(self) -> list[str]:
-        """Delete expired songs. Returns list of filenames for file cleanup."""
+    async def cleanup_expired_radio_songs(self) -> tuple[list[str], list[dict]]:
+        """Delete expired songs. Returns (filenames, song_details) for cleanup + notification."""
         import time
+        now = time.time()
         async with self.db.execute(
-            "SELECT filename FROM radio_songs WHERE expires_at < ?", (time.time(),)
+            "SELECT id, title, artist, filename, suno_url FROM radio_songs WHERE expires_at IS NOT NULL AND expires_at < ?",
+            (now,),
         ) as cursor:
-            filenames = [row["filename"] for row in await cursor.fetchall()]
-        if filenames:
-            await self.db.execute("DELETE FROM radio_songs WHERE expires_at < ?", (time.time(),))
+            rows = [dict(r) for r in await cursor.fetchall()]
+        filenames = [r["filename"] for r in rows]
+        if rows:
+            await self.db.execute(
+                "DELETE FROM radio_songs WHERE expires_at IS NOT NULL AND expires_at < ?", (now,)
+            )
             await self.db.commit()
-        return filenames
+        return filenames, rows
 
     async def count_radio_uploads_by_ip(self, ip: str, hours: int = 1) -> int:
         """Count uploads from an IP in the last N hours for rate limiting."""

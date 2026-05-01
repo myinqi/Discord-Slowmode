@@ -2609,6 +2609,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 shuffle = "1" if form.get("shuffle") else "0"
                 post_ch1 = form.get("post_channel_1_id", "").strip()
                 post_ch2 = form.get("post_channel_2_id", "").strip()
+                expiry_ch = form.get("expiry_channel_id", "").strip()
                 tw_client_id = form.get("twitch_client_id", "").strip()
                 tw_client_secret = form.get("twitch_client_secret", "").strip()
                 tw_refresh_token = form.get("twitch_refresh_token", "").strip()
@@ -2623,6 +2624,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.set_setting("radio_shuffle", shuffle)
                 await db.set_setting("radio_post_channel_1_id", post_ch1)
                 await db.set_setting("radio_post_channel_2_id", post_ch2)
+                await db.set_setting("radio_expiry_channel_id", expiry_ch)
                 if tw_client_id:
                     await db.set_setting("radio_twitch_client_id", tw_client_id)
                 if tw_client_secret and not tw_client_secret.startswith("****"):
@@ -2802,6 +2804,7 @@ def create_app(db: Database, bot=None) -> Quart:
 
         post_channel_1_id = await db.get_setting("radio_post_channel_1_id") or ""
         post_channel_2_id = await db.get_setting("radio_post_channel_2_id") or ""
+        expiry_channel_id = await db.get_setting("radio_expiry_channel_id") or ""
         # Twitch chat-bot (modern Helix flow)
         tw_client_id     = await db.get_setting("radio_twitch_client_id") or ""
         _tw_secret       = await db.get_setting("radio_twitch_client_secret") or ""
@@ -2830,6 +2833,7 @@ def create_app(db: Database, bot=None) -> Quart:
             text_channels=text_channels,
             post_channel_1_id=post_channel_1_id,
             post_channel_2_id=post_channel_2_id,
+            expiry_channel_id=expiry_channel_id,
             shuffle=shuffle,
             tw_client_id=tw_client_id,
             tw_secret_masked=tw_secret_masked,
@@ -2923,17 +2927,43 @@ def create_app(db: Database, bot=None) -> Quart:
     # --- Auto-cleanup task ---
 
     async def _radio_cleanup_loop():
-        """Periodically delete expired radio songs (every hour)."""
+        """Periodically delete expired radio songs (every hour).
+        Posts a notification to the configured Discord channel when songs expire."""
         while True:
             try:
                 await asyncio.sleep(3600)
-                filenames = await db.cleanup_expired_radio_songs()
+                filenames, expired_songs = await db.cleanup_expired_radio_songs()
                 for fn in filenames:
                     filepath = os.path.join(RADIO_UPLOAD_DIR, fn)
                     if os.path.exists(filepath):
                         os.remove(filepath)
-                if filenames:
-                    print(f"[radio] Cleaned up {len(filenames)} expired songs.")
+                if expired_songs:
+                    print(f"[radio] Cleaned up {len(expired_songs)} expired songs.")
+                    # Post notification to Discord
+                    channel_id_str = await db.get_setting("radio_expiry_channel_id")
+                    if channel_id_str and bot and bot.is_ready():
+                        guild = get_guild()
+                        if guild:
+                            ch = guild.get_channel(int(channel_id_str))
+                            if ch:
+                                try:
+                                    lines = []
+                                    for s in expired_songs:
+                                        title = s.get("title", "Unknown")
+                                        artist = s.get("artist", "Unknown")
+                                        suno_url = s.get("suno_url", "")
+                                        if suno_url:
+                                            lines.append(f"- **{title}** - {artist}\n  {suno_url}")
+                                        else:
+                                            lines.append(f"- **{title}** - {artist}")
+                                    msg = (
+                                        f"🗑️ **{len(expired_songs)} Song{'s' if len(expired_songs) != 1 else ''} "
+                                        f"expired and removed from the radio playlist:**\n\n"
+                                        + "\n".join(lines)
+                                    )
+                                    await ch.send(msg)
+                                except Exception as notify_err:
+                                    print(f"[radio] Expiry notification error: {notify_err}")
             except Exception as e:
                 print(f"[radio] Cleanup error: {e}")
 
