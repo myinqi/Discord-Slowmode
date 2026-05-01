@@ -700,26 +700,42 @@ class StreamManager:
                     # the old `.replace()` chain missed this and left literal
                     # `\u00e4` etc. in the lyrics).
                     raw = _decode_json_string(raw)
+                    raw = raw.replace("\r", "")
                     lines = []
                     for line in raw.split("\n"):
                         cleaned = _normalize_text(line)
-                        if cleaned:
-                            lines.append(cleaned)
+                        if not cleaned:
+                            continue
+                        # Drop stage directions like [intro], [verse], [chorus],
+                        # [instrumentals, fade in ...] — they add no lyrical value
+                        # and sometimes carry invisible chars that render as tofu.
+                        stripped = cleaned.strip()
+                        if stripped.startswith("[") and stripped.endswith("]"):
+                            continue
+                        lines.append(cleaned)
                     print(f"[radio] Scraped {len(lines)} lyrics lines from {suno_url}")
-                    # Diagnostic: report any line whose LAST char isn't basic
-                    # ASCII printable — that's our prime suspect for the stray
-                    # glyph-boxes visible at the end of rendered lyric lines.
-                    suspicious = [
-                        (i, ln) for i, ln in enumerate(lines)
-                        if ln and (ord(ln[-1]) > 0x7E or ord(ln[-1]) < 0x20)
-                    ]
-                    if suspicious:
-                        for i, ln in suspicious[:8]:
+                    # Diagnostic: dump the last few chars of every non-empty
+                    # line so we can identify *any* stray glyph-box source.
+                    suspicious = []
+                    for i, ln in enumerate(lines):
+                        if not ln:
+                            continue
+                        # Flag any line with a non-basic-ASCII last char…
+                        last = ord(ln[-1])
+                        if last > 0x7E or last < 0x20:
                             tail = ln[-5:] if len(ln) >= 5 else ln
                             cps = " ".join(f"U+{ord(c):04X}" for c in tail)
-                            print(f"[radio] LYRIC TAIL #{i} | …{tail!r} -> {cps}")
+                            suspicious.append(f"#{i} | …{tail!r} -> {cps}")
+                    if suspicious:
+                        for s in suspicious[:10]:
+                            print(f"[radio] LYRIC TAIL {s}")
                     else:
                         print(f"[radio] LYRIC TAIL: all {len(lines)} lines end with ASCII")
+                    # Extra: dump first 5 lines fully hex-encoded for debugging
+                    for i, ln in enumerate(lines[:5]):
+                        hexcodes = " ".join(f"{ord(c):04X}" for c in ln)
+                        print(f"[radio] LINE[{i}] hex: {hexcodes}")
+                        print(f"[radio] LINE[{i}] txt: {ln!r}")
                     return lines
         except Exception as e:
             print(f"[radio] Lyrics scrape error: {e}")
