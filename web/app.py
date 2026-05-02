@@ -3374,9 +3374,23 @@ def create_app(db: Database, bot=None) -> Quart:
         candidate_ids: list[str] = []
         seen_ids: set[str] = set()
 
+        # Non-song UUIDs to exclude (playlists, video uploads from CDN preload links)
+        exclude_ids: set[str] = set(raw_pl_ids)
+        for cdn_uuid in re.findall(r'video_upload_([a-f0-9-]{36})', html):
+            exclude_ids.add(cdn_uuid)
+
         if pinned_uuid:
             candidate_ids.append(pinned_uuid)
             seen_ids.add(pinned_uuid)
+
+        # Also extract any other UUIDs embedded in the profile HTML (may include
+        # song UUIDs in Next.js SSR JSON / script tags)
+        all_html_uuids = re.findall(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', html)
+        for uid in all_html_uuids:
+            if uid not in seen_ids and uid not in exclude_ids:
+                candidate_ids.append(uid)
+                seen_ids.add(uid)
+        print(f"[suno_promotion] {len(candidate_ids)} UUIDs from profile HTML (after filter)")
 
         async def _fetch_playlist_ids(pl_url: str) -> list[str]:
             try:
@@ -3395,8 +3409,8 @@ def create_app(db: Database, bot=None) -> Quart:
         )
         for result in pl_results:
             if isinstance(result, list):
-                # Playlists are ordered oldest→newest; take the last 8 (newest songs)
-                for sid in result[-8:]:
+                # Playlists are ordered oldest→newest; take the last 15 (newest songs)
+                for sid in result[-15:]:
                     if sid not in seen_ids:
                         seen_ids.add(sid)
                         candidate_ids.append(sid)
