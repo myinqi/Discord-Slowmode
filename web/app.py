@@ -3395,10 +3395,15 @@ def create_app(db: Database, bot=None) -> Quart:
         )
         for result in pl_results:
             if isinstance(result, list):
-                for sid in result:
+                # Playlists are ordered oldest→newest; take the last 8 (newest songs)
+                for sid in result[-8:]:
                     if sid not in seen_ids:
                         seen_ids.add(sid)
                         candidate_ids.append(sid)
+
+        # Cap total candidates to avoid too many requests
+        if len(candidate_ids) > 45:
+            candidate_ids = candidate_ids[:1] + candidate_ids[-44:]  # keep pinned + newest
 
         print(f"[suno_promotion] {len(candidate_ids)} candidate songs from {len(playlist_urls)} playlists for {profile_url}")
 
@@ -3413,22 +3418,27 @@ def create_app(db: Database, bot=None) -> Quart:
                 try:
                     async with aiohttp.ClientSession(headers=headers) as s:
                         async with s.get(
-                            f"https://suno.com/embed/{sid}",
+                            f"https://suno.com/song/{sid}",
                             timeout=aiohttp.ClientTimeout(total=10),
                         ) as r:
                             if r.status != 200:
                                 return sid, 0, None
                             body = await r.text()
-                    # Timestamp from CDN image URL
-                    tm = re.search(r'snapshot_0s_(\d{9,11})_image', body)
+                    # Timestamp from CDN image URL — pattern: _snapshot_0s_<unix_ts>_image
+                    # The full og:image URL from song pages contains this pattern
+                    tm = re.search(r'snapshot_0s_(\d{9,12})', body)
                     ts = int(tm.group(1)) if tm else 0
-                    # Title
-                    ttm = re.search(r'<title>(.+?)\s*\|\s*Suno</title>', body)
+                    # Title from <title> or og:title
                     title_val = None
+                    ttm = re.search(r'<title>(.+?)\s*\|\s*Suno</title>', body)
                     if ttm:
                         raw = ttm.group(1).strip()
                         parts = raw.rsplit(' by ', 1)
                         title_val = parts[0].strip() if len(parts) == 2 else raw
+                    if not title_val:
+                        ttm = re.search(r'<meta\s+property=["\']og:title["\']\s+content=["\']([^"\']+)["\']', body)
+                        if ttm:
+                            title_val = _html.unescape(ttm.group(1).strip())
                     return sid, ts, title_val
                 except Exception:
                     return sid, 0, None
