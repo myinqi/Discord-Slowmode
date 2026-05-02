@@ -3588,6 +3588,38 @@ def create_app(db: Database, bot=None) -> Quart:
                 else:
                     await flash("No entries to reset.", "error")
 
+            elif action == "set_latest":
+                entry_id = int(form.get("entry_id", "0"))
+                raw_url = (form.get("latest_song_url") or "").strip()
+                # Accept full suno.com/song/UUID or bare UUID
+                m = re.search(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', raw_url)
+                if not m:
+                    await flash("Invalid song URL.", "error")
+                else:
+                    song_uuid = m.group(0)
+                    canonical_song_url = f"https://suno.com/song/{song_uuid}"
+                    # Try to fetch title from song page
+                    try:
+                        meta = await _fetch_suno_meta(song_uuid)
+                        song_title = meta.get("title") if meta else None
+                    except Exception:
+                        song_title = None
+                    entry = await db.suno_userlist_get(owner_id, entry_id)
+                    if entry:
+                        await db.suno_userlist_update_meta(
+                            owner_user_id=owner_id,
+                            entry_id=entry_id,
+                            display_name=entry.get("display_name"),
+                            avatar_url=entry.get("avatar_url"),
+                            last_song_url=canonical_song_url,
+                            last_song_title=song_title,
+                            pinned_song_url=entry.get("pinned_song_url"),
+                            pinned_song_title=entry.get("pinned_song_title"),
+                            latest_song_url=canonical_song_url,
+                            latest_song_title=song_title,
+                        )
+                        await flash(f"Latest song set to: {song_title or song_uuid}", "success")
+
             elif action == "refresh":
                 entry_id = int(form.get("entry_id", "0"))
                 entry = await db.suno_userlist_get(owner_id, entry_id)
