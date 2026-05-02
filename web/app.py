@@ -3354,29 +3354,70 @@ def create_app(db: Database, bot=None) -> Quart:
                 out["avatar_url"] = m.group(0)
 
         # Find ALL songs on the profile with their metadata (id, title, created_at)
-        # Suno embeds a JSON blob with the songs list in the HTML
+        # Suno embeds JSON blobs in the HTML — try multiple strategies
         songs_data = []
-        # Try to find the songs array in embedded JSON
-        json_matches = re.findall(
-            r'"id"\s*:\s*"([a-f0-9-]{36})".*?"title"\s*:\s*"([^"]+)".*?"created_at"\s*:\s*"([^"]+)"',
-            html, re.DOTALL
-        )
-        if json_matches:
-            for sid, title, created_at in json_matches:
-                songs_data.append({
-                    "id": sid,
-                    "title": _html.unescape(title),
-                    "created_at": created_at,
-                })
-        else:
-            # Fallback: extract all song UUIDs from /song/<uuid> links
+
+        # Strategy 1: Look for clip objects with id/title/created_at in page data
+        # Pattern matches Suno's JSON structure: {"id":"uuid","title":"...","created_at":"..."}
+        json_patterns = [
+            # Match clip objects in JSON arrays
+            r'\{\s*"id"\s*:\s*"([a-f0-9-]{36})"\s*,\s*"title"\s*:\s*"([^"]+)"\s*,\s*"created_at"\s*:\s*"([^"]+)"',
+            # Match with more whitespace variation
+            r'"id"\s*:\s*"([a-f0-9-]{36})"[^}]*?"title"\s*:\s*"([^"]+)"[^}]*?"created_at"\s*:\s*"([^"]+)"',
+        ]
+
+        for pattern in json_patterns:
+            matches = re.findall(pattern, html)
+            if matches:
+                for sid, title, created_at in matches:
+                    if sid not in [s["id"] for s in songs_data]:
+                        songs_data.append({
+                            "id": sid,
+                            "title": _html.unescape(title),
+                            "created_at": created_at,
+                        })
+                if songs_data:
+                    break
+
+        # Strategy 2: Extract from Next.js data script
+        if not songs_data:
+            next_data_match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
+            if next_data_match:
+                try:
+                    next_data = _json.loads(next_data_match.group(1))
+                    # Navigate potential structures
+                    clips = None
+                    if isinstance(next_data, dict):
+                        # Try common paths
+                        props = next_data.get("props", {})
+                        page_props = props.get("pageProps", {}) if isinstance(props, dict) else {}
+                        clips = page_props.get("clips") or page_props.get("user", {}).get("clips")
+                    if isinstance(clips, list):
+                        for clip in clips:
+                            if isinstance(clip, dict) and clip.get("id"):
+                                sid = clip["id"]
+                                if sid not in [s["id"] for s in songs_data]:
+                                    songs_data.append({
+                                        "id": sid,
+                                        "title": _html.unescape(clip.get("title", "")),
+                                        "created_at": clip.get("created_at"),
+                                    })
+                except Exception as e:
+                    print(f"[suno_promotion] JSON parse error: {e}")
+
+        # Strategy 3: Fallback to URL extraction preserving order
+        if not songs_data:
             uuids = re.findall(r'/song/([a-f0-9-]{36})', html)
-            # Deduplicate while preserving order
             seen = set()
             for sid in uuids:
                 if sid not in seen:
                     seen.add(sid)
                     songs_data.append({"id": sid, "title": None, "created_at": None})
+
+        # Debug logging
+        print(f"[suno_promotion] Found {len(songs_data)} songs for {profile_url}")
+        for s in songs_data[:5]:
+            print(f"[suno_promotion]   - {s['id']}: {s.get('title', 'unknown')[:40]} (created: {s.get('created_at', 'N/A')})")
 
         if songs_data:
             # First song is typically the pinned/featured one
