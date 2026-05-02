@@ -3277,17 +3277,23 @@ def create_app(db: Database, bot=None) -> Quart:
         return canonical, handle.lower()
 
     async def _fetch_suno_profile(profile_url: str) -> dict:
-        """Fetch a Suno profile page and extract display name, avatar, and last song.
+        """Fetch a Suno profile page and extract display name, avatar, pinned and latest song.
 
-        Returns dict with keys: display_name, avatar_url, last_song_url, last_song_title.
+        Returns dict with keys:
+          - display_name, avatar_url
+          - pinned_song_url, pinned_song_title (first prominent song on profile)
+          - latest_song_url, latest_song_title (most recently created song by date)
         Best-effort; missing fields are None.
         """
         import html as _html
+        import json as _json
         out = {
             "display_name": None,
             "avatar_url": None,
-            "last_song_url": None,
-            "last_song_title": None,
+            "pinned_song_url": None,
+            "pinned_song_title": None,
+            "latest_song_url": None,
+            "latest_song_title": None,
         }
         headers = {
             "User-Agent": (
@@ -3347,26 +3353,64 @@ def create_app(db: Database, bot=None) -> Quart:
             if m:
                 out["avatar_url"] = m.group(0)
 
-        # Last song: first /song/<uuid> reference on the profile page.
-        # Match both absolute and relative URLs, and also raw clip-id patterns
-        # commonly embedded in Suno's SSR HTML JSON blobs.
-        song_uuid = None
-        m = re.search(r'/song/([a-f0-9-]{36})', html)
-        if m:
-            song_uuid = m.group(1)
-        if not song_uuid:
-            m = re.search(r'"clip_id"\s*:\s*"([a-f0-9-]{36})"', html)
-            if m:
-                song_uuid = m.group(1)
-        if song_uuid:
-            out["last_song_url"] = f"https://suno.com/song/{song_uuid}"
-            # Try to fetch the song's title quickly
-            try:
-                meta = await _fetch_suno_meta(song_uuid)
-                if meta and meta.get("title"):
-                    out["last_song_title"] = meta["title"]
-            except Exception:
-                pass
+        # Find ALL songs on the profile with their metadata (id, title, created_at)
+        # Suno embeds a JSON blob with the songs list in the HTML
+        songs_data = []
+        # Try to find the songs array in embedded JSON
+        json_matches = re.findall(
+            r'"id"\s*:\s*"([a-f0-9-]{36})".*?"title"\s*:\s*"([^"]+)".*?"created_at"\s*:\s*"([^"]+)"',
+            html, re.DOTALL
+        )
+        if json_matches:
+            for sid, title, created_at in json_matches:
+                songs_data.append({
+                    "id": sid,
+                    "title": _html.unescape(title),
+                    "created_at": created_at,
+                })
+        else:
+            # Fallback: extract all song UUIDs from /song/<uuid> links
+            uuids = re.findall(r'/song/([a-f0-9-]{36})', html)
+            # Deduplicate while preserving order
+            seen = set()
+            for sid in uuids:
+                if sid not in seen:
+                    seen.add(sid)
+                    songs_data.append({"id": sid, "title": None, "created_at": None})
+
+        if songs_data:
+            # First song is typically the pinned/featured one
+            pinned = songs_data[0]
+            out["pinned_song_url"] = f"https://suno.com/song/{pinned['id']}"
+            out["pinned_song_title"] = pinned["title"]
+
+            # Find latest by created_at date
+            latest = None
+            for s in songs_data:
+                if s.get("created_at"):
+                    if latest is None or s["created_at"] > latest["created_at"]:
+                        latest = s
+            # Fallback: if no dates, use first song as latest
+            if latest is None:
+                latest = songs_data[0]
+
+            out["latest_song_url"] = f"https://suno.com/song/{latest['id']}"
+            out["latest_song_title"] = latest["title"]
+
+            # Fetch titles if missing
+            async def _fetch_title(sid):
+                try:
+                    meta = await _fetch_suno_meta(sid)
+                    return meta.get("title") if meta else None
+                except Exception:
+                    return None
+
+            if not out["pinned_song_title"]:
+                out["pinned_song_title"] = await _fetch_title(pinned["id"])
+            if latest["id"] != pinned["id"] and not out["latest_song_title"]:
+                out["latest_song_title"] = await _fetch_title(latest["id"])
+            elif latest["id"] == pinned["id"] and out["pinned_song_title"]:
+                out["latest_song_title"] = out["pinned_song_title"]
 
         return out
 
@@ -3394,8 +3438,12 @@ def create_app(db: Database, bot=None) -> Quart:
                         handle=handle,
                         display_name=info.get("display_name"),
                         avatar_url=info.get("avatar_url"),
-                        last_song_url=info.get("last_song_url"),
-                        last_song_title=info.get("last_song_title"),
+                        last_song_url=info.get("latest_song_url") or info.get("last_song_url"),
+                        last_song_title=info.get("latest_song_title") or info.get("last_song_title"),
+                        pinned_song_url=info.get("pinned_song_url"),
+                        pinned_song_title=info.get("pinned_song_title"),
+                        latest_song_url=info.get("latest_song_url"),
+                        latest_song_title=info.get("latest_song_title"),
                         priority=priority,
                     )
                     if new_id is None:
@@ -3444,8 +3492,12 @@ def create_app(db: Database, bot=None) -> Quart:
                         handle=handle,
                         display_name=info.get("display_name"),
                         avatar_url=info.get("avatar_url"),
-                        last_song_url=info.get("last_song_url"),
-                        last_song_title=info.get("last_song_title"),
+                        last_song_url=info.get("latest_song_url") or info.get("last_song_url"),
+                        last_song_title=info.get("latest_song_title") or info.get("last_song_title"),
+                        pinned_song_url=info.get("pinned_song_url"),
+                        pinned_song_title=info.get("pinned_song_title"),
+                        latest_song_url=info.get("latest_song_url"),
+                        latest_song_title=info.get("latest_song_title"),
                     )
                     if ok:
                         await flash(f"Entry updated: @{handle}.", "success")
@@ -3469,8 +3521,12 @@ def create_app(db: Database, bot=None) -> Quart:
                         entry_id=entry_id,
                         display_name=info.get("display_name") or entry.get("display_name"),
                         avatar_url=info.get("avatar_url") or entry.get("avatar_url"),
-                        last_song_url=info.get("last_song_url") or entry.get("last_song_url"),
-                        last_song_title=info.get("last_song_title") or entry.get("last_song_title"),
+                        last_song_url=info.get("latest_song_url") or info.get("last_song_url") or entry.get("last_song_url"),
+                        last_song_title=info.get("latest_song_title") or info.get("last_song_title") or entry.get("last_song_title"),
+                        pinned_song_url=info.get("pinned_song_url") or entry.get("pinned_song_url"),
+                        pinned_song_title=info.get("pinned_song_title") or entry.get("pinned_song_title"),
+                        latest_song_url=info.get("latest_song_url") or entry.get("latest_song_url"),
+                        latest_song_title=info.get("latest_song_title") or entry.get("latest_song_title"),
                     )
 
             # Preserve current filter state

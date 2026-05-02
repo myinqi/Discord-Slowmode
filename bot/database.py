@@ -277,6 +277,10 @@ class Database:
                 paused INTEGER NOT NULL DEFAULT 0,
                 last_song_url TEXT,
                 last_song_title TEXT,
+                pinned_song_url TEXT,
+                pinned_song_title TEXT,
+                latest_song_url TEXT,
+                latest_song_title TEXT,
                 last_fetched_at REAL,
                 added_at REAL DEFAULT (unixepoch()),
                 UNIQUE(owner_user_id, handle)
@@ -284,6 +288,16 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_suno_userlist_owner ON suno_userlist(owner_user_id);
         """)
         await self.db.commit()
+
+        # Migrate suno_userlist: add pinned/latest song columns if missing
+        async with self.db.execute("PRAGMA table_info(suno_userlist)") as cur:
+            sul_cols = {row["name"] for row in await cur.fetchall()}
+        if "pinned_song_url" not in sul_cols:
+            await self.db.execute("ALTER TABLE suno_userlist ADD COLUMN pinned_song_url TEXT")
+            await self.db.execute("ALTER TABLE suno_userlist ADD COLUMN pinned_song_title TEXT")
+            await self.db.execute("ALTER TABLE suno_userlist ADD COLUMN latest_song_url TEXT")
+            await self.db.execute("ALTER TABLE suno_userlist ADD COLUMN latest_song_title TEXT")
+            await self.db.commit()
 
         # Create suno_playlists table for radio Suno playlist sources
         await self.db.executescript("""
@@ -2037,16 +2051,24 @@ class Database:
         avatar_url: str | None = None,
         last_song_url: str | None = None,
         last_song_title: str | None = None,
+        pinned_song_url: str | None = None,
+        pinned_song_title: str | None = None,
+        latest_song_url: str | None = None,
+        latest_song_title: str | None = None,
         priority: str = "medium",
     ) -> int | None:
         try:
             cur = await self.db.execute(
                 "INSERT INTO suno_userlist "
                 "(owner_user_id, profile_url, handle, display_name, avatar_url, "
-                " priority, last_song_url, last_song_title, last_fetched_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " priority, last_song_url, last_song_title, "
+                " pinned_song_url, pinned_song_title, latest_song_url, latest_song_title, "
+                " last_fetched_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (owner_user_id, profile_url, handle, display_name, avatar_url,
-                 priority, last_song_url, last_song_title, time.time()),
+                 priority, last_song_url, last_song_title,
+                 pinned_song_url, pinned_song_title, latest_song_url, latest_song_title,
+                 time.time()),
             )
             await self.db.commit()
             return cur.lastrowid
@@ -2130,14 +2152,22 @@ class Database:
         avatar_url: str | None,
         last_song_url: str | None,
         last_song_title: str | None,
+        pinned_song_url: str | None = None,
+        pinned_song_title: str | None = None,
+        latest_song_url: str | None = None,
+        latest_song_title: str | None = None,
     ) -> bool:
         try:
             cur = await self.db.execute(
                 "UPDATE suno_userlist SET profile_url = ?, handle = ?, display_name = ?, "
-                "  avatar_url = ?, last_song_url = ?, last_song_title = ?, last_fetched_at = ? "
+                "  avatar_url = ?, last_song_url = ?, last_song_title = ?, "
+                "  pinned_song_url = ?, pinned_song_title = ?, latest_song_url = ?, latest_song_title = ?, "
+                "  last_fetched_at = ? "
                 "WHERE owner_user_id = ? AND id = ?",
                 (profile_url, handle, display_name, avatar_url,
-                 last_song_url, last_song_title, time.time(),
+                 last_song_url, last_song_title,
+                 pinned_song_url, pinned_song_title, latest_song_url, latest_song_title,
+                 time.time(),
                  owner_user_id, entry_id),
             )
             await self.db.commit()
@@ -2153,12 +2183,20 @@ class Database:
         avatar_url: str | None,
         last_song_url: str | None,
         last_song_title: str | None,
+        pinned_song_url: str | None = None,
+        pinned_song_title: str | None = None,
+        latest_song_url: str | None = None,
+        latest_song_title: str | None = None,
     ) -> bool:
         cur = await self.db.execute(
             "UPDATE suno_userlist SET display_name = ?, avatar_url = ?, "
-            "  last_song_url = ?, last_song_title = ?, last_fetched_at = ? "
+            "  last_song_url = ?, last_song_title = ?, "
+            "  pinned_song_url = ?, pinned_song_title = ?, latest_song_url = ?, latest_song_title = ?, "
+            "  last_fetched_at = ? "
             "WHERE owner_user_id = ? AND id = ?",
-            (display_name, avatar_url, last_song_url, last_song_title, time.time(),
+            (display_name, avatar_url, last_song_url, last_song_title,
+             pinned_song_url, pinned_song_title, latest_song_url, latest_song_title,
+             time.time(),
              owner_user_id, entry_id),
         )
         await self.db.commit()
