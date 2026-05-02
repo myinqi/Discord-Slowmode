@@ -3362,9 +3362,14 @@ def create_app(db: Database, bot=None) -> Quart:
         # --- Collect ALL candidate song UUIDs from the user's playlists ---
         # Suno renders songs client-side; only the pinned song is in the SSR HTML.
         # Playlists ARE rendered server-side, so we scrape them for song UUIDs.
+        # Match both absolute (https://suno.com/playlist/UUID) and relative (/playlist/UUID)
+        raw_pl_ids = re.findall(r'(?:https://suno\.com)?/playlist/([a-f0-9-]{36})', html)
         playlist_urls = list(dict.fromkeys(
-            re.findall(r'https://suno\.com/playlist/[a-f0-9-]{36}', html)
-        ))[:8]  # up to 8 playlists
+            f"https://suno.com/playlist/{pid}" for pid in raw_pl_ids
+        ))[:8]
+        print(f"[suno_promotion] playlists found: {len(playlist_urls)} for {profile_url}")
+        # Debug: dump first 500 chars of html to see what we actually got
+        print(f"[suno_promotion] html snippet: {html[:500]!r}")
 
         candidate_ids: list[str] = []
         seen_ids: set[str] = set()
