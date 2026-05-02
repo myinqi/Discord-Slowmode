@@ -3417,7 +3417,8 @@ def create_app(db: Database, bot=None) -> Quart:
         # Debug logging
         print(f"[suno_promotion] Found {len(songs_data)} songs for {profile_url}")
         for s in songs_data[:5]:
-            print(f"[suno_promotion]   - {s['id']}: {s.get('title', 'unknown')[:40]} (created: {s.get('created_at', 'N/A')})")
+            title = (s.get('title') or 'unknown')[:40]
+            print(f"[suno_promotion]   - {s['id']}: {title} (created: {s.get('created_at', 'N/A')})")
 
         if songs_data:
             # First song is typically the pinned/featured one
