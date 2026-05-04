@@ -1194,8 +1194,12 @@ audio.addEventListener('ended', function(){
         buildShuffle();
         var next = nextIdx(); // skips any hidden songs in the new order
         if(next >= 0) playIndex(next);
+    } else {
+        // No playable songs left → stop and clear the current highlight
+        CUR = -1;
+        updateNavBtns();
+        renderTable();
     }
-    // Otherwise: no playable songs left → stop
 });
 
 function updatePlayBtn(){
