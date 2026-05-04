@@ -3654,6 +3654,31 @@ def create_app(db: Database, bot=None) -> Quart:
                         latest_song_title=info.get("latest_song_title") or entry.get("latest_song_title"),
                     )
 
+            elif action == "refresh_all":
+                all_entries = await db.suno_userlist_list(owner_id)
+                refreshed = 0
+                errors = 0
+                for entry in all_entries:
+                    try:
+                        info = await _fetch_suno_profile(entry["profile_url"])
+                        await db.suno_userlist_update_meta(
+                            owner_user_id=owner_id,
+                            entry_id=entry["id"],
+                            display_name=info.get("display_name") or entry.get("display_name"),
+                            avatar_url=info.get("avatar_url") or entry.get("avatar_url"),
+                            last_song_url=info.get("latest_song_url") or info.get("last_song_url") or entry.get("last_song_url"),
+                            last_song_title=info.get("latest_song_title") or info.get("last_song_title") or entry.get("last_song_title"),
+                            pinned_song_url=info.get("pinned_song_url") or entry.get("pinned_song_url"),
+                            pinned_song_title=info.get("pinned_song_title") or entry.get("pinned_song_title"),
+                            latest_song_url=info.get("latest_song_url") or entry.get("latest_song_url"),
+                            latest_song_title=info.get("latest_song_title") or entry.get("latest_song_title"),
+                        )
+                        refreshed += 1
+                    except Exception as exc:
+                        print(f"[suno_promotion] Refresh failed for {entry.get('handle')}: {exc}")
+                        errors += 1
+                await flash(f"Refreshed {refreshed} entries ({errors} errors).", "success")
+
             # Preserve current filter state
             qs = {k: v for k, v in (await request.form).items()
                   if k in ("filter_priority", "filter_status", "hide_paused")}
@@ -3662,17 +3687,19 @@ def create_app(db: Database, bot=None) -> Quart:
         # GET — apply filters
         all_entries = await db.suno_userlist_list(owner_id)
         filter_priority = request.args.get("filter_priority", "all")
-        filter_status = request.args.get("filter_status", "open")  # open | done | all
+        filter_status = request.args.get("filter_status", "open")  # open | done | paused | all
         hide_paused = request.args.get("hide_paused", "0") == "1"
 
         def keep(e):
             if filter_priority in ("high", "medium", "low") and e["priority"] != filter_priority:
                 return False
-            if filter_status == "open" and e["done"]:
+            if filter_status == "open" and (e["done"] or e["paused"]):
                 return False
             if filter_status == "done" and not e["done"]:
                 return False
-            if hide_paused and e["paused"]:
+            if filter_status == "paused" and not e["paused"]:
+                return False
+            if filter_status == "all" and hide_paused and e["paused"]:
                 return False
             return True
 

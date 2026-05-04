@@ -90,7 +90,7 @@
                 <div>
                     <p class="text-gray-400 text-xs mb-2">Status</p>
                     <div class="flex flex-wrap gap-2">
-                        {% for key, label in [('open','Open'),('done','Done'),('all','All')] %}
+                        {% for key, label in [('open','Open'),('done','Done'),('paused','Paused'),('all','All')] %}
                         <a href="{{ url_for('suno_promotion', filter_priority=filter_priority, filter_status=key, hide_paused='1' if hide_paused else '0') }}"
                             class="px-3 py-1 rounded-lg text-xs font-medium transition-colors {% if filter_status == key %}bg-discord-blurple/30 text-discord-blurple{% else %}bg-discord-darker text-gray-400 hover:text-white{% endif %}">
                             {{ label }}
@@ -98,11 +98,22 @@
                         {% endfor %}
                     </div>
                 </div>
-                <div>
+                <div class="flex flex-wrap gap-2">
                     <a href="{{ url_for('suno_promotion', filter_priority=filter_priority, filter_status=filter_status, hide_paused='0' if hide_paused else '1') }}"
                         class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors {% if hide_paused %}bg-purple-500/30 text-purple-300{% else %}bg-discord-darker text-gray-400 hover:text-white{% endif %}">
                         {% if hide_paused %}✓ Paused hidden{% else %}Hide paused{% endif %}
                     </a>
+
+                    <form method="POST" class="inline" onsubmit="return confirm('Refresh all entries? This may take a moment.');">
+                        <input type="hidden" name="action" value="refresh_all">
+                        <input type="hidden" name="filter_priority" value="{{ filter_priority }}">
+                        <input type="hidden" name="filter_status" value="{{ filter_status }}">
+                        <input type="hidden" name="hide_paused" value="{{ '1' if hide_paused else '0' }}">
+                        <button type="submit"
+                            class="inline-flex items-center gap-2 px-3 py-1.5 bg-gray-600/20 hover:bg-gray-600/40 text-gray-300 rounded-lg text-xs font-medium transition-colors">
+                            ↻ Refresh All
+                        </button>
+                    </form>
                 </div>
             </div>
         </div>
