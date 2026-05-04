@@ -1189,14 +1189,13 @@ audio.addEventListener('ended', function(){
     var nx = nextIdx();
     if(nx >= 0){
         playIndex(nx);
-    } else if(SHUFFLE && !HIDE_PLAYED){
-        // End of shuffle order and no hide-played filter → reshuffle and continue
+    } else if(SHUFFLE && hasPlayable()){
+        // End of shuffle order but playable songs remain → reshuffle and continue
         buildShuffle();
-        // Start from pos 1 to avoid immediately replaying the just-finished song
-        var next = SHUFFLE_ORDER[SONGS.length > 1 ? 1 : 0];
-        if(next !== undefined) playIndex(next);
+        var next = nextIdx(); // skips any hidden songs in the new order
+        if(next >= 0) playIndex(next);
     }
-    // Otherwise (no next, or HIDE_PLAYED is on): stop — nothing left to play
+    // Otherwise: no playable songs left → stop
 });
 
 function updatePlayBtn(){
@@ -1280,10 +1279,10 @@ document.getElementById('btn-next').onclick = function(){
     var i=nextIdx();
     if(i>=0){
         playIndex(i);
-    } else if(SHUFFLE && !HIDE_PLAYED){
+    } else if(SHUFFLE && hasPlayable()){
         buildShuffle();
-        var next=SHUFFLE_ORDER[SONGS.length>1?1:0];
-        if(next!==undefined) playIndex(next);
+        var next=nextIdx(); // skips hidden songs in the new order
+        if(next>=0) playIndex(next);
     }
 };
 document.getElementById('seek-track').addEventListener('click', function(ev){
