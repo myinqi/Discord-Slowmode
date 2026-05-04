@@ -156,6 +156,8 @@
                color:#d4d4dc;padding:6px 10px 10px 4px}
     .th-bar{flex-shrink:0;display:flex;align-items:center;gap:12px;
             padding:12px 24px 18px;border-top:1px solid #1a1a1e;background:#0a0a0c}
+    .th-bar .si-seek{flex:0 0 50%;max-width:50%}
+    .th-bar .si-spectrum{flex:0 0 calc(50% - 180px);min-width:0;height:40px;margin-left:12px}
 </style>
 
 <div class="flex items-center justify-between mb-6 flex-wrap gap-3">
@@ -357,6 +359,7 @@
             <div class="si-seek-track" id="th-track"><div class="si-seek-fill" id="th-fill"></div></div>
             <span class="si-seek-time" id="th-dur">0:00</span>
         </div>
+        <canvas id="th-spectrum" class="si-spectrum" width="420" height="40"></canvas>
         <button class="si-btn" id="th-close" title="Exit theater (Esc)">
             <svg viewBox="0 0 24 24"><path d="M6 6 18 18"/><path d="M18 6 6 18"/></svg>
         </button>
@@ -1154,15 +1157,34 @@ function initSpectrum(){
         return true;
     } catch(e){ console.warn('Spectrum init failed', e); return false; }
 }
-function drawSpectrum(){
-    var c = document.getElementById('si-spectrum');
-    if(!c || !_specAnalyser) return;
-    var ctx = c.getContext('2d');
-    // Match canvas pixel size to its CSS box for crispness.
+function drawOnCanvas(c, ctx, data, binEdges, bars){
+    if(!c) return;
     var rect = c.getBoundingClientRect();
     if(c.width !== Math.floor(rect.width) || c.height !== Math.floor(rect.height)){
         c.width = Math.floor(rect.width); c.height = Math.floor(rect.height);
     }
+    var w = c.width, h = c.height;
+    ctx.clearRect(0,0,w,h);
+    var gap = 1, barW = (w - gap*(bars-1))/bars;
+    for(var i=0;i<bars;i++){
+        var start = binEdges[i], end = Math.max(binEdges[i+1], start+1);
+        var peak = 0;
+        for(var j=start;j<end;j++){ if(data[j]>peak) peak = data[j]; }
+        var bh = (peak/255)*h*0.95;
+        var x = i*(barW+gap);
+        var y = h - bh;
+        var g = ctx.createLinearGradient(0,y,0,h);
+        g.addColorStop(0,'#a78bfa'); g.addColorStop(1,'#4c2a8a');
+        ctx.fillStyle = g;
+        ctx.fillRect(x,y,barW,bh);
+    }
+}
+function drawSpectrum(){
+    var c1 = document.getElementById('si-spectrum');
+    var c2 = document.getElementById('th-spectrum');
+    if(!c1 || !_specAnalyser) return;
+    var ctx1 = c1.getContext('2d');
+    var ctx2 = c2 ? c2.getContext('2d') : null;
     var data = new Uint8Array(_specAnalyser.frequencyBinCount);
     var bars = 44;
     var minBin = 1, maxBin = Math.min(data.length, Math.floor(data.length*0.7));
@@ -1207,21 +1229,8 @@ function drawSpectrum(){
                 }
             }
         }
-        var w = c.width, h = c.height;
-        ctx.clearRect(0,0,w,h);
-        var gap = 1, barW = (w - gap*(bars-1))/bars;
-        for(var i=0;i<bars;i++){
-            var start = binEdges[i], end = Math.max(binEdges[i+1], start+1);
-            var peak = 0;
-            for(var j=start;j<end;j++){ if(data[j]>peak) peak = data[j]; }
-            var bh = (peak/255)*h*0.95;
-            var x = i*(barW+gap);
-            var y = h - bh;
-            var g = ctx.createLinearGradient(0,y,0,h);
-            g.addColorStop(0,'#a78bfa'); g.addColorStop(1,'#4c2a8a');
-            ctx.fillStyle = g;
-            ctx.fillRect(x,y,barW,bh);
-        }
+        drawOnCanvas(c1, ctx1, data, binEdges, bars);
+        if(c2 && ctx2) drawOnCanvas(c2, ctx2, data, binEdges, bars);
     }
     loop();
 }
