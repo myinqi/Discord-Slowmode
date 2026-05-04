@@ -3976,4 +3976,32 @@ def create_app(db: Database, bot=None) -> Quart:
             "count": count,
         })
 
+    # --- User Preferences API -------------------------------------------------
+
+    @app.route("/api/user/preferences", methods=["GET"])
+    async def api_get_user_preferences():
+        """Get current user's UI preferences."""
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "not authenticated"}), 401
+        split = await db.get_user_preference(user_id, "suno_player_split", 0.55)
+        return jsonify({"suno_player_split": split})
+
+    @app.route("/api/user/preferences", methods=["POST"])
+    async def api_set_user_preferences():
+        """Save current user's UI preferences."""
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "not authenticated"}), 401
+        data = await request.get_json()
+        if data and "suno_player_split" in data:
+            try:
+                val = float(data["suno_player_split"])
+                val = max(0.2, min(0.8, val))  # clamp between 20% and 80%
+                await db.set_user_preference(user_id, "suno_player_split", val)
+                return jsonify({"suno_player_split": val})
+            except (ValueError, TypeError):
+                return jsonify({"error": "invalid value"}), 400
+        return jsonify({"error": "no data"}), 400
+
     return app

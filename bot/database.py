@@ -414,6 +414,16 @@ class Database:
             )
             await self.db.commit()
 
+        # Create user_preferences table for per-user UI settings
+        await self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                user_id INTEGER PRIMARY KEY,
+                suno_player_split REAL DEFAULT 0.55,
+                updated_at REAL DEFAULT (unixepoch())
+            );
+        """)
+        await self.db.commit()
+
     # --- Settings ---
 
     async def get_setting(self, key: str, default: str = "") -> str:
@@ -2263,3 +2273,27 @@ class Database:
         )
         await self.db.commit()
         return data
+
+    # --- User Preferences (per-web-user UI settings) ---
+
+    async def get_user_preference(self, user_id: int, key: str, default=None):
+        """Get a user preference value. Returns default if not set."""
+        if key == "suno_player_split":
+            async with self.db.execute(
+                "SELECT suno_player_split FROM user_preferences WHERE user_id = ?",
+                (user_id,),
+            ) as cur:
+                row = await cur.fetchone()
+                return row["suno_player_split"] if row else default
+        return default
+
+    async def set_user_preference(self, user_id: int, key: str, value):
+        """Set a user preference value."""
+        if key == "suno_player_split":
+            await self.db.execute(
+                "INSERT INTO user_preferences (user_id, suno_player_split, updated_at) "
+                "VALUES (?, ?, unixepoch()) "
+                "ON CONFLICT(user_id) DO UPDATE SET suno_player_split = excluded.suno_player_split, updated_at = excluded.updated_at",
+                (user_id, float(value)),
+            )
+            await self.db.commit()
