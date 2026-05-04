@@ -223,7 +223,7 @@ var player=document.getElementById('player');
 var REACT_EMOJIS=['💜','💯','👏🏻','❤️‍🔥','🫶🏻','🔥'];
 
 /* --- UUID extraction from Suno URLs --- */
-var SUNO_RE=/(?:https?:\/\/)?(?:app\.)?suno\.(?:com|ai)\/(?:song|track|s)\/([a-zA-Z0-9_-]{8,})/;
+var SUNO_RE=/(?:https?:\/\/)?(?:app\.)?suno\.(?:com|ai)\/(?:song|track|hook|s)\/([a-zA-Z0-9_-]{8,})/;
 function extractUUID(url){var m=url.match(SUNO_RE);return m?m[1]:null;}
 function isFullUUID(id){return /-/.test(id);}
 function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
@@ -247,6 +247,7 @@ async function fetchSongs(append){
         var existingIds=new Set(T.map(function(t){return t.url;}));
         songs.forEach(function(s){
             if(existingIds.has(s.url))return;
+            if(/\/hook\//.test(s.url||''))return; // skip direct hook URLs
             var uuid=extractUUID(s.url);
             if(uuid){
                 T.push({
@@ -332,7 +333,7 @@ async function resolveAllTitles(){
         var batch=pending.slice(b,b+3);
         await Promise.all(batch.map(async function(idx){
             var e=T[idx],uuid=e.id;
-            if(!e.isUUID){var resolved=await resolveShortId(e.id);if(resolved){uuid=resolved;e.id=resolved;e.isUUID=true;}else return;}
+            if(!e.isUUID){var resolved=await resolveShortId(e.id);if(resolved){uuid=resolved;e.id=resolved;e.isUUID=true;}else{e._unavailable=true;return;}}
             var meta=await fetchSunoMeta(uuid);
             if(meta){if(meta.title)e.title=meta.title;if(meta.image_url)e.imageUrl=meta.image_url;if(meta.artist)e.sunoArtist=meta.artist;if(meta.video_url)e.videoUrl=meta.video_url;if(meta.handle)e.sunoHandle=meta.handle;}
             done++;
@@ -564,6 +565,7 @@ function renderQ(){
     var html='',shown=0;
     for(var i=0;i<T.length;i++){
         var realIdx=getPlayIndex(i);var t=T[realIdx];
+        if(t._unavailable)continue;
         if(i!==cur&&isFiltered(realIdx))continue;
         if(hidePlayed&&i!==cur&&playedSet.has(realIdx))continue;
         shown++;
