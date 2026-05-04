@@ -307,6 +307,9 @@
                 <button class="si-btn" id="btn-shuffle" title="Shuffle">
                     <svg viewBox="0 0 24 24"><path class="fill" d="M16 3h5v5"/><path d="M4 20 21 3"/><path class="fill" d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
                 </button>
+                <button class="si-btn" id="btn-hide-played" title="Hide Played">
+                    <svg viewBox="0 0 24 24"><path d="M2.5 12s3.4-5.5 9.5-5.5S21.5 12 21.5 12 18.1 17.5 12 17.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.6"/></svg>
+                </button>
                 <button class="si-btn" id="btn-prev" disabled title="Previous">
                     <svg viewBox="0 0 24 24"><rect class="fill" x="5" y="6.5" width="1.8" height="11" rx="0.4"/><path class="fill" d="M19 6.5 12 12l7 5.5z"/><path class="fill" d="M12 6.5 7.2 12l4.8 5.5z"/></svg>
                 </button>
@@ -400,6 +403,9 @@
             <button class="si-btn" id="th-shuffle" title="Shuffle">
                 <svg viewBox="0 0 24 24"><path class="fill" d="M16 3h5v5"/><path d="M4 20 21 3"/><path class="fill" d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
             </button>
+            <button class="si-btn" id="th-hide-played" title="Hide Played">
+                <svg viewBox="0 0 24 24"><path d="M2.5 12s3.4-5.5 9.5-5.5S21.5 12 21.5 12 18.1 17.5 12 17.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.6"/></svg>
+            </button>
             <button class="si-btn" id="th-prev" title="Previous">
                 <svg viewBox="0 0 24 24"><rect class="fill" x="5" y="6.5" width="1.8" height="11" rx="0.4"/><path class="fill" d="M19 6.5 12 12l7 5.5z"/><path class="fill" d="M12 6.5 7.2 12 4.8 5.5z"/></svg>
             </button>
@@ -438,6 +444,8 @@ var CUR = -1;             // current song index in SONGS
 var META_CACHE = {};      // uuid -> rich metadata
 var SHUFFLE = false;      // shuffle mode on/off
 var SHUFFLE_ORDER = [];   // shuffled SONGS indices
+var PLAYED_SET = new Set(); // indices of played songs
+var HIDE_PLAYED = false;  // hide played songs from table
 var audio = document.getElementById('audio');
 var LY_TEXT = '';         // raw lyrics for the current song (for theater mode)
 
@@ -502,7 +510,7 @@ async function loadFromChannel(){
             ? '— ' + (document.querySelector('#dc-channel option:checked').textContent || '')
             : '— Discord';
         setStatus(SONGS.length + ' loaded');
-        CUR = -1;
+        CUR = -1; PLAYED_SET.clear();
         if(SHUFFLE) buildShuffle();
         renderTable();
         prefetchCovers();
@@ -541,7 +549,7 @@ async function loadPlaylist(){
         setStatus(SONGS.length+' loaded');
         // Persist successfully loaded URL for next session.
         try { localStorage.setItem('suno-info-last-url', url); } catch(e){}
-        CUR = -1;
+        CUR = -1; PLAYED_SET.clear();
         if(SHUFFLE) buildShuffle();
         renderTable();
         // Lazily fetch metadata for ALL rows in the background — fills in
@@ -593,14 +601,17 @@ function renderTable(){
         tbody.innerHTML = '<tr><td colspan="4" class="si-loading">No songs.</td></tr>';
         return;
     }
+    var visible = 0;
     var rows = SONGS.map(function(s, i){
         if(s._unavailable) return '';
+        if(HIDE_PLAYED && i !== CUR && PLAYED_SET.has(i)) return '';
         var cover = (s._meta && s._meta.image_url)
             || ('https://cdn1.suno.ai/image_'+s.uuid+'.jpeg');
         var artist = (s._meta && s._meta.artist) || s.artist || '';
         var title = (s._meta && s._meta.title) || s.title || s.uuid.slice(0,8);
         var dur = (s._meta && s._meta.duration) || s.duration;
         var durTxt = (typeof dur === 'number' && isFinite(dur)) ? fmt(dur) : '—';
+        visible++;
         return '<tr data-i="'+i+'"'+(i===CUR?' class="on"':'')+'>'+
             '<td><img class="si-cover" src="'+esc(cover)+'" loading="lazy" '+
                 'onerror="this.onerror=null;this.src=\'https://cdn1.suno.ai/image_'+esc(s.uuid)+'.jpeg\'"></td>'+
@@ -610,6 +621,9 @@ function renderTable(){
             '</tr>';
     }).join('');
     tbody.innerHTML = rows;
+    var total = SONGS.filter(function(s){return !s._unavailable;}).length;
+    document.getElementById('song-count').textContent =
+        (HIDE_PLAYED && visible < total) ? visible + ' / ' + total + ' songs' : total + ' songs';
     updateTotalRuntime();
     tbody.querySelectorAll('tr[data-i]').forEach(function(tr){
         tr.addEventListener('click', function(){
@@ -739,6 +753,8 @@ async function playIndex(i){
         await resolveSong(s);
         // if still unresolved: audio will fail silently — don't hard-block
     }
+    // Track played
+    PLAYED_SET.add(i);
     // Set audio source & play
     audio.src = 'https://cdn1.suno.ai/'+s.uuid+'.mp3';
     audio.play().catch(function(){});
@@ -1209,6 +1225,15 @@ function updateNavBtns(){
     document.getElementById('btn-prev').disabled = prevIdx()<0;
     document.getElementById('btn-next').disabled = nextIdx()<0;
 }
+function toggleHidePlayed(){
+    HIDE_PLAYED = !HIDE_PLAYED;
+    document.getElementById('btn-hide-played').className = 'si-btn' + (HIDE_PLAYED ? ' is-on' : '');
+    var thBtn = document.getElementById('th-hide-played');
+    if(thBtn) thBtn.className = 'si-btn' + (HIDE_PLAYED ? ' is-on' : '');
+    renderTable();
+}
+document.getElementById('btn-hide-played').onclick = toggleHidePlayed;
+
 function toggleShuffle(){
     SHUFFLE = !SHUFFLE;
     if(SHUFFLE) buildShuffle();
@@ -1717,6 +1742,7 @@ function syncTheaterFromState(){
     document.getElementById('th-prev').onclick = document.getElementById('btn-prev').onclick;
     document.getElementById('th-next').onclick = document.getElementById('btn-next').onclick;
     document.getElementById('th-shuffle').onclick = document.getElementById('btn-shuffle').onclick;
+    document.getElementById('th-hide-played').onclick = document.getElementById('btn-hide-played').onclick;
     document.getElementById('th-track').addEventListener('click', function(ev){
         if(!audio.duration) return;
         var rect = this.getBoundingClientRect();
