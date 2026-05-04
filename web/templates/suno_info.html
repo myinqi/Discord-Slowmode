@@ -550,6 +550,7 @@ async function loadPartyPlaylist(){
         document.getElementById('song-count').textContent = PARTY_SONGS.length+' songs';
         statusEl.textContent = PARTY_SONGS.length+' songs';
         renderPartyList();
+        prefetchCovers();
     } catch(e) {
         statusEl.textContent = 'Error: '+e.message;
     }
@@ -572,10 +573,25 @@ function renderPartyList(){
         if(PARTY_FILTER==='heard') return !!p.heard;
         return true;
     });
-    // Update counts in song-count header
+    // Update counts + total runtime in header
     var rem = PARTY_SONGS.filter(function(p){return !p.heard;}).length;
     document.getElementById('song-count').textContent =
         PARTY_SONGS.length+' songs · '+rem+' remaining · '+(PARTY_SONGS.length-rem)+' heard';
+    var totalSec = 0, knownDur = 0;
+    SONGS.forEach(function(s){
+        var d = s._meta && s._meta.duration;
+        if(typeof d === 'number' && isFinite(d)){ totalSec += d; knownDur++; }
+    });
+    var statusEl = document.getElementById('songs-status');
+    var base = PARTY_SONGS.length+' loaded';
+    if(totalSec > 0){
+        var hh=Math.floor(totalSec/3600), mm=Math.floor((totalSec%3600)/60), ss=Math.floor(totalSec%60);
+        var tStr = hh>0 ? (hh+':'+(mm<10?'0':'')+mm+':'+(ss<10?'0':'')+ss) : (mm+':'+(ss<10?'0':'')+ss);
+        var partial = knownDur < SONGS.length ? ' (±)' : '';
+        statusEl.textContent = base+' • '+tStr+partial;
+    } else {
+        statusEl.textContent = base;
+    }
     if(!filtered.length){
         list.innerHTML = '<div class="si-loading">No songs.</div>';
         return;
@@ -586,6 +602,9 @@ function renderPartyList(){
         var img = p.image_url
             ? '<img class="party-thumb" src="'+esc(p.image_url)+'" loading="lazy" onerror="this.outerHTML=\'<div class=\\\'party-thumb\\\'>♪</div>\'">'
             : '<div class="party-thumb">♪</div>';
+        var songMeta = songIdx>=0 ? SONGS[songIdx]._meta : null;
+        var dur = songMeta && songMeta.duration;
+        var durTxt = (typeof dur === 'number' && isFinite(dur)) ? fmt(dur) : '';
         var statusIcon = p.heard ? '✅' : '⏳';
         var listenBtn = songIdx>=0
             ? '<button class="party-btn listen" onclick="partyListen('+songIdx+')">Listen</button>'
@@ -598,6 +617,7 @@ function renderPartyList(){
             '<div class="party-info">'+
                 '<div class="party-title"><span>'+statusIcon+'</span>'+
                     '<a href="'+esc(p.url)+'" target="_blank">'+esc(p.song_title||'Unknown')+'</a>'+
+                    (durTxt ? '<span style="color:#555;font-size:11px;font-weight:400;margin-left:4px">'+durTxt+'</span>' : '')+
                 '</div>'+
                 '<div class="party-artist">by '+esc(p.user_name||'')+'</div>'+
             '</div>'+
@@ -887,10 +907,12 @@ async function prefetchCovers(){
         }));
         updateArtistOptions();
         renderTable();
+        if(PARTY_SONGS.length) renderPartyList();
     }
     // After all batches, re-render once more to hide any unavailable songs
     updateArtistOptions();
     renderTable();
+    if(PARTY_SONGS.length) renderPartyList();
 }
 
 /* --- Per-song metadata fetch & cache -------------------------------------- */
