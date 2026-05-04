@@ -3731,7 +3731,7 @@ def create_app(db: Database, bot=None) -> Quart:
     @app.route("/suno-info")
     @permission_required('suno_info')
     async def suno_info():
-        return await render_template("suno_info.html")
+        return await render_template("suno_info.html", channels=await _get_player_channels())
 
     @app.route("/api/suno-info/playlist")
     @permission_required('suno_info')
