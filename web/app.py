@@ -3981,6 +3981,7 @@ def create_app(db: Database, bot=None) -> Quart:
     @app.route("/api/user/preferences", methods=["GET"])
     async def api_get_user_preferences():
         """Get current user's UI preferences."""
+        from quart import jsonify
         user_id = session.get("user_id")
         if not user_id:
             return jsonify({"error": "not authenticated"}), 401
@@ -3990,6 +3991,7 @@ def create_app(db: Database, bot=None) -> Quart:
     @app.route("/api/user/preferences", methods=["POST"])
     async def api_set_user_preferences():
         """Save current user's UI preferences."""
+        from quart import jsonify
         user_id = session.get("user_id")
         if not user_id:
             return jsonify({"error": "not authenticated"}), 401

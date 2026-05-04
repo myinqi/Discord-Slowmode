@@ -29,16 +29,16 @@
     .si-card{background:#0f0f12;border:1px solid #2a2a2e;border-radius:10px;padding:14px;
              display:flex;flex-direction:column;height:100%;min-height:0;overflow:hidden}
     .np-art-wrap{position:relative;flex:1;min-height:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
-    .np-art-wrap img:not(.np-placeholder),.np-art-wrap video{display:none;width:100%;height:100%;object-fit:contain;border-radius:8px}
+    /* Cover and video hidden by default */
+    #np-img,#np-video{display:none;width:100%;height:100%;object-fit:contain;border-radius:8px}
     /* When song loaded: show cover image */
     .np-art-wrap.has-song #np-img{display:block}
     /* When video available: hide cover, show video */
     .np-art-wrap.has-video #np-img{display:none !important}
     .np-art-wrap.has-video #np-video{display:block !important}
-    /* Placeholder logo - only show when no song */
-    .np-placeholder{max-width:60%;max-height:60%;object-fit:contain;opacity:0.4;transition:opacity .2s}
-    .np-art-wrap:not(.has-song) .np-placeholder{display:block}
-    .np-art-wrap.has-song .np-placeholder{display:none}
+    /* Placeholder logo - shown when no song */
+    #np-placeholder{max-width:60%;max-height:60%;object-fit:contain;opacity:0.4;transition:opacity .2s;display:block}
+    .np-art-wrap.has-song #np-placeholder{display:none}
     /* Compact mode — cover shrinks to fixed size */
     .si-cover-pane.compact .np-art-wrap{flex:none;height:140px;width:140px}
     .si-cover-pane.compact .np-art-wrap img,.si-cover-pane.compact .np-art-wrap video{object-fit:cover}
@@ -213,9 +213,9 @@
         <!-- Cover Pane: Video + Anfasser (resizable) -->
         <div class="si-cover-pane" id="si-cover-pane">
             <div class="np-art-wrap" id="np-art-wrap">
-                <img id="np-img" src="" alt="cover" hidden>
-                <video id="np-video" autoplay loop muted playsinline hidden></video>
-                <img id="np-placeholder" src="{{ url_for('static', filename='TryA_logo.png') }}" alt="TryA" class="np-placeholder">
+                <img id="np-img" src="" alt="cover">
+                <video id="np-video" autoplay loop muted playsinline></video>
+                <img id="np-placeholder" src="{{ url_for('static', filename='TrYa_logo.png') }}" alt="TryA">
             </div>
             <!-- Resizable divider direkt unter dem Video -->
             <div class="si-divider" id="si-divider" title="Drag to resize"></div>
@@ -621,9 +621,7 @@ function setNowPlaying(m){
     var vid = document.getElementById('np-video');
     if(m.uuid){
         wrap.classList.add('has-song');
-        img.hidden = false;
         if(m.video_url){
-            vid.hidden = false;
             if(vid.src !== m.video_url){ vid.src = m.video_url; vid.load(); }
             wrap.classList.add('has-video');
             vid.onloadedmetadata = function(){
@@ -634,7 +632,6 @@ function setNowPlaying(m){
             vid.onerror = function(){ wrap.classList.remove('has-video'); wrap.style.aspectRatio=''; };
         } else {
             wrap.classList.remove('has-video'); wrap.style.aspectRatio='';
-            vid.hidden = true;
             vid.removeAttribute('src'); vid.load();
         }
         img.src = m.image_url || 'https://cdn1.suno.ai/image_large_'+m.uuid+'.jpeg';
@@ -643,8 +640,7 @@ function setNowPlaying(m){
         // No song selected - show placeholder
         wrap.classList.remove('has-song','has-video');
         wrap.style.aspectRatio='';
-        img.hidden = true; img.src='';
-        vid.hidden = true; vid.removeAttribute('src'); vid.load();
+        img.src=''; vid.removeAttribute('src'); vid.load();
     }
 
     // Stats line
