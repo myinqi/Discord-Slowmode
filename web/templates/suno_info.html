@@ -225,6 +225,13 @@
                         Load
                     </button>
                 </div>
+                <div class="flex items-center gap-2">
+                    <span class="text-gray-500 text-xs">Artist:</span>
+                    <select id="dc-artist"
+                        class="bg-discord-darker border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none min-w-[160px]">
+                        <option value="">All artists</option>
+                    </select>
+                </div>
             </div>
         </div>
         <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-4 si-songs-card">
@@ -407,7 +414,7 @@
                 <svg viewBox="0 0 24 24"><path d="M2.5 12s3.4-5.5 9.5-5.5S21.5 12 21.5 12 18.1 17.5 12 17.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.6"/></svg>
             </button>
             <button class="si-btn" id="th-prev" title="Previous">
-                <svg viewBox="0 0 24 24"><rect class="fill" x="5" y="6.5" width="1.8" height="11" rx="0.4"/><path class="fill" d="M19 6.5 12 12l7 5.5z"/><path class="fill" d="M12 6.5 7.2 12 4.8 5.5z"/></svg>
+                <svg viewBox="0 0 24 24"><rect class="fill" x="5" y="6.5" width="1.8" height="11" rx="0.4"/><path class="fill" d="M19 6.5 12 12l7 5.5z"/><path class="fill" d="M12 6.5 7.2 12l4.8 5.5z"/></svg>
             </button>
             <button class="si-btn lg" id="th-play" title="Play/Pause">
                 <svg class="play-icon" viewBox="0 0 24 24"><path class="fill" d="M8 6.5v11l8-5.5-8-5.5Z"/></svg>
@@ -446,6 +453,7 @@ var SHUFFLE = false;      // shuffle mode on/off
 var SHUFFLE_ORDER = [];   // shuffled SONGS indices
 var PLAYED_SET = new Set(); // indices of played songs
 var HIDE_PLAYED = false;  // hide played songs from table
+var ARTIST_FILTER = '';   // artist name filter (channel mode only)
 var audio = document.getElementById('audio');
 var LY_TEXT = '';         // raw lyrics for the current song (for theater mode)
 
@@ -466,11 +474,17 @@ function switchSource(src){
     document.getElementById('src-channel-btn').className =
         'px-3 py-1 rounded-md font-medium transition-colors text-xs ' +
         (isChannel ? 'bg-discord-blurple text-white' : 'bg-transparent text-gray-400 hover:text-white');
+    if(!isChannel){ ARTIST_FILTER = ''; var sel=document.getElementById('dc-artist'); if(sel){sel.value='';} }
     try { localStorage.setItem('suno-info-source', src); } catch(e){}
 }
 
 /* --- Discord Channel loading ---------------------------------------------- */
 document.getElementById('btn-load-channel').addEventListener('click', loadFromChannel);
+document.getElementById('dc-artist').addEventListener('change', function(){
+    ARTIST_FILTER = this.value;
+    updateNavBtns();
+    renderTable();
+});
 
 async function loadFromChannel(){
     var ch   = document.getElementById('dc-channel').value;
@@ -512,6 +526,7 @@ async function loadFromChannel(){
         setStatus(SONGS.length + ' loaded');
         CUR = -1; PLAYED_SET.clear();
         if(SHUFFLE) buildShuffle();
+        updateArtistOptions();
         renderTable();
         prefetchCovers();
     } catch(e) {
@@ -688,9 +703,11 @@ async function prefetchCovers(){
                 done++;
             });
         }));
+        updateArtistOptions();
         renderTable();
     }
     // After all batches, re-render once more to hide any unavailable songs
+    updateArtistOptions();
     renderTable();
 }
 
@@ -1224,8 +1241,33 @@ function buildShuffle(){
         if(pos>0){var t=SHUFFLE_ORDER[0];SHUFFLE_ORDER[0]=SHUFFLE_ORDER[pos];SHUFFLE_ORDER[pos]=t;}
     }
 }
+function getArtist(s){
+    return (s._meta && s._meta.artist) || s.artist || '';
+}
 function isHidden(i){
-    return !!(SONGS[i]._unavailable || (HIDE_PLAYED && PLAYED_SET.has(i)));
+    var s = SONGS[i];
+    if(s._unavailable) return true;
+    if(HIDE_PLAYED && PLAYED_SET.has(i)) return true;
+    if(ARTIST_FILTER && getArtist(s) !== ARTIST_FILTER) return true;
+    return false;
+}
+function updateArtistOptions(){
+    var sel = document.getElementById('dc-artist');
+    if(!sel) return;
+    var prev = sel.value;
+    var names = {};
+    SONGS.forEach(function(s){ var a = getArtist(s); if(a) names[a] = 1; });
+    var sorted = Object.keys(names).sort(function(a,b){
+        return a.toLowerCase().localeCompare(b.toLowerCase());
+    });
+    sel.innerHTML = '<option value="">All artists</option>';
+    sorted.forEach(function(n){
+        var o = document.createElement('option');
+        o.value = n; o.textContent = n;
+        if(n === prev) o.selected = true;
+        sel.appendChild(o);
+    });
+    if(!names[prev]) { ARTIST_FILTER = ''; sel.value = ''; }
 }
 function nextIdx(){
     if(!SHUFFLE){
