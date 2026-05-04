@@ -858,7 +858,7 @@ def create_app(db: Database, bot=None) -> Quart:
             async with aiohttp.ClientSession() as sess:
                 async with sess.get(f"https://suno.com/s/{short_id}", allow_redirects=True, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     url = str(resp.url)
-                    m = re.search(r'/song/([a-f0-9-]{36})', url)
+                    m = re.search(r'/(?:song|hook)/([a-f0-9-]{36})', url)
                     if m:
                         return jsonify({"uuid": m.group(1)})
                     html = await resp.text()
@@ -996,7 +996,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as resp:
                     url = str(resp.url)
-                    m = re.search(r'/song/([a-f0-9-]{36})', url)
+                    m = re.search(r'/(?:song|hook)/([a-f0-9-]{36})', url)
                     if m:
                         return jsonify({"uuid": m.group(1)})
                     html = await resp.text()

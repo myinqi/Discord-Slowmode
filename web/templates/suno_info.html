@@ -438,7 +438,7 @@ function fmt(s){if(!isFinite(s))return '0:00';var m=Math.floor(s/60),ss=Math.flo
 function setStatus(t){document.getElementById('songs-status').textContent=t||'';}
 
 /* --- Source toggle -------------------------------------------------------- */
-var SUNO_UUID_RE = /(?:https?:\/\/)?(?:app\.)?suno\.(?:com|ai)\/(?:song|track|s)\/([a-zA-Z0-9_-]{8,})/;
+var SUNO_UUID_RE = /(?:https?:\/\/)?(?:app\.)?suno\.(?:com|ai)\/(?:song|track|hook|s)\/([a-zA-Z0-9_-]{8,})/;
 function switchSource(src){
     var isChannel = src === 'channel';
     document.getElementById('src-playlist-row').style.display = isChannel ? 'none' : '';
@@ -699,7 +699,7 @@ async function playIndex(i){
     if(isShortId(s.uuid)){
         var resolved = await resolveShortId(s.uuid);
         if(resolved){ s.uuid = resolved; }
-        else { setNowPlaying({uuid:null,title:'⚠ Konnte Song nicht auflösen',artist:'',image_url:null,video_url:null,lyrics:null,prompt:'',tags:[],plays:null,likes:null,model:'',type:'',created_at:'',handle:null}); return; }
+        // else: fallback — keep short ID, audio will likely fail but don't hard-block
     }
     // Set audio source & play
     audio.src = 'https://cdn1.suno.ai/'+s.uuid+'.mp3';
