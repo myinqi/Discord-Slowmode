@@ -3313,6 +3313,72 @@ def create_app(db: Database, bot=None) -> Quart:
             traceback.print_exc()
             return f"<pre>Error: {e}\n\n{traceback.format_exc()}</pre>", 500
 
+    # --- Party Playlist JSON API (used by suno_info.html) ---
+
+    @app.route("/api/party-playlist/songs")
+    @permission_required('party_playlist')
+    async def api_party_playlist_songs():
+        from quart import jsonify
+        songs = await db.party_get_all_songs()
+        return jsonify([dict(s) for s in songs])
+
+    @app.route("/api/party-playlist/heard/<int:song_id>", methods=["POST"])
+    @permission_required('party_playlist')
+    async def api_party_mark_heard(song_id):
+        from quart import jsonify
+        await db.party_mark_heard(song_id)
+        return jsonify({"ok": True})
+
+    @app.route("/api/party-playlist/unheard/<int:song_id>", methods=["POST"])
+    @permission_required('party_playlist')
+    async def api_party_mark_unheard(song_id):
+        from quart import jsonify
+        await db.party_mark_unheard(song_id)
+        return jsonify({"ok": True})
+
+    @app.route("/api/party-playlist/song/<int:song_id>", methods=["DELETE"])
+    @permission_required('party_playlist')
+    async def api_party_delete_song(song_id):
+        from quart import jsonify
+        await db.db.execute("DELETE FROM party_playlist WHERE id = ?", (song_id,))
+        await db.db.commit()
+        return jsonify({"ok": True})
+
+    @app.route("/api/party-playlist/post/<int:song_id>", methods=["POST"])
+    @permission_required('party_playlist')
+    async def api_party_post_song(song_id):
+        from quart import jsonify
+        import discord as _discord
+        songs = await db.party_get_all_songs()
+        song = next((s for s in songs if s["id"] == song_id), None)
+        if not song:
+            return jsonify({"ok": False, "error": "Song not found"}), 404
+        channel_id_str = await db.get_setting("party_voice_channel")
+        if not channel_id_str:
+            return jsonify({"ok": False, "error": "No post channel configured"}), 400
+        guild = get_guild()
+        if not guild:
+            return jsonify({"ok": False, "error": "Bot not connected"}), 503
+        channel = guild.get_channel(int(channel_id_str))
+        if not channel:
+            return jsonify({"ok": False, "error": "Channel not found"}), 404
+        title = song.get("song_title") or "Unknown Title"
+        artist = song.get("user_name") or "Unknown Artist"
+        embed = _discord.Embed(
+            title=title, url=song["url"],
+            description=f"by **{artist}**",
+            color=_discord.Color.purple(),
+        )
+        if song.get("image_url"):
+            embed.set_thumbnail(url=song["image_url"])
+        bot_name = await db.get_setting("bot_name") or "Slowmode Bot"
+        embed.set_footer(text=f"{bot_name} — Listening Party")
+        try:
+            await channel.send(embed=embed)
+            return jsonify({"ok": True, "channel": channel.name})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+
     # --- Suno Promotion (per logged-in web user) ---
 
     SUNO_PROFILE_PATTERN = re.compile(r'^https?://(?:www\.)?suno\.com/@([A-Za-z0-9_.\-]+)/?$')
