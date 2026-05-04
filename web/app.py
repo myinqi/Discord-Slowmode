@@ -4000,8 +4000,11 @@ def create_app(db: Database, bot=None) -> Quart:
                 val = max(0.2, min(0.8, val))  # clamp between 20% and 80%
                 await db.set_user_preference(user_id, "suno_player_split", val)
                 return jsonify({"suno_player_split": val})
-            except (ValueError, TypeError):
-                return jsonify({"error": "invalid value"}), 400
+            except Exception as e:
+                import traceback
+                print(f"[api_set_user_preferences] Error: {e}")
+                print(traceback.format_exc())
+                return jsonify({"error": str(e)}), 500
         return jsonify({"error": "no data"}), 400
 
     return app
