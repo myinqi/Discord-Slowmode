@@ -3297,19 +3297,39 @@ def create_app(db: Database, bot=None) -> Quart:
         }
         headers = {
             "User-Agent": (
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-            )
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         }
-        try:
-            async with aiohttp.ClientSession(headers=headers) as sess:
-                async with sess.get(profile_url, timeout=aiohttp.ClientTimeout(total=12)) as resp:
-                    if resp.status != 200:
-                        return out
-                    html = await resp.text()
-        except Exception as e:
-            print(f"[suno_promotion] fetch failed for {profile_url}: {e}")
-            return out
+
+        # Fetch both pages concurrently
+        async with aiohttp.ClientSession(headers=headers) as session:
+            main_task = session.get(
+                profile_url, timeout=aiohttp.ClientTimeout(total=15)
+            )
+            songs_page_url = f"{profile_url}?page=songs"
+            songs_task = session.get(
+                songs_page_url, timeout=aiohttp.ClientTimeout(total=15)
+            )
+
+            main_resp, songs_resp = await asyncio.gather(main_task, songs_task)
+
+            main_html = await main_resp.text() if main_resp.status == 200 else ""
+            songs_html = await songs_resp.text() if songs_resp.status == 200 else ""
+
+            if not main_html:
+                print(f"[suno_promotion] HTTP {main_resp.status} for {profile_url}")
+                return out
+
+        # Use main HTML for most things, but songs_html for song list
+        html = main_html
+
+        # --- Pinned song: first /song/<uuid> in the main profile HTML ---
+        pinned_uuid = None
+        m = re.search(r'/song/([a-f0-9-]{36})', html)
+        if m:
+            pinned_uuid = m.group(1)
 
         # og:title — typically "Display Name | Suno" or just "Display Name"
         m = re.search(
@@ -3383,43 +3403,25 @@ def create_app(db: Database, bot=None) -> Quart:
             candidate_ids.append(pinned_uuid)
             seen_ids.add(pinned_uuid)
 
-        # Also extract any other UUIDs embedded in the profile HTML (may include
-        # song UUIDs in Next.js SSR JSON / script tags)
-        all_html_uuids = re.findall(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', html)
-        for uid in all_html_uuids:
-            if uid not in seen_ids and uid not in exclude_ids:
-                candidate_ids.append(uid)
-                seen_ids.add(uid)
-        print(f"[suno_promotion] {len(candidate_ids)} UUIDs from profile HTML (after filter)")
+        # --- Primary source: ?page=songs page contains ALL songs in Recent order ---
+        # The first song is the latest, the list is already sorted by Suno
+        songs_from_page = []
+        if songs_html:
+            songs_from_page = re.findall(r'/song/([a-f0-9-]{36})', songs_html)
+            print(f"[suno_promotion] Found {len(songs_from_page)} songs on ?page=songs")
+            if songs_from_page:
+                print(f"[suno_promotion] First (latest) song from ?page=songs: {songs_from_page[0]}")
+        else:
+            print(f"[suno_promotion] No songs_html available (HTTP error)")
 
-        async def _fetch_playlist_ids(pl_url: str) -> list[str]:
-            try:
-                async with aiohttp.ClientSession(headers=headers) as s:
-                    async with s.get(pl_url, timeout=aiohttp.ClientTimeout(total=10)) as r:
-                        if r.status != 200:
-                            return []
-                        pl_html = await r.text()
-                return re.findall(r'/song/([a-f0-9-]{36})', pl_html)
-            except Exception:
-                return []
+        # Add songs from ?page=songs to candidates (take first 20 for metadata fetch)
+        latest_from_songs_page = songs_from_page[0] if songs_from_page else None
+        for sid in songs_from_page[:20]:
+            if sid not in seen_ids:
+                candidate_ids.append(sid)
+                seen_ids.add(sid)
 
-        pl_results = await asyncio.gather(
-            *[_fetch_playlist_ids(u) for u in playlist_urls],
-            return_exceptions=True,
-        )
-        for result in pl_results:
-            if isinstance(result, list):
-                # Playlists are ordered oldest→newest; take the last 15 (newest songs)
-                for sid in result[-15:]:
-                    if sid not in seen_ids:
-                        seen_ids.add(sid)
-                        candidate_ids.append(sid)
-
-        # Cap total candidates to avoid too many requests
-        if len(candidate_ids) > 45:
-            candidate_ids = candidate_ids[:1] + candidate_ids[-44:]  # keep pinned + newest
-
-        print(f"[suno_promotion] {len(candidate_ids)} candidate songs from {len(playlist_urls)} playlists for {profile_url}")
+        print(f"[suno_promotion] {len(candidate_ids)} candidate songs total for {profile_url}")
 
         # --- Determine creation time via CDN timestamp in og:image ---
         # og:image URL contains a Unix timestamp: _snapshot_0s_<ts>_image.jpeg
@@ -3479,8 +3481,22 @@ def create_app(db: Database, bot=None) -> Quart:
             out["pinned_song_url"]   = f"https://suno.com/song/{pinned_uuid}"
             out["pinned_song_title"] = title_map.get(pinned_uuid)
 
-        # Latest = highest timestamp overall
-        if ts_results:
+        # Latest = the first song from ?page=songs (most recent) if available,
+        # otherwise fall back to highest timestamp from candidates
+        if latest_from_songs_page:
+            # Find title from our fetched results
+            latest_title = title_map.get(latest_from_songs_page)
+            # If we didn't fetch it, try to get metadata now
+            if not latest_title:
+                try:
+                    meta = await _fetch_suno_meta(latest_from_songs_page)
+                    latest_title = meta.get("title") if meta else None
+                except Exception:
+                    pass
+            out["latest_song_url"]   = f"https://suno.com/song/{latest_from_songs_page}"
+            out["latest_song_title"] = latest_title
+        elif ts_results:
+            # Fallback: use highest timestamp from candidates
             latest_id, latest_ts, latest_title = ts_results[0]
             out["latest_song_url"]   = f"https://suno.com/song/{latest_id}"
             out["latest_song_title"] = latest_title
