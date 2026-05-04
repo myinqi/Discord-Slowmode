@@ -51,6 +51,7 @@
     .si-btn{border:1px solid #2a2a2e;background:#1a1a1f;color:#eee;width:38px;height:38px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:all .15s}
     .si-btn:hover:not(:disabled){background:#2d2456;border-color:#5561e4}
     .si-btn:disabled{opacity:.4;cursor:not-allowed}
+    .si-btn.is-on{background:#2d2456;border-color:#5561e4;color:#a78bfa}
     .si-btn svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
     .si-btn .fill{fill:currentColor;stroke:none}
     .si-btn.lg{width:48px;height:48px;border-radius:10px}
@@ -185,7 +186,7 @@
                     onclick="switchSource('playlist')">Playlist URL</button>
                 <button id="src-channel-btn"
                     class="px-3 py-1 rounded-md bg-transparent text-gray-400 hover:text-white font-medium transition-colors"
-                    onclick="switchSource('channel')">Discord Kanal</button>
+                    onclick="switchSource('channel')">Discord Channel</button>
             </div>
             <!-- Playlist URL row -->
             <div id="src-playlist-row" class="flex flex-col sm:flex-row gap-2">
@@ -221,7 +222,7 @@
                         class="w-20 bg-discord-darker border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
                     <button id="btn-load-channel"
                         class="px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg text-sm font-medium transition-colors">
-                        Laden
+                        Load
                     </button>
                 </div>
             </div>
@@ -303,6 +304,9 @@
 
             <!-- Transport -->
             <div class="si-transport">
+                <button class="si-btn" id="btn-shuffle" title="Shuffle">
+                    <svg viewBox="0 0 24 24"><path class="fill" d="M16 3h5v5"/><path d="M4 20 21 3"/><path class="fill" d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
+                </button>
                 <button class="si-btn" id="btn-prev" disabled title="Previous">
                     <svg viewBox="0 0 24 24"><rect class="fill" x="5" y="6.5" width="1.8" height="11" rx="0.4"/><path class="fill" d="M19 6.5 12 12l7 5.5z"/><path class="fill" d="M12 6.5 7.2 12l4.8 5.5z"/></svg>
                 </button>
@@ -393,6 +397,9 @@
     </div>
     <div class="th-bar">
         <div class="th-bar-controls">
+            <button class="si-btn" id="th-shuffle" title="Shuffle">
+                <svg viewBox="0 0 24 24"><path class="fill" d="M16 3h5v5"/><path d="M4 20 21 3"/><path class="fill" d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
+            </button>
             <button class="si-btn" id="th-prev" title="Previous">
                 <svg viewBox="0 0 24 24"><rect class="fill" x="5" y="6.5" width="1.8" height="11" rx="0.4"/><path class="fill" d="M19 6.5 12 12l7 5.5z"/><path class="fill" d="M12 6.5 7.2 12 4.8 5.5z"/></svg>
             </button>
@@ -429,6 +436,8 @@
 var SONGS = [];           // [{uuid,title,artist,suno_url, _meta?}]
 var CUR = -1;             // current song index in SONGS
 var META_CACHE = {};      // uuid -> rich metadata
+var SHUFFLE = false;      // shuffle mode on/off
+var SHUFFLE_ORDER = [];   // shuffled SONGS indices
 var audio = document.getElementById('audio');
 var LY_TEXT = '';         // raw lyrics for the current song (for theater mode)
 
@@ -492,13 +501,15 @@ async function loadFromChannel(){
         document.getElementById('playlist-name').textContent = ch
             ? '— ' + (document.querySelector('#dc-channel option:checked').textContent || '')
             : '— Discord';
-        setStatus(SONGS.length + ' geladen');
+        setStatus(SONGS.length + ' loaded');
+        CUR = -1;
+        if(SHUFFLE) buildShuffle();
         renderTable();
         prefetchCovers();
     } catch(e) {
         renderError(e.message || String(e));
     } finally {
-        btn.disabled = false; btn.textContent = 'Laden';
+        btn.disabled = false; btn.textContent = 'Load';
     }
 }
 
@@ -530,6 +541,8 @@ async function loadPlaylist(){
         setStatus(SONGS.length+' loaded');
         // Persist successfully loaded URL for next session.
         try { localStorage.setItem('suno-info-last-url', url); } catch(e){}
+        CUR = -1;
+        if(SHUFFLE) buildShuffle();
         renderTable();
         // Lazily fetch metadata for ALL rows in the background — fills in
         // titles / artists / durations that may have been missing from
@@ -729,8 +742,7 @@ async function playIndex(i){
     // Set audio source & play
     audio.src = 'https://cdn1.suno.ai/'+s.uuid+'.mp3';
     audio.play().catch(function(){});
-    document.getElementById('btn-prev').disabled = i===0;
-    document.getElementById('btn-next').disabled = i===SONGS.length-1;
+    updateNavBtns();
     document.getElementById('btn-play').disabled = false;
     // Optimistic UI from playlist data
     setNowPlaying({
@@ -1158,7 +1170,7 @@ audio.addEventListener('ended', function(){
     // Honor the playback mode: stop after current = no auto-advance.
     var mode = document.querySelector('input[name="si-mode"]:checked');
     if(mode && mode.value==='stop') return;
-    playIndex(CUR+1);
+    var nx=nextIdx(); if(nx>=0) playIndex(nx);
 });
 
 function updatePlayBtn(){
@@ -1170,8 +1182,47 @@ document.getElementById('btn-play').onclick = function(){
     if(CUR<0){ if(SONGS.length) playIndex(0); return; }
     if(audio.paused) audio.play(); else audio.pause();
 };
-document.getElementById('btn-prev').onclick = function(){ playIndex(CUR-1); };
-document.getElementById('btn-next').onclick = function(){ playIndex(CUR+1); };
+/* --- Shuffle helpers ------------------------------------------------------ */
+function buildShuffle(){
+    SHUFFLE_ORDER = SONGS.map(function(_,i){return i;});
+    for(var i=SHUFFLE_ORDER.length-1;i>0;i--){
+        var j=Math.floor(Math.random()*(i+1));
+        var t=SHUFFLE_ORDER[i];SHUFFLE_ORDER[i]=SHUFFLE_ORDER[j];SHUFFLE_ORDER[j]=t;
+    }
+    // Put CUR first so current song is position 0 in shuffle
+    if(CUR>=0){
+        var pos=SHUFFLE_ORDER.indexOf(CUR);
+        if(pos>0){var t=SHUFFLE_ORDER[0];SHUFFLE_ORDER[0]=SHUFFLE_ORDER[pos];SHUFFLE_ORDER[pos]=t;}
+    }
+}
+function nextIdx(){
+    if(!SHUFFLE) return CUR+1 < SONGS.length ? CUR+1 : -1;
+    var pos=SHUFFLE_ORDER.indexOf(CUR);
+    return (pos>=0 && pos<SHUFFLE_ORDER.length-1) ? SHUFFLE_ORDER[pos+1] : -1;
+}
+function prevIdx(){
+    if(!SHUFFLE) return CUR>0 ? CUR-1 : -1;
+    var pos=SHUFFLE_ORDER.indexOf(CUR);
+    return (pos>0) ? SHUFFLE_ORDER[pos-1] : -1;
+}
+function updateNavBtns(){
+    document.getElementById('btn-prev').disabled = prevIdx()<0;
+    document.getElementById('btn-next').disabled = nextIdx()<0;
+}
+function toggleShuffle(){
+    SHUFFLE = !SHUFFLE;
+    if(SHUFFLE) buildShuffle();
+    var cls = SHUFFLE ? 'is-on' : '';
+    document.getElementById('btn-shuffle').className = 'si-btn' + (SHUFFLE ? ' is-on' : '');
+    var thBtn = document.getElementById('th-shuffle');
+    if(thBtn) thBtn.className = 'si-btn' + (SHUFFLE ? ' is-on' : '');
+    updateNavBtns();
+    try{localStorage.setItem('suno-info-shuffle', SHUFFLE?'1':'0');}catch(e){}
+}
+document.getElementById('btn-shuffle').onclick = toggleShuffle;
+
+document.getElementById('btn-prev').onclick = function(){ var i=prevIdx(); if(i>=0) playIndex(i); };
+document.getElementById('btn-next').onclick = function(){ var i=nextIdx(); if(i>=0) playIndex(i); };
 document.getElementById('seek-track').addEventListener('click', function(ev){
     if(!audio.duration) return;
     var rect = this.getBoundingClientRect();
@@ -1483,6 +1534,8 @@ function syncTheaterFromState(){
     // Restore source tab (playlist vs discord channel)
     var lastSrc = localStorage.getItem('suno-info-source');
     if(lastSrc === 'channel') switchSource('channel');
+    // Restore shuffle state
+    if(localStorage.getItem('suno-info-shuffle') === '1') toggleShuffle();
 
     // --- DC filter preferences (persisted per-user on server) ---
     (function(){
@@ -1663,6 +1716,7 @@ function syncTheaterFromState(){
     document.getElementById('th-play').onclick = document.getElementById('btn-play').onclick;
     document.getElementById('th-prev').onclick = document.getElementById('btn-prev').onclick;
     document.getElementById('th-next').onclick = document.getElementById('btn-next').onclick;
+    document.getElementById('th-shuffle').onclick = document.getElementById('btn-shuffle').onclick;
     document.getElementById('th-track').addEventListener('click', function(ev){
         if(!audio.duration) return;
         var rect = this.getBoundingClientRect();
