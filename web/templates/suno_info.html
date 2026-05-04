@@ -1246,9 +1246,13 @@ function prevIdx(){
     }
     return -1;
 }
+function hasPlayable(){
+    return SONGS.some(function(s,i){ return !isHidden(i); });
+}
 function updateNavBtns(){
     document.getElementById('btn-prev').disabled = prevIdx()<0;
-    document.getElementById('btn-next').disabled = nextIdx()<0;
+    // In shuffle mode: Next is always available if any playable song exists (will reshuffle at end)
+    document.getElementById('btn-next').disabled = SHUFFLE ? !hasPlayable() : nextIdx()<0;
 }
 function toggleHidePlayed(){
     HIDE_PLAYED = !HIDE_PLAYED;
@@ -1272,7 +1276,16 @@ function toggleShuffle(){
 document.getElementById('btn-shuffle').onclick = toggleShuffle;
 
 document.getElementById('btn-prev').onclick = function(){ var i=prevIdx(); if(i>=0) playIndex(i); };
-document.getElementById('btn-next').onclick = function(){ var i=nextIdx(); if(i>=0) playIndex(i); };
+document.getElementById('btn-next').onclick = function(){
+    var i=nextIdx();
+    if(i>=0){
+        playIndex(i);
+    } else if(SHUFFLE && !HIDE_PLAYED){
+        buildShuffle();
+        var next=SHUFFLE_ORDER[SONGS.length>1?1:0];
+        if(next!==undefined) playIndex(next);
+    }
+};
 document.getElementById('seek-track').addEventListener('click', function(ev){
     if(!audio.duration) return;
     var rect = this.getBoundingClientRect();
