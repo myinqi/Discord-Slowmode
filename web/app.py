@@ -870,23 +870,18 @@ def create_app(db: Database, bot=None) -> Quart:
                         return m.group(1)
                     html = await resp.text()
                     print(f"[suno-resolve] HTML length={len(html)}, snippet={html[:200]!r}", flush=True)
-                    # Hook redirect — find parent song UUID in hook page HTML
+                    # Hook redirect — Suno hooks are client-side rendered;
+                    # the parent song UUID is NOT in the initial HTML.
+                    # We can only succeed if Suno ever embeds a /song/ link.
                     hook_m = _re.search(r'/hook/([a-f0-9-]{36})', final_url)
                     if hook_m:
                         hook_uuid = hook_m.group(1)
-                        print(f"[suno-resolve] Hook detected: {hook_uuid}", flush=True)
+                        print(f"[suno-resolve] Hook detected: {hook_uuid} — searching for /song/ link", flush=True)
                         parent_m = _re.search(r'/song/([a-f0-9-]{36})', html)
                         if parent_m:
                             print(f"[suno-resolve] Parent song via /song/ in HTML: {parent_m.group(1)}", flush=True)
                             return parent_m.group(1)
-                        all_uuids = _re.findall(
-                            r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', html
-                        )
-                        print(f"[suno-resolve] UUIDs in hook HTML (excl. hook): {[u for u in all_uuids if u != hook_uuid][:5]}", flush=True)
-                        for uuid in all_uuids:
-                            if uuid != hook_uuid:
-                                return uuid
-                        print(f"[suno-resolve] Hook: no parent song UUID found in HTML", flush=True)
+                        print(f"[suno-resolve] Hook: no /song/ link found — cannot resolve", flush=True)
                         return None
                     # CDN audio URL in HTML
                     m = _re.search(r'cdn[12]\.suno\.ai/([a-f0-9-]{36})\.mp3', html)
@@ -918,19 +913,12 @@ def create_app(db: Database, bot=None) -> Quart:
                     if resp.status != 200:
                         return None
                     html = await resp.text()
-                    print(f"[suno-hook] HTML length={len(html)}, snippet={html[:200]!r}", flush=True)
+                    print(f"[suno-hook] HTML length={len(html)} — searching for /song/ link", flush=True)
                     m = _re.search(r'/song/([a-f0-9-]{36})', html)
                     if m:
                         print(f"[suno-hook] Found parent via /song/: {m.group(1)}", flush=True)
                         return m.group(1)
-                    all_uuids = _re.findall(
-                        r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', html
-                    )
-                    print(f"[suno-hook] UUIDs in HTML (excl. hook): {[u for u in all_uuids if u != hook_uuid][:5]}", flush=True)
-                    for uuid in all_uuids:
-                        if uuid != hook_uuid:
-                            return uuid
-                    print(f"[suno-hook] No parent UUID found for {hook_uuid}", flush=True)
+                    print(f"[suno-hook] No /song/ link in hook HTML — cannot resolve {hook_uuid}", flush=True)
         except Exception as e:
             print(f"[suno-hook] Exception for {hook_uuid}: {e}", flush=True)
         return None

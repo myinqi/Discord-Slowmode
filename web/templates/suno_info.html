@@ -475,16 +475,15 @@ async function loadFromChannel(){
         songs.forEach(function(s){
             if(cutoff && s.posted_at && s.posted_at < cutoff) return;
             var url = s.url || '';
+            if(/\/hook\//.test(url)) return; // skip direct hook URLs (unresolvable)
             var m = url.match(SUNO_UUID_RE);
             var uuid = m ? m[1] : null;
             if(!uuid) return;
-            var isHook = /\/hook\//.test(url);
             SONGS.push({
                 uuid:   uuid,
                 title:  s.song_title || uuid,
                 artist: s.user_name  || '',
                 suno_url: s.url,
-                _is_hook: isHook,
                 _dc_meta: { messageId: s.message_id, channelId: s.channel_id,
                              userId: s.user_id, reactions: s.reaction_count || 0 }
             });
@@ -582,6 +581,7 @@ function renderTable(){
         return;
     }
     var rows = SONGS.map(function(s, i){
+        if(s._unavailable) return '';
         var cover = (s._meta && s._meta.image_url)
             || ('https://cdn1.suno.ai/image_'+s.uuid+'.jpeg');
         var artist = (s._meta && s._meta.artist) || s.artist || '';
@@ -629,17 +629,15 @@ async function resolveHookUuid(hookUuid){
 }
 async function resolveSong(s){
     if(s._is_hook){
-        console.log('[suno] resolveHookUuid:', s.uuid);
         var resolved = await resolveHookUuid(s.uuid);
-        console.log('[suno] resolveHookUuid result:', resolved);
         if(resolved){ s.uuid = resolved; s._is_hook = false; }
+        else s._unavailable = true;
         return !!resolved;
     }
     if(isShortId(s.uuid)){
-        console.log('[suno] resolveShortId:', s.uuid);
         var resolved = await resolveShortId(s.uuid);
-        console.log('[suno] resolveShortId result:', resolved);
         if(resolved){ s.uuid = resolved; }
+        else s._unavailable = true;
         return !!resolved;
     }
     return true;
@@ -665,6 +663,8 @@ async function prefetchCovers(){
         }));
         renderTable();
     }
+    // After all batches, re-render once more to hide any unavailable songs
+    renderTable();
 }
 
 /* --- Per-song metadata fetch & cache -------------------------------------- */
