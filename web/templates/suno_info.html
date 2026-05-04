@@ -629,12 +629,16 @@ async function resolveHookUuid(hookUuid){
 }
 async function resolveSong(s){
     if(s._is_hook){
+        console.log('[suno] resolveHookUuid:', s.uuid);
         var resolved = await resolveHookUuid(s.uuid);
+        console.log('[suno] resolveHookUuid result:', resolved);
         if(resolved){ s.uuid = resolved; s._is_hook = false; }
         return !!resolved;
     }
     if(isShortId(s.uuid)){
+        console.log('[suno] resolveShortId:', s.uuid);
         var resolved = await resolveShortId(s.uuid);
+        console.log('[suno] resolveShortId result:', resolved);
         if(resolved){ s.uuid = resolved; }
         return !!resolved;
     }

@@ -853,6 +853,7 @@ def create_app(db: Database, bot=None) -> Quart:
     async def _resolve_suno_short_url(short_id: str):
         """Resolve a Suno short ID to a full song UUID. Returns uuid str or None."""
         import aiohttp as _aiohttp, re as _re
+        print(f"[suno-resolve] Resolving short_id={short_id}", flush=True)
         try:
             async with _aiohttp.ClientSession() as sess:
                 async with sess.get(
@@ -861,39 +862,50 @@ def create_app(db: Database, bot=None) -> Quart:
                     timeout=_aiohttp.ClientTimeout(total=10),
                 ) as resp:
                     final_url = str(resp.url)
+                    print(f"[suno-resolve] HTTP {resp.status} final_url={final_url}", flush=True)
                     # Direct song redirect
                     m = _re.search(r'/song/([a-f0-9-]{36})', final_url)
                     if m:
+                        print(f"[suno-resolve] Resolved via URL song match: {m.group(1)}", flush=True)
                         return m.group(1)
                     html = await resp.text()
+                    print(f"[suno-resolve] HTML length={len(html)}, snippet={html[:200]!r}", flush=True)
                     # Hook redirect — find parent song UUID in hook page HTML
                     hook_m = _re.search(r'/hook/([a-f0-9-]{36})', final_url)
                     if hook_m:
                         hook_uuid = hook_m.group(1)
+                        print(f"[suno-resolve] Hook detected: {hook_uuid}", flush=True)
                         parent_m = _re.search(r'/song/([a-f0-9-]{36})', html)
                         if parent_m:
+                            print(f"[suno-resolve] Parent song via /song/ in HTML: {parent_m.group(1)}", flush=True)
                             return parent_m.group(1)
                         all_uuids = _re.findall(
                             r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', html
                         )
+                        print(f"[suno-resolve] UUIDs in hook HTML (excl. hook): {[u for u in all_uuids if u != hook_uuid][:5]}", flush=True)
                         for uuid in all_uuids:
                             if uuid != hook_uuid:
                                 return uuid
+                        print(f"[suno-resolve] Hook: no parent song UUID found in HTML", flush=True)
                         return None
                     # CDN audio URL in HTML
                     m = _re.search(r'cdn[12]\.suno\.ai/([a-f0-9-]{36})\.mp3', html)
                     if m:
+                        print(f"[suno-resolve] Resolved via CDN URL in HTML: {m.group(1)}", flush=True)
                         return m.group(1)
                     m = _re.search(r'"audio_url"\s*:\s*"[^"]*?([a-f0-9-]{36})\.mp3"', html)
                     if m:
+                        print(f"[suno-resolve] Resolved via audio_url in HTML: {m.group(1)}", flush=True)
                         return m.group(1)
-        except Exception:
-            pass
+                    print(f"[suno-resolve] Could not resolve {short_id} — no patterns matched", flush=True)
+        except Exception as e:
+            print(f"[suno-resolve] Exception for {short_id}: {e}", flush=True)
         return None
 
     async def _resolve_suno_hook_uuid(hook_uuid: str):
         """Fetch a Suno hook page and return the parent song UUID, or None."""
         import aiohttp as _aiohttp, re as _re
+        print(f"[suno-hook] Resolving hook_uuid={hook_uuid}", flush=True)
         try:
             headers = {"User-Agent": "Mozilla/5.0 (compatible; Bot/1.0)"}
             async with _aiohttp.ClientSession(headers=headers) as sess:
@@ -902,20 +914,25 @@ def create_app(db: Database, bot=None) -> Quart:
                     allow_redirects=True,
                     timeout=_aiohttp.ClientTimeout(total=10),
                 ) as resp:
+                    print(f"[suno-hook] HTTP {resp.status} for {hook_uuid}", flush=True)
                     if resp.status != 200:
                         return None
                     html = await resp.text()
+                    print(f"[suno-hook] HTML length={len(html)}, snippet={html[:200]!r}", flush=True)
                     m = _re.search(r'/song/([a-f0-9-]{36})', html)
                     if m:
+                        print(f"[suno-hook] Found parent via /song/: {m.group(1)}", flush=True)
                         return m.group(1)
                     all_uuids = _re.findall(
                         r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', html
                     )
+                    print(f"[suno-hook] UUIDs in HTML (excl. hook): {[u for u in all_uuids if u != hook_uuid][:5]}", flush=True)
                     for uuid in all_uuids:
                         if uuid != hook_uuid:
                             return uuid
-        except Exception:
-            pass
+                    print(f"[suno-hook] No parent UUID found for {hook_uuid}", flush=True)
+        except Exception as e:
+            print(f"[suno-hook] Exception for {hook_uuid}: {e}", flush=True)
         return None
 
     @app.route("/public/api/suno-resolve/<short_id>")
