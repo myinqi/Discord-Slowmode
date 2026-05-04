@@ -422,7 +422,19 @@ class Database:
                 updated_at REAL DEFAULT (unixepoch())
             );
         """)
-        await self.db.commit()
+        # Add DC-player filter columns (migration for existing installs)
+        for col, definition in [
+            ("dc_channel", "TEXT DEFAULT ''"),
+            ("dc_limit",   "INTEGER DEFAULT 15"),
+            ("dc_days",    "INTEGER DEFAULT 1"),
+        ]:
+            try:
+                await self.db.execute(
+                    f"ALTER TABLE user_preferences ADD COLUMN {col} {definition}"
+                )
+                await self.db.commit()
+            except Exception:
+                pass  # column already exists
 
     # --- Settings ---
 
@@ -2276,24 +2288,39 @@ class Database:
 
     # --- User Preferences (per-web-user UI settings) ---
 
+    _PREF_COLUMNS = {"suno_player_split", "dc_channel", "dc_limit", "dc_days"}
+
     async def get_user_preference(self, user_id: int, key: str, default=None):
         """Get a user preference value. Returns default if not set."""
-        if key == "suno_player_split":
-            async with self.db.execute(
-                "SELECT suno_player_split FROM user_preferences WHERE user_id = ?",
-                (user_id,),
-            ) as cur:
-                row = await cur.fetchone()
-                return row["suno_player_split"] if row else default
-        return default
+        if key not in self._PREF_COLUMNS:
+            return default
+        async with self.db.execute(
+            f"SELECT {key} FROM user_preferences WHERE user_id = ?",
+            (user_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            return row[key] if row and row[key] is not None else default
+
+    async def get_all_user_preferences(self, user_id: int) -> dict:
+        """Return all preferences for a user as a dict."""
+        async with self.db.execute(
+            "SELECT suno_player_split, dc_channel, dc_limit, dc_days "
+            "FROM user_preferences WHERE user_id = ?",
+            (user_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        if row:
+            return dict(row)
+        return {"suno_player_split": 0.55, "dc_channel": "", "dc_limit": 15, "dc_days": 1}
 
     async def set_user_preference(self, user_id: int, key: str, value):
         """Set a user preference value."""
-        if key == "suno_player_split":
-            await self.db.execute(
-                "INSERT INTO user_preferences (user_id, suno_player_split, updated_at) "
-                "VALUES (?, ?, unixepoch()) "
-                "ON CONFLICT(user_id) DO UPDATE SET suno_player_split = excluded.suno_player_split, updated_at = excluded.updated_at",
-                (user_id, float(value)),
-            )
-            await self.db.commit()
+        if key not in self._PREF_COLUMNS:
+            return
+        await self.db.execute(
+            f"INSERT INTO user_preferences (user_id, {key}, updated_at) "
+            f"VALUES (?, ?, unixepoch()) "
+            f"ON CONFLICT(user_id) DO UPDATE SET {key} = excluded.{key}, updated_at = excluded.updated_at",
+            (user_id, value),
+        )
+        await self.db.commit()

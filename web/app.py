@@ -3985,8 +3985,8 @@ def create_app(db: Database, bot=None) -> Quart:
         user_id = session.get("user_id")
         if not user_id:
             return jsonify({"error": "not authenticated"}), 401
-        split = await db.get_user_preference(user_id, "suno_player_split", 0.55)
-        return jsonify({"suno_player_split": split})
+        prefs = await db.get_all_user_preferences(user_id)
+        return jsonify(prefs)
 
     @app.route("/api/user/preferences", methods=["POST"])
     async def api_set_user_preferences():
@@ -3996,17 +3996,32 @@ def create_app(db: Database, bot=None) -> Quart:
         if not user_id:
             return jsonify({"error": "not authenticated"}), 401
         data = await request.get_json()
-        if data and "suno_player_split" in data:
-            try:
-                val = float(data["suno_player_split"])
-                val = max(0.2, min(0.8, val))  # clamp between 20% and 80%
+        if not data:
+            return jsonify({"error": "no data"}), 400
+        try:
+            saved = {}
+            if "suno_player_split" in data:
+                val = max(0.2, min(0.8, float(data["suno_player_split"])))
                 await db.set_user_preference(user_id, "suno_player_split", val)
-                return jsonify({"suno_player_split": val})
-            except Exception as e:
-                import traceback
-                print(f"[api_set_user_preferences] Error: {e}")
-                print(traceback.format_exc())
-                return jsonify({"error": str(e)}), 500
-        return jsonify({"error": "no data"}), 400
+                saved["suno_player_split"] = val
+            if "dc_channel" in data:
+                await db.set_user_preference(user_id, "dc_channel", str(data["dc_channel"] or ""))
+                saved["dc_channel"] = data["dc_channel"]
+            if "dc_limit" in data:
+                val = max(1, min(500, int(data["dc_limit"])))
+                await db.set_user_preference(user_id, "dc_limit", val)
+                saved["dc_limit"] = val
+            if "dc_days" in data:
+                val = max(0, int(data["dc_days"]))
+                await db.set_user_preference(user_id, "dc_days", val)
+                saved["dc_days"] = val
+            if saved:
+                return jsonify(saved)
+            return jsonify({"error": "no known keys"}), 400
+        except Exception as e:
+            import traceback
+            print(f"[api_set_user_preferences] Error: {e}")
+            print(traceback.format_exc())
+            return jsonify({"error": str(e)}), 500
 
     return app
