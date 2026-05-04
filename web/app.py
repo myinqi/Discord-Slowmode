@@ -850,27 +850,89 @@ def create_app(db: Database, bot=None) -> Quart:
         songs = await db.get_player_songs(channel_id=ch_id, limit=limit, offset=offset)
         return jsonify(songs)
 
+    async def _resolve_suno_short_url(short_id: str):
+        """Resolve a Suno short ID to a full song UUID. Returns uuid str or None."""
+        import aiohttp as _aiohttp, re as _re
+        try:
+            async with _aiohttp.ClientSession() as sess:
+                async with sess.get(
+                    f"https://suno.com/s/{short_id}",
+                    allow_redirects=True,
+                    timeout=_aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    final_url = str(resp.url)
+                    # Direct song redirect
+                    m = _re.search(r'/song/([a-f0-9-]{36})', final_url)
+                    if m:
+                        return m.group(1)
+                    html = await resp.text()
+                    # Hook redirect — find parent song UUID in hook page HTML
+                    hook_m = _re.search(r'/hook/([a-f0-9-]{36})', final_url)
+                    if hook_m:
+                        hook_uuid = hook_m.group(1)
+                        parent_m = _re.search(r'/song/([a-f0-9-]{36})', html)
+                        if parent_m:
+                            return parent_m.group(1)
+                        all_uuids = _re.findall(
+                            r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', html
+                        )
+                        for uuid in all_uuids:
+                            if uuid != hook_uuid:
+                                return uuid
+                        return None
+                    # CDN audio URL in HTML
+                    m = _re.search(r'cdn[12]\.suno\.ai/([a-f0-9-]{36})\.mp3', html)
+                    if m:
+                        return m.group(1)
+                    m = _re.search(r'"audio_url"\s*:\s*"[^"]*?([a-f0-9-]{36})\.mp3"', html)
+                    if m:
+                        return m.group(1)
+        except Exception:
+            pass
+        return None
+
+    async def _resolve_suno_hook_uuid(hook_uuid: str):
+        """Fetch a Suno hook page and return the parent song UUID, or None."""
+        import aiohttp as _aiohttp, re as _re
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (compatible; Bot/1.0)"}
+            async with _aiohttp.ClientSession(headers=headers) as sess:
+                async with sess.get(
+                    f"https://suno.com/hook/{hook_uuid}",
+                    allow_redirects=True,
+                    timeout=_aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status != 200:
+                        return None
+                    html = await resp.text()
+                    m = _re.search(r'/song/([a-f0-9-]{36})', html)
+                    if m:
+                        return m.group(1)
+                    all_uuids = _re.findall(
+                        r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', html
+                    )
+                    for uuid in all_uuids:
+                        if uuid != hook_uuid:
+                            return uuid
+        except Exception:
+            pass
+        return None
+
     @app.route("/public/api/suno-resolve/<short_id>")
     async def api_suno_resolve_public(short_id):
-        import aiohttp, re
         from quart import jsonify
-        try:
-            async with aiohttp.ClientSession() as sess:
-                async with sess.get(f"https://suno.com/s/{short_id}", allow_redirects=True, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                    url = str(resp.url)
-                    m = re.search(r'/(?:song|hook)/([a-f0-9-]{36})', url)
-                    if m:
-                        return jsonify({"uuid": m.group(1)})
-                    html = await resp.text()
-                    m = re.search(r'cdn[12]\.suno\.ai/([a-f0-9-]{36})\.mp3', html)
-                    if m:
-                        return jsonify({"uuid": m.group(1)})
-                    m = re.search(r'"audio_url"\s*:\s*"[^"]*?([a-f0-9-]{36})\.mp3"', html)
-                    if m:
-                        return jsonify({"uuid": m.group(1)})
-            return jsonify({"uuid": None}), 404
-        except Exception as e:
-            return jsonify({"uuid": None, "error": str(e)}), 500
+        uuid = await _resolve_suno_short_url(short_id)
+        if uuid:
+            return jsonify({"uuid": uuid})
+        return jsonify({"uuid": None}), 404
+
+    @app.route("/public/api/suno-hook/<hook_uuid>")
+    async def api_suno_hook_resolve_public(hook_uuid):
+        from quart import jsonify
+        uuid = await _resolve_suno_hook_uuid(hook_uuid)
+        if uuid:
+            return jsonify({"uuid": uuid})
+        return jsonify({"uuid": None}), 404
 
     @app.route("/public/api/suno-lyrics/<uuid>")
     async def api_suno_lyrics_public(uuid):
@@ -986,30 +1048,21 @@ def create_app(db: Database, bot=None) -> Quart:
     @login_required
     async def api_suno_resolve(short_id):
         """Server-side proxy to resolve Suno short URLs to full UUIDs."""
-        import aiohttp, re
         from quart import jsonify
-        try:
-            async with aiohttp.ClientSession() as sess:
-                async with sess.get(
-                    f"https://suno.com/s/{short_id}",
-                    allow_redirects=True,
-                    timeout=aiohttp.ClientTimeout(total=10),
-                ) as resp:
-                    url = str(resp.url)
-                    m = re.search(r'/(?:song|hook)/([a-f0-9-]{36})', url)
-                    if m:
-                        return jsonify({"uuid": m.group(1)})
-                    html = await resp.text()
-                    m = re.search(r'cdn[12]\.suno\.ai/([a-f0-9-]{36})\.mp3', html)
-                    if m:
-                        return jsonify({"uuid": m.group(1)})
-                    # Try meta tag or JSON data
-                    m = re.search(r'"audio_url"\s*:\s*"[^"]*?([a-f0-9-]{36})\.mp3"', html)
-                    if m:
-                        return jsonify({"uuid": m.group(1)})
-            return jsonify({"uuid": None, "error": "Could not resolve"}), 404
-        except Exception as e:
-            return jsonify({"uuid": None, "error": str(e)}), 500
+        uuid = await _resolve_suno_short_url(short_id)
+        if uuid:
+            return jsonify({"uuid": uuid})
+        return jsonify({"uuid": None, "error": "Could not resolve"}), 404
+
+    @app.route("/api/suno-hook/<hook_uuid>")
+    @login_required
+    async def api_suno_hook_resolve(hook_uuid):
+        """Resolve a Suno hook UUID to its parent song UUID."""
+        from quart import jsonify
+        uuid = await _resolve_suno_hook_uuid(hook_uuid)
+        if uuid:
+            return jsonify({"uuid": uuid})
+        return jsonify({"uuid": None, "error": "Parent song not found"}), 404
 
     _RSC_REF_RE = re.compile(r'^\$[0-9a-f]+$')
 

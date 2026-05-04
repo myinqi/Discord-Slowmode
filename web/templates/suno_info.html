@@ -474,14 +474,17 @@ async function loadFromChannel(){
         SONGS = [];
         songs.forEach(function(s){
             if(cutoff && s.posted_at && s.posted_at < cutoff) return;
-            var m = (s.url || '').match(SUNO_UUID_RE);
+            var url = s.url || '';
+            var m = url.match(SUNO_UUID_RE);
             var uuid = m ? m[1] : null;
             if(!uuid) return;
+            var isHook = /\/hook\//.test(url);
             SONGS.push({
                 uuid:   uuid,
                 title:  s.song_title || uuid,
                 artist: s.user_name  || '',
                 suno_url: s.url,
+                _is_hook: isHook,
                 _dc_meta: { messageId: s.message_id, channelId: s.channel_id,
                              userId: s.user_id, reactions: s.reaction_count || 0 }
             });
@@ -608,7 +611,7 @@ function renderTable(){
     });
 }
 
-/* Short ID helpers (songs from suno.com/s/<shortid>) */
+/* Short ID / Hook helpers */
 function isShortId(uuid){ return uuid && !uuid.includes('-'); }
 async function resolveShortId(shortId){
     try{
@@ -616,6 +619,26 @@ async function resolveShortId(shortId){
         if(r.ok){ var d = await r.json(); return d.uuid||null; }
     }catch(e){}
     return null;
+}
+async function resolveHookUuid(hookUuid){
+    try{
+        var r = await fetch('/api/suno-hook/'+encodeURIComponent(hookUuid));
+        if(r.ok){ var d = await r.json(); return d.uuid||null; }
+    }catch(e){}
+    return null;
+}
+async function resolveSong(s){
+    if(s._is_hook){
+        var resolved = await resolveHookUuid(s.uuid);
+        if(resolved){ s.uuid = resolved; s._is_hook = false; }
+        return !!resolved;
+    }
+    if(isShortId(s.uuid)){
+        var resolved = await resolveShortId(s.uuid);
+        if(resolved){ s.uuid = resolved; }
+        return !!resolved;
+    }
+    return true;
 }
 
 /* Background prefetch for ALL rows. Fills in missing titles/artists/durations
@@ -626,10 +649,9 @@ async function prefetchCovers(){
     for(var b=0;b<pending.length;b+=4){
         var batch = pending.slice(b,b+4);
         await Promise.all(batch.map(async function(s){
-            if(isShortId(s.uuid)){
-                var resolved = await resolveShortId(s.uuid);
-                if(resolved) s.uuid = resolved;
-                else return;
+            if(s._is_hook || isShortId(s.uuid)){
+                var ok = await resolveSong(s);
+                if(!ok) return;
             }
             return loadMeta(s.uuid).then(function(m){
                 if(!m) return;
@@ -695,11 +717,10 @@ async function playIndex(i){
     loadProfileForUuid(s.uuid);
     // If we don't yet have a profile, start recording one for this song.
     if(!LY_PROFILE) startRmsRecording(s.uuid);
-    // Resolve short IDs before playing
-    if(isShortId(s.uuid)){
-        var resolved = await resolveShortId(s.uuid);
-        if(resolved){ s.uuid = resolved; }
-        // else: fallback — keep short ID, audio will likely fail but don't hard-block
+    // Resolve short IDs / hook UUIDs before playing
+    if(s._is_hook || isShortId(s.uuid)){
+        await resolveSong(s);
+        // if still unresolved: audio will fail silently — don't hard-block
     }
     // Set audio source & play
     audio.src = 'https://cdn1.suno.ai/'+s.uuid+'.mp3';
