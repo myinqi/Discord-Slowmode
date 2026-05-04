@@ -1186,7 +1186,17 @@ audio.addEventListener('ended', function(){
     // Honor the playback mode: stop after current = no auto-advance.
     var mode = document.querySelector('input[name="si-mode"]:checked');
     if(mode && mode.value==='stop') return;
-    var nx=nextIdx(); if(nx>=0) playIndex(nx);
+    var nx = nextIdx();
+    if(nx >= 0){
+        playIndex(nx);
+    } else if(SHUFFLE && !HIDE_PLAYED){
+        // End of shuffle order and no hide-played filter → reshuffle and continue
+        buildShuffle();
+        // Start from pos 1 to avoid immediately replaying the just-finished song
+        var next = SHUFFLE_ORDER[SONGS.length > 1 ? 1 : 0];
+        if(next !== undefined) playIndex(next);
+    }
+    // Otherwise (no next, or HIDE_PLAYED is on): stop — nothing left to play
 });
 
 function updatePlayBtn(){
@@ -1211,15 +1221,30 @@ function buildShuffle(){
         if(pos>0){var t=SHUFFLE_ORDER[0];SHUFFLE_ORDER[0]=SHUFFLE_ORDER[pos];SHUFFLE_ORDER[pos]=t;}
     }
 }
+function isHidden(i){
+    return !!(SONGS[i]._unavailable || (HIDE_PLAYED && PLAYED_SET.has(i)));
+}
 function nextIdx(){
-    if(!SHUFFLE) return CUR+1 < SONGS.length ? CUR+1 : -1;
+    if(!SHUFFLE){
+        for(var i=CUR+1;i<SONGS.length;i++){ if(!isHidden(i)) return i; }
+        return -1;
+    }
     var pos=SHUFFLE_ORDER.indexOf(CUR);
-    return (pos>=0 && pos<SHUFFLE_ORDER.length-1) ? SHUFFLE_ORDER[pos+1] : -1;
+    for(var p=pos+1;p<SHUFFLE_ORDER.length;p++){
+        if(!isHidden(SHUFFLE_ORDER[p])) return SHUFFLE_ORDER[p];
+    }
+    return -1;
 }
 function prevIdx(){
-    if(!SHUFFLE) return CUR>0 ? CUR-1 : -1;
+    if(!SHUFFLE){
+        for(var i=CUR-1;i>=0;i--){ if(!isHidden(i)) return i; }
+        return -1;
+    }
     var pos=SHUFFLE_ORDER.indexOf(CUR);
-    return (pos>0) ? SHUFFLE_ORDER[pos-1] : -1;
+    for(var p=pos-1;p>=0;p--){
+        if(!isHidden(SHUFFLE_ORDER[p])) return SHUFFLE_ORDER[p];
+    }
+    return -1;
 }
 function updateNavBtns(){
     document.getElementById('btn-prev').disabled = prevIdx()<0;
