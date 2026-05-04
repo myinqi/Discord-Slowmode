@@ -244,6 +244,12 @@
                     </svg>
                     <span>Suno</span>
                 </a>
+                <button id="btn-copy-link" class="si-compact-btn shrink-0 mt-1" title="Copy Suno link" disabled>
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                    </svg>
+                    <span>Copy</span>
+                </button>
                 <button id="btn-theater" class="si-compact-btn shrink-0 mt-1" title="Theater mode">
                     <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <rect x="3" y="5" width="18" height="12" rx="2"/>
@@ -358,6 +364,11 @@
             </button>
             <button class="si-btn" id="th-next" title="Next">
                 <svg viewBox="0 0 24 24"><path class="fill" d="M5 6.5 12 12 5 17.5z"/><path class="fill" d="M12 6.5 16.8 12 12 17.5z"/><rect class="fill" x="17.2" y="6.5" width="1.8" height="11" rx="0.4"/></svg>
+            </button>
+            <button class="si-btn" id="th-copy" title="Copy Suno link">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                </svg>
             </button>
         </div>
         <div class="th-bar-middle">
@@ -611,12 +622,17 @@ function setNowPlaying(m){
     document.getElementById('th-artist').textContent = m.artist || '';
     syncTheaterArt(m);
     var link = document.getElementById('np-suno-link');
+    var copyBtn = document.getElementById('btn-copy-link');
     if(m.uuid){
         link.href = 'https://suno.com/song/' + m.uuid;
         link.classList.remove('pointer-events-none','opacity-50');
+        copyBtn.disabled = false;
+        copyBtn.classList.remove('opacity-50');
     } else {
         link.href = '#';
         link.classList.add('pointer-events-none','opacity-50');
+        copyBtn.disabled = true;
+        copyBtn.classList.add('opacity-50');
     }
     // Cover / video / placeholder
     var wrap = document.getElementById('np-art-wrap');
@@ -1476,6 +1492,26 @@ function syncTheaterFromState(){
     audio.addEventListener('play',  syncTheaterPlay);
     audio.addEventListener('pause', syncTheaterPlay);
 
+    // Copy link functionality
+    function copySunoLink(btn){
+        var url = document.getElementById('np-suno-link').href;
+        if(!url || url === '#' || url === window.location.href + '#') return;
+        var ta = document.createElement('textarea');
+        ta.value = url;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); } catch(e){}
+        document.body.removeChild(ta);
+        var orig = btn.innerHTML;
+        btn.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
+        if(btn.id === 'btn-copy-link') btn.innerHTML += '<span>Copied!</span>';
+        btn.classList.add('is-on');
+        setTimeout(function(){ btn.innerHTML = orig; btn.classList.remove('is-on'); }, 1500);
+    }
+    document.getElementById('btn-copy-link').addEventListener('click', function(){ copySunoLink(this); });
+    document.getElementById('th-copy').addEventListener('click', function(){ copySunoLink(this); });
 })();
 </script>
 {% endblock %}
