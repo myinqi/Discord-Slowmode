@@ -155,9 +155,13 @@
                font-family:ui-sans-serif,system-ui;font-size:15px;line-height:1.8;
                color:#d4d4dc;padding:6px 10px 10px 4px}
     .th-bar{flex-shrink:0;display:flex;align-items:center;gap:12px;
-            padding:12px 24px 18px;border-top:1px solid #1a1a1e;background:#0a0a0c}
-    .th-bar .si-seek{flex:0 0 50%;max-width:50%}
-    .th-bar .si-spectrum{flex:0 0 calc(50% - 180px);min-width:0;height:40px;margin-left:12px}
+            padding:12px 20px 18px 24px;border-top:1px solid #1a1a1e;background:#0a0a0c}
+    .th-bar-controls{flex:0 0 auto;display:flex;align-items:center;gap:10px}
+    .th-bar-middle{flex:1;display:flex;align-items:center;gap:12px;min-width:0}
+    .th-bar .si-seek{flex:0 0 55%;max-width:55%}
+    .th-bar .si-spectrum{flex:1;min-width:80px;height:40px}
+    .th-bar-logo{flex:0 0 32px;height:32px;object-fit:contain;opacity:0.7;margin-left:12px}
+    .th-bar-close{flex:0 0 auto;margin-left:12px}
 </style>
 
 <div class="flex items-center justify-between mb-6 flex-wrap gap-3">
@@ -344,23 +348,28 @@
         </div>
     </div>
     <div class="th-bar">
-        <button class="si-btn" id="th-prev" title="Previous">
-            <svg viewBox="0 0 24 24"><rect class="fill" x="5" y="6.5" width="1.8" height="11" rx="0.4"/><path class="fill" d="M19 6.5 12 12l7 5.5z"/><path class="fill" d="M12 6.5 7.2 12l4.8 5.5z"/></svg>
-        </button>
-        <button class="si-btn lg" id="th-play" title="Play/Pause">
-            <svg class="play-icon" viewBox="0 0 24 24"><path class="fill" d="M8 6.5v11l8-5.5-8-5.5Z"/></svg>
-            <svg class="pause-icon" viewBox="0 0 24 24"><path d="M9 6.8v10.4"/><path d="M15 6.8v10.4"/></svg>
-        </button>
-        <button class="si-btn" id="th-next" title="Next">
-            <svg viewBox="0 0 24 24"><path class="fill" d="M5 6.5 12 12 5 17.5z"/><path class="fill" d="M12 6.5 16.8 12 12 17.5z"/><rect class="fill" x="17.2" y="6.5" width="1.8" height="11" rx="0.4"/></svg>
-        </button>
-        <div class="si-seek">
-            <span class="si-seek-time" id="th-now">0:00</span>
-            <div class="si-seek-track" id="th-track"><div class="si-seek-fill" id="th-fill"></div></div>
-            <span class="si-seek-time" id="th-dur">0:00</span>
+        <div class="th-bar-controls">
+            <button class="si-btn" id="th-prev" title="Previous">
+                <svg viewBox="0 0 24 24"><rect class="fill" x="5" y="6.5" width="1.8" height="11" rx="0.4"/><path class="fill" d="M19 6.5 12 12l7 5.5z"/><path class="fill" d="M12 6.5 7.2 12 4.8 5.5z"/></svg>
+            </button>
+            <button class="si-btn lg" id="th-play" title="Play/Pause">
+                <svg class="play-icon" viewBox="0 0 24 24"><path class="fill" d="M8 6.5v11l8-5.5-8-5.5Z"/></svg>
+                <svg class="pause-icon" viewBox="0 0 24 24"><path d="M9 6.8v10.4"/><path d="M15 6.8v10.4"/></svg>
+            </button>
+            <button class="si-btn" id="th-next" title="Next">
+                <svg viewBox="0 0 24 24"><path class="fill" d="M5 6.5 12 12 5 17.5z"/><path class="fill" d="M12 6.5 16.8 12 12 17.5z"/><rect class="fill" x="17.2" y="6.5" width="1.8" height="11" rx="0.4"/></svg>
+            </button>
         </div>
-        <canvas id="th-spectrum" class="si-spectrum" width="420" height="40"></canvas>
-        <button class="si-btn" id="th-close" title="Exit theater (Esc)">
+        <div class="th-bar-middle">
+            <div class="si-seek">
+                <span class="si-seek-time" id="th-now">0:00</span>
+                <div class="si-seek-track" id="th-track"><div class="si-seek-fill" id="th-fill"></div></div>
+                <span class="si-seek-time" id="th-dur">0:00</span>
+            </div>
+            <canvas id="th-spectrum" class="si-spectrum" width="420" height="40"></canvas>
+        </div>
+        <img src="{{ url_for('static', filename='TrYa_logo.png') }}" alt="TryA" class="th-bar-logo">
+        <button class="si-btn th-bar-close" id="th-close" title="Exit theater (Esc)">
             <svg viewBox="0 0 24 24"><path d="M6 6 18 18"/><path d="M18 6 6 18"/></svg>
         </button>
     </div>
