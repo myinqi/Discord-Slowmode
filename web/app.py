@@ -3344,6 +3344,33 @@ def create_app(db: Database, bot=None) -> Quart:
         await db.db.commit()
         return jsonify({"ok": True})
 
+    @app.route("/api/party-playlist/submit", methods=["POST"])
+    @permission_required('party_playlist')
+    async def api_party_submit_song():
+        from quart import jsonify
+        data = await request.get_json(silent=True) or {}
+        url = (data.get("url") or "").strip()
+        if not url or not SUNO_URL_PATTERN.search(url):
+            return jsonify({"ok": False, "error": "Invalid Suno URL"}), 400
+        song_title, artist, image_url = await _fetch_suno_info(url)
+        await db.party_submit_song(
+            user_id=0,
+            user_name=artist or "Unknown Artist",
+            url=url,
+            song_title=song_title,
+            image_url=image_url,
+        )
+        return jsonify({"ok": True, "song_title": song_title, "artist": artist})
+
+    @app.route("/api/party-playlist/reset", methods=["POST"])
+    @permission_required('party_playlist')
+    async def api_party_reset():
+        from quart import jsonify
+        await db.party_reset()
+        await db.set_setting("party_playlist_url", "")
+        await db.set_setting("party_playlist_image", "")
+        return jsonify({"ok": True})
+
     @app.route("/api/party-playlist/post/<int:song_id>", methods=["POST"])
     @permission_required('party_playlist')
     async def api_party_post_song(song_id):
