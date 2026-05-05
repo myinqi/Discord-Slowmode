@@ -4120,26 +4120,54 @@ def create_app(db: Database, bot=None) -> Quart:
             if cur_text:
                 chunks.append(cur_text)
 
-            # Translate each stanza independently (auto-detect per stanza)
+            # Helpers for per-chunk translation
             import unicodedata as _ud
+            _LETTER_RE = _re.compile(
+                r'[a-zA-ZÀ-ÿ\u0100-\u024F\u0370-\u03FF\u0400-\u04FF\u0600-\u06FF]'
+            )
+            _SEC_RE = _re.compile(r'^\s*\[[^\]]+\]\s*$')
+
+            def _is_structural(line: str) -> bool:
+                """Return True for empty lines, [Section] markers, and decorative
+                lines whose letter-character ratio is below 45 %."""
+                s = line.strip()
+                if not s or _SEC_RE.match(s):
+                    return True
+                return len(_LETTER_RE.findall(s)) / len(s) < 0.45
+
+            async def _translate_chunk(raw: str) -> str:
+                # NFKC: convert Mathematical Bold-Italic glyphs → plain ASCII
+                plain = _ud.normalize("NFKC", raw)
+                lines = plain.split('\n')
+                struct_idx = {i for i, l in enumerate(lines) if _is_structural(l)}
+                content = [lines[i] for i in range(len(lines)) if i not in struct_idx]
+                if not content:
+                    return plain  # nothing translatable — return as-is
+                try:
+                    translated = await loop.run_in_executor(
+                        None,
+                        lambda c='\n'.join(content): GoogleTranslator(
+                            source="auto", target=lang.lower()
+                        ).translate(c),
+                    )
+                    t_lines = (translated or '\n'.join(content)).split('\n')
+                except Exception:
+                    t_lines = content  # keep original content on error
+                # Reassemble: structural lines stay in place, translated lines fill the rest
+                t_iter = iter(t_lines)
+                return '\n'.join(
+                    lines[i] if i in struct_idx else next(t_iter, lines[i])
+                    for i in range(len(lines))
+                )
+
+            # Translate each stanza independently (auto-detect per stanza)
             translated_parts = []
             for chunk in chunks:
                 stripped = chunk.strip()
                 if not stripped:
                     translated_parts.append('')
                     continue
-                # NFKC normalization converts decorative Unicode fonts
-                # (Mathematical Bold Italic etc.) to plain ASCII equivalents
-                # so Google Translate can read them (e.g. 𝑰𝒄𝒉 → Ich).
-                plain = _ud.normalize("NFKC", stripped)
-                try:
-                    result = await loop.run_in_executor(
-                        None,
-                        lambda c=plain: GoogleTranslator(source="auto", target=lang.lower()).translate(c),
-                    )
-                    translated_parts.append(result if result else chunk)
-                except Exception:
-                    translated_parts.append(chunk)  # keep original on error
+                translated_parts.append(await _translate_chunk(stripped))
 
             return jsonify({"ok": True, "translated": '\n\n'.join(translated_parts)})
         except Exception as e:
