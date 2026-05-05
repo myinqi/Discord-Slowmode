@@ -4092,10 +4092,42 @@ def create_app(db: Database, bot=None) -> Quart:
         try:
             from deep_translator import GoogleTranslator
             loop = asyncio.get_event_loop()
-            translated = await loop.run_in_executor(
-                None, lambda: GoogleTranslator(source="auto", target=lang.lower()).translate(text)
-            )
-            return jsonify({"ok": True, "translated": translated})
+
+            # Split into stanza-sized chunks so each chunk gets its own
+            # language detection — essential for mixed-language lyrics.
+            MAX_CHUNK = 2500
+            SECTION_RE = __import__('re').compile(r'^\s*\[[^\]]+\]\s*$')
+            lines = text.split('\n')
+            chunks, cur_lines, cur_len = [], [], 0
+            for line in lines:
+                line_len = len(line) + 1
+                is_section = SECTION_RE.match(line)
+                # Break before a new section marker or when size limit reached
+                if cur_lines and (cur_len + line_len > MAX_CHUNK or (is_section and cur_len > 80)):
+                    chunks.append('\n'.join(cur_lines))
+                    cur_lines, cur_len = [], 0
+                cur_lines.append(line)
+                cur_len += line_len
+            if cur_lines:
+                chunks.append('\n'.join(cur_lines))
+
+            # Translate each chunk independently (auto-detect per chunk)
+            translated_parts = []
+            for chunk in chunks:
+                stripped = chunk.strip()
+                if not stripped:
+                    translated_parts.append(chunk)
+                    continue
+                try:
+                    result = await loop.run_in_executor(
+                        None,
+                        lambda c=stripped: GoogleTranslator(source="auto", target=lang.lower()).translate(c),
+                    )
+                    translated_parts.append(result if result else chunk)
+                except Exception:
+                    translated_parts.append(chunk)  # keep original on error
+
+            return jsonify({"ok": True, "translated": '\n'.join(translated_parts)})
         except Exception as e:
             return jsonify({"ok": False, "error": str(e)}), 500
 
