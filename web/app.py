@@ -4093,30 +4093,39 @@ def create_app(db: Database, bot=None) -> Quart:
             from deep_translator import GoogleTranslator
             loop = asyncio.get_event_loop()
 
-            # Split into stanza-sized chunks so each chunk gets its own
-            # language detection — essential for mixed-language lyrics.
-            MAX_CHUNK = 2500
-            SECTION_RE = __import__('re').compile(r'^\s*\[[^\]]+\]\s*$')
-            lines = text.split('\n')
-            chunks, cur_lines, cur_len = [], [], 0
-            for line in lines:
-                line_len = len(line) + 1
-                is_section = SECTION_RE.match(line)
-                # Break before a new section marker or when size limit reached
-                if cur_lines and (cur_len + line_len > MAX_CHUNK or (is_section and cur_len > 80)):
-                    chunks.append('\n'.join(cur_lines))
-                    cur_lines, cur_len = [], 0
-                cur_lines.append(line)
-                cur_len += line_len
-            if cur_lines:
-                chunks.append('\n'.join(cur_lines))
+            # Split at paragraph/stanza boundaries (blank lines) so each stanza
+            # gets independent language detection — essential for mixed-language
+            # lyrics (e.g. English intro + Finnish verses in the same song).
+            import re as _re
+            # Preserve blank lines as empty entries so we can reassemble later
+            raw_paragraphs = _re.split(r'(\n\s*\n)', text)
+            MAX_CHUNK = 4000
+            chunks = []
+            separators = []  # parallel list of separators between chunks
+            cur_text = ''
+            cur_sep = ''
+            for i, part in enumerate(raw_paragraphs):
+                if _re.fullmatch(r'\n\s*\n', part):
+                    cur_sep = part  # this is a separator, hold it
+                    continue
+                candidate = cur_text + (cur_sep if cur_text else '') + part
+                if cur_text and len(candidate) > MAX_CHUNK:
+                    chunks.append(cur_text)
+                    separators.append(cur_sep)
+                    cur_text = part
+                    cur_sep = ''
+                else:
+                    cur_text = candidate
+                    cur_sep = ''
+            if cur_text:
+                chunks.append(cur_text)
 
-            # Translate each chunk independently (auto-detect per chunk)
+            # Translate each stanza independently (auto-detect per stanza)
             translated_parts = []
             for chunk in chunks:
                 stripped = chunk.strip()
                 if not stripped:
-                    translated_parts.append(chunk)
+                    translated_parts.append('')
                     continue
                 try:
                     result = await loop.run_in_executor(
@@ -4127,7 +4136,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 except Exception:
                     translated_parts.append(chunk)  # keep original on error
 
-            return jsonify({"ok": True, "translated": '\n'.join(translated_parts)})
+            return jsonify({"ok": True, "translated": '\n\n'.join(translated_parts)})
         except Exception as e:
             return jsonify({"ok": False, "error": str(e)}), 500
 
