@@ -4079,6 +4079,26 @@ def create_app(db: Database, bot=None) -> Quart:
             result["image_url"] = f"https://cdn1.suno.ai/image_large_{uuid}.jpeg"
         return jsonify(result)
 
+    @app.route("/api/translate-lyrics", methods=["POST"])
+    @login_required
+    async def api_translate_lyrics():
+        from quart import jsonify
+        import asyncio
+        data = await request.get_json(silent=True) or {}
+        text = (data.get("text") or "").strip()
+        lang = (data.get("lang") or "").strip().upper()
+        if not text or lang not in ("DE", "EN", "FR", "ES", "JA", "IT", "PT"):
+            return jsonify({"ok": False, "error": "Invalid input"}), 400
+        try:
+            from deep_translator import GoogleTranslator
+            loop = asyncio.get_event_loop()
+            translated = await loop.run_in_executor(
+                None, lambda: GoogleTranslator(source="auto", target=lang.lower()).translate(text)
+            )
+            return jsonify({"ok": True, "translated": translated})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+
     @app.route("/api/suno-info/comments/<uuid>")
     @permission_required('suno_info')
     async def api_suno_info_comments(uuid):
