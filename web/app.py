@@ -4127,33 +4127,51 @@ def create_app(db: Database, bot=None) -> Quart:
             )
             _SEC_RE = _re.compile(r'^\s*\[[^\]]+\]\s*$')
 
+            def _clean(text: str) -> str:
+                """NFKC-normalize and strip invisible Unicode format characters
+                (zero-width joiners, BOM, soft-hyphens, etc.) that can confuse
+                Google Translate's language detector."""
+                text = _ud.normalize("NFKC", text)
+                return ''.join(
+                    ch for ch in text
+                    if ch in ' \t\n\r' or not _ud.category(ch).startswith('C')
+                )
+
             def _is_structural(line: str) -> bool:
-                """Return True for empty lines, [Section] markers, and decorative
-                lines whose letter-character ratio is below 45 %."""
                 s = line.strip()
                 if not s or _SEC_RE.match(s):
                     return True
                 return len(_LETTER_RE.findall(s)) / len(s) < 0.45
 
+            async def _do_translate(text: str) -> str:
+                """Translate text; if result is unchanged, retry with source=de."""
+                result = await loop.run_in_executor(
+                    None,
+                    lambda c=text: GoogleTranslator(source="auto", target=lang.lower()).translate(c),
+                )
+                result = result or ''
+                if result.strip() == text.strip():
+                    # Auto-detect returned source unchanged — retry with explicit German
+                    result = await loop.run_in_executor(
+                        None,
+                        lambda c=text: GoogleTranslator(source="de", target=lang.lower()).translate(c),
+                    )
+                    result = result or text
+                return result
+
             async def _translate_chunk(raw: str) -> str:
-                # NFKC: convert Mathematical Bold-Italic glyphs → plain ASCII
-                plain = _ud.normalize("NFKC", raw)
+                plain = _clean(raw)
                 lines = plain.split('\n')
                 struct_idx = {i for i, l in enumerate(lines) if _is_structural(l)}
                 content = [lines[i] for i in range(len(lines)) if i not in struct_idx]
                 if not content:
-                    return plain  # nothing translatable — return as-is
+                    return plain
+                content_text = '\n'.join(content)
                 try:
-                    translated = await loop.run_in_executor(
-                        None,
-                        lambda c='\n'.join(content): GoogleTranslator(
-                            source="auto", target=lang.lower()
-                        ).translate(c),
-                    )
-                    t_lines = (translated or '\n'.join(content)).split('\n')
+                    translated = await _do_translate(content_text)
+                    t_lines = translated.split('\n')
                 except Exception:
-                    t_lines = content  # keep original content on error
-                # Reassemble: structural lines stay in place, translated lines fill the rest
+                    t_lines = content
                 t_iter = iter(t_lines)
                 return '\n'.join(
                     lines[i] if i in struct_idx else next(t_iter, lines[i])
