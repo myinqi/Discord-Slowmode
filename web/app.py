@@ -4121,16 +4121,21 @@ def create_app(db: Database, bot=None) -> Quart:
                 chunks.append(cur_text)
 
             # Translate each stanza independently (auto-detect per stanza)
+            import unicodedata as _ud
             translated_parts = []
             for chunk in chunks:
                 stripped = chunk.strip()
                 if not stripped:
                     translated_parts.append('')
                     continue
+                # NFKC normalization converts decorative Unicode fonts
+                # (Mathematical Bold Italic etc.) to plain ASCII equivalents
+                # so Google Translate can read them (e.g. 𝑰𝒄𝒉 → Ich).
+                plain = _ud.normalize("NFKC", stripped)
                 try:
                     result = await loop.run_in_executor(
                         None,
-                        lambda c=stripped: GoogleTranslator(source="auto", target=lang.lower()).translate(c),
+                        lambda c=plain: GoogleTranslator(source="auto", target=lang.lower()).translate(c),
                     )
                     translated_parts.append(result if result else chunk)
                 except Exception:
