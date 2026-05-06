@@ -576,12 +576,13 @@ class StreamManager:
             self._video_url_cache[key] = await self._fetch_video_url(suno_url) if suno_url else None
         video_url = self._video_url_cache.get(key)
 
-        # Target: all clips normalized to 480×854 (9:16 portrait), h264,
-        # timestamps reset to 0 — prevents DTS discontinuities in concat.
-        _NW, _NH = 480, 854
+        # Target: all clips normalized to 720×1280 (9:16 HD portrait), h264.
+        # Crop-to-fill so content always fills the frame without black bars.
+        # Timestamps reset to 0 to prevent DTS discontinuities in concat.
+        _NW, _NH = 720, 1280
         _NORM_VF = (
-            f"scale={_NW}:{_NH}:force_original_aspect_ratio=decrease,"
-            f"pad={_NW}:{_NH}:(ow-iw)/2:(oh-ih)/2:color=black,"
+            f"scale={_NW}:{_NH}:force_original_aspect_ratio=increase,"
+            f"crop={_NW}:{_NH},"
             f"setpts=PTS-STARTPTS,format=yuv420p"
         )
 
@@ -602,7 +603,7 @@ class StreamManager:
         # 2) Try Suno video clip (~10 s) — download then normalize
         if video_url:
             raw_path = os.path.join(vid_cache_dir, f"raw_vid_{key}.mp4")
-            norm_path = os.path.join(vid_cache_dir, f"norm_vid_{key}.mp4")
+            norm_path = os.path.join(vid_cache_dir, f"norm_{_NW}x{_NH}_{key}.mp4")
             if os.path.exists(norm_path):
                 self._song_pip_paths[key] = norm_path
                 print(f"[radio] Song PiP ready (video): {key}")
@@ -618,7 +619,7 @@ class StreamManager:
             f"https://cdn1.suno.ai/image_large_{suno_uuid}.jpeg" if suno_uuid else None
         )
         cover_path = os.path.join(vid_cache_dir, f"cover_{key}.jpg")
-        cover_vid = os.path.join(vid_cache_dir, f"cover_norm_{key}.mp4")
+        cover_vid = os.path.join(vid_cache_dir, f"cover_{_NW}x{_NH}_{key}.mp4")
         if os.path.exists(cover_vid):
             self._song_pip_paths[key] = cover_vid
             return cover_vid
@@ -640,7 +641,7 @@ class StreamManager:
                 return cover_vid
 
         # 4) Last resort: 10 s black frame (encode once, reuse)
-        black_vid = os.path.join(vid_cache_dir, "black_norm.mp4")
+        black_vid = os.path.join(vid_cache_dir, f"black_{_NW}x{_NH}.mp4")
         if not os.path.exists(black_vid):
             proc = await asyncio.create_subprocess_exec(
                 "ffmpeg", "-y",
@@ -666,7 +667,7 @@ class StreamManager:
         active_uuids = {str(s.get("uuid") or s.get("id")) for s in self.playlist if s.get("uuid") or s.get("id")}
         removed = 0
         for fname in os.listdir(vid_cache_dir):
-            if fname in ("black_10s.mp4", "black_norm.mp4"):
+            if fname.startswith("black_"):
                 continue
             if not any(uid in fname for uid in active_uuids):
                 try:
