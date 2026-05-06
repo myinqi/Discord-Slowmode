@@ -618,7 +618,7 @@ class StreamManager:
             f"https://cdn1.suno.ai/image_large_{suno_uuid}.jpeg" if suno_uuid else None
         )
         cover_path = os.path.join(vid_cache_dir, f"cover_{key}.jpg")
-        cover_vid = os.path.join(vid_cache_dir, f"cover_vid_{key}.mp4")
+        cover_vid = os.path.join(vid_cache_dir, f"cover_norm_{key}.mp4")
         if os.path.exists(cover_vid):
             self._song_pip_paths[key] = cover_vid
             return cover_vid
@@ -640,7 +640,7 @@ class StreamManager:
                 return cover_vid
 
         # 4) Last resort: 10 s black frame (encode once, reuse)
-        black_vid = os.path.join(vid_cache_dir, "black_10s.mp4")
+        black_vid = os.path.join(vid_cache_dir, "black_norm.mp4")
         if not os.path.exists(black_vid):
             proc = await asyncio.create_subprocess_exec(
                 "ffmpeg", "-y",
@@ -666,7 +666,7 @@ class StreamManager:
         active_uuids = {str(s.get("uuid") or s.get("id")) for s in self.playlist if s.get("uuid") or s.get("id")}
         removed = 0
         for fname in os.listdir(vid_cache_dir):
-            if fname == "black_10s.mp4":
+            if fname in ("black_10s.mp4", "black_norm.mp4"):
                 continue
             if not any(uid in fname for uid in active_uuids):
                 try:
@@ -709,9 +709,8 @@ class StreamManager:
 
     def _build_song_pip_concat(self) -> str | None:
         """Build a video concat file for the song-pip track.
-        All clips are normalized to 480x854 / 24 fps with reset timestamps.
-        We overshoot each song by 2 extra clip-lengths; the audio concat is the
-        master clock so FFmpeg stops naturally when audio ends."""
+        All clips are normalized to 480x854 / 24 fps / PTS-from-0, so the
+        concat 'duration' directive gives exact per-song sync."""
         _CLIP_DUR = 10.0  # normalized clips are always ~10 s
         n = len(self.playlist)
         path = os.path.join(self._temp_dir, "song_pip.txt")
@@ -726,10 +725,13 @@ class StreamManager:
                         continue
                     safe = clip.replace("'", "'\\''")
                     song_dur = max(5.0, float(song.get("duration") or 180))
-                    # overshoot by 2 extra clips; audio track is the real terminator
-                    repeats = int(math.ceil(song_dur / _CLIP_DUR)) + 2
-                    for _ in range(repeats):
+                    full = int(song_dur / _CLIP_DUR)
+                    remainder = song_dur - full * _CLIP_DUR
+                    for _ in range(full):
                         f.write(f"file '{safe}'\n")
+                    if remainder > 0.05:
+                        f.write(f"file '{safe}'\n")
+                        f.write(f"duration {remainder:.3f}\n")
         self._song_pip_concat_path = path
         return path
 

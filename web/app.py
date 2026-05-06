@@ -2907,7 +2907,7 @@ def create_app(db: Database, bot=None) -> Quart:
         pip_rtmp_key = await db.get_setting("radio_pip_rtmp_key") or ""
         song_pip_enabled  = await db.get_setting("radio_song_pip_enabled")  or "off"
         song_pip_format   = await db.get_setting("radio_song_pip_format")   or "9:16"
-        song_pip_scale    = await db.get_setting("radio_song_pip_scale")    or "20"
+        song_pip_scale    = await db.get_setting("radio_song_pip_scale")    or "30"
         song_pip_position = await db.get_setting("radio_song_pip_position") or "top-right"
         lyrics_width = await db.get_setting("radio_lyrics_width") or "80"
 
