@@ -2782,7 +2782,6 @@ def create_app(db: Database, bot=None) -> Quart:
                     lyrics_width = "80"
                 await db.set_setting("radio_lyrics_width", lyrics_width)
                 await flash("Lyrics config saved.", "success")
-                return redirect(url_for("radio"))
 
             elif action == "save_song_pip_config":
                 spip_enabled  = "on" if form.get("song_pip_enabled") == "on" else "off"
@@ -2793,10 +2792,11 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.set_setting("radio_song_pip_format",   spip_format)
                 await db.set_setting("radio_song_pip_scale",    spip_scale)
                 await db.set_setting("radio_song_pip_position", spip_position)
-                await flash("Song Video PiP config saved.", "success")
                 if stream_manager.is_running:
                     await stream_manager.reload_pip()
-                return redirect(url_for("radio"))
+                    await flash("Song Video PiP config saved & applied to running stream.", "success")
+                else:
+                    await flash("Song Video PiP config saved.", "success")
 
             elif action == "save_pip_config":
                 pip_mode = form.get("pip_mode", "off")
