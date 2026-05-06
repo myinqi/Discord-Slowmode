@@ -432,6 +432,7 @@ class StreamManager:
         self._video_url_cache = {}   # uuid -> video_url str | None
         self._song_pip_paths = {}    # uuid -> path to loop-trimmed pip clip
         self._song_pip_concat_path = None
+        self._song_pip_ready = False  # True only after ALL clips are prepared
 
     async def get_status(self) -> dict:
         return {
@@ -653,6 +654,7 @@ class StreamManager:
         """Background task: prepare all clips, then hot-reload the running stream."""
         try:
             await self._prepare_all_song_pip_clips()
+            self._song_pip_ready = True
             if self._song_pip_paths and self.is_running:
                 print("[radio] Song-PiP clips ready — reloading stream with video overlay...")
                 await self.reload_pip()
@@ -713,6 +715,10 @@ class StreamManager:
         if self._loading:
             return {"error": "Stream is currently loading, please wait."}
         self._loading = True
+        # Reset Song-PiP state for this new session
+        self._song_pip_ready = False
+        self._song_pip_paths = {}
+        self._video_url_cache = {}
 
         # Determine radio source mode
         source_mode = await self.db.get_setting("radio_source_mode") or "submissions"
@@ -1168,7 +1174,7 @@ class StreamManager:
         # --- Song-Video PiP (second overlay) ---------------------------------
         song_pip_input_idx = None
         song_pip_enabled = (await self.db.get_setting("radio_song_pip_enabled") or "off") == "on"
-        if song_pip_enabled and self._song_pip_paths:
+        if song_pip_enabled and self._song_pip_ready and self._song_pip_paths:
             song_pip_concat = self._build_song_pip_concat()
             if song_pip_concat:
                 # Next available input index (after background + audio + optional PiP)
