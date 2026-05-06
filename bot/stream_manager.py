@@ -1028,9 +1028,10 @@ class StreamManager:
             while len(visible) < window:
                 visible.append("")
             # Truncate over-long lines so they never escape the fixed box width.
+            max_chars = getattr(self, "_lyrics_max_chars", _LYRICS_MAX_LINE_CHARS)
             visible = [
-                (ln if len(ln) <= _LYRICS_MAX_LINE_CHARS
-                 else ln[:_LYRICS_MAX_LINE_CHARS - 1].rstrip() + "…")
+                (ln if len(ln) <= max_chars
+                 else ln[:max_chars - 1].rstrip() + "…")
                 for ln in visible
             ]
             text = "\n".join(visible) or " "
@@ -1175,6 +1176,8 @@ class StreamManager:
         lyrics_box_w = max(200, round(1140 * _lyrics_width_pct / 80))
         lyrics_box_h = 800
         lyrics_pad = 24
+        # ~11px per char at fontsize 22 (Noto Sans proportional); minus padding
+        self._lyrics_max_chars = max(20, int((lyrics_box_w - 2 * lyrics_pad) / 11))
         lyrics_box = (
             f"drawbox=x={lyrics_box_x}:y={lyrics_box_y}"
             f":w={lyrics_box_w}:h={lyrics_box_h}"
@@ -1282,8 +1285,12 @@ class StreamManager:
                 )
                 parts.append(scale)
                 if i == len(overlays) - 1:
+                    # song_pip is always the last overlay; eof_action=pass keeps
+                    # the stream alive if the concat unexpectedly exhausts.
+                    is_song_pip = (inp == song_pip_input_idx)
+                    eof = ":eof_action=pass" if is_song_pip else ""
                     parts.append(
-                        f"[{prev}][p{i}]overlay={ox}:{oy},{text_filters}[vout]"
+                        f"[{prev}][p{i}]overlay={ox}:{oy}{eof},{text_filters}[vout]"
                     )
                 else:
                     nxt = f"m{i}"
