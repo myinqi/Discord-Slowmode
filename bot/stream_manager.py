@@ -651,10 +651,15 @@ class StreamManager:
 
     async def _prepare_song_pip_and_reload(self):
         """Background task: prepare all clips, then hot-reload the running stream."""
-        await self._prepare_all_song_pip_clips()
-        if self._song_pip_paths and self.is_running:
-            print("[radio] Song-PiP clips ready — reloading stream with video overlay...")
-            await self.reload_pip()
+        try:
+            await self._prepare_all_song_pip_clips()
+            if self._song_pip_paths and self.is_running:
+                print("[radio] Song-PiP clips ready — reloading stream with video overlay...")
+                await self.reload_pip()
+        except Exception as e:
+            import traceback
+            print(f"[radio] Song-PiP background task error: {e}")
+            traceback.print_exc()
 
     async def _prepare_all_song_pip_clips(self):
         """Download + transcode pip clips for all playlist songs (semaphore-limited)."""
