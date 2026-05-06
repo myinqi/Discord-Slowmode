@@ -5,6 +5,7 @@ ensuring seamless transitions without stream interruptions.
 """
 
 import asyncio
+import math
 import os
 import random
 import re
@@ -575,16 +576,44 @@ class StreamManager:
             self._video_url_cache[key] = await self._fetch_video_url(suno_url) if suno_url else None
         video_url = self._video_url_cache.get(key)
 
-        # 2) Try Suno video clip (~10 s) — just download, no transcode
+        # Target: all clips normalized to 480×854 (9:16 portrait), h264,
+        # timestamps reset to 0 — prevents DTS discontinuities in concat.
+        _NW, _NH = 480, 854
+        _NORM_VF = (
+            f"scale={_NW}:{_NH}:force_original_aspect_ratio=decrease,"
+            f"pad={_NW}:{_NH}:(ow-iw)/2:(oh-ih)/2:color=black,"
+            f"setpts=PTS-STARTPTS,format=yuv420p"
+        )
+
+        async def _normalize(src: str, dst: str) -> bool:
+            if os.path.exists(dst):
+                return True
+            proc = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-y", "-i", src,
+                "-vf", _NORM_VF,
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+                "-r", "24", "-an", dst,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await proc.wait()
+            return os.path.exists(dst)
+
+        # 2) Try Suno video clip (~10 s) — download then normalize
         if video_url:
             raw_path = os.path.join(vid_cache_dir, f"raw_vid_{key}.mp4")
-            if os.path.exists(raw_path) or await self._download_file(video_url, raw_path):
-                if os.path.exists(raw_path):
-                    self._song_pip_paths[key] = raw_path
-                    print(f"[radio] Song PiP ready (video): {key}")
-                    return raw_path
+            norm_path = os.path.join(vid_cache_dir, f"norm_vid_{key}.mp4")
+            if os.path.exists(norm_path):
+                self._song_pip_paths[key] = norm_path
+                print(f"[radio] Song PiP ready (video): {key}")
+                return norm_path
+            if (os.path.exists(raw_path) or await self._download_file(video_url, raw_path)) \
+                    and await _normalize(raw_path, norm_path):
+                self._song_pip_paths[key] = norm_path
+                print(f"[radio] Song PiP ready (video): {key}")
+                return norm_path
 
-        # 3) Fallback: cover image → encode once as a 10 s static clip (1 fps)
+        # 3) Fallback: cover image → 10 s static clip at same normalized size
         image_url = song.get("image_url") or (
             f"https://cdn1.suno.ai/image_large_{suno_uuid}.jpeg" if suno_uuid else None
         )
@@ -597,11 +626,9 @@ class StreamManager:
             proc = await asyncio.create_subprocess_exec(
                 "ffmpeg", "-y",
                 "-loop", "1", "-i", cover_path,
-                "-t", "10",
-                "-r", "1",
+                "-t", "10", "-r", "24",
+                "-vf", _NORM_VF,
                 "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-                "-vf", "scale=480:480:force_original_aspect_ratio=decrease,"
-                       "pad=480:480:(ow-iw)/2:(oh-ih)/2",
                 "-an", cover_vid,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
@@ -617,7 +644,7 @@ class StreamManager:
         if not os.path.exists(black_vid):
             proc = await asyncio.create_subprocess_exec(
                 "ffmpeg", "-y",
-                "-f", "lavfi", "-i", "color=c=black:s=480x480:r=1:d=10",
+                "-f", "lavfi", "-i", f"color=c=black:s={_NW}x{_NH}:r=24:d=10",
                 "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
                 "-an", black_vid,
                 stdout=asyncio.subprocess.DEVNULL,
@@ -682,10 +709,10 @@ class StreamManager:
 
     def _build_song_pip_concat(self) -> str | None:
         """Build a video concat file for the song-pip track.
-        Suno clips are ~10 s; use the concat 'duration' directive to loop each
-        source file the exact number of times needed to cover the song duration.
-        No FFmpeg pre-transcode required."""
-        _CLIP_DUR = 10.0  # Suno video clips are always ~10 seconds
+        All clips are normalized to 480x854 / 24 fps with reset timestamps.
+        We overshoot each song by 2 extra clip-lengths; the audio concat is the
+        master clock so FFmpeg stops naturally when audio ends."""
+        _CLIP_DUR = 10.0  # normalized clips are always ~10 s
         n = len(self.playlist)
         path = os.path.join(self._temp_dir, "song_pip.txt")
         with open(path, "w") as f:
@@ -699,13 +726,10 @@ class StreamManager:
                         continue
                     safe = clip.replace("'", "'\\''")
                     song_dur = max(5.0, float(song.get("duration") or 180))
-                    full = int(song_dur / _CLIP_DUR)
-                    remainder = song_dur - full * _CLIP_DUR
-                    for _ in range(full):
+                    # overshoot by 2 extra clips; audio track is the real terminator
+                    repeats = int(math.ceil(song_dur / _CLIP_DUR)) + 2
+                    for _ in range(repeats):
                         f.write(f"file '{safe}'\n")
-                    if remainder > 0.05:
-                        f.write(f"file '{safe}'\n")
-                        f.write(f"duration {remainder:.3f}\n")
         self._song_pip_concat_path = path
         return path
 
