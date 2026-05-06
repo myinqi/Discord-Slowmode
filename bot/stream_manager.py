@@ -635,7 +635,7 @@ class StreamManager:
         vid_cache_dir = os.path.join(self.radio_dir, "suno_cache", "video")
         if not os.path.isdir(vid_cache_dir):
             return
-        active_uuids = {s.get("uuid") or s.get("id") for s in self.playlist if s.get("uuid") or s.get("id")}
+        active_uuids = {str(s.get("uuid") or s.get("id")) for s in self.playlist if s.get("uuid") or s.get("id")}
         removed = 0
         for fname in os.listdir(vid_cache_dir):
             if fname == "black_10s.mp4":
