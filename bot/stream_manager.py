@@ -545,20 +545,14 @@ class StreamManager:
             return False
 
     async def _prepare_song_pip_clip(self, song: dict) -> str | None:
-        """Download Suno video (or cover fallback) and loop-trim it to song duration.
-        Returns path to the clip mp4, or None on complete failure.
-        Raw source files are cached in suno_cache/video/ (persistent, reusable).
-        Loop clips live in _temp_dir and are cleaned up on stream stop."""
+        """Download Suno video source (or cover fallback) for song PiP.
+        Suno clips are always ~10 s — no loop-trim transcode needed.
+        The concat file handles exact-duration looping via the 'duration' directive.
+        All files are persistent in suno_cache/video/."""
         uuid = song.get("uuid") or song.get("id")
         if not uuid:
             return None
-        duration = max(5, int(song.get("duration") or 180) + 2)  # +2s safety
-        out_path = os.path.join(self._temp_dir, f"pip_{uuid}.mp4")
-        if os.path.exists(out_path):
-            self._song_pip_paths[uuid] = out_path
-            return out_path
 
-        # Persistent video source cache (survives stream restarts, ~10 MB/song)
         vid_cache_dir = os.path.join(self.radio_dir, "suno_cache", "video")
         os.makedirs(vid_cache_dir, exist_ok=True)
 
@@ -568,74 +562,71 @@ class StreamManager:
             self._video_url_cache[uuid] = await self._fetch_video_url(suno_url)
         video_url = self._video_url_cache.get(uuid)
 
-        # 2) Try Suno video clip first
+        # 2) Try Suno video clip (~10 s) — just download, no transcode
         if video_url:
-            raw_path = os.path.join(vid_cache_dir, f"raw_vid_{uuid}.mp4")  # persistent
-            if await self._download_file(video_url, raw_path):
-                proc = await asyncio.create_subprocess_exec(
-                    "ffmpeg", "-y",
-                    "-stream_loop", "-1", "-i", raw_path,
-                    "-t", str(duration),
-                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-                    "-an", out_path,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-                await proc.wait()
-                if os.path.exists(out_path):
-                    print(f"[radio] Song PiP clip (video): {uuid}")
-                    self._song_pip_paths[uuid] = out_path
-                    return out_path
+            raw_path = os.path.join(vid_cache_dir, f"raw_vid_{uuid}.mp4")
+            if os.path.exists(raw_path) or await self._download_file(video_url, raw_path):
+                if os.path.exists(raw_path):
+                    self._song_pip_paths[uuid] = raw_path
+                    print(f"[radio] Song PiP ready (video): {uuid}")
+                    return raw_path
 
-        # 3) Fallback: cover image
+        # 3) Fallback: cover image → encode once as a 10 s static clip (1 fps)
         image_url = song.get("image_url") or f"https://cdn1.suno.ai/image_large_{uuid}.jpeg"
-        cover_path = os.path.join(vid_cache_dir, f"cover_{uuid}.jpg")  # persistent
+        cover_path = os.path.join(vid_cache_dir, f"cover_{uuid}.jpg")
+        cover_vid = os.path.join(vid_cache_dir, f"cover_vid_{uuid}.mp4")
+        if os.path.exists(cover_vid):
+            self._song_pip_paths[uuid] = cover_vid
+            return cover_vid
         if await self._download_file(image_url, cover_path):
             proc = await asyncio.create_subprocess_exec(
                 "ffmpeg", "-y",
                 "-loop", "1", "-i", cover_path,
-                "-t", str(duration),
+                "-t", "10",
+                "-r", "1",
                 "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
                 "-vf", "scale=480:480:force_original_aspect_ratio=decrease,"
                        "pad=480:480:(ow-iw)/2:(oh-ih)/2",
-                "-an", out_path,
+                "-an", cover_vid,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
             await proc.wait()
-            if os.path.exists(out_path):
-                print(f"[radio] Song PiP clip (cover fallback): {uuid}")
-                self._song_pip_paths[uuid] = out_path
-                return out_path
+            if os.path.exists(cover_vid):
+                self._song_pip_paths[uuid] = cover_vid
+                print(f"[radio] Song PiP ready (cover): {uuid}")
+                return cover_vid
 
-        # 4) Last resort: black frame
-        proc = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-y",
-            "-f", "lavfi", "-i", f"color=c=black:s=480x480:r=5:d={duration}",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-            "-an", out_path,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        await proc.wait()
-        if os.path.exists(out_path):
-            self._song_pip_paths[uuid] = out_path
-            return out_path
+        # 4) Last resort: 10 s black frame (encode once, reuse)
+        black_vid = os.path.join(vid_cache_dir, "black_10s.mp4")
+        if not os.path.exists(black_vid):
+            proc = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-y",
+                "-f", "lavfi", "-i", "color=c=black:s=480x480:r=1:d=10",
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+                "-an", black_vid,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await proc.wait()
+        if os.path.exists(black_vid):
+            self._song_pip_paths[uuid] = black_vid
+            return black_vid
         return None
 
     def _cleanup_video_source_cache(self):
-        """Remove raw video source files that no longer belong to the current playlist.
-        Keeps only files whose UUID is in the active playlist (+ cover fallbacks)."""
+        """Remove cached video/cover files no longer in the active playlist.
+        Keeps black_10s.mp4 (shared fallback) and any file whose UUID appears
+        in the current playlist."""
         vid_cache_dir = os.path.join(self.radio_dir, "suno_cache", "video")
         if not os.path.isdir(vid_cache_dir):
             return
-        active_uuids = {s.get("uuid") or s.get("id") for s in self.playlist}
+        active_uuids = {s.get("uuid") or s.get("id") for s in self.playlist if s.get("uuid") or s.get("id")}
         removed = 0
         for fname in os.listdir(vid_cache_dir):
-            # Files are named raw_vid_{uuid}.mp4 or cover_{uuid}.jpg
-            parts = fname.replace(".mp4", "").replace(".jpg", "").split("_", 2)
-            uuid = parts[-1] if len(parts) >= 3 else None
-            if uuid and uuid not in active_uuids:
+            if fname == "black_10s.mp4":
+                continue
+            if not any(uid in fname for uid in active_uuids):
                 try:
                     os.remove(os.path.join(vid_cache_dir, fname))
                     removed += 1
@@ -643,6 +634,13 @@ class StreamManager:
                     pass
         if removed:
             print(f"[radio] Video cache cleanup: removed {removed} stale file(s)")
+
+    async def _prepare_song_pip_and_reload(self):
+        """Background task: prepare all clips, then hot-reload the running stream."""
+        await self._prepare_all_song_pip_clips()
+        if self._song_pip_paths and self.is_running:
+            print("[radio] Song-PiP clips ready — reloading stream with video overlay...")
+            await self.reload_pip()
 
     async def _prepare_all_song_pip_clips(self):
         """Download + transcode pip clips for all playlist songs (semaphore-limited)."""
@@ -662,19 +660,31 @@ class StreamManager:
         print(f"[radio] Song-PiP ready: {ready}/{total}")
 
     def _build_song_pip_concat(self) -> str | None:
-        """Build a video concat file for the song-pip track (mirrors audio concat)."""
+        """Build a video concat file for the song-pip track.
+        Suno clips are ~10 s; use the concat 'duration' directive to loop each
+        source file the exact number of times needed to cover the song duration.
+        No FFmpeg pre-transcode required."""
+        _CLIP_DUR = 10.0  # Suno video clips are always ~10 seconds
         n = len(self.playlist)
         path = os.path.join(self._temp_dir, "song_pip.txt")
         with open(path, "w") as f:
-            for _ in range(_PLAYLIST_REPEATS):
+            for rep in range(_PLAYLIST_REPEATS):
                 for i in range(n):
                     idx = (self._concat_start + i) % n
                     song = self.playlist[idx]
                     uuid = song.get("uuid") or song.get("id")
                     clip = self._song_pip_paths.get(uuid)
-                    if clip and os.path.exists(clip):
-                        safe = clip.replace("'", "'\\''")
+                    if not clip or not os.path.exists(clip):
+                        continue
+                    safe = clip.replace("'", "'\\''")
+                    song_dur = max(5.0, float(song.get("duration") or 180))
+                    full = int(song_dur / _CLIP_DUR)
+                    remainder = song_dur - full * _CLIP_DUR
+                    for _ in range(full):
                         f.write(f"file '{safe}'\n")
+                    if remainder > 0.05:
+                        f.write(f"file '{safe}'\n")
+                        f.write(f"duration {remainder:.3f}\n")
         self._song_pip_concat_path = path
         return path
 
@@ -725,9 +735,10 @@ class StreamManager:
             f.write(" ")
         # Write playlist title header
         await self._write_header()
-        # Song-Video PiP: pre-generate loop clips if feature is enabled
+        # Song-Video PiP: prepare clips in background so stream starts immediately.
+        # reload_pip() is called automatically once all clips are ready.
         if (await self.db.get_setting("radio_song_pip_enabled") or "off") == "on":
-            await self._prepare_all_song_pip_clips()
+            asyncio.ensure_future(self._prepare_song_pip_and_reload())
         # Connect to Twitch chat if configured (Helix-based bot, modern auth)
         client_id = await self.db.get_setting("radio_twitch_client_id")
         refresh_tok = await self.db.get_setting("radio_twitch_refresh_token")
