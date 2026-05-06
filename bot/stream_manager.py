@@ -1197,6 +1197,10 @@ class StreamManager:
             else:  # 16:9
                 w = int(1920 * scale_pct / 100)
                 h = int(w * 9 / 16)
+            # Force even dimensions (required for yuv420p; odd values cause
+            # scale to round up beyond the pad target → "pad smaller than input")
+            w = (w // 2) * 2
+            h = (h // 2) * 2
             pad = 40
             pos_map = {
                 "top-left":      (f"{pad}", f"{pad}"),
