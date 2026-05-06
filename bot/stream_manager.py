@@ -547,38 +547,52 @@ class StreamManager:
     async def _prepare_song_pip_clip(self, song: dict) -> str | None:
         """Download Suno video source (or cover fallback) for song PiP.
         Suno clips are always ~10 s — no loop-trim transcode needed.
-        The concat file handles exact-duration looping via the 'duration' directive.
+        Works for both suno_playlist songs (uuid field) and submissions (suno_url field).
         All files are persistent in suno_cache/video/."""
-        uuid = song.get("uuid") or song.get("id")
-        if not uuid:
+        # key: prefer Suno UUID, fall back to stringified DB id
+        key = str(song.get("uuid") or song.get("id") or "")
+        if not key:
             return None
+
+        # Derive suno_url: prefer stored value, then build from uuid if it looks like one
+        suno_url = song.get("suno_url") or ""
+        if not suno_url:
+            uuid_val = song.get("uuid", "")
+            if isinstance(uuid_val, str) and len(uuid_val) == 36:
+                suno_url = f"https://suno.com/song/{uuid_val}"
+
+        # Extract the actual Suno UUID from the URL for CDN image fallback
+        _suno_uuid_re = re.compile(r'([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})', re.I)
+        m = _suno_uuid_re.search(suno_url)
+        suno_uuid = m.group(1) if m else None
 
         vid_cache_dir = os.path.join(self.radio_dir, "suno_cache", "video")
         os.makedirs(vid_cache_dir, exist_ok=True)
 
-        # 1) Fetch video URL
-        if uuid not in self._video_url_cache:
-            suno_url = song.get("suno_url") or f"https://suno.com/song/{uuid}"
-            self._video_url_cache[uuid] = await self._fetch_video_url(suno_url)
-        video_url = self._video_url_cache.get(uuid)
+        # 1) Fetch video URL (cached by key)
+        if key not in self._video_url_cache:
+            self._video_url_cache[key] = await self._fetch_video_url(suno_url) if suno_url else None
+        video_url = self._video_url_cache.get(key)
 
         # 2) Try Suno video clip (~10 s) — just download, no transcode
         if video_url:
-            raw_path = os.path.join(vid_cache_dir, f"raw_vid_{uuid}.mp4")
+            raw_path = os.path.join(vid_cache_dir, f"raw_vid_{key}.mp4")
             if os.path.exists(raw_path) or await self._download_file(video_url, raw_path):
                 if os.path.exists(raw_path):
-                    self._song_pip_paths[uuid] = raw_path
-                    print(f"[radio] Song PiP ready (video): {uuid}")
+                    self._song_pip_paths[key] = raw_path
+                    print(f"[radio] Song PiP ready (video): {key}")
                     return raw_path
 
         # 3) Fallback: cover image → encode once as a 10 s static clip (1 fps)
-        image_url = song.get("image_url") or f"https://cdn1.suno.ai/image_large_{uuid}.jpeg"
-        cover_path = os.path.join(vid_cache_dir, f"cover_{uuid}.jpg")
-        cover_vid = os.path.join(vid_cache_dir, f"cover_vid_{uuid}.mp4")
+        image_url = song.get("image_url") or (
+            f"https://cdn1.suno.ai/image_large_{suno_uuid}.jpeg" if suno_uuid else None
+        )
+        cover_path = os.path.join(vid_cache_dir, f"cover_{key}.jpg")
+        cover_vid = os.path.join(vid_cache_dir, f"cover_vid_{key}.mp4")
         if os.path.exists(cover_vid):
-            self._song_pip_paths[uuid] = cover_vid
+            self._song_pip_paths[key] = cover_vid
             return cover_vid
-        if await self._download_file(image_url, cover_path):
+        if image_url and await self._download_file(image_url, cover_path):
             proc = await asyncio.create_subprocess_exec(
                 "ffmpeg", "-y",
                 "-loop", "1", "-i", cover_path,
@@ -593,8 +607,8 @@ class StreamManager:
             )
             await proc.wait()
             if os.path.exists(cover_vid):
-                self._song_pip_paths[uuid] = cover_vid
-                print(f"[radio] Song PiP ready (cover): {uuid}")
+                self._song_pip_paths[key] = cover_vid
+                print(f"[radio] Song PiP ready (cover): {key}")
                 return cover_vid
 
         # 4) Last resort: 10 s black frame (encode once, reuse)
@@ -610,7 +624,7 @@ class StreamManager:
             )
             await proc.wait()
         if os.path.exists(black_vid):
-            self._song_pip_paths[uuid] = black_vid
+            self._song_pip_paths[key] = black_vid
             return black_vid
         return None
 
@@ -656,7 +670,7 @@ class StreamManager:
         self._cleanup_video_source_cache()
         await asyncio.gather(*[_prep(s) for s in self.playlist])
         ready = sum(1 for s in self.playlist
-                    if self._song_pip_paths.get(s.get("uuid") or s.get("id")))
+                    if self._song_pip_paths.get(str(s.get("uuid") or s.get("id") or "")))
         print(f"[radio] Song-PiP ready: {ready}/{total}")
 
     def _build_song_pip_concat(self) -> str | None:
@@ -672,7 +686,7 @@ class StreamManager:
                 for i in range(n):
                     idx = (self._concat_start + i) % n
                     song = self.playlist[idx]
-                    uuid = song.get("uuid") or song.get("id")
+                    uuid = str(song.get("uuid") or song.get("id") or "")
                     clip = self._song_pip_paths.get(uuid)
                     if not clip or not os.path.exists(clip):
                         continue
@@ -736,7 +750,7 @@ class StreamManager:
         # Write playlist title header
         await self._write_header()
         # Song-Video PiP: prepare clips in background so stream starts immediately.
-        # reload_pip() is called automatically once all clips are ready.
+        # Works for both suno_playlist (uuid) and submissions (suno_url from DB).
         if (await self.db.get_setting("radio_song_pip_enabled") or "off") == "on":
             asyncio.ensure_future(self._prepare_song_pip_and_reload())
         # Connect to Twitch chat if configured (Helix-based bot, modern auth)
