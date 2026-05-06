@@ -90,6 +90,27 @@
     .ly-tr-active{background:#1e1a32!important;color:#a080e0!important}
     .ly-tr-orig{background:#1e1a32;color:#9070d0}
 
+    /* ── Wheel of Fortune ─────────────────────────────────────────────────── */
+    @keyframes wh-fadein{from{opacity:0;transform:scale(.82)}to{opacity:1;transform:scale(1)}}
+    @keyframes wh-pulse{0%,100%{box-shadow:0 0 22px rgba(161,139,250,.4),0 0 6px rgba(161,139,250,.3)}50%{box-shadow:0 0 55px rgba(161,139,250,.95),0 0 20px rgba(161,139,250,.6)}}
+    @keyframes wh-blink{0%,100%{opacity:.55}50%{opacity:1}}
+    @keyframes wh-spin-ring{to{transform:rotate(360deg)}}
+    .wh-overlay{position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:9000;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(8px)}
+    .wh-modal{display:flex;flex-direction:column;align-items:center;gap:18px;animation:wh-fadein .32s cubic-bezier(.22,1,.36,1)}
+    .wh-canvas-wrap{position:relative;display:inline-block;filter:drop-shadow(0 0 32px rgba(85,97,228,.5))}
+    .wh-pointer{position:absolute;top:-3px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:13px solid transparent;border-right:13px solid transparent;border-top:30px solid #a78bfa;filter:drop-shadow(0 0 10px #7c3aed) drop-shadow(0 0 4px #c4b5fd);z-index:10;pointer-events:none}
+    .wh-winner-box{position:absolute;inset:0;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;background:rgba(6,5,20,.8);backdrop-filter:blur(12px);animation:wh-fadein .4s ease}
+    .wh-winner-img{width:115px;height:115px;border-radius:12px;object-fit:cover;animation:wh-pulse 1.5s ease infinite}
+    .wh-winner-title{color:#e0d8ff;font-size:17px;font-weight:700;text-align:center;max-width:260px;padding:0 14px;line-height:1.3}
+    .wh-winner-artist{color:#8080a8;font-size:12px}
+    .wh-winner-playing{color:#a78bfa;font-size:12px;letter-spacing:.04em;animation:wh-blink 1s ease infinite}
+    .wh-btn-row{display:flex;gap:10px}
+    .wh-spin-btn{padding:10px 30px;background:linear-gradient(135deg,#5561e4,#7c3aed);color:#fff;border:none;border-radius:9px;font-size:15px;font-weight:700;cursor:pointer;letter-spacing:.02em;box-shadow:0 4px 20px rgba(85,97,228,.4);transition:opacity .15s,transform .1s}
+    .wh-spin-btn:hover:not(:disabled){opacity:.88;transform:scale(1.03)}
+    .wh-spin-btn:disabled{opacity:.4;cursor:default;transform:none}
+    .wh-close-btn{padding:10px 18px;background:#1a1a1f;color:#777;border:1px solid #2a2a2e;border-radius:9px;font-size:14px;cursor:pointer;transition:all .15s}
+    .wh-close-btn:hover{color:#ddd;border-color:#444}
+
     /* Prompt + tags panel */
     .si-prompt-block{padding:10px 12px;background:#16161a;border:1px solid #2a2a2e;border-radius:8px;font-family:ui-monospace,monospace;font-size:12px;color:#cfc8ff;white-space:pre-wrap;line-height:1.55}
     .si-meta-grid{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:12px;margin-top:10px}
@@ -250,6 +271,10 @@
                 <button id="btn-party-reset"
                     class="px-3 py-1.5 bg-red-800/70 hover:bg-red-700/70 text-red-300 rounded-lg text-sm font-medium transition-colors whitespace-nowrap">
                     Reset
+                </button>
+                <button id="btn-party-wheel" onclick="openWheel()"
+                    class="px-3 py-1.5 bg-purple-900/60 hover:bg-purple-800/70 border border-purple-700/50 text-purple-300 rounded-lg text-sm font-medium transition-colors whitespace-nowrap">
+                    🎡 Wheel
                 </button>
                 <span id="party-status" class="text-gray-500 text-xs"></span>
             </div>
@@ -516,6 +541,26 @@
     </div>
 </div>
 
+<!-- ═══ Wheel of Fortune overlay ═════════════════════════════════════════ -->
+<div id="wh-overlay" class="wh-overlay" style="display:none">
+    <div class="wh-modal">
+        <div class="wh-canvas-wrap">
+            <div class="wh-pointer"></div>
+            <canvas id="wh-canvas" width="480" height="480" style="border-radius:50%;display:block"></canvas>
+            <div id="wh-winner-box" class="wh-winner-box" style="display:none">
+                <img id="wh-winner-img" class="wh-winner-img" src="" alt="">
+                <div id="wh-winner-title" class="wh-winner-title"></div>
+                <div id="wh-winner-artist" class="wh-winner-artist"></div>
+                <div class="wh-winner-playing">▶ Playing soon…</div>
+            </div>
+        </div>
+        <div class="wh-btn-row">
+            <button id="wh-spin-btn" class="wh-spin-btn" onclick="whSpin()">🎰 Spin!</button>
+            <button class="wh-close-btn" onclick="whClose()">✕ Close</button>
+        </div>
+    </div>
+</div>
+
 <script>
 /* --- State ---------------------------------------------------------------- */
 var SONGS = [];           // [{uuid,title,artist,suno_url, _meta?}]
@@ -745,6 +790,220 @@ function partyCopy(btn, url){
     var orig=btn.innerHTML; btn.innerHTML='✓';
     setTimeout(function(){btn.innerHTML=orig;},1500);
 }
+
+/* === Wheel of Fortune ======================================================= */
+var WH_SONGS  = [];          // unheard SONGS entries for current spin
+var WH_IMGS   = {};          // uuid → HTMLImageElement cache
+var WH_ANGLE  = 0;           // current rotation (radians)
+var WH_WINNER = -1;          // index in WH_SONGS of chosen winner
+var WH_RAF    = null;        // requestAnimationFrame handle
+var WH_COLORS = [
+    '#1e1b4b','#312e81','#1e3a5f','#1a2744',
+    '#2d1b4e','#1b3a4b','#3b1d5e','#14332b',
+    '#33190d','#1d3318','#1a1a3e','#1f2937'
+];
+
+function openWheel(){
+    // Only unheard AND not yet played in this session
+    WH_SONGS = SONGS.filter(function(s, i){
+        return s._party && !s._party.heard && !PLAYED_SET.has(i);
+    });
+    if(WH_SONGS.length < 2){
+        alert(WH_SONGS.length === 0
+            ? 'No unheard songs available for the wheel.'
+            : 'At least 2 unheard songs are needed to spin the wheel.');
+        return;
+    }
+    WH_ANGLE = 0; WH_WINNER = -1;
+    // Responsive canvas size
+    var size = Math.max(260, Math.min(480,
+        Math.floor(window.innerWidth * 0.82),
+        Math.floor(window.innerHeight * 0.58)));
+    var canvas = document.getElementById('wh-canvas');
+    canvas.width = canvas.height = size;
+    document.getElementById('wh-winner-box').style.display = 'none';
+    document.getElementById('wh-overlay').style.display   = 'flex';
+    var btn = document.getElementById('wh-spin-btn');
+    btn.disabled = false; btn.textContent = '🎰 Spin!';
+    _whLoadImgs().then(function(){ _wdraw(WH_ANGLE); });
+}
+
+function whClose(){
+    if(WH_RAF){ cancelAnimationFrame(WH_RAF); WH_RAF = null; }
+    document.getElementById('wh-overlay').style.display = 'none';
+}
+
+// Close on overlay backdrop click
+document.getElementById('wh-overlay').addEventListener('click', function(e){
+    if(e.target === this) whClose();
+});
+
+function _whLoadImgs(){
+    var promises = WH_SONGS.map(function(s){
+        if(WH_IMGS[s.uuid]) return Promise.resolve();
+        return new Promise(function(resolve){
+            var img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload  = function(){ WH_IMGS[s.uuid] = img; resolve(); };
+            img.onerror = resolve;
+            img.src = (s._meta && s._meta.image_url)
+                   || (s._party && s._party.image_url)
+                   || ('https://cdn1.suno.ai/image_' + s.uuid + '.jpeg');
+        });
+    });
+    return Promise.all(promises);
+}
+
+function _wdraw(angle){
+    var canvas = document.getElementById('wh-canvas');
+    if(!canvas) return;
+    var ctx = canvas.getContext('2d');
+    var W = canvas.width, H = canvas.height;
+    var cx = W/2, cy = H/2, R = Math.min(W,H)/2 - 14;
+    var rHub = R * 0.17;
+    var n = WH_SONGS.length;
+    var slice = (2*Math.PI) / n;
+
+    ctx.clearRect(0, 0, W, H);
+
+    // Outer ambient glow
+    var glo = ctx.createRadialGradient(cx,cy,R,cx,cy,R+16);
+    glo.addColorStop(0, 'rgba(85,97,228,.55)');
+    glo.addColorStop(1, 'rgba(85,97,228,0)');
+    ctx.beginPath(); ctx.arc(cx,cy,R+16,0,2*Math.PI);
+    ctx.fillStyle = glo; ctx.fill();
+
+    for(var i = 0; i < n; i++){
+        var a0 = angle - Math.PI/2 + i*slice;
+        var a1 = a0 + slice;
+        var song = WH_SONGS[i];
+        var win  = WH_WINNER === i && WH_WINNER >= 0;
+
+        // ── Segment background
+        ctx.beginPath(); ctx.moveTo(cx,cy);
+        ctx.arc(cx,cy,R,a0,a1); ctx.closePath();
+        ctx.fillStyle = WH_COLORS[i % WH_COLORS.length];
+        ctx.fill();
+
+        // ── Cover image clipped to segment
+        var img = WH_IMGS[song.uuid];
+        if(img){
+            var mid  = a0 + slice/2;
+            var imgR = R * 0.63;
+            var ix   = cx + imgR * Math.cos(mid);
+            var iy   = cy + imgR * Math.sin(mid);
+            var iSz  = Math.max(14, Math.min(slice*R*0.72, R*0.42));
+            ctx.save();
+            ctx.beginPath(); ctx.moveTo(cx,cy); ctx.arc(cx,cy,R,a0,a1); ctx.closePath();
+            ctx.clip();
+            ctx.globalAlpha = win ? 0.92 : 0.55;
+            ctx.drawImage(img, ix-iSz/2, iy-iSz/2, iSz, iSz);
+            ctx.globalAlpha = 1;
+            ctx.restore();
+        }
+
+        // ── Segment divider line
+        ctx.beginPath(); ctx.moveTo(cx,cy);
+        ctx.arc(cx,cy,R,a0,a1); ctx.closePath();
+        ctx.strokeStyle = win ? 'rgba(167,139,250,.65)' : 'rgba(255,255,255,.07)';
+        ctx.lineWidth   = win ? 3 : 1;
+        ctx.stroke();
+
+        // ── Song title text (only when segments are large enough)
+        if(n <= 24){
+            ctx.save();
+            ctx.translate(cx, cy);
+            ctx.rotate(a0 + slice/2);
+            ctx.textAlign   = 'right';
+            ctx.fillStyle   = win ? '#e8e0ff' : 'rgba(215,205,255,.82)';
+            var fs = Math.max(8, Math.min(12, Math.floor(slice * R * 0.44)));
+            ctx.font        = 'bold ' + fs + 'px system-ui,sans-serif';
+            ctx.shadowColor = 'rgba(0,0,0,.9)'; ctx.shadowBlur = 4;
+            var t = (song._meta && song._meta.title)
+                 || (song._party && song._party.song_title)
+                 || song.title || song.uuid.slice(0,8);
+            var mc = Math.max(5, Math.floor((R - rHub - 8) / (fs * 0.56)));
+            if(t.length > mc) t = t.slice(0, mc-1) + '…';
+            ctx.fillText(t, R - 8, fs * 0.38);
+            ctx.restore();
+        }
+    }
+
+    // ── Outer ring border
+    ctx.beginPath(); ctx.arc(cx,cy,R,0,2*Math.PI);
+    ctx.strokeStyle = '#5561e4'; ctx.lineWidth = 3; ctx.stroke();
+
+    // ── Center hub
+    ctx.beginPath(); ctx.arc(cx,cy,rHub,0,2*Math.PI);
+    var hg = ctx.createRadialGradient(cx,cy,0,cx,cy,rHub);
+    hg.addColorStop(0, '#26204a'); hg.addColorStop(1, '#0e0d1a');
+    ctx.fillStyle = hg; ctx.fill();
+    ctx.strokeStyle = '#3d3470'; ctx.lineWidth = 2; ctx.stroke();
+
+    // Hub icon
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font         = 'bold ' + Math.floor(rHub * 0.95) + 'px system-ui';
+    ctx.shadowColor  = 'rgba(99,102,241,.8)'; ctx.shadowBlur = 10;
+    ctx.fillStyle    = '#818cf8';
+    ctx.fillText('🎡', cx, cy);
+    ctx.shadowBlur   = 0;
+    ctx.textBaseline = 'alphabetic';
+}
+
+function whSpin(){
+    if(WH_RAF) return;
+    var n     = WH_SONGS.length;
+    WH_WINNER = Math.floor(Math.random() * n);
+    var slice = 2*Math.PI / n;
+    // Calculate final resting angle so the winner segment centre sits at top (pointer)
+    var jitter     = (Math.random() - 0.5) * slice * 0.5;
+    var baseTarget = -(WH_WINNER * slice + slice/2) + jitter;
+    var tNorm  = ((baseTarget % (2*Math.PI)) + 2*Math.PI) % (2*Math.PI);
+    var cNorm  = ((WH_ANGLE   % (2*Math.PI)) + 2*Math.PI) % (2*Math.PI);
+    var diff   = (tNorm - cNorm + 2*Math.PI) % (2*Math.PI);
+    var extra  = (6 + Math.floor(Math.random() * 5)) * 2*Math.PI; // 6-10 full turns
+    var startAngle = WH_ANGLE;
+    var endAngle   = startAngle + extra + diff;
+    var duration   = 5000 + Math.random() * 1500;  // 5 – 6.5 s
+    var startTime  = null;
+    var btn = document.getElementById('wh-spin-btn');
+    btn.disabled = true; btn.textContent = '…spinning…';
+    function ease(t){ return 1 - Math.pow(1-t, 4); }
+    function frame(ts){
+        if(!startTime) startTime = ts;
+        var t  = Math.min((ts - startTime) / duration, 1);
+        WH_ANGLE = startAngle + ease(t) * (endAngle - startAngle);
+        _wdraw(WH_ANGLE);
+        if(t < 1){ WH_RAF = requestAnimationFrame(frame); }
+        else { WH_RAF = null; WH_ANGLE = endAngle; setTimeout(_whShowWinner, 380); }
+    }
+    WH_RAF = requestAnimationFrame(frame);
+}
+
+function _whShowWinner(){
+    _wdraw(WH_ANGLE);   // redraw once more with winner glow
+    var song   = WH_SONGS[WH_WINNER];
+    var imgUrl = (song._meta && song._meta.image_url)
+              || (song._party && song._party.image_url)
+              || ('https://cdn1.suno.ai/image_' + song.uuid + '.jpeg');
+    var title  = (song._meta && song._meta.title)
+              || (song._party && song._party.song_title)
+              || song.title || '?';
+    var artist = (song._meta && song._meta.artist)
+              || (song._party && song._party.user_name) || '';
+    document.getElementById('wh-winner-img').src         = imgUrl;
+    document.getElementById('wh-winner-title').textContent = title;
+    document.getElementById('wh-winner-artist').textContent = artist ? 'by ' + artist : '';
+    document.getElementById('wh-winner-box').style.display = 'flex';
+    // Find the song's index in SONGS and play it after 2.2 s
+    var idx = SONGS.indexOf(song);
+    setTimeout(function(){
+        whClose();
+        if(idx >= 0){ playIndex(idx); renderPartyList(); }
+    }, 2200);
+}
+/* === End Wheel ============================================================= */
 
 /* --- Discord Channel loading ---------------------------------------------- */
 document.getElementById('btn-load-channel').addEventListener('click', loadFromChannel);
