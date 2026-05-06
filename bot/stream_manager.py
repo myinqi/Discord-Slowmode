@@ -429,6 +429,9 @@ class StreamManager:
         self._suno_dl_dir = None  # temp dir for downloaded Suno playlist songs
         self._header_path = None  # playlist title overlay file
         self._loading = False  # guard against concurrent start() calls
+        self._video_url_cache = {}   # uuid -> video_url str | None
+        self._song_pip_paths = {}    # uuid -> path to loop-trimmed pip clip
+        self._song_pip_concat_path = None
 
     async def get_status(self) -> dict:
         return {
@@ -499,6 +502,182 @@ class StreamManager:
             pass
         return 180
 
+    async def _fetch_video_url(self, suno_url: str) -> str | None:
+        """Scrape a Suno song page for its video_cover_url."""
+        if not suno_url:
+            return None
+        try:
+            headers = {"User-Agent": _BROWSER_UA}
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(suno_url, headers=headers,
+                                    timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status != 200:
+                        return None
+                    html = await resp.text()
+            m = re.search(r'"video_cover_url"\s*:\s*"([^"]+)"', html)
+            if not m:
+                m = re.search(r'video_cover_url\\":\\"([^"\\]+)\\"', html)
+            if m:
+                url = m.group(1).replace("\\/", "/")
+                print(f"[radio] Song PiP video URL: {url[:60]}")
+                return url
+        except Exception as e:
+            print(f"[radio] _fetch_video_url error: {e}")
+        return None
+
+    async def _download_file(self, url: str, dest: str) -> bool:
+        """Download url to dest. Returns True on success."""
+        if os.path.exists(dest):
+            return True
+        try:
+            headers = {"User-Agent": _BROWSER_UA}
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(url, headers=headers,
+                                    timeout=aiohttp.ClientTimeout(total=60)) as resp:
+                    if resp.status != 200:
+                        return False
+                    data = await resp.read()
+            with open(dest, "wb") as fh:
+                fh.write(data)
+            return True
+        except Exception as e:
+            print(f"[radio] _download_file error ({url[:60]}): {e}")
+            return False
+
+    async def _prepare_song_pip_clip(self, song: dict) -> str | None:
+        """Download Suno video (or cover fallback) and loop-trim it to song duration.
+        Returns path to the clip mp4, or None on complete failure.
+        Raw source files are cached in suno_cache/video/ (persistent, reusable).
+        Loop clips live in _temp_dir and are cleaned up on stream stop."""
+        uuid = song.get("uuid") or song.get("id")
+        if not uuid:
+            return None
+        duration = max(5, int(song.get("duration") or 180) + 2)  # +2s safety
+        out_path = os.path.join(self._temp_dir, f"pip_{uuid}.mp4")
+        if os.path.exists(out_path):
+            self._song_pip_paths[uuid] = out_path
+            return out_path
+
+        # Persistent video source cache (survives stream restarts, ~10 MB/song)
+        vid_cache_dir = os.path.join(self.radio_dir, "suno_cache", "video")
+        os.makedirs(vid_cache_dir, exist_ok=True)
+
+        # 1) Fetch video URL
+        if uuid not in self._video_url_cache:
+            suno_url = song.get("suno_url") or f"https://suno.com/song/{uuid}"
+            self._video_url_cache[uuid] = await self._fetch_video_url(suno_url)
+        video_url = self._video_url_cache.get(uuid)
+
+        # 2) Try Suno video clip first
+        if video_url:
+            raw_path = os.path.join(vid_cache_dir, f"raw_vid_{uuid}.mp4")  # persistent
+            if await self._download_file(video_url, raw_path):
+                proc = await asyncio.create_subprocess_exec(
+                    "ffmpeg", "-y",
+                    "-stream_loop", "-1", "-i", raw_path,
+                    "-t", str(duration),
+                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+                    "-an", out_path,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await proc.wait()
+                if os.path.exists(out_path):
+                    print(f"[radio] Song PiP clip (video): {uuid}")
+                    self._song_pip_paths[uuid] = out_path
+                    return out_path
+
+        # 3) Fallback: cover image
+        image_url = song.get("image_url") or f"https://cdn1.suno.ai/image_large_{uuid}.jpeg"
+        cover_path = os.path.join(vid_cache_dir, f"cover_{uuid}.jpg")  # persistent
+        if await self._download_file(image_url, cover_path):
+            proc = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-y",
+                "-loop", "1", "-i", cover_path,
+                "-t", str(duration),
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+                "-vf", "scale=480:480:force_original_aspect_ratio=decrease,"
+                       "pad=480:480:(ow-iw)/2:(oh-ih)/2",
+                "-an", out_path,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await proc.wait()
+            if os.path.exists(out_path):
+                print(f"[radio] Song PiP clip (cover fallback): {uuid}")
+                self._song_pip_paths[uuid] = out_path
+                return out_path
+
+        # 4) Last resort: black frame
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", f"color=c=black:s=480x480:r=5:d={duration}",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+            "-an", out_path,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.wait()
+        if os.path.exists(out_path):
+            self._song_pip_paths[uuid] = out_path
+            return out_path
+        return None
+
+    def _cleanup_video_source_cache(self):
+        """Remove raw video source files that no longer belong to the current playlist.
+        Keeps only files whose UUID is in the active playlist (+ cover fallbacks)."""
+        vid_cache_dir = os.path.join(self.radio_dir, "suno_cache", "video")
+        if not os.path.isdir(vid_cache_dir):
+            return
+        active_uuids = {s.get("uuid") or s.get("id") for s in self.playlist}
+        removed = 0
+        for fname in os.listdir(vid_cache_dir):
+            # Files are named raw_vid_{uuid}.mp4 or cover_{uuid}.jpg
+            parts = fname.replace(".mp4", "").replace(".jpg", "").split("_", 2)
+            uuid = parts[-1] if len(parts) >= 3 else None
+            if uuid and uuid not in active_uuids:
+                try:
+                    os.remove(os.path.join(vid_cache_dir, fname))
+                    removed += 1
+                except OSError:
+                    pass
+        if removed:
+            print(f"[radio] Video cache cleanup: removed {removed} stale file(s)")
+
+    async def _prepare_all_song_pip_clips(self):
+        """Download + transcode pip clips for all playlist songs (semaphore-limited)."""
+        sem = asyncio.Semaphore(3)  # max 3 parallel downloads/transcodes
+
+        async def _prep(song):
+            async with sem:
+                await self._prepare_song_pip_clip(song)
+
+        total = len(self.playlist)
+        print(f"[radio] Preparing {total} Song-PiP clips…")
+        # Clean up stale source files from previous playlists first
+        self._cleanup_video_source_cache()
+        await asyncio.gather(*[_prep(s) for s in self.playlist])
+        ready = sum(1 for s in self.playlist
+                    if self._song_pip_paths.get(s.get("uuid") or s.get("id")))
+        print(f"[radio] Song-PiP ready: {ready}/{total}")
+
+    def _build_song_pip_concat(self) -> str | None:
+        """Build a video concat file for the song-pip track (mirrors audio concat)."""
+        n = len(self.playlist)
+        path = os.path.join(self._temp_dir, "song_pip.txt")
+        with open(path, "w") as f:
+            for _ in range(_PLAYLIST_REPEATS):
+                for i in range(n):
+                    idx = (self._concat_start + i) % n
+                    song = self.playlist[idx]
+                    uuid = song.get("uuid") or song.get("id")
+                    clip = self._song_pip_paths.get(uuid)
+                    if clip and os.path.exists(clip):
+                        safe = clip.replace("'", "'\\''")
+                        f.write(f"file '{safe}'\n")
+        self._song_pip_concat_path = path
+        return path
+
     async def start(self):
         if self.is_running:
             return {"error": "Stream is already running."}
@@ -533,6 +712,11 @@ class StreamManager:
         if shuffle:
             random.shuffle(self.playlist)
         self._font_path = await self._resolve_font()
+        # Clean up any orphaned temp dirs from previous crashed sessions
+        import glob as _glob
+        for stale in _glob.glob(os.path.join(tempfile.gettempdir(), "radio_*")):
+            if os.path.isdir(stale):
+                shutil.rmtree(stale, ignore_errors=True)
         self._temp_dir = tempfile.mkdtemp(prefix="radio_")
         self._overlay_path = os.path.join(self._temp_dir, "nowplaying.txt")
         self._lyrics_path = os.path.join(self._temp_dir, "lyrics.txt")
@@ -541,6 +725,9 @@ class StreamManager:
             f.write(" ")
         # Write playlist title header
         await self._write_header()
+        # Song-Video PiP: pre-generate loop clips if feature is enabled
+        if (await self.db.get_setting("radio_song_pip_enabled") or "off") == "on":
+            await self._prepare_all_song_pip_clips()
         # Connect to Twitch chat if configured (Helix-based bot, modern auth)
         client_id = await self.db.get_setting("radio_twitch_client_id")
         refresh_tok = await self.db.get_setting("radio_twitch_refresh_token")
@@ -704,6 +891,14 @@ class StreamManager:
                     lines = []
                     for line in raw.split("\n"):
                         cleaned = _normalize_text(line)
+                        # Strip any trailing char above Latin Extended-B that
+                        # isn't a letter or digit — catches Suno line-end
+                        # decorators (music notes, arrows, etc.) that pass
+                        # _renderable_char but have no glyph in Noto Sans.
+                        while (cleaned and ord(cleaned[-1]) > 0x024F
+                               and unicodedata.category(cleaned[-1])[0] not in ('L', 'N')):
+                            cleaned = cleaned[:-1]
+                        cleaned = cleaned.strip()
                         if not cleaned:
                             continue
                         # Drop stage directions like [intro], [verse], [chorus],
@@ -911,9 +1106,11 @@ class StreamManager:
         )
         # Lyrics: fixed-width semi-transparent box on the left so it never
         # resizes with content and never overlaps the PiP camera on the right.
-        # The 1920×1080 frame: PiP at x=1500–1880, lyrics box at x=40–1180.
+        # Width is configurable: 80% (default, 1140 px) → 60% → 40% of frame.
         lyrics_box_x, lyrics_box_y = 40, 140
-        lyrics_box_w, lyrics_box_h = 1140, 800
+        _lyrics_width_pct = int(await self.db.get_setting("radio_lyrics_width") or "80")
+        lyrics_box_w = max(200, round(1140 * _lyrics_width_pct / 80))
+        lyrics_box_h = 800
         lyrics_pad = 24
         lyrics_box = (
             f"drawbox=x={lyrics_box_x}:y={lyrics_box_y}"
@@ -938,21 +1135,32 @@ class StreamManager:
             f":x=(w-text_w)/2:y=30"
         )
 
-        if pip_input_idx is not None:
-            # Build filter_complex with PiP overlay
-            pip_format = await self.db.get_setting("radio_pip_format") or "16:9"
-            pip_scale_pct = int(await self.db.get_setting("radio_pip_scale") or "25")
-            pip_position = await self.db.get_setting("radio_pip_position") or "center-right"
+        # --- Song-Video PiP (second overlay) ---------------------------------
+        song_pip_input_idx = None
+        song_pip_enabled = (await self.db.get_setting("radio_song_pip_enabled") or "off") == "on"
+        if song_pip_enabled and self._song_pip_paths:
+            song_pip_concat = self._build_song_pip_concat()
+            if song_pip_concat:
+                # Next available input index (after background + audio + optional PiP)
+                song_pip_input_idx = 2 if pip_input_idx is None else pip_input_idx + 1
+                cmd += ["-f", "concat", "-safe", "0", "-i", song_pip_concat]
+                print(f"[radio] Song-PiP input idx={song_pip_input_idx}")
 
-            # Calculate PiP dimensions based on aspect ratio and scale
-            if pip_format == "9:16":
-                pip_h = int(1080 * pip_scale_pct / 100)
-                pip_w = int(pip_h * 9 / 16)
+        # --- Build overlay chain ------------------------------------------
+        # Helper: resolve PiP dimensions + position for any pip block
+        def _pip_dims_pos(fmt_key, scale_key, pos_key, defaults):
+            fmt = defaults.get(fmt_key, "16:9")
+            scale_pct = int(defaults.get(scale_key, 25))
+            position = defaults.get(pos_key, "center-right")
+            if fmt == "9:16":
+                h = int(1080 * scale_pct / 100)
+                w = int(h * 9 / 16)
+            elif fmt == "1:1":
+                h = int(1080 * scale_pct / 100)
+                w = h
             else:  # 16:9
-                pip_w = int(1920 * pip_scale_pct / 100)
-                pip_h = int(pip_w * 9 / 16)
-
-            # Position mapping with 40px padding
+                w = int(1920 * scale_pct / 100)
+                h = int(w * 9 / 16)
             pad = 40
             pos_map = {
                 "top-left":      (f"{pad}", f"{pad}"),
@@ -965,24 +1173,64 @@ class StreamManager:
                 "bottom-center": (f"(W-w)/2", f"H-h-{pad}"),
                 "bottom-right":  (f"W-w-{pad}", f"H-h-{pad}"),
             }
-            ox, oy = pos_map.get(pip_position, pos_map["center-right"])
+            ox, oy = pos_map.get(position, pos_map["center-right"])
+            return w, h, ox, oy
 
-            fc = (
-                f"[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,"
-                f"pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p[bg];"
-                f"[{pip_input_idx}:v]scale={pip_w}:{pip_h}:force_original_aspect_ratio=decrease,"
-                f"pad={pip_w}:{pip_h}:(ow-iw)/2:(oh-ih)/2[pip];"
-                f"[bg][pip]overlay={ox}:{oy},"
-                f"{header},{now_playing},{lyrics_box},{lyrics}[vout]"
+        # Collect active overlays: (input_idx, w, h, ox, oy)
+        overlays = []
+        if pip_input_idx is not None:
+            pip_fmt      = await self.db.get_setting("radio_pip_format") or "16:9"
+            pip_scale    = int(await self.db.get_setting("radio_pip_scale") or "25")
+            pip_position = await self.db.get_setting("radio_pip_position") or "center-right"
+            pw, ph, pox, poy = _pip_dims_pos(
+                "fmt", "scale", "pos",
+                {"fmt": pip_fmt, "scale": pip_scale, "pos": pip_position}
             )
+            overlays.append((pip_input_idx, pw, ph, pox, poy))
+
+        if song_pip_input_idx is not None:
+            spip_fmt      = await self.db.get_setting("radio_song_pip_format") or "9:16"
+            spip_scale    = int(await self.db.get_setting("radio_song_pip_scale") or "20")
+            spip_position = await self.db.get_setting("radio_song_pip_position") or "top-right"
+            sw, sh, sox, soy = _pip_dims_pos(
+                "fmt", "scale", "pos",
+                {"fmt": spip_fmt, "scale": spip_scale, "pos": spip_position}
+            )
+            overlays.append((song_pip_input_idx, sw, sh, sox, soy))
+
+        text_filters = f"{header},{now_playing},{lyrics_box},{lyrics}"
+
+        if overlays:
+            # Chain overlays: bg → pip0 → [pip1 →] drawtext → [vout]
+            bg = (
+                "[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,"
+                "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p[bg0]"
+            )
+            parts = [bg]
+            prev = "bg0"
+            for i, (inp, w, h, ox, oy) in enumerate(overlays):
+                scale = (
+                    f"[{inp}:v]scale={w}:{h}:force_original_aspect_ratio=decrease,"
+                    f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2[p{i}]"
+                )
+                parts.append(scale)
+                if i == len(overlays) - 1:
+                    parts.append(
+                        f"[{prev}][p{i}]overlay={ox}:{oy},{text_filters}[vout]"
+                    )
+                else:
+                    nxt = f"m{i}"
+                    parts.append(f"[{prev}][p{i}]overlay={ox}:{oy}[{nxt}]")
+                    prev = nxt
+            fc = ";".join(parts)
             cmd += ["-filter_complex", fc, "-map", "[vout]", "-map", "1:a:0"]
         else:
-            # Simple filter without PiP
+            # Simple filter without any PiP
             cmd += ["-map", "0:v:0", "-map", "1:a:0"]
             vf = (
                 "scale=1920:1080:force_original_aspect_ratio=decrease,"
                 "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,"
-                f"format=yuv420p,{header},{now_playing},{lyrics_box},{lyrics}"
+                f"format=yuv420p,{text_filters}"
             )
             cmd += ["-vf", vf]
 

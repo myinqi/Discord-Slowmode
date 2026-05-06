@@ -171,6 +171,39 @@
             </div>
         </div>
 
+        <!-- Lyrics Box -->
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            <div class="px-5 py-4 border-b border-gray-700/50">
+                <h3 class="text-white font-semibold">Lyrics Box</h3>
+            </div>
+            <div class="p-5">
+                <form method="POST" class="space-y-3">
+                    <input type="hidden" name="action" value="save_lyrics_config">
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-2">Box Width</label>
+                        <div class="flex gap-3">
+                            {% for val, lbl, hint in [('80', '80%', 'Default'), ('60', '60%', 'Narrower'), ('40', '40%', 'Compact')] %}
+                            <label class="flex-1 cursor-pointer">
+                                <input type="radio" name="lyrics_width" value="{{ val }}" class="hidden peer"
+                                    {% if lyrics_width == val %}checked{% endif %}>
+                                <span class="block text-center py-2 rounded text-sm transition-colors
+                                    peer-checked:bg-discord-blurple peer-checked:text-white
+                                    bg-discord-darker text-gray-400 hover:bg-gray-600/40">
+                                    <span class="block font-medium">{{ lbl }}</span>
+                                    <span class="block text-xs opacity-70">{{ hint }}</span>
+                                </span>
+                            </label>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    <button type="submit"
+                        class="w-full px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg font-medium text-sm transition-colors">
+                        Save Lyrics Config
+                    </button>
+                </form>
+            </div>
+        </div>
+
         <!-- PiP Overlay -->
         <div class="bg-discord-dark rounded-xl border border-gray-700/50">
             <div class="px-5 py-4 border-b border-gray-700/50">
@@ -249,6 +282,70 @@
                     <button type="submit"
                         class="w-full px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg font-medium text-sm transition-colors">
                         Save PiP Config
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Song Video PiP -->
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            <div class="px-5 py-4 border-b border-gray-700/50">
+                <h3 class="text-white font-semibold">Song Video PiP</h3>
+                <p class="text-gray-400 text-xs mt-0.5">Shows the Suno video clip of each playing song as a second overlay. Falls back to cover art if no video is available.</p>
+            </div>
+            <div class="p-5">
+                <form method="POST" class="space-y-4">
+                    <input type="hidden" name="action" value="save_song_pip_config">
+                    <!-- Enable -->
+                    <div class="flex items-center gap-3">
+                        <label class="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" name="song_pip_enabled" value="on"
+                                {% if song_pip_enabled == 'on' %}checked{% endif %}
+                                class="sr-only peer">
+                            <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-discord-blurple"></div>
+                        </label>
+                        <span class="text-gray-300 text-sm">Enable Song Video PiP</span>
+                    </div>
+                    <!-- Format -->
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">Aspect Ratio</label>
+                        <div class="flex gap-3">
+                            {% for val, lbl in [('16:9','16:9'),('9:16','9:16'),('1:1','1:1')] %}
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="radio" name="song_pip_format" value="{{ val }}"
+                                    {% if song_pip_format == val %}checked{% endif %}
+                                    class="w-4 h-4 border-gray-600 bg-discord-darker text-discord-blurple focus:ring-discord-blurple">
+                                <span class="text-gray-300 text-sm">{{ lbl }}</span>
+                            </label>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    <!-- Size -->
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">Size: <span id="spip-size-label" class="text-gray-300">{{ song_pip_scale }}%</span></label>
+                        <input type="range" name="song_pip_scale" min="5" max="50" value="{{ song_pip_scale }}"
+                            class="w-full accent-discord-blurple"
+                            oninput="document.getElementById('spip-size-label').textContent=this.value+'%'">
+                    </div>
+                    <!-- Position -->
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">Position</label>
+                        <div class="grid grid-cols-3 gap-1 w-40">
+                            {% for pos, label in [('top-left','↖'),('top-center','↑'),('top-right','↗'),('center-left','←'),('center','●'),('center-right','→'),('bottom-left','↙'),('bottom-center','↓'),('bottom-right','↘')] %}
+                            <label class="cursor-pointer">
+                                <input type="radio" name="song_pip_position" value="{{ pos }}" class="hidden peer"
+                                    {% if song_pip_position == pos %}checked{% endif %}>
+                                <span class="block text-center py-1.5 rounded text-sm transition-colors
+                                    peer-checked:bg-discord-blurple peer-checked:text-white
+                                    bg-discord-darker text-gray-400 hover:bg-gray-600/40">{{ label }}</span>
+                            </label>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    <p class="text-gray-500 text-xs">Clips are pre-generated at stream start. This may add 1–3 min to startup time depending on playlist size.</p>
+                    <button type="submit"
+                        class="w-full px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg font-medium text-sm transition-colors">
+                        Save Song Video PiP Config
                     </button>
                 </form>
             </div>

@@ -2776,6 +2776,28 @@ def create_app(db: Database, bot=None) -> Quart:
                 from quart import jsonify
                 return jsonify({"ok": True})
 
+            elif action == "save_lyrics_config":
+                lyrics_width = form.get("lyrics_width", "80")
+                if lyrics_width not in ("80", "60", "40"):
+                    lyrics_width = "80"
+                await db.set_setting("radio_lyrics_width", lyrics_width)
+                await flash("Lyrics config saved.", "success")
+                return redirect(url_for("radio"))
+
+            elif action == "save_song_pip_config":
+                spip_enabled  = "on" if form.get("song_pip_enabled") == "on" else "off"
+                spip_format   = form.get("song_pip_format", "9:16")
+                spip_scale    = form.get("song_pip_scale", "20")
+                spip_position = form.get("song_pip_position", "top-right")
+                await db.set_setting("radio_song_pip_enabled",  spip_enabled)
+                await db.set_setting("radio_song_pip_format",   spip_format)
+                await db.set_setting("radio_song_pip_scale",    spip_scale)
+                await db.set_setting("radio_song_pip_position", spip_position)
+                await flash("Song Video PiP config saved.", "success")
+                if stream_manager.is_running:
+                    await stream_manager.reload_pip()
+                return redirect(url_for("radio"))
+
             elif action == "save_pip_config":
                 pip_mode = form.get("pip_mode", "off")
                 pip_format = form.get("pip_format", "16:9")
@@ -2883,6 +2905,11 @@ def create_app(db: Database, bot=None) -> Quart:
         pip_filename = await db.get_setting("radio_pip_filename") or ""
         pip_file_type = await db.get_setting("radio_pip_file_type") or "image"
         pip_rtmp_key = await db.get_setting("radio_pip_rtmp_key") or ""
+        song_pip_enabled  = await db.get_setting("radio_song_pip_enabled")  or "off"
+        song_pip_format   = await db.get_setting("radio_song_pip_format")   or "9:16"
+        song_pip_scale    = await db.get_setting("radio_song_pip_scale")    or "20"
+        song_pip_position = await db.get_setting("radio_song_pip_position") or "top-right"
+        lyrics_width = await db.get_setting("radio_lyrics_width") or "80"
 
         return await render_template(
             "radio.html",
@@ -2904,6 +2931,9 @@ def create_app(db: Database, bot=None) -> Quart:
             pip_mode=pip_mode, pip_format=pip_format, pip_scale=pip_scale,
             pip_position=pip_position, pip_filename=pip_filename,
             pip_file_type=pip_file_type, pip_rtmp_key=pip_rtmp_key,
+            song_pip_enabled=song_pip_enabled, song_pip_format=song_pip_format,
+            song_pip_scale=song_pip_scale, song_pip_position=song_pip_position,
+            lyrics_width=lyrics_width,
         )
 
     @app.route("/radio/files/<filename>")
