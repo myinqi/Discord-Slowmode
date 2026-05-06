@@ -3882,7 +3882,14 @@ def create_app(db: Database, bot=None) -> Quart:
     @app.route("/suno-info")
     @permission_required('suno_info')
     async def suno_info():
-        return await render_template("suno_info.html", channels=await _get_player_channels())
+        import json as _json
+        _user = await db.get_web_user_by_id(session["user_id"])
+        _perms = []
+        try: _perms = _json.loads(_user.get("permissions") or "[]")
+        except (ValueError, TypeError): pass
+        has_party = bool(_user.get("is_admin")) or "party_playlist" in _perms
+        return await render_template("suno_info.html",
+            channels=await _get_player_channels(), has_party=has_party)
 
     @app.route("/api/suno-info/playlist")
     @permission_required('suno_info')

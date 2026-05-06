@@ -242,9 +242,11 @@
                 <button id="src-channel-btn"
                     class="px-3 py-1 rounded-md bg-transparent text-gray-400 hover:text-white font-medium transition-colors"
                     onclick="switchSource('channel')">Discord Channel</button>
+                {% if has_party %}
                 <button id="src-party-btn"
                     class="px-3 py-1 rounded-md bg-transparent text-gray-400 hover:text-white font-medium transition-colors"
                     onclick="switchSource('party')">Party Playlist</button>
+                {% endif %}
             </div>
             <!-- Playlist URL row -->
             <div id="src-playlist-row" class="flex flex-col sm:flex-row gap-2">
@@ -257,6 +259,7 @@
                 </button>
             </div>
             <!-- Party Playlist row -->
+            {% if has_party %}
             <div id="src-party-row" style="display:none" class="flex flex-wrap items-center gap-2">
                 <button id="btn-reload-party"
                     class="px-3 py-1.5 bg-discord-darker hover:bg-gray-700 border border-gray-600 text-gray-300 rounded-lg text-sm font-medium transition-colors whitespace-nowrap">
@@ -278,6 +281,7 @@
                 </button>
                 <span id="party-status" class="text-gray-500 text-xs"></span>
             </div>
+            {% endif %}
             <!-- Discord channel row -->
             <div id="src-channel-row" class="flex-col gap-2" style="display:none">
                 <div class="flex flex-wrap gap-2 mb-2">
@@ -571,6 +575,7 @@ var SHUFFLE_ORDER = [];   // shuffled SONGS indices
 var PLAYED_SET = new Set(); // indices of played songs
 var HIDE_PLAYED = false;  // hide played songs from table
 var ARTIST_FILTER = '';   // artist name filter (channel mode only)
+var HAS_PARTY = {{ 'true' if has_party else 'false' }};
 var audio = document.getElementById('audio');
 var LY_TEXT = '';         // raw lyrics for the current song (for theater mode)
 var LY_TRANSLATED = null; // translated text (null = showing original)
@@ -590,10 +595,10 @@ function switchSource(src){
     var off = 'px-3 py-1 rounded-md font-medium transition-colors text-xs bg-transparent text-gray-400 hover:text-white';
     document.getElementById('src-playlist-row').style.display  = src==='playlist' ? '' : 'none';
     document.getElementById('src-channel-row').style.display   = src==='channel'  ? 'flex' : 'none';
-    document.getElementById('src-party-row').style.display     = src==='party'    ? '' : 'none';
+    var _pr = document.getElementById('src-party-row'); if(_pr) _pr.style.display = src==='party' ? '' : 'none';
     document.getElementById('src-playlist-btn').className = src==='playlist' ? on : off;
     document.getElementById('src-channel-btn').className  = src==='channel'  ? on : off;
-    document.getElementById('src-party-btn').className    = src==='party'    ? on : off;
+    var _pb = document.getElementById('src-party-btn'); if(_pb) _pb.className = src==='party' ? on : off;
     // Party-specific UI
     var isParty = src === 'party';
     document.getElementById('si-table-wrap').style.display = isParty ? 'none' : '';
@@ -603,6 +608,7 @@ function switchSource(src){
     if(isParty) loadPartyPlaylist();
     try { localStorage.setItem('suno-info-source', src); } catch(e){}
 }
+{% if has_party %}
 document.getElementById('btn-reload-party').onclick = loadPartyPlaylist;
 document.getElementById('btn-party-add').onclick = async function(){
     var input = document.getElementById('party-submit-url');
@@ -638,6 +644,7 @@ document.getElementById('btn-party-reset').onclick = async function(){
     } catch(e){ statusEl.textContent = '✗ '+e.message; }
     this.disabled = false;
 };
+{% endif %}
 
 /* --- Party Playlist ------------------------------------------------------- */
 async function loadPartyPlaylist(){
@@ -2218,7 +2225,7 @@ function syncTheaterFromState(){
     }
     // Restore source tab (playlist vs discord channel vs party playlist)
     var lastSrc = localStorage.getItem('suno-info-source');
-    if(lastSrc === 'channel' || lastSrc === 'party') switchSource(lastSrc);
+    if(lastSrc === 'channel' || (lastSrc === 'party' && HAS_PARTY)) switchSource(lastSrc);
     // Restore shuffle state
     if(localStorage.getItem('suno-info-shuffle') === '1') toggleShuffle();
 
