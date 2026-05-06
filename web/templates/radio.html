@@ -4,8 +4,46 @@
 <h2 class="text-2xl font-bold text-white mb-6">📻 Twitch Radio Stream Manager</h2>
 
 <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
-    <!-- Left: Config + Controls -->
+    <!-- Left: Controls + Config -->
     <div class="space-y-6">
+        <!-- Stream Controls -->
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            <div class="px-5 py-4 border-b border-gray-700/50">
+                <h3 class="text-white font-semibold">Stream Controls</h3>
+            </div>
+            <div class="p-5">
+                <div id="stream-status" class="mb-4">
+                    <div class="flex items-center gap-2 mb-2">
+                        <span class="inline-block w-2 h-2 bg-gray-500 rounded-full" id="status-dot"></span>
+                        <span class="text-gray-400 text-sm" id="status-text">Offline</span>
+                    </div>
+                    <p class="text-gray-500 text-xs" id="now-playing">—</p>
+                </div>
+                <div class="grid grid-cols-5 gap-2">
+                    <button onclick="streamAction('prev')"
+                        class="px-3 py-2 bg-gray-600/30 hover:bg-gray-600/50 text-gray-300 rounded-lg text-sm transition-colors" title="Previous">
+                        ⏮
+                    </button>
+                    <button onclick="streamAction('start')" id="btn-play"
+                        class="px-3 py-2 bg-green-600/30 hover:bg-green-600/50 text-green-400 rounded-lg text-sm transition-colors" title="Start">
+                        ▶️
+                    </button>
+                    <button onclick="streamAction('stop')" id="btn-stop"
+                        class="px-3 py-2 bg-red-600/30 hover:bg-red-600/50 text-red-400 rounded-lg text-sm transition-colors" title="Stop">
+                        ⏹
+                    </button>
+                    <button onclick="streamAction('next')"
+                        class="px-3 py-2 bg-gray-600/30 hover:bg-gray-600/50 text-gray-300 rounded-lg text-sm transition-colors" title="Next">
+                        ⏭
+                    </button>
+                    <button onclick="streamAction('reload')"
+                        class="px-3 py-2 bg-blue-600/30 hover:bg-blue-600/50 text-blue-400 rounded-lg text-sm transition-colors" title="Reload Playlist">
+                        🔄
+                    </button>
+                </div>
+            </div>
+        </div>
+
         <!-- Stream Config -->
         <div class="bg-discord-dark rounded-xl border border-gray-700/50">
             <div class="px-5 py-4 border-b border-gray-700/50">
@@ -130,44 +168,6 @@
                         Save Config
                     </button>
                 </form>
-            </div>
-        </div>
-
-        <!-- Stream Controls -->
-        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
-            <div class="px-5 py-4 border-b border-gray-700/50">
-                <h3 class="text-white font-semibold">Stream Controls</h3>
-            </div>
-            <div class="p-5">
-                <div id="stream-status" class="mb-4">
-                    <div class="flex items-center gap-2 mb-2">
-                        <span class="inline-block w-2 h-2 bg-gray-500 rounded-full" id="status-dot"></span>
-                        <span class="text-gray-400 text-sm" id="status-text">Offline</span>
-                    </div>
-                    <p class="text-gray-500 text-xs" id="now-playing">—</p>
-                </div>
-                <div class="grid grid-cols-5 gap-2">
-                    <button onclick="streamAction('prev')"
-                        class="px-3 py-2 bg-gray-600/30 hover:bg-gray-600/50 text-gray-300 rounded-lg text-sm transition-colors" title="Previous">
-                        ⏮
-                    </button>
-                    <button onclick="streamAction('start')" id="btn-play"
-                        class="px-3 py-2 bg-green-600/30 hover:bg-green-600/50 text-green-400 rounded-lg text-sm transition-colors" title="Start">
-                        ▶️
-                    </button>
-                    <button onclick="streamAction('stop')" id="btn-stop"
-                        class="px-3 py-2 bg-red-600/30 hover:bg-red-600/50 text-red-400 rounded-lg text-sm transition-colors" title="Stop">
-                        ⏹
-                    </button>
-                    <button onclick="streamAction('next')"
-                        class="px-3 py-2 bg-gray-600/30 hover:bg-gray-600/50 text-gray-300 rounded-lg text-sm transition-colors" title="Next">
-                        ⏭
-                    </button>
-                    <button onclick="streamAction('reload')"
-                        class="px-3 py-2 bg-blue-600/30 hover:bg-blue-600/50 text-blue-400 rounded-lg text-sm transition-colors" title="Reload Playlist">
-                        🔄
-                    </button>
-                </div>
             </div>
         </div>
 
