@@ -10,6 +10,10 @@ from discord import app_commands
 from discord.ext import commands
 
 SUNO_URL_PATTERN = re.compile(r'https://suno\.com/(?:s|song)/[\w-]+')
+YOUTUBE_URL_RE   = re.compile(
+    r'(?:https?://)?(?:www\.)?(?:youtu\.be/|youtube\.com/(?:watch\?v=|embed/|v/|shorts/))'
+    r'([A-Za-z0-9_-]{11})'
+)
 SUNO_PLAYLIST_PATTERN = re.compile(r'https://suno\.com/playlist/[\w-]+')
 SPOTIFY_ALBUM_PATTERN = re.compile(r'https://open\.spotify\.com/album/[\w?=&-]+')
 
@@ -1449,13 +1453,33 @@ class CommandsCog(commands.Cog):
             pass
         return None, None, None
 
+    async def _fetch_youtube_info(self, url: str):
+        """Fetch title, author and thumbnail from a YouTube URL via oEmbed."""
+        import aiohttp
+        try:
+            oembed = f"https://www.youtube.com/oembed?url={url}&format=json"
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(oembed, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return None, None, None
+                    data = await resp.json()
+                    title  = data.get("title")
+                    author = data.get("author_name")
+                    m = YOUTUBE_URL_RE.search(url)
+                    thumb = f"https://img.youtube.com/vi/{m.group(1)}/hqdefault.jpg" if m else None
+                    return title, author, thumb
+        except Exception:
+            return None, None, None
+
     @app_commands.command(name="party-submit", description="Submit a song to the Listening Party playlist (max 2 per user)")
-    @app_commands.describe(url="Suno song URL to submit")
+    @app_commands.describe(url="Suno or YouTube URL to submit")
     async def party_submit(self, interaction: discord.Interaction, url: str):
         await interaction.response.defer(ephemeral=True)
         try:
-            if not SUNO_URL_PATTERN.search(url):
-                await interaction.followup.send("Invalid URL. Please provide a valid Suno song link.", ephemeral=True)
+            is_suno = bool(SUNO_URL_PATTERN.search(url))
+            is_yt   = bool(YOUTUBE_URL_RE.search(url))
+            if not is_suno and not is_yt:
+                await interaction.followup.send("Invalid URL. Please provide a valid Suno or YouTube link.", ephemeral=True)
                 return
 
             max_songs = int(await self.bot.db.get_setting("party_max_songs") or "2")
@@ -1464,8 +1488,10 @@ class CommandsCog(commands.Cog):
                 await interaction.followup.send(f"You have already submitted {max_songs} songs. Remove one first with `/party-remove`.", ephemeral=True)
                 return
 
-            # Auto-fetch song title, artist and cover image from Suno page
-            title, artist, image_url = await self._fetch_suno_info(url)
+            if is_suno:
+                title, artist, image_url = await self._fetch_suno_info(url)
+            else:
+                title, artist, image_url = await self._fetch_youtube_info(url)
 
             await self.bot.db.party_submit_song(
                 user_id=interaction.user.id,
@@ -1679,7 +1705,7 @@ class CommandsCog(commands.Cog):
         # Listening Party (all users + admin reset)
         if has_admin:
             party_cmds = (
-                "**`/party-submit <url>`** — Submit a Suno song (max 2 per user)\n"
+                "**`/party-submit <url>`** — Submit a Suno or YouTube song (max 2 per user)\n"
                 "**`/party-songs`** — View your submitted songs\n"
                 "**`/party-remove <id>`** — Remove one of your songs\n"
                 "**`/party-list`** — List all submitted songs\n"
@@ -1688,7 +1714,7 @@ class CommandsCog(commands.Cog):
             )
         else:
             party_cmds = (
-                "**`/party-submit <url>`** — Submit a Suno song (max 2 per user)\n"
+                "**`/party-submit <url>`** — Submit a Suno or YouTube song (max 2 per user)\n"
                 "**`/party-songs`** — View your submitted songs\n"
                 "**`/party-remove <id>`** — Remove one of your songs\n"
                 "**`/party-list`** — List all submitted songs\n"
