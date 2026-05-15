@@ -10,6 +10,10 @@ from quart import Quart, render_template, request, redirect, url_for, session, f
 from bot.database import Database
 
 SUNO_URL_PATTERN = re.compile(r'https://suno\.com/(?:s|song)/[\w-]+')
+YOUTUBE_URL_RE   = re.compile(
+    r'(?:https?://)?(?:www\.)?(?:youtu\.be/|youtube\.com/(?:watch\?v=|embed/|v/|shorts/))'
+    r'([A-Za-z0-9_-]{11})'
+)
 
 
 def create_app(db: Database, bot=None) -> Quart:
@@ -2436,6 +2440,24 @@ def create_app(db: Database, bot=None) -> Quart:
 
     # --- Shared helpers ---
 
+    async def _fetch_youtube_info(url: str) -> tuple[str | None, str | None, str | None]:
+        """Fetch title, author and thumbnail from a YouTube URL via oEmbed.
+        Returns (title, author, thumbnail_url)."""
+        try:
+            oembed = f"https://www.youtube.com/oembed?url={url}&format=json"
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(oembed, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return None, None, None
+                    data = await resp.json()
+                    title  = data.get("title")
+                    author = data.get("author_name")
+                    m = YOUTUBE_URL_RE.search(url)
+                    thumb = f"https://img.youtube.com/vi/{m.group(1)}/hqdefault.jpg" if m else None
+                    return title, author, thumb
+        except Exception:
+            return None, None, None
+
     async def _fetch_suno_info(url: str) -> tuple[str | None, str | None, str | None]:
         """Fetch song title, artist and image from a Suno URL. Returns (title, artist, image_url)."""
         import html as _html
@@ -3174,10 +3196,13 @@ def create_app(db: Database, bot=None) -> Quart:
 
             if action == "submit_song":
                 url = form.get("url", "").strip()
-                if not SUNO_URL_PATTERN.search(url):
-                    await flash("Invalid URL. Please provide a valid Suno song link.", "error")
+                if SUNO_URL_PATTERN.search(url):
+                    song_title, artist, image_url = await _fetch_suno_info(url)
+                elif YOUTUBE_URL_RE.search(url):
+                    song_title, artist, image_url = await _fetch_youtube_info(url)
+                else:
+                    await flash("Invalid URL. Please provide a valid Suno or YouTube link.", "error")
                     return redirect(url_for("party_playlist"))
-                song_title, artist, image_url = await _fetch_suno_info(url)
                 await db.party_submit_song(
                     user_id=0,
                     user_name=artist or "Unknown Artist",
@@ -3380,9 +3405,14 @@ def create_app(db: Database, bot=None) -> Quart:
         from quart import jsonify
         data = await request.get_json(silent=True) or {}
         url = (data.get("url") or "").strip()
-        if not url or not SUNO_URL_PATTERN.search(url):
-            return jsonify({"ok": False, "error": "Invalid Suno URL"}), 400
-        song_title, artist, image_url = await _fetch_suno_info(url)
+        if not url:
+            return jsonify({"ok": False, "error": "Please enter a URL"}), 400
+        if SUNO_URL_PATTERN.search(url):
+            song_title, artist, image_url = await _fetch_suno_info(url)
+        elif YOUTUBE_URL_RE.search(url):
+            song_title, artist, image_url = await _fetch_youtube_info(url)
+        else:
+            return jsonify({"ok": False, "error": "Please enter a valid Suno or YouTube URL"}), 400
         await db.party_submit_song(
             user_id=0,
             user_name=artist or "Unknown Artist",
