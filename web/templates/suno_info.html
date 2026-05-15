@@ -189,6 +189,8 @@
     #yt-player-wrap{display:none;width:100%;aspect-ratio:16/9;background:#000;border-radius:8px;overflow:hidden;position:relative}
     #yt-player{position:absolute;inset:0;width:100%;height:100%}
     #yt-player iframe{width:100%!important;height:100%!important;border:0!important}
+    /* YouTube in theater mode fills the th-art area */
+    .th-art #yt-player-wrap{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;aspect-ratio:unset!important;border-radius:0!important}
 
     /* Loading state */
     .si-loading{padding:30px;text-align:center;color:#666;font-size:13px}
@@ -2301,10 +2303,39 @@ audio.addEventListener('play', function(){
 });
 
 /* --- Theater mode sync helpers (called from setNowPlaying / renderLyrics) - */
+function _ytWrapToTheater(){
+    var art = document.getElementById('th-art');
+    var ytWrap = document.getElementById('yt-player-wrap');
+    if(ytWrap.parentElement !== art){
+        art.appendChild(ytWrap);
+    }
+    ytWrap.style.display = 'block';
+}
+function _ytWrapToMain(){
+    var ytWrap = document.getElementById('yt-player-wrap');
+    var coverPane = document.getElementById('si-cover-pane');
+    var divider = document.getElementById('si-divider');
+    if(ytWrap.parentElement !== coverPane){
+        coverPane.insertBefore(ytWrap, divider);
+    }
+}
 function syncTheaterArt(m){
     var art = document.getElementById('th-art');
     var img = document.getElementById('th-img');
     var vid = document.getElementById('th-video');
+    var ytWrap = document.getElementById('yt-player-wrap');
+    // Theater is only relevant when it is visible
+    var inTheater = !document.getElementById('theater').hidden;
+    if(m.ytId){
+        if(inTheater){
+            _ytWrapToTheater();
+        }
+        art.classList.remove('has-video');
+        img.src = ''; vid.removeAttribute('src'); vid.load();
+        return;
+    }
+    // Non-YouTube: ensure YT wrap is back in main pane
+    if(ytWrap.parentElement === art){ _ytWrapToMain(); }
     if(m.video_url){
         if(vid.src !== m.video_url){ vid.src = m.video_url; vid.load(); }
         art.classList.add('has-video');
@@ -2342,7 +2373,8 @@ function syncTheaterFromState(){
     syncTheaterLyrics();
     if(CUR >= 0 && SONGS[CUR]){
         var s = SONGS[CUR];
-        var m = s._meta || {uuid:s.uuid, title:s.title, artist:s.artist};
+        var m = s._meta || {uuid:s.uuid, ytId:s.ytId, title:s.title, artist:s.artist,
+                            image_url:s.ytId?'https://img.youtube.com/vi/'+s.ytId+'/hqdefault.jpg':null};
         document.getElementById('th-title').textContent = m.title || s.title || '—';
         document.getElementById('th-artist').textContent = m.artist || s.artist || '';
         syncTheaterArt(m);
@@ -2543,6 +2575,15 @@ function syncTheaterFromState(){
     function theaterClose(){
         theater.hidden = true;
         document.body.style.overflow = '';
+        // Move YT player back to main cover pane (keeps playing uninterrupted)
+        var ytWrap = document.getElementById('yt-player-wrap');
+        if(ytWrap.parentElement === document.getElementById('th-art')){
+            _ytWrapToMain();
+            // Stay visible if YouTube is still the active song
+            if(CUR>=0 && SONGS[CUR] && SONGS[CUR].type==='youtube'){
+                ytWrap.style.display = 'block';
+            }
+        }
     }
     document.getElementById('btn-theater').addEventListener('click', theaterOpen);
     document.getElementById('th-close').addEventListener('click', theaterClose);
