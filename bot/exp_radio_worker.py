@@ -306,18 +306,43 @@ _DECOR_RE = re.compile(
 )
 
 
+_SECTION_MARKER_RE = re.compile(
+    r'^\s*(?:'
+    r'\[[^\]]+\]'                                                          # [Verse 1], [Chorus]
+    r'|#{1,6}\s+\S'                                                        # ## Title
+    r'|(?:Verse|Chorus|Bridge|Intro|Outro|Pre[-\s]?Chorus|Hook|Refrain|Interlude|Tag|Coda)'
+    r'\b[^a-z]*'                                                           # word boundary, allow numerals/punct after
+    r')\s*$',
+    re.IGNORECASE,
+)
+
+
 def clean_lyrics(raw: str) -> str:
-    """Strip section headers, decorative box/emoji glyphs, and markdown formatting,
-    and normalize fancy Unicode (e.g. 𝑰𝒏𝒕𝒓𝒐 → 'Intro') so that lyrics are usable as a
-    Whisper initial_prompt and as alignment tokens."""
+    """Strip section headers, decorative box/emoji glyphs, markdown formatting,
+    and the non-lyric preamble (author description, URLs, event blurbs) that
+    Suno users frequently paste before the actual lyrics. Normalises fancy
+    Unicode (𝑰𝒏𝒕𝒓𝒐 → 'Intro') so lyrics are usable as a Whisper initial_prompt
+    and as alignment tokens.
+    """
     if not raw:
         return ""
     # NFKC folds Mathematical Italic / Bold / Sans-serif letters back to ASCII
     text = unicodedata.normalize("NFKC", raw)
+    lines = text.splitlines()
+
+    # Find the first structural marker (Verse/Chorus/##/[...]) — anything
+    # before it is treated as preamble (author note, URLs, etc.) and dropped.
+    # If no marker is present we keep all lines.
+    start = 0
+    for i, line in enumerate(lines):
+        if _SECTION_MARKER_RE.match(line):
+            start = i
+            break
+
     out = []
-    for line in text.splitlines():
-        # Skip lines that are *only* a [Section] marker
-        if re.match(r'^\s*\[[^\]]+\]\s*$', line):
+    for line in lines[start:]:
+        # Skip the section marker lines themselves — they are not sung.
+        if _SECTION_MARKER_RE.match(line):
             continue
         line = _DECOR_RE.sub('', line)
         # Strip markdown bold/italic markers but keep their contents
@@ -356,10 +381,13 @@ def _whisper_sync(mp3_path: str, lyrics_prompt: str = "") -> list:
     correctly transcribe artistic neologisms like 'Morrowmire'."""
     from faster_whisper import WhisperModel
     model = WhisperModel(_WHISPER_MODEL, device="cpu", compute_type="int8")
-    # Whisper's prompt is capped at ~224 tokens; trim to last 220 chars
+    # Whisper's prompt is capped at ~224 tokens. The prompt biases primarily
+    # the FIRST decoding window (subsequent windows are conditioned on the
+    # previously transcribed text), so we want the SONG'S OPENING LINES here,
+    # not the tail of the lyric sheet. Take the first 220 chars.
     prompt = (lyrics_prompt or "").strip()
     if len(prompt) > 220:
-        prompt = prompt[-220:]
+        prompt = prompt[:220]
     segments, _ = model.transcribe(
         mp3_path,
         word_timestamps=True,
