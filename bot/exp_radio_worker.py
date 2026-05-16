@@ -361,7 +361,13 @@ def _whisper_sync(mp3_path: str, lyrics_prompt: str = "") -> list:
         word_timestamps=True,
         language="en",
         initial_prompt=prompt or None,
-        vad_filter=True,
+        # vad_filter is deliberately OFF: Silero VAD is too aggressive on
+        # sung audio (held vowels and quiet passages get classified as
+        # silence and dropped entirely), which causes the karaoke to start
+        # late, hang mid-song, then resume. Running Whisper over the full
+        # audio yields continuous word timestamps that match the actual
+        # vocals frame-for-frame.
+        vad_filter=False,
     )
     words = []
     for seg in segments:
