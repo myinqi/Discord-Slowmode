@@ -1814,7 +1814,8 @@ _EXP_TERMS_DISPLAY = (
     "• You grant a **14-day streaming license** for Twitch live streams & VODs\n"
     "• The content complies with community guidelines (no hate speech, explicit or illegal content)\n"
     "• Songs expire and are deleted automatically after **14 days**\n"
-    f"• Maximum **{_EXP_MAX_PER_USER} songs** per user"
+    f"• Maximum **{_EXP_MAX_PER_USER} songs** per user\n"
+    "• Maximum song length: **5 minutes**"
 )
 
 _EXP_RIGHTS_DECLARATION = (
@@ -1903,7 +1904,7 @@ class ExpRadioSubmitModal(discord.ui.Modal, title="Submit to Experimental Radio"
         # Kick off background pipeline (fire and forget)
         from bot.exp_radio_worker import process_exp_song
         asyncio.create_task(
-            process_exp_song(self.bot.db, song_id, self.bot.exp_radio_dir)
+            process_exp_song(self.bot.db, song_id, self.bot.exp_radio_dir, bot=self.bot)
         )
 
 

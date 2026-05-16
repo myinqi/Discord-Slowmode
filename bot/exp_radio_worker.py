@@ -40,6 +40,9 @@ EXP_TERMS_SHORT = (
 )
 
 
+MAX_DURATION_SECS = 300  # 5 minutes
+
+
 # ─── Directory helpers ────────────────────────────────────────────────────────
 
 def ensure_exp_dirs(exp_radio_dir: str):
@@ -272,7 +275,18 @@ def build_ass(words: list, title: str = "", artist: str = "",
 
 # ─── Main processing pipeline ─────────────────────────────────────────────────
 
-async def process_exp_song(db, song_id: int, exp_radio_dir: str):
+async def _notify_user(bot, user_id: int, msg: str):
+    """Send a DM to the Discord user if possible."""
+    if bot is None:
+        return
+    try:
+        user = await bot.fetch_user(user_id)
+        await user.send(msg)
+    except Exception as e:
+        print(f"[exp-radio] DM to {user_id} failed: {e}", flush=True)
+
+
+async def process_exp_song(db, song_id: int, exp_radio_dir: str, bot=None):
     """Full async pipeline for one submitted experimental radio song."""
     mp3_dir = os.path.join(exp_radio_dir, "mp3")
     ass_dir = os.path.join(exp_radio_dir, "ass")
@@ -303,6 +317,22 @@ async def process_exp_song(db, song_id: int, exp_radio_dir: str):
         video_url = meta["video_url"]
         lyrics    = clean_lyrics(meta["raw_lyrics"] or "")
         duration  = await get_duration(mp3_path)
+
+        # Duration gate: reject songs longer than MAX_DURATION_SECS
+        if duration and duration > MAX_DURATION_SECS:
+            os.remove(mp3_path)
+            await db.update_exp_radio_song(
+                song_id, duration=duration, analysis_status="failed"
+            )
+            mins = int(MAX_DURATION_SECS // 60)
+            await _notify_user(
+                bot, song["user_id"],
+                f"❌ **Experimental Radio** — your submission **{title}** was rejected.\n"
+                f"The song is {duration / 60:.1f} min long. Maximum allowed is **{mins} minutes**.\n"
+                "Please submit a shorter song."
+            )
+            print(f"[exp-radio] #{song_id} rejected: duration {duration:.0f}s > {MAX_DURATION_SECS}s", flush=True)
+            return
 
         await db.update_exp_radio_song(
             song_id,
