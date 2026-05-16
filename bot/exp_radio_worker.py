@@ -520,7 +520,13 @@ async def process_exp_song(db, song_id: int, exp_radio_dir: str, bot=None):
         artist    = meta["artist"]    or song.get("artist") or "Unknown"
         cover_url = meta["cover_url"] or f"https://cdn1.suno.ai/image_large_{real_uuid}.jpeg"
         video_url = meta["video_url"]
-        lyrics    = clean_lyrics(meta["raw_lyrics"] or "")
+        raw_lyrics_text = meta["raw_lyrics"] or ""
+        lyrics    = clean_lyrics(raw_lyrics_text)
+        print(
+            f"[exp-radio] #{song_id} lyrics: {len(raw_lyrics_text)} raw chars → "
+            f"{len(lyrics)} clean chars",
+            flush=True,
+        )
         duration  = await get_duration(mp3_path)
 
         # Duration gate: reject songs longer than MAX_DURATION_SECS
