@@ -1907,19 +1907,26 @@ class ExpRadioSubmitModal(discord.ui.Modal, title="Submit to Experimental Radio"
         web_url = self.bot.web_url
         if web_url:
             upload_link = f"{web_url}/exp-radio/upload/{upload_token}"
-            upload_note = (
-                f"\n\n📎 **Please complete your submission:**\n"
-                f"[Click here to upload your song]({upload_link})\n"
-                "*(The page will automatically transfer the audio from Suno — "
-                "no manual download needed.)*"
+            view = discord.ui.View()
+            view.add_item(discord.ui.Button(
+                label="⬆  Complete Submission — Upload Song",
+                url=upload_link,
+                style=discord.ButtonStyle.link,
+            ))
+            await interaction.followup.send(
+                f"✅ **Song registered!** (#{song_id})\n\n"
+                "**⚠️ One more step required:**\n"
+                "Click the button below to transfer the audio from Suno to the server.\n"
+                "*(Takes ~10 seconds — the page does it automatically.)*",
+                view=view,
+                ephemeral=True,
             )
         else:
-            upload_note = "\n\n⚠️ Upload link unavailable — ask an admin to set WEB_URL."
-
-        await interaction.followup.send(
-            f"✅ **Song registered!** (#{song_id}){upload_note}",
-            ephemeral=True,
-        )
+            await interaction.followup.send(
+                f"✅ **Song registered!** (#{song_id})\n\n"
+                "⚠️ Upload link unavailable — ask an admin to set `WEB_URL`.",
+                ephemeral=True,
+            )
 
         # Pipeline is triggered by the upload endpoint once the MP3 arrives
 
