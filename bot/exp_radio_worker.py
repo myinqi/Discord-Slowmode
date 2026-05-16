@@ -134,12 +134,27 @@ async def scrape_suno(uuid: str) -> dict:
                 result["title"] = raw_title
 
         # Artist fallback: display_name from RSC payload
+        # Iterate matches in REVERSE — song owner is usually the last display_name on the page.
+        # Filter out version strings (v5.5), "Cover", "Remix", and single-char names.
         if not result["artist"]:
-            for pat in [r'\\"display_name\\":\\"([^\\]+)\\"', r'"display_name":"([^"]+)"']:
-                m = re.search(pat, page)
-                if m:
-                    result["artist"] = _html.unescape(m.group(1))
+            candidates = re.findall(r'display_name\\":\\"([^"\\]+)\\"', page)
+            if not candidates:
+                candidates = re.findall(r'"display_name"\s*:\s*"([^"]+)"', page)
+            for dn in reversed(candidates):
+                dn = _html.unescape(dn).strip()
+                if (len(dn) > 1
+                        and not re.match(r'^v\d', dn)
+                        and dn not in ("Cover", "Remix")):
+                    result["artist"] = dn
                     break
+
+        # Title-based artist extraction fallback (handles "Title by Artist" patterns)
+        if not result["artist"] and result["title"]:
+            tm = re.search(r'\bby\s+(.+?)(?:\s*\||\s*-\s*Suno|$)', result["title"])
+            if tm:
+                # Strip the "by Artist" part from the title and use it as artist
+                result["artist"] = tm.group(1).strip()
+                result["title"] = re.sub(r'\s+by\s+.+$', '', result["title"]).strip()
 
         # og:image
         m = re.search(r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']', page)
