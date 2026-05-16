@@ -374,14 +374,14 @@ class ExpStreamManager:
             filters.append(f"color=size={W}x{H}:color=0x111111:rate={_FPS}[bg]")
         last = "[bg]"
 
-        # Loop video overlay – top-right, 500×500 (25% larger than 400×400)
+        # Loop video overlay – top-right, 650×650 (+30% from 500×500)
         if lv_input is not None:
             filters.append(
-                f"[{lv_input}:v]scale=500:500:force_original_aspect_ratio=decrease,"
+                f"[{lv_input}:v]scale=650:650:force_original_aspect_ratio=decrease,"
                 f"fps={_FPS}[lv]"
             )
             filters.append(
-                f"{last}[lv]overlay=x={W}-500-20:y=20:shortest=0[after_lv]"
+                f"{last}[lv]overlay=x={W}-650-20:y=20:shortest=0[after_lv]"
             )
             last = "[after_lv]"
 
