@@ -306,15 +306,72 @@ _DECOR_RE = re.compile(
 )
 
 
-_SECTION_MARKER_RE = re.compile(
-    r'^\s*(?:'
-    r'\[[^\]]+\]\s*$'                                                      # [Verse 1], [Chorus]
-    r'|#{1,6}\s+.+$'                                                       # ## Title
-    r'|(?:Verse|Chorus|Bridge|Intro|Outro|Pre[-\s]?Chorus|Hook|Refrain|Interlude|Tag|Coda)'
-    r'\s*[IVXivx0-9]*\s*[:.,)\-]*\s*$'                                     # only roman/digits/punct may follow
-    r')',
-    re.IGNORECASE,
-)
+_BRACKET_MARKER_RE = re.compile(r'^\s*\[[^\]]+\]\s*$')          # [Verse 1], [Chorus]
+_MARKDOWN_HEADING_RE = re.compile(r'^\s*#{1,6}\s+\S')            # ## Title
+_NAMED_MARKER_WORDS = {
+    "verse", "chorus", "bridge", "intro", "outro",
+    "prechorus", "pre-chorus", "hook", "refrain",
+    "interlude", "tag", "coda", "post-chorus", "postchorus",
+}
+
+
+def _is_section_marker(line: str) -> bool:
+    """True if the line is only a section marker (no actual lyrics)."""
+    if _BRACKET_MARKER_RE.match(line):
+        return True
+    if _MARKDOWN_HEADING_RE.match(line):
+        return True
+    # Strip trailing punctuation and split into tokens. A marker line should
+    # collapse to one keyword plus at most one Roman-numeral / digit suffix.
+    stripped = line.strip().rstrip(":.,)-").strip()
+    if not stripped:
+        return False
+    parts = stripped.split()
+    if len(parts) > 2:
+        return False
+    head = parts[0].lower()
+    if head not in _NAMED_MARKER_WORDS:
+        return False
+    if len(parts) == 1:
+        return True
+    # Second token must be a Roman numeral (I, II, III…) or digit
+    return bool(re.fullmatch(r"[IVXivx]+|\d+", parts[1]))
+
+
+def extract_vocab_hints(lyrics: str, max_chars: int = 220) -> str:
+    """Pull out proper-noun-style tokens (capitalised neologisms / names) from
+    cleaned lyrics for use as a Whisper initial_prompt.
+
+    Feeding Whisper actual lyric lines as a prompt causes it to echo the
+    prompt as the first transcribed words (a classic faster-whisper failure
+    mode). A comma-separated vocabulary list does not get echoed verbatim
+    but still biases the decoder toward the correct spelling of rare words
+    like 'Morrowmire', 'Tarja', 'Vorralune'.
+    """
+    if not lyrics:
+        return ""
+    seen = []
+    seen_lower = set()
+    # Tokenize, then keep tokens that:
+    #   - are >=4 chars
+    #   - start with an uppercase letter
+    #   - are not at the start of a sentence (would catch ordinary words)
+    # We approximate the sentence-initial check by ignoring the first token of
+    # every line; this also drops common capitalised line starts.
+    for line in lyrics.splitlines():
+        toks = re.findall(r"[A-Za-z][A-Za-z'\-]+", line)
+        for tok in toks[1:]:  # skip line-initial token
+            if len(tok) < 4 or not tok[0].isupper():
+                continue
+            low = tok.lower()
+            if low in seen_lower:
+                continue
+            seen_lower.add(low)
+            seen.append(tok)
+    hint = ", ".join(seen)
+    if len(hint) > max_chars:
+        hint = hint[:max_chars].rsplit(",", 1)[0]
+    return hint
 
 
 def clean_lyrics(raw: str) -> str:
@@ -335,14 +392,14 @@ def clean_lyrics(raw: str) -> str:
     # If no marker is present we keep all lines.
     start = 0
     for i, line in enumerate(lines):
-        if _SECTION_MARKER_RE.match(line):
+        if _is_section_marker(line):
             start = i
             break
 
     out = []
     for line in lines[start:]:
         # Skip the section marker lines themselves — they are not sung.
-        if _SECTION_MARKER_RE.match(line):
+        if _is_section_marker(line):
             continue
         line = _DECOR_RE.sub('', line)
         # Strip markdown bold/italic markers but keep their contents
@@ -641,9 +698,18 @@ async def process_exp_song(db, song_id: int, exp_radio_dir: str, bot=None):
             lyrics=lyrics, duration=duration,
         )
 
-        # 3) Whisper word-timestamp analysis (lyrics fed as initial_prompt)
-        print(f"[exp-radio] Starting Whisper analysis for #{song_id} (model={_WHISPER_MODEL})…", flush=True)
-        words = await run_whisper(mp3_path, lyrics_prompt=lyrics)
+        # 3) Whisper word-timestamp analysis. We do NOT pass the lyric text
+        # itself as initial_prompt (Whisper echoes it as the first sung
+        # words). Instead we pass a comma-separated vocabulary hint built
+        # from capitalised proper-noun candidates so the model still learns
+        # to spell rare names correctly.
+        vocab_hint = extract_vocab_hints(lyrics)
+        print(
+            f"[exp-radio] Starting Whisper analysis for #{song_id} "
+            f"(model={_WHISPER_MODEL}, vocab_hint={vocab_hint!r})…",
+            flush=True,
+        )
+        words = await run_whisper(mp3_path, lyrics_prompt=vocab_hint)
         print(f"[exp-radio] Whisper done: {len(words)} words for #{song_id}", flush=True)
 
         # 3b) Forced-alignment-light: keep Whisper structure/timing, correct
