@@ -3197,6 +3197,47 @@ def create_app(db: Database, bot=None) -> Quart:
             bg_filename=bg_filename, loop_filename=loop_filename,
         )
 
+    @app.route("/exp-radio/upload/<token>/resolve")
+    async def exp_radio_upload_resolve(token: str):
+        """Resolve the real Suno UUID (full UUID) for the upload page JS."""
+        from quart import jsonify
+        import aiohttp, re as _re
+        song = await db.get_exp_radio_song_by_token(token)
+        if not song:
+            return jsonify({"error": "Invalid token"}), 403
+        suno_uuid = song["suno_uuid"]
+        # Try to get the real full UUID by scraping the Suno song page
+        is_full_uuid = bool(_re.match(
+            r'^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$', suno_uuid
+        ))
+        if is_full_uuid:
+            return jsonify({"real_uuid": suno_uuid})
+        # Short ID — scrape the song page to get the real UUID
+        url = f"https://suno.com/s/{suno_uuid}"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        try:
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(url, headers=headers,
+                                    timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return jsonify({"error": f"Suno returned {resp.status}"}), 502
+                    html = await resp.text()
+            m = _re.search(
+                r'"id"\s*:\s*"([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})"',
+                html,
+            )
+            if not m:
+                m = _re.search(
+                    r'song/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})',
+                    html,
+                )
+            real_uuid = m.group(1) if m else None
+            if not real_uuid:
+                return jsonify({"error": "Could not resolve real UUID from Suno page"}), 502
+            return jsonify({"real_uuid": real_uuid})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
     @app.route("/exp-radio/upload/<token>")
     async def exp_radio_upload_page(token: str):
         """Public page (no login) — browser fetches MP3 from Suno CDN and POSTs it here."""

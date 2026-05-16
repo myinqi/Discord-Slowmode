@@ -82,8 +82,21 @@ async function startUpload() {
     btn.textContent = 'Working…';
     progArea.classList.remove('hidden');
 
-    // Step 1: Fetch MP3 from Suno CDN
-    var cdnUrl = 'https://cdn1.suno.ai/' + SUNO_UUID + '.mp3';
+    // Step 1: Resolve real UUID (short IDs like /s/xxxxx need server-side lookup)
+    progLabel.textContent = 'Resolving song ID…';
+    var realUuid = SUNO_UUID;
+    try {
+        var rr = await fetch('/exp-radio/upload/' + UPLOAD_TOKEN + '/resolve');
+        var rd = await rr.json();
+        if (rd.error) throw new Error(rd.error);
+        realUuid = rd.real_uuid;
+    } catch (e) {
+        showError('Could not resolve Suno UUID: ' + e.message);
+        return;
+    }
+
+    // Step 2: Fetch MP3 from Suno CDN using real UUID
+    var cdnUrl = 'https://cdn1.suno.ai/' + realUuid + '.mp3';
     progLabel.textContent = 'Fetching audio from Suno…';
 
     var blob;

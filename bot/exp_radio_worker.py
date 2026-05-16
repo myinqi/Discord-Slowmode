@@ -76,17 +76,36 @@ async def download_mp3(uuid: str, mp3_dir: str) -> str | None:
 
 # ─── Suno metadata scrape ─────────────────────────────────────────────────────
 
+_FULL_UUID_RE = re.compile(
+    r'^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$'
+)
+
+
 async def scrape_suno(uuid: str) -> dict:
-    """Fetch title, artist, cover_url, video_url, raw_lyrics from Suno embed."""
+    """Fetch title, artist, cover_url, video_url, raw_lyrics from Suno embed.
+    Also returns 'real_uuid' (full UUID) which may differ from the short ID."""
     result = {"title": None, "artist": None, "cover_url": None,
-              "video_url": None, "raw_lyrics": None}
-    url = f"https://suno.com/song/{uuid}"
+              "video_url": None, "raw_lyrics": None, "real_uuid": None}
+    is_full = bool(_FULL_UUID_RE.match(uuid))
+    url = f"https://suno.com/song/{uuid}" if is_full else f"https://suno.com/s/{uuid}"
     try:
         async with aiohttp.ClientSession(headers={"User-Agent": _BROWSER_UA}) as sess:
             async with sess.get(url, timeout=aiohttp.ClientTimeout(total=25)) as resp:
                 if resp.status != 200:
                     return result
                 page = await resp.text()
+
+        # Extract real full UUID from RSC payload
+        m = re.search(
+            r'"id"\s*:\s*"([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})"',
+            page,
+        )
+        if not m:
+            m = re.search(
+                r'song/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})',
+                page,
+            )
+        result["real_uuid"] = m.group(1) if m else (uuid if is_full else None)
 
         # og:title → "Song Title by Artist – Suno"
         m = re.search(r'<meta\s+(?:name|property)=["\']og:title["\']\s+content=["\']([^"\']+)["\']', page)
@@ -316,9 +335,10 @@ async def process_exp_song(db, song_id: int, exp_radio_dir: str, bot=None):
 
         # 2) Scrape Suno metadata
         meta = await scrape_suno(uuid)
+        real_uuid = meta.get("real_uuid") or uuid
         title     = meta["title"]     or song.get("title")  or "Unknown"
         artist    = meta["artist"]    or song.get("artist") or "Unknown"
-        cover_url = meta["cover_url"] or f"https://cdn1.suno.ai/image_large_{uuid}.jpeg"
+        cover_url = meta["cover_url"] or f"https://cdn1.suno.ai/image_large_{real_uuid}.jpeg"
         video_url = meta["video_url"]
         lyrics    = clean_lyrics(meta["raw_lyrics"] or "")
         duration  = await get_duration(mp3_path)
