@@ -3150,6 +3150,32 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.delete_exp_radio_song(song_id)
                 await flash("Song removed.", "success")
 
+            elif action == "rescrape_metadata":
+                from bot.exp_radio_worker import scrape_suno
+                songs_all = await db.get_all_exp_radio_songs(active_only=True)
+                updated = 0
+                for s in songs_all:
+                    uuid = s.get("suno_uuid")
+                    if not uuid:
+                        continue
+                    meta = await scrape_suno(uuid)
+                    real_uuid = meta.get("real_uuid") or uuid
+                    fields = {}
+                    if meta.get("title"):     fields["title"]     = meta["title"]
+                    if meta.get("artist"):    fields["artist"]    = meta["artist"]
+                    if meta.get("video_url"): fields["video_url"] = meta["video_url"]
+                    if meta.get("cover_url"): fields["cover_url"] = meta["cover_url"]
+                    if fields:
+                        await db.update_exp_radio_song(s["id"], **fields)
+                        updated += 1
+                        # Invalidate cached media so next stream run downloads fresh
+                        for ext in (".jpg", ".mp4"):
+                            cached = os.path.join(EXP_RADIO_DIR, "cover_cache", f"{uuid}{ext}")
+                            if os.path.exists(cached):
+                                try: os.remove(cached)
+                                except Exception: pass
+                await flash(f"Refreshed metadata for {updated} song(s).", "success")
+
             elif action == "save_stream_key":
                 key = form.get("exp_twitch_key", "").strip()
                 await db.set_setting("exp_radio_twitch_key", key)

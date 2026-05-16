@@ -118,6 +118,14 @@
                     <span class="ml-2 text-xs text-gray-500 font-normal">{{ songs|length }} total</span>
                 </h3>
                 <div class="flex items-center gap-3 text-xs text-gray-500">
+                    <form method="POST" class="inline">
+                        <input type="hidden" name="action" value="rescrape_metadata">
+                        <button type="submit"
+                                class="px-2.5 py-1 bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 rounded transition-colors"
+                                title="Re-fetch title, artist, cover and video URL from Suno for all active songs">
+                            ⟳ Refresh Metadata
+                        </button>
+                    </form>
                     <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-green-500 inline-block"></span> Done</span>
                     <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-yellow-500 inline-block"></span> Processing</span>
                     <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-gray-500 inline-block"></span> Pending</span>
