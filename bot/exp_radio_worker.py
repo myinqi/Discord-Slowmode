@@ -404,23 +404,6 @@ def _align_to_lyrics(whisper_words: list, lyrics_text: str) -> list:
     ]
     lyric_norm = [t.lower() for t in lyric_tokens]
 
-    # Length-ratio safety: alignment only helps when Whisper- and lyric-
-    # word counts are in the same ballpark. If one is far longer than the
-    # other (e.g. cover songs, instrumentals, mis-uploaded lyrics), the
-    # proportional remapping in 'replace' opcodes will mangle the karaoke
-    # (lyric tokens get dropped or stretched over wrong timestamps). In
-    # that case keep Whisper's raw output — it was probably already decent.
-    w_len, l_len = len(whisper_words), len(lyric_tokens)
-    ratio = max(w_len, l_len) / max(1, min(w_len, l_len))
-    if ratio > 2.0:
-        print(
-            f"[exp-radio] Alignment skipped: length mismatch "
-            f"({w_len} whisper vs {l_len} lyric tokens, ratio {ratio:.1f}×) "
-            f"— keeping raw Whisper output",
-            flush=True,
-        )
-        return whisper_words
-
     sm = SequenceMatcher(a=whisper_norm, b=lyric_norm, autojunk=False)
     opcodes = sm.get_opcodes()
 
@@ -435,33 +418,27 @@ def _align_to_lyrics(whisper_words: list, lyrics_text: str) -> list:
         )
         return whisper_words
 
-    out = []
+    # Whisper-driven, lyric-corrected: preserve Whisper's structure & timing 1:1;
+    # only overwrite a word's *text* where Whisper and the lyric sheet agree
+    # exactly (the `equal` opcodes). This avoids the previous 1:1 proportional
+    # remapping which mangled karaoke whenever the sheet's token count differed
+    # from the sung word count (chorus repeats, instrumental sections, etc.).
+    out = [dict(w) for w in whisper_words]
+    corrected = 0
     for tag, i1, i2, j1, j2 in opcodes:
-        whis_run = whisper_words[i1:i2]
-        lyr_run = lyric_tokens[j1:j2]
-        if tag == "equal":
-            for k, w in enumerate(whis_run):
-                nw = dict(w)
-                nw["word"] = lyr_run[k]
-                out.append(nw)
-        elif tag == "replace":
-            # Distribute lyric tokens proportionally across Whisper's time spans
-            if not lyr_run:
-                out.extend(whis_run)
-                continue
-            for k, w in enumerate(whis_run):
-                nw = dict(w)
-                lyr_idx = min(
-                    int(k * len(lyr_run) / max(1, len(whis_run))),
-                    len(lyr_run) - 1,
-                )
-                nw["word"] = lyr_run[lyr_idx]
-                out.append(nw)
-        elif tag == "delete":
-            # Whisper heard something not in the lyrics — keep it (ad-lib / breath)
-            out.extend(whis_run)
-        # 'insert' → lyric tokens Whisper didn't pick up; we cannot synthesize
-        # timestamps reliably, so we drop them rather than guess.
+        if tag != "equal":
+            continue
+        for k in range(i2 - i1):
+            new_text = lyric_tokens[j1 + k]
+            if out[i1 + k]["word"] != new_text:
+                out[i1 + k]["word"] = new_text
+                corrected += 1
+    print(
+        f"[exp-radio] Aligned: {matched}/{len(whisper_words)} exact matches, "
+        f"{corrected} word(s) re-cased from lyrics "
+        f"({len(whisper_words)} whisper vs {len(lyric_tokens)} lyric tokens)",
+        flush=True,
+    )
     return out
 
 
@@ -615,11 +592,10 @@ async def process_exp_song(db, song_id: int, exp_radio_dir: str, bot=None):
         words = await run_whisper(mp3_path, lyrics_prompt=lyrics)
         print(f"[exp-radio] Whisper done: {len(words)} words for #{song_id}", flush=True)
 
-        # 3b) Forced-alignment-light: replace word texts with original lyric tokens
+        # 3b) Forced-alignment-light: keep Whisper structure/timing, correct
+        # word spellings from the lyric sheet wherever they agree exactly.
         if lyrics:
-            before = len(words)
             words = _align_to_lyrics(words, lyrics)
-            print(f"[exp-radio] Aligned to lyrics: {before} → {len(words)} words for #{song_id}", flush=True)
 
         # 4) Build ASS subtitle file
         ass_content  = build_ass(words, title=title, artist=artist)
