@@ -108,16 +108,38 @@ async def scrape_suno(uuid: str) -> dict:
         result["real_uuid"] = m.group(1) if m else (uuid if is_full else None)
 
         # og:title → "Song Title by Artist – Suno"
-        m = re.search(r'<meta\s+(?:name|property)=["\']og:title["\']\s+content=["\']([^"\']+)["\']', page)
-        if m:
-            raw = _html.unescape(m.group(1)).strip()
-            raw = re.sub(r'\s*[|\-–]\s*Suno\s*$', '', raw, flags=re.IGNORECASE).strip()
-            bm = re.search(r'^(.+?)\s+by\s+(.+)$', raw)
+        # Try both attribute orderings (property before content, or content before property)
+        raw_title = None
+        for pat in [
+            r'<meta\s+(?:name|property)=["\']og:title["\']\s+content=["\']([^"\']+)["\']',
+            r'<meta\s+content=["\']([^"\']+)["\']\s+(?:name|property)=["\']og:title["\']',
+        ]:
+            m = re.search(pat, page)
+            if m:
+                raw_title = _html.unescape(m.group(1)).strip()
+                break
+        # Fallback: <title> tag
+        if not raw_title:
+            m = re.search(r'<title>([^<]+)</title>', page)
+            if m:
+                raw_title = _html.unescape(m.group(1)).strip()
+
+        if raw_title:
+            raw_title = re.sub(r'\s*[|\-–]\s*Suno\s*$', '', raw_title, flags=re.IGNORECASE).strip()
+            bm = re.search(r'^(.+?)\s+by\s+(.+)$', raw_title)
             if bm:
                 result["title"] = bm.group(1).strip()
                 result["artist"] = bm.group(2).strip()
             else:
-                result["title"] = raw
+                result["title"] = raw_title
+
+        # Artist fallback: display_name from RSC payload
+        if not result["artist"]:
+            for pat in [r'\\"display_name\\":\\"([^\\]+)\\"', r'"display_name":"([^"]+)"']:
+                m = re.search(pat, page)
+                if m:
+                    result["artist"] = _html.unescape(m.group(1))
+                    break
 
         # og:image
         m = re.search(r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']', page)

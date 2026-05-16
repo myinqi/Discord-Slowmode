@@ -3193,7 +3193,7 @@ def create_app(db: Database, bot=None) -> Quart:
 
             return redirect(request.url)
 
-        songs = await db.get_all_exp_radio_songs(active_only=False)
+        songs = await db.get_all_exp_radio_songs(active_only=True)
         status = await exp_stream_manager.get_status()
         masked_key = "*" * 20 if await db.get_setting("exp_radio_twitch_key") else ""
         bg_filename  = await db.get_setting("exp_radio_bg_filename") or ""
