@@ -1761,7 +1761,7 @@ class CommandsCog(commands.Cog):
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="twitch-submit", description="Submit a Suno song to the Experimental Radio (max 2 per user)")
+    @app_commands.command(name="twitch-submit", description="Submit a Suno song to the Experimental Radio (max 3 per user)")
     @app_commands.default_permissions(administrator=True)
     async def exp_radio_submit(self, interaction: discord.Interaction):
         embed = discord.Embed(
@@ -1817,7 +1817,7 @@ class CommandsCog(commands.Cog):
 
 
 _SUNO_SUBMIT_RE = re.compile(r'(?:suno\.com/(?:s|song)/)([A-Za-z0-9_-]{8,})')
-_EXP_MAX_PER_USER = 2
+_EXP_MAX_PER_USER = 3
 
 _EXP_TERMS_DISPLAY = (
     "**By submitting you confirm:**\n"

@@ -36,7 +36,7 @@ EXP_TERMS_SHORT = (
     "• You grant a **14-day** streaming license for Twitch live streams & VODs\n"
     "• The content complies with community guidelines (no hate speech, explicit/illegal content)\n"
     "• Songs expire and are deleted automatically after 14 days\n"
-    "• Maximum **2 songs** per user"
+    "• Maximum **3 songs** per user"
 )
 
 
