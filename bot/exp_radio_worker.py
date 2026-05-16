@@ -25,6 +25,10 @@ _BROWSER_UA = (
     "Chrome/124.0.0.0 Safari/537.36"
 )
 
+# Matches an RSC reference placeholder like '$3d' that Next.js emits for
+# long string fields (resolved later from a separate flight chunk).
+_RSC_REF_RE = re.compile(r'^\$[0-9a-f]+$')
+
 EXP_RIGHTS_DECLARATION = (
     "I confirm that I created this song on Suno.ai, hold the necessary rights to stream it, "
     "and grant a non-exclusive 14-day streaming license for Twitch live streams and VODs. "
@@ -173,23 +177,6 @@ async def scrape_suno(uuid: str) -> dict:
                 result["video_url"] = m.group(1).replace("\\/", "/")
                 break
 
-        # Fallback: /embed/<real_uuid> page exposes video_cover_url more reliably
-        # (same approach used by the working Suno Info player)
-        if not result["video_url"] and result.get("real_uuid"):
-            try:
-                async with aiohttp.ClientSession(headers={"User-Agent": _BROWSER_UA}) as sess:
-                    embed_url = f"https://suno.com/embed/{result['real_uuid']}"
-                    async with sess.get(embed_url, timeout=aiohttp.ClientTimeout(total=15)) as r:
-                        if r.status == 200:
-                            embed_html = await r.text()
-                            m = re.search(r'"video_cover_url"\s*:\s*"([^"]+)"', embed_html)
-                            if not m:
-                                m = re.search(r'video_cover_url\\":\\"([^"\\]+)\\"', embed_html)
-                            if m:
-                                result["video_url"] = m.group(1).replace("\\/", "/")
-            except Exception as e:
-                print(f"[exp-radio] embed fetch error: {e}", flush=True)
-
         # Lyrics from prompt field (two patterns)
         def _valid(s):
             return s and len(s.strip()) >= 10 and not re.match(r'^\$\w+$', s.strip())
@@ -205,7 +192,7 @@ async def scrape_suno(uuid: str) -> dict:
                     result["raw_lyrics"] = cand
                     break
 
-        # RSC long-form lyrics fallback
+        # RSC long-form lyrics fallback (still on /song page)
         if not result["raw_lyrics"]:
             rsc = re.findall(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)', page, re.DOTALL)
             for chunk in rsc:
@@ -215,6 +202,77 @@ async def scrape_suno(uuid: str) -> dict:
                     if _valid(cand):
                         result["raw_lyrics"] = cand
                         break
+
+        # Fallback: /embed/<real_uuid> page exposes video_cover_url and lyrics
+        # more reliably (same approach used by the working Suno Info player).
+        # In particular, longer prompts are serialised as RSC references like
+        # `"prompt":"$3d"` and the actual content lives in a separate flight
+        # chunk `3d:T<hexlen>,<bytes>`. The simple regex above cannot follow
+        # that indirection, so we replicate the resolver here.
+        need_video = not result["video_url"]
+        need_lyrics = not result["raw_lyrics"]
+        if (need_video or need_lyrics) and result.get("real_uuid"):
+            try:
+                async with aiohttp.ClientSession(headers={"User-Agent": _BROWSER_UA}) as sess:
+                    embed_url = f"https://suno.com/embed/{result['real_uuid']}"
+                    async with sess.get(embed_url, timeout=aiohttp.ClientTimeout(total=15)) as r:
+                        if r.status == 200:
+                            embed_html = await r.text()
+
+                            if need_video:
+                                m = re.search(r'"video_cover_url"\s*:\s*"([^"]+)"', embed_html)
+                                if not m:
+                                    m = re.search(r'video_cover_url\\":\\"([^"\\]+)\\"', embed_html)
+                                if m:
+                                    result["video_url"] = m.group(1).replace("\\/", "/")
+
+                            if need_lyrics:
+                                # Inline lyrics in embed page
+                                idx = embed_html.find(result["real_uuid"])
+                                if idx > -1:
+                                    chunk = embed_html[max(0, idx - 500):idx + 5000]
+                                    m = re.search(r'"prompt"\s*:\s*"((?:[^"\\]|\\.)*)"', chunk)
+                                    if m:
+                                        cand = m.group(1).replace("\\n", "\n").replace('\\"', '"')
+                                        if _valid(cand):
+                                            result["raw_lyrics"] = cand
+
+                                # RSC-reference resolution (for long prompts)
+                                if not result["raw_lyrics"] or _RSC_REF_RE.match(result["raw_lyrics"] or ""):
+                                    chunks = re.findall(
+                                        r'self\.__next_f\.push\(\[1,"(.*?)"\]\)',
+                                        embed_html, re.DOTALL,
+                                    )
+                                    if chunks:
+                                        decoded = []
+                                        for c in chunks:
+                                            try:
+                                                decoded.append(json.loads('"' + c + '"'))
+                                            except Exception:
+                                                decoded.append(
+                                                    c.replace('\\n', '\n')
+                                                     .replace('\\"', '"')
+                                                     .replace('\\\\', '\\')
+                                                )
+                                        full = "".join(decoded)
+                                        mref = re.search(r'"prompt":"\$([0-9a-f]+)"', full)
+                                        if mref:
+                                            ref = mref.group(1)
+                                            full_bytes = full.encode("utf-8")
+                                            tpat_b = re.compile(
+                                                rb'(?:^|\n)' + re.escape(ref).encode() +
+                                                rb':T([0-9a-f]+),'
+                                            )
+                                            tfnd = tpat_b.search(full_bytes)
+                                            if tfnd:
+                                                length = int(tfnd.group(1), 16)
+                                                b_start = tfnd.end()
+                                                cand = full_bytes[b_start:b_start + length] \
+                                                    .decode("utf-8", errors="replace").rstrip()
+                                                if _valid(cand):
+                                                    result["raw_lyrics"] = cand
+            except Exception as e:
+                print(f"[exp-radio] embed fetch error: {e}", flush=True)
 
     except Exception as e:
         print(f"[exp-radio] Suno scrape error {uuid}: {e}", flush=True)
