@@ -253,7 +253,7 @@ class ExpStreamManager:
             "Alignment, MarginL, MarginR, MarginV, Encoding\n"
             "Style: Default,Arial,52,&H00FFFFFF,&H000000FF,&H00000000,"
             "&H80000000,-1,0,0,0,100,100,0,0,1,2.5,1,2,10,10,30,1\n"
-            "Style: NowPlaying,Arial,32,&H00E8C97A,&H000000FF,&H00000000,"
+            "Style: NowPlaying,Arial,48,&H00E8C97A,&H000000FF,&H00000000,"
             "&HC8000000,0,0,0,0,100,100,0,0,1,1.5,0.8,7,20,20,14,1\n\n"
             "[Events]\n"
             "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
@@ -321,7 +321,7 @@ class ExpStreamManager:
 
         Layer stack (bottom → top):
           0: Background (static image or looping video)  1920×1080
-          1: Loop video overlay, 400×400, top-right
+          1: Loop video overlay, 500×500, top-right
           2: Song media concat (9:16 video or square cover), bottom-left inset
           3: Combined ASS subtitles (lyrics + NowPlaying title cards)
         """
@@ -374,14 +374,14 @@ class ExpStreamManager:
             filters.append(f"color=size={W}x{H}:color=0x111111:rate={_FPS}[bg]")
         last = "[bg]"
 
-        # Loop video overlay – top-right, 400×400
+        # Loop video overlay – top-right, 500×500 (25% larger than 400×400)
         if lv_input is not None:
             filters.append(
-                f"[{lv_input}:v]scale=400:400:force_original_aspect_ratio=decrease,"
+                f"[{lv_input}:v]scale=500:500:force_original_aspect_ratio=decrease,"
                 f"fps={_FPS}[lv]"
             )
             filters.append(
-                f"{last}[lv]overlay=x={W}-400-20:y=20:shortest=0[after_lv]"
+                f"{last}[lv]overlay=x={W}-500-20:y=20:shortest=0[after_lv]"
             )
             last = "[after_lv]"
 
