@@ -2407,7 +2407,8 @@ class Database:
 
     async def count_exp_radio_songs_by_user(self, user_id: int) -> int:
         async with self.db.execute(
-            "SELECT COUNT(*) FROM exp_radio_songs WHERE user_id = ? AND active = 1",
+            "SELECT COUNT(*) FROM exp_radio_songs "
+            "WHERE user_id = ? AND active = 1 AND analysis_status != 'failed'",
             (user_id,),
         ) as cursor:
             row = await cursor.fetchone()

@@ -3084,10 +3084,18 @@ def create_app(db: Database, bot=None) -> Quart:
 
     async def _exp_radio_cleanup_loop():
         """Periodically soft-delete expired exp_radio songs (every hour).
+        Also marks stale pending songs (no MP3 uploaded within 30 min) as failed.
         Notifies users via the configured Discord channel."""
         while True:
             try:
                 await asyncio.sleep(3600)
+                # Mark stale pending songs (submitted >30 min ago, still no MP3) as failed
+                await db.db.execute(
+                    "UPDATE exp_radio_songs SET analysis_status = 'failed' "
+                    "WHERE analysis_status = 'pending' AND mp3_filename IS NULL "
+                    "AND submitted_at < unixepoch() - 1800"
+                )
+                await db.db.commit()
                 expired = await db.expire_old_exp_radio_songs()
                 if not expired:
                     continue
