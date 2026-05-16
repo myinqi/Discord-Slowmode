@@ -285,7 +285,7 @@ async def get_duration(mp3_path: str) -> float:
 # ─── Whisper analysis ─────────────────────────────────────────────────────────
 
 # Model size can be overridden via env (tiny, base, small, medium, large-v3)
-_WHISPER_MODEL = os.environ.get("EXP_RADIO_WHISPER_MODEL", "small")
+_WHISPER_MODEL = os.environ.get("EXP_RADIO_WHISPER_MODEL", "base")
 
 
 def _whisper_sync(mp3_path: str, lyrics_prompt: str = "") -> list:
