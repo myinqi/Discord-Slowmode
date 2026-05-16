@@ -308,11 +308,11 @@ _DECOR_RE = re.compile(
 
 _SECTION_MARKER_RE = re.compile(
     r'^\s*(?:'
-    r'\[[^\]]+\]'                                                          # [Verse 1], [Chorus]
-    r'|#{1,6}\s+\S'                                                        # ## Title
+    r'\[[^\]]+\]\s*$'                                                      # [Verse 1], [Chorus]
+    r'|#{1,6}\s+.+$'                                                       # ## Title
     r'|(?:Verse|Chorus|Bridge|Intro|Outro|Pre[-\s]?Chorus|Hook|Refrain|Interlude|Tag|Coda)'
-    r'\b[^a-z]*'                                                           # word boundary, allow numerals/punct after
-    r')\s*$',
+    r'\s*[IVXivx0-9]*\s*[:.,)\-]*\s*$'                                     # only roman/digits/punct may follow
+    r')',
     re.IGNORECASE,
 )
 
@@ -400,17 +400,27 @@ def _whisper_sync(mp3_path: str, lyrics_prompt: str = "") -> list:
         # audio yields continuous word timestamps that match the actual
         # vocals frame-for-frame.
         vad_filter=False,
+        # Each 30s window decodes against the original initial_prompt only,
+        # not against the previous window's output. This prevents the
+        # cascading-hallucination failure mode where a single bad window
+        # (silence misread as repeated punctuation, etc.) poisons every
+        # subsequent window and produces a transcript of just dots.
+        condition_on_previous_text=False,
     )
+    _has_alnum = re.compile(r"[\w]", re.UNICODE)
     words = []
     for seg in segments:
         for w in (seg.words or []):
             word = w.word.strip()
-            if word:
-                words.append({
-                    "word": word,
-                    "start": round(w.start, 3),
-                    "end": round(w.end, 3),
-                })
+            # Drop standalone punctuation tokens ('.', ',', '?'…) — they
+            # carry no karaoke value and only inflate the word count.
+            if not word or not _has_alnum.search(word):
+                continue
+            words.append({
+                "word": word,
+                "start": round(w.start, 3),
+                "end": round(w.end, 3),
+            })
     return words
 
 
