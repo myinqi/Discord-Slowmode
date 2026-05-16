@@ -14,6 +14,7 @@ services:
       - DATABASE_PATH=/app/data/bot.db
       - OLLAMA_URL=http://ollama:11434
       - LLM_MODEL=qwen2.5:7b-instruct
+      - WEB_URL=http://v2202502254147313270.goodsrv.de:5000
     depends_on:
       - ollama
 
