@@ -346,6 +346,23 @@ def _align_to_lyrics(whisper_words: list, lyrics_text: str) -> list:
     ]
     lyric_norm = [t.lower() for t in lyric_tokens]
 
+    # Length-ratio safety: alignment only helps when Whisper- and lyric-
+    # word counts are in the same ballpark. If one is far longer than the
+    # other (e.g. cover songs, instrumentals, mis-uploaded lyrics), the
+    # proportional remapping in 'replace' opcodes will mangle the karaoke
+    # (lyric tokens get dropped or stretched over wrong timestamps). In
+    # that case keep Whisper's raw output — it was probably already decent.
+    w_len, l_len = len(whisper_words), len(lyric_tokens)
+    ratio = max(w_len, l_len) / max(1, min(w_len, l_len))
+    if ratio > 2.0:
+        print(
+            f"[exp-radio] Alignment skipped: length mismatch "
+            f"({w_len} whisper vs {l_len} lyric tokens, ratio {ratio:.1f}×) "
+            f"— keeping raw Whisper output",
+            flush=True,
+        )
+        return whisper_words
+
     sm = SequenceMatcher(a=whisper_norm, b=lyric_norm, autojunk=False)
     opcodes = sm.get_opcodes()
 
