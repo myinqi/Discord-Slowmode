@@ -1913,11 +1913,18 @@ class ExpRadioSubmitModal(discord.ui.Modal, title="Submit to Experimental Radio"
                 url=upload_link,
                 style=discord.ButtonStyle.link,
             ))
+            embed = discord.Embed(
+                title="⚠️ Action required — complete your submission",
+                description=(
+                    "Click the button below to transfer the audio from Suno to the server.\n"
+                    "*(Takes ~10 seconds — the page handles it automatically.)*"
+                ),
+                color=0xf5a623,
+            )
+            embed.set_footer(text=f"Song #{song_id} registered • expires in 14 days")
             await interaction.followup.send(
-                f"✅ **Song registered!** (#{song_id})\n\n"
-                "**⚠️ One more step required:**\n"
-                "Click the button below to transfer the audio from Suno to the server.\n"
-                "*(Takes ~10 seconds — the page does it automatically.)*",
+                "✅ **Song registered!**",
+                embed=embed,
                 view=view,
                 ephemeral=True,
             )
