@@ -3150,6 +3150,27 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.delete_exp_radio_song(song_id)
                 await flash("Song removed.", "success")
 
+            elif action == "reanalyze_whisper":
+                from bot.exp_radio_worker import process_exp_song
+                songs_all = await db.get_all_exp_radio_songs(active_only=True)
+                queued = 0
+                for s in songs_all:
+                    if not s.get("mp3_filename"):
+                        continue  # MP3 never finished uploading — skip
+                    # Drop stale ASS so the player won't pick it up mid-rebuild
+                    await db.update_exp_radio_song(
+                        s["id"], analysis_status="processing", ass_filename=None,
+                    )
+                    asyncio.create_task(
+                        process_exp_song(db, s["id"], EXP_RADIO_DIR, bot=bot)
+                    )
+                    queued += 1
+                await flash(
+                    f"Queued {queued} song(s) for re-analysis. "
+                    "Whisper runs in the background — refresh the page to see status updates.",
+                    "success",
+                )
+
             elif action == "rescrape_metadata":
                 from bot.exp_radio_worker import scrape_suno
                 songs_all = await db.get_all_exp_radio_songs(active_only=True)

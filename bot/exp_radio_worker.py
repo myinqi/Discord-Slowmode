@@ -16,6 +16,8 @@ import json
 import os
 import re
 import time
+import unicodedata
+from difflib import SequenceMatcher
 
 _BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -225,24 +227,44 @@ async def scrape_suno(uuid: str) -> dict:
 
 # ─── Lyrics cleaning ─────────────────────────────────────────────────────────
 
+# Unicode ranges for emoji + decorative symbols we want to strip from lyrics
+_DECOR_RE = re.compile(
+    r'['
+    r'\u2500-\u257F'      # Box drawing
+    r'\u2580-\u259F'      # Block elements
+    r'\u25A0-\u25FF'      # Geometric shapes
+    r'\u2600-\u26FF'      # Misc symbols (✦ ⚜ ☀ etc.)
+    r'\u2700-\u27BF'      # Dingbats
+    r'\u2B00-\u2BFF'      # Misc symbols & arrows
+    r'\U0001F300-\U0001F9FF'  # Misc pictographs + emoticons
+    r'\U0001FA00-\U0001FAFF'  # Symbols & pictographs ext.
+    r'\U0001F700-\U0001F77F'  # Alchemical symbols (🜁 🜂 🜔)
+    r'\u2728\uFE0F'       # Sparkles + variation selector
+    r']+'
+)
+
+
 def clean_lyrics(raw: str) -> str:
-    """Remove section headers ([Verse 1], [Chorus], etc.) and normalize whitespace."""
+    """Strip section headers, decorative box/emoji glyphs, and markdown formatting,
+    and normalize fancy Unicode (e.g. 𝑰𝒏𝒕𝒓𝒐 → 'Intro') so that lyrics are usable as a
+    Whisper initial_prompt and as alignment tokens."""
     if not raw:
         return ""
-    lines = []
-    for line in raw.splitlines():
+    # NFKC folds Mathematical Italic / Bold / Sans-serif letters back to ASCII
+    text = unicodedata.normalize("NFKC", raw)
+    out = []
+    for line in text.splitlines():
+        # Skip lines that are *only* a [Section] marker
         if re.match(r'^\s*\[[^\]]+\]\s*$', line):
             continue
-        lines.append(line)
-    result = []
-    prev_blank = False
-    for line in lines:
-        is_blank = not line.strip()
-        if is_blank and prev_blank:
-            continue
-        result.append(line)
-        prev_blank = is_blank
-    return "\n".join(result).strip()
+        line = _DECOR_RE.sub('', line)
+        # Strip markdown bold/italic markers but keep their contents
+        line = re.sub(r'\*+', '', line)
+        # Collapse whitespace
+        line = re.sub(r'\s+', ' ', line).strip()
+        if line:
+            out.append(line)
+    return "\n".join(out).strip()
 
 
 # ─── Audio duration ───────────────────────────────────────────────────────────
@@ -262,11 +284,27 @@ async def get_duration(mp3_path: str) -> float:
 
 # ─── Whisper analysis ─────────────────────────────────────────────────────────
 
-def _whisper_sync(mp3_path: str) -> list:
-    """Run faster-whisper synchronously (called in thread pool)."""
+# Model size can be overridden via env (tiny, base, small, medium, large-v3)
+_WHISPER_MODEL = os.environ.get("EXP_RADIO_WHISPER_MODEL", "small")
+
+
+def _whisper_sync(mp3_path: str, lyrics_prompt: str = "") -> list:
+    """Run faster-whisper synchronously (called in thread pool).
+    `lyrics_prompt` is fed to Whisper as an initial_prompt so it can
+    correctly transcribe artistic neologisms like 'Morrowmire'."""
     from faster_whisper import WhisperModel
-    model = WhisperModel("base", device="cpu", compute_type="int8")
-    segments, _ = model.transcribe(mp3_path, word_timestamps=True)
+    model = WhisperModel(_WHISPER_MODEL, device="cpu", compute_type="int8")
+    # Whisper's prompt is capped at ~224 tokens; trim to last 220 chars
+    prompt = (lyrics_prompt or "").strip()
+    if len(prompt) > 220:
+        prompt = prompt[-220:]
+    segments, _ = model.transcribe(
+        mp3_path,
+        word_timestamps=True,
+        language="en",
+        initial_prompt=prompt or None,
+        vad_filter=True,
+    )
     words = []
     for seg in segments:
         for w in (seg.words or []):
@@ -280,10 +318,76 @@ def _whisper_sync(mp3_path: str) -> list:
     return words
 
 
-async def run_whisper(mp3_path: str) -> list:
+async def run_whisper(mp3_path: str, lyrics_prompt: str = "") -> list:
     """Run Whisper in thread pool so the event loop is not blocked."""
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _whisper_sync, mp3_path)
+    return await loop.run_in_executor(None, _whisper_sync, mp3_path, lyrics_prompt)
+
+
+def _align_to_lyrics(whisper_words: list, lyrics_text: str) -> list:
+    """Forced-alignment-light: keep Whisper's word *timings* but replace each
+    word's *text* with the corresponding token from the original lyrics via
+    sequence alignment. This eliminates Whisper hallucinations on artistic
+    or non-dictionary lyrics (e.g. 'Morrowmire', 'Vorralune').
+
+    Falls back to the raw Whisper output if the alignment quality is too poor
+    (i.e. nothing matches → lyrics likely don't correspond to the audio).
+    """
+    if not lyrics_text or not whisper_words:
+        return whisper_words
+
+    lyric_tokens = re.findall(r"[\w']+", lyrics_text, flags=re.UNICODE)
+    if not lyric_tokens:
+        return whisper_words
+
+    whisper_norm = [
+        re.sub(r"[^\w']", "", w["word"], flags=re.UNICODE).lower()
+        for w in whisper_words
+    ]
+    lyric_norm = [t.lower() for t in lyric_tokens]
+
+    sm = SequenceMatcher(a=whisper_norm, b=lyric_norm, autojunk=False)
+    opcodes = sm.get_opcodes()
+
+    # Sanity check: if <10% of Whisper words match the lyrics exactly,
+    # the lyrics probably don't fit this audio — keep Whisper as-is.
+    matched = sum((i2 - i1) for tag, i1, i2, _, _ in opcodes if tag == "equal")
+    if matched < max(3, int(0.1 * len(whisper_words))):
+        print(
+            f"[exp-radio] Alignment confidence too low "
+            f"({matched}/{len(whisper_words)} matched) — keeping raw Whisper output",
+            flush=True,
+        )
+        return whisper_words
+
+    out = []
+    for tag, i1, i2, j1, j2 in opcodes:
+        whis_run = whisper_words[i1:i2]
+        lyr_run = lyric_tokens[j1:j2]
+        if tag == "equal":
+            for k, w in enumerate(whis_run):
+                nw = dict(w)
+                nw["word"] = lyr_run[k]
+                out.append(nw)
+        elif tag == "replace":
+            # Distribute lyric tokens proportionally across Whisper's time spans
+            if not lyr_run:
+                out.extend(whis_run)
+                continue
+            for k, w in enumerate(whis_run):
+                nw = dict(w)
+                lyr_idx = min(
+                    int(k * len(lyr_run) / max(1, len(whis_run))),
+                    len(lyr_run) - 1,
+                )
+                nw["word"] = lyr_run[lyr_idx]
+                out.append(nw)
+        elif tag == "delete":
+            # Whisper heard something not in the lyrics — keep it (ad-lib / breath)
+            out.extend(whis_run)
+        # 'insert' → lyric tokens Whisper didn't pick up; we cannot synthesize
+        # timestamps reliably, so we drop them rather than guess.
+    return out
 
 
 # ─── ASS subtitle generation ──────────────────────────────────────────────────
@@ -425,10 +529,16 @@ async def process_exp_song(db, song_id: int, exp_radio_dir: str, bot=None):
             lyrics=lyrics, duration=duration,
         )
 
-        # 3) Whisper word-timestamp analysis
-        print(f"[exp-radio] Starting Whisper analysis for #{song_id}…", flush=True)
-        words = await run_whisper(mp3_path)
+        # 3) Whisper word-timestamp analysis (lyrics fed as initial_prompt)
+        print(f"[exp-radio] Starting Whisper analysis for #{song_id} (model={_WHISPER_MODEL})…", flush=True)
+        words = await run_whisper(mp3_path, lyrics_prompt=lyrics)
         print(f"[exp-radio] Whisper done: {len(words)} words for #{song_id}", flush=True)
+
+        # 3b) Forced-alignment-light: replace word texts with original lyric tokens
+        if lyrics:
+            before = len(words)
+            words = _align_to_lyrics(words, lyrics)
+            print(f"[exp-radio] Aligned to lyrics: {before} → {len(words)} words for #{song_id}", flush=True)
 
         # 4) Build ASS subtitle file
         ass_content  = build_ass(words, title=title, artist=artist)

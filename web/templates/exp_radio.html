@@ -126,6 +126,15 @@
                             ⟳ Refresh Metadata
                         </button>
                     </form>
+                    <form method="POST" class="inline"
+                          onsubmit="return confirm('Re-run Whisper analysis for all active songs?\n\nThis takes several minutes per song (CPU bound) and runs in the background. Existing subtitles will be regenerated.');">
+                        <input type="hidden" name="action" value="reanalyze_whisper">
+                        <button type="submit"
+                                class="px-2.5 py-1 bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 rounded transition-colors"
+                                title="Re-run Whisper transcription + lyric alignment for all active songs (slow, runs in background)">
+                            ⟳ Re-analyze Whisper
+                        </button>
+                    </form>
                     <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-green-500 inline-block"></span> Done</span>
                     <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-yellow-500 inline-block"></span> Processing</span>
                     <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-gray-500 inline-block"></span> Pending</span>
