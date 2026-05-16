@@ -3197,6 +3197,45 @@ def create_app(db: Database, bot=None) -> Quart:
             bg_filename=bg_filename, loop_filename=loop_filename,
         )
 
+    @app.route("/exp-radio/upload/<token>")
+    async def exp_radio_upload_page(token: str):
+        """Public page (no login) — browser fetches MP3 from Suno CDN and POSTs it here."""
+        song = await db.get_exp_radio_song_by_token(token)
+        if not song:
+            return await render_template("exp_radio_upload.html", error="Link invalid or expired.")
+        if song.get("mp3_filename"):
+            return await render_template("exp_radio_upload.html", done=True,
+                                         title=song.get("title") or "Your song")
+        return await render_template("exp_radio_upload.html", song=song, token=token)
+
+    @app.route("/exp-radio/upload/<token>", methods=["POST"])
+    async def exp_radio_upload_receive(token: str):
+        """Receive the MP3 posted by the browser upload page."""
+        from quart import jsonify
+        song = await db.get_exp_radio_song_by_token(token)
+        if not song:
+            return jsonify({"ok": False, "error": "Invalid token"}), 403
+        if song.get("mp3_filename"):
+            return jsonify({"ok": True, "already": True})
+
+        files = await request.files
+        mp3_file = files.get("mp3")
+        if not mp3_file:
+            return jsonify({"ok": False, "error": "No file received"}), 400
+
+        mp3_dir = os.path.join(EXP_RADIO_DIR, "mp3")
+        os.makedirs(mp3_dir, exist_ok=True)
+        mp3_filename = f"{song['suno_uuid']}.mp3"
+        mp3_path     = os.path.join(mp3_dir, mp3_filename)
+        await mp3_file.save(mp3_path)
+        await db.update_exp_radio_song(song["id"], mp3_filename=mp3_filename)
+
+        from bot.exp_radio_worker import process_exp_song
+        asyncio.create_task(
+            process_exp_song(db, song["id"], EXP_RADIO_DIR, bot=bot)
+        )
+        return jsonify({"ok": True})
+
     @app.route("/exp-radio/stream/<action>", methods=["POST"])
     @permission_required('exp_radio')
     async def exp_radio_stream_action(action):

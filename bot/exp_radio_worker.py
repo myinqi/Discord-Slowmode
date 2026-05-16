@@ -302,12 +302,17 @@ async def process_exp_song(db, song_id: int, exp_radio_dir: str, bot=None):
     await db.update_exp_radio_song(song_id, analysis_status="processing")
 
     try:
-        # 1) Download MP3
-        mp3_path = await download_mp3(uuid, mp3_dir)
-        if not mp3_path:
+        # 1) Locate MP3 — supplied by the browser upload endpoint
+        mp3_filename = song.get("mp3_filename")
+        if not mp3_filename:
+            print(f"[exp-radio] #{song_id}: no mp3_filename in DB yet — upload not completed", flush=True)
             await db.update_exp_radio_song(song_id, analysis_status="failed")
             return
-        await db.update_exp_radio_song(song_id, mp3_filename=os.path.basename(mp3_path))
+        mp3_path = os.path.join(mp3_dir, mp3_filename)
+        if not os.path.exists(mp3_path):
+            print(f"[exp-radio] #{song_id}: MP3 file missing on disk: {mp3_path}", flush=True)
+            await db.update_exp_radio_song(song_id, analysis_status="failed")
+            return
 
         # 2) Scrape Suno metadata
         meta = await scrape_suno(uuid)

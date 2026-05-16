@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Experimental Radio — Complete Submission</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>tailwind.config={darkMode:'class',theme:{extend:{colors:{'discord-dark':'#2b2d31','discord-darker':'#1e1f22','discord-blurple':'#5865f2'}}}}</script>
+</head>
+<body class="dark bg-discord-darker min-h-screen flex items-center justify-center p-4">
+<div class="w-full max-w-md">
+
+{% if error %}
+<div class="bg-red-900/40 border border-red-700/50 rounded-xl p-6 text-center">
+    <p class="text-4xl mb-3">❌</p>
+    <p class="text-red-300 font-semibold">{{ error }}</p>
+    <p class="text-gray-500 text-sm mt-2">This link is invalid or has already been used.</p>
+</div>
+
+{% elif done %}
+<div class="bg-green-900/40 border border-green-700/50 rounded-xl p-6 text-center">
+    <p class="text-4xl mb-3">✅</p>
+    <p class="text-green-300 font-semibold">Already uploaded!</p>
+    <p class="text-gray-400 text-sm mt-2"><strong>{{ title }}</strong> is being analysed. You will find it in the Experimental Radio once processing is complete.</p>
+</div>
+
+{% else %}
+<div class="bg-discord-dark border border-gray-700/50 rounded-xl overflow-hidden shadow-xl">
+    <div class="px-6 py-5 border-b border-gray-700/50">
+        <h1 class="text-white font-bold text-lg">🎙️ Complete Your Submission</h1>
+        <p class="text-gray-400 text-sm mt-1">Experimental Radio</p>
+    </div>
+
+    <div class="p-6 space-y-4">
+        <div class="bg-gray-800/50 rounded-lg p-4">
+            <p class="text-gray-400 text-xs uppercase tracking-wide mb-1">Suno Song</p>
+            <a href="{{ song.suno_url }}" target="_blank"
+               class="text-discord-blurple hover:underline text-sm break-all">{{ song.suno_url }}</a>
+        </div>
+
+        <p class="text-gray-400 text-sm">
+            Click the button below. Your browser will fetch the audio directly from Suno and send it to the server for processing.
+        </p>
+
+        <!-- Progress area -->
+        <div id="progress-area" class="hidden">
+            <div class="flex items-center justify-between text-xs text-gray-400 mb-1">
+                <span id="prog-label">Fetching audio…</span>
+                <span id="prog-pct">0%</span>
+            </div>
+            <div class="w-full bg-gray-700 rounded-full h-2">
+                <div id="prog-bar" class="bg-discord-blurple h-2 rounded-full transition-all duration-300" style="width:0%"></div>
+            </div>
+        </div>
+
+        <div id="result-area" class="hidden"></div>
+
+        <button id="start-btn" onclick="startUpload()"
+            class="w-full py-3 bg-discord-blurple hover:bg-blue-600 text-white font-semibold rounded-lg transition-colors text-sm">
+            ⬆ Fetch &amp; Submit Audio
+        </button>
+
+        <p class="text-gray-600 text-xs text-center">
+            This link is single-use and will expire with your submission (14 days).
+        </p>
+    </div>
+</div>
+
+<script>
+var SUNO_UUID = {{ song.suno_uuid | tojson }};
+var UPLOAD_TOKEN = {{ token | tojson }};
+
+async function startUpload() {
+    var btn = document.getElementById('start-btn');
+    var progArea = document.getElementById('progress-area');
+    var resultArea = document.getElementById('result-area');
+    var progBar = document.getElementById('prog-bar');
+    var progLabel = document.getElementById('prog-label');
+    var progPct = document.getElementById('prog-pct');
+
+    btn.disabled = true;
+    btn.textContent = 'Working…';
+    progArea.classList.remove('hidden');
+
+    // Step 1: Fetch MP3 from Suno CDN
+    var cdnUrl = 'https://cdn1.suno.ai/' + SUNO_UUID + '.mp3';
+    progLabel.textContent = 'Fetching audio from Suno…';
+
+    var blob;
+    try {
+        var resp = await fetch(cdnUrl);
+        if (!resp.ok) {
+            throw new Error('Suno returned HTTP ' + resp.status + '. The song may be private or unavailable.');
+        }
+        // Stream response to track progress
+        var reader = resp.body.getReader();
+        var total = parseInt(resp.headers.get('Content-Length') || '0');
+        var received = 0;
+        var chunks = [];
+        while (true) {
+            var { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            received += value.length;
+            if (total > 0) {
+                var pct = Math.round(received / total * 60);
+                progBar.style.width = pct + '%';
+                progPct.textContent = pct + '%';
+            }
+        }
+        blob = new Blob(chunks, { type: 'audio/mpeg' });
+    } catch (e) {
+        showError('Could not fetch audio: ' + e.message);
+        return;
+    }
+
+    // Step 2: POST to our server
+    progLabel.textContent = 'Uploading to server…';
+    progBar.style.width = '65%';
+    progPct.textContent = '65%';
+
+    var formData = new FormData();
+    formData.append('mp3', blob, SUNO_UUID + '.mp3');
+
+    try {
+        var r = await fetch('/exp-radio/upload/' + UPLOAD_TOKEN, {
+            method: 'POST',
+            body: formData,
+        });
+        var d = await r.json();
+        if (!d.ok && !d.already) {
+            throw new Error(d.error || 'Server error');
+        }
+    } catch (e) {
+        showError('Upload failed: ' + e.message);
+        return;
+    }
+
+    progBar.style.width = '100%';
+    progPct.textContent = '100%';
+    progLabel.textContent = 'Done!';
+
+    resultArea.classList.remove('hidden');
+    resultArea.innerHTML = `
+        <div class="bg-green-900/40 border border-green-700/50 rounded-lg p-4 text-center">
+            <p class="text-green-300 font-semibold text-sm">✅ Upload complete!</p>
+            <p class="text-gray-400 text-xs mt-1">
+                Your song is now being analysed (lyrics, timing, subtitles).<br>
+                This takes 1–3 minutes. You can close this page.
+            </p>
+        </div>`;
+    btn.classList.add('hidden');
+}
+
+function showError(msg) {
+    var btn = document.getElementById('start-btn');
+    var resultArea = document.getElementById('result-area');
+    btn.disabled = false;
+    btn.textContent = '⬆ Fetch & Submit Audio';
+    resultArea.classList.remove('hidden');
+    resultArea.innerHTML = `
+        <div class="bg-red-900/40 border border-red-700/50 rounded-lg p-4">
+            <p class="text-red-300 text-sm font-semibold">❌ Error</p>
+            <p class="text-gray-400 text-xs mt-1">${msg}</p>
+        </div>`;
+}
+</script>
+{% endif %}
+
+</div>
+</body>
+</html>

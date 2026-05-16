@@ -1731,8 +1731,6 @@ class CommandsCog(commands.Cog):
             "**`/poll-create [channel]`** — Create a poll\n"
             "**`/poll-edit`** — Edit your existing polls\n"
             "**`/twitch-playlist`** — Show the Twitch radio playlist\n"
-            "**`/twitch-submit`** — Submit a Suno song to the Experimental Radio\n"
-            "**`/twitch-delete`** — Remove one of your Experimental Radio submissions\n"
             "**`/help`** — Show this help message"
         )
         embed.add_field(name="🛠️ Utility & Fun", value=utility_cmds, inline=False)
@@ -1744,6 +1742,17 @@ class CommandsCog(commands.Cog):
             inline=False,
         )
 
+        # Experimental Radio (admin only)
+        if has_admin:
+            embed.add_field(
+                name="🎙️ Experimental Radio (Admin)",
+                value=(
+                    "**`/twitch-submit`** — Submit a Suno song to the Experimental Radio\n"
+                    "**`/twitch-delete`** — Remove one of your Experimental Radio submissions"
+                ),
+                inline=False,
+            )
+
         # Dynamic footer based on permissions
         if has_admin:
             embed.set_footer(text="✅ You have admin/mod permissions — all commands shown")
@@ -1753,6 +1762,7 @@ class CommandsCog(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="twitch-submit", description="Submit a Suno song to the Experimental Radio (max 2 per user)")
+    @app_commands.default_permissions(administrator=True)
     async def exp_radio_submit(self, interaction: discord.Interaction):
         embed = discord.Embed(
             title="🎙️ Submit to Experimental Radio",
@@ -1764,6 +1774,7 @@ class CommandsCog(commands.Cog):
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
     @app_commands.command(name="twitch-delete", description="Remove one of your Experimental Radio submissions")
+    @app_commands.default_permissions(administrator=True)
     async def exp_radio_delete(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         songs = await self.bot.db.get_exp_radio_songs_by_user(interaction.user.id)
@@ -1884,7 +1895,7 @@ class ExpRadioSubmitModal(discord.ui.Modal, title="Submit to Experimental Radio"
             f"{_EXP_RIGHTS_DECLARATION}|{interaction.user.id}|{raw_url}|{suno_uuid}".encode()
         ).hexdigest()
 
-        song_id = await self.bot.db.add_exp_radio_song(
+        song_id, upload_token = await self.bot.db.add_exp_radio_song(
             user_id=interaction.user.id,
             user_name=str(interaction.user),
             suno_url=raw_url,
@@ -1893,19 +1904,24 @@ class ExpRadioSubmitModal(discord.ui.Modal, title="Submit to Experimental Radio"
             rights_hash=rights_hash,
         )
 
+        web_url = self.bot.web_url
+        if web_url:
+            upload_link = f"{web_url}/exp-radio/upload/{upload_token}"
+            upload_note = (
+                f"\n\n📎 **Please complete your submission:**\n"
+                f"[Click here to upload your song]({upload_link})\n"
+                "*(The page will automatically transfer the audio from Suno — "
+                "no manual download needed.)*"
+            )
+        else:
+            upload_note = "\n\n⚠️ Upload link unavailable — ask an admin to set WEB_URL."
+
         await interaction.followup.send(
-            f"✅ **Song submitted!** (#{song_id})\n"
-            "⏳ Downloading and analysing your song in the background — "
-            "title and lyrics will appear shortly.\n"
-            f"Use `/twitch-delete` to remove it if needed.",
+            f"✅ **Song registered!** (#{song_id}){upload_note}",
             ephemeral=True,
         )
 
-        # Kick off background pipeline (fire and forget)
-        from bot.exp_radio_worker import process_exp_song
-        asyncio.create_task(
-            process_exp_song(self.bot.db, song_id, self.bot.exp_radio_dir, bot=self.bot)
-        )
+        # Pipeline is triggered by the upload endpoint once the MP3 arrives
 
 
 class ExpRadioDeleteView(discord.ui.View):

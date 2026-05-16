@@ -452,6 +452,15 @@ class Database:
         """)
         await self.db.commit()
 
+        # Add upload_token to exp_radio_songs (migration for existing installs)
+        try:
+            await self.db.execute(
+                "ALTER TABLE exp_radio_songs ADD COLUMN upload_token TEXT"
+            )
+            await self.db.commit()
+        except Exception:
+            pass  # column already exists
+
         # Add DC-player filter columns (migration for existing installs)
         for col, definition in [
             ("dc_channel", "TEXT DEFAULT ''"),
@@ -2360,22 +2369,31 @@ class Database:
     async def add_exp_radio_song(
         self, user_id: int, user_name: str, suno_url: str, suno_uuid: str,
         rights_declaration: str, rights_hash: str,
-    ) -> int:
+    ) -> tuple[int, str]:
+        import secrets
+        upload_token = secrets.token_urlsafe(32)
         expires_at = time.time() + 14 * 86400
         cursor = await self.db.execute(
             """INSERT INTO exp_radio_songs
                (user_id, user_name, suno_url, suno_uuid,
-                rights_declaration, rights_hash, rights_agreed_at, expires_at)
-               VALUES (?, ?, ?, ?, ?, ?, unixepoch(), ?)""",
+                rights_declaration, rights_hash, rights_agreed_at, expires_at, upload_token)
+               VALUES (?, ?, ?, ?, ?, ?, unixepoch(), ?, ?)""",
             (user_id, user_name, suno_url, suno_uuid,
-             rights_declaration, rights_hash, expires_at),
+             rights_declaration, rights_hash, expires_at, upload_token),
         )
         await self.db.commit()
-        return cursor.lastrowid
+        return cursor.lastrowid, upload_token
 
     async def get_exp_radio_song(self, song_id: int) -> Optional[dict]:
         async with self.db.execute(
             "SELECT * FROM exp_radio_songs WHERE id = ?", (song_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_exp_radio_song_by_token(self, token: str) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM exp_radio_songs WHERE upload_token = ? AND active = 1", (token,)
         ) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None
