@@ -294,6 +294,10 @@ _DECOR_RE = re.compile(
     r'\u2600-\u26FF'      # Misc symbols (✦ ⚜ ☀ etc.)
     r'\u2700-\u27BF'      # Dingbats
     r'\u2B00-\u2BFF'      # Misc symbols & arrows
+    r'\u2E00-\u2E7F'      # Supplemental punctuation
+    r'\u3000-\u303F'      # CJK symbols & punctuation
+    r'\u0F00-\u0FFF'      # Tibetan (includes ༼ ༽ ༺ ༻ decorative brackets)
+    r'\uA9C0-\uA9DF'      # Javanese punctuation (꧁ ꧂ etc.)
     r'\U0001F300-\U0001F9FF'  # Misc pictographs + emoticons
     r'\U0001FA00-\U0001FAFF'  # Symbols & pictographs ext.
     r'\U0001F700-\U0001F77F'  # Alchemical symbols (🜁 🜂 🜔)
@@ -429,6 +433,7 @@ def _align_to_lyrics(whisper_words: list, lyrics_text: str) -> list:
     # exactly (the `equal` opcodes). This avoids the previous 1:1 proportional
     # remapping which mangled karaoke whenever the sheet's token count differed
     # from the sung word count (chorus repeats, instrumental sections, etc.).
+    _has_latin = re.compile(r"[A-Za-z]")
     out = [dict(w) for w in whisper_words]
     corrected = 0
     for tag, i1, i2, j1, j2 in opcodes:
@@ -436,6 +441,11 @@ def _align_to_lyrics(whisper_words: list, lyrics_text: str) -> list:
             continue
         for k in range(i2 - i1):
             new_text = lyric_tokens[j1 + k]
+            # Refuse to overwrite Whisper output with a lyric token that has
+            # no Latin letters — those are almost always decorative ornaments
+            # (༼ ꧂ ✦) bleeding in from artist-name banners in the lyric sheet.
+            if not _has_latin.search(new_text):
+                continue
             if out[i1 + k]["word"] != new_text:
                 out[i1 + k]["word"] = new_text
                 corrected += 1
