@@ -3100,7 +3100,10 @@ def create_app(db: Database, bot=None) -> Quart:
                 if not expired:
                     continue
                 print(f"[exp-radio] Expired {len(expired)} song(s).", flush=True)
-                channel_id_str = await db.get_setting("radio_expiry_channel_id")
+                channel_id_str = (
+                    await db.get_setting("exp_radio_expiry_channel_id")
+                    or await db.get_setting("radio_expiry_channel_id")
+                )
                 if channel_id_str and bot and bot.is_ready():
                     guild = get_guild()
                     if guild:
@@ -3202,6 +3205,36 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.set_setting("exp_radio_twitch_key", key)
                 await flash("Stream key saved.", "success")
 
+            elif action == "save_exp_settings":
+                ch1 = form.get("exp_post_channel_1_id", "").strip()
+                ch2 = form.get("exp_post_channel_2_id", "").strip()
+                expiry_ch = form.get("exp_expiry_channel_id", "").strip()
+                stream_url_v = form.get("exp_stream_url", "").strip()
+                await db.set_setting("exp_radio_post_channel_1_id", ch1)
+                await db.set_setting("exp_radio_post_channel_2_id", ch2)
+                await db.set_setting("exp_radio_expiry_channel_id", expiry_ch)
+                if stream_url_v:
+                    await db.set_setting("exp_radio_stream_url", stream_url_v)
+                await flash("Settings saved.", "success")
+
+            elif action == "post_exp_stream_url":
+                ch_id = form.get("post_channel_id_select", "")
+                exp_stream_url_v = await db.get_setting("exp_radio_stream_url") or ""
+                guild = get_guild()
+                if guild and ch_id and exp_stream_url_v:
+                    channel = guild.get_channel(int(ch_id)) or guild.get_thread(int(ch_id))
+                    if channel:
+                        import discord
+                        embed = discord.Embed(
+                            title="\U0001F4FA Live Stream",
+                            description=f"Watch the stream now!\n\n**[Tune in]({exp_stream_url_v})**",
+                            color=discord.Color.purple(),
+                        )
+                        await channel.send(embed=embed)
+                        await flash(f"Stream link posted to #{channel.name}.", "success")
+                elif not exp_stream_url_v:
+                    await flash("No stream URL configured. Open Settings to add one.", "danger")
+
             elif action == "upload_background":
                 bg_file = files.get("bg_file")
                 if bg_file and bg_file.filename:
@@ -3276,11 +3309,25 @@ def create_app(db: Database, bot=None) -> Quart:
         masked_key = "*" * 20 if await db.get_setting("exp_radio_twitch_key") else ""
         bg_filename  = await db.get_setting("exp_radio_bg_filename") or ""
         loop_filename = await db.get_setting("exp_radio_loop_filename") or ""
+        exp_stream_url = await db.get_setting("exp_radio_stream_url") or ""
+        exp_post_channel_1_id = await db.get_setting("exp_radio_post_channel_1_id") or ""
+        exp_post_channel_2_id = await db.get_setting("exp_radio_post_channel_2_id") or ""
+        exp_expiry_channel_id = await db.get_setting("exp_radio_expiry_channel_id") or ""
+        exp_guild = get_guild()
+        exp_text_channels = []
+        if exp_guild:
+            for _ch in sorted(exp_guild.text_channels, key=lambda c: c.position):
+                exp_text_channels.append({"id": _ch.id, "name": _ch.name})
         return await render_template(
             "exp_radio.html",
             songs=songs, status=status,
             masked_key=masked_key,
             bg_filename=bg_filename, loop_filename=loop_filename,
+            exp_stream_url=exp_stream_url,
+            exp_post_channel_1_id=exp_post_channel_1_id,
+            exp_post_channel_2_id=exp_post_channel_2_id,
+            exp_expiry_channel_id=exp_expiry_channel_id,
+            text_channels=exp_text_channels,
         )
 
     @app.route("/exp-radio/upload/<token>/resolve")
