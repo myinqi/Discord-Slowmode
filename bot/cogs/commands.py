@@ -1731,6 +1731,8 @@ class CommandsCog(commands.Cog):
             "**`/poll-create [channel]`** — Create a poll\n"
             "**`/poll-edit`** — Edit your existing polls\n"
             "**`/twitch-playlist`** — Show the Twitch radio playlist\n"
+            "**`/twitch-submit`** — Submit a Suno song to the Experimental Radio\n"
+            "**`/twitch-delete`** — Remove one of your Experimental Radio submissions\n"
             "**`/help`** — Show this help message"
         )
         embed.add_field(name="🛠️ Utility & Fun", value=utility_cmds, inline=False)
@@ -1749,6 +1751,31 @@ class CommandsCog(commands.Cog):
             embed.set_footer(text="ℹ️ Some admin commands are hidden — ask a moderator for access")
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="twitch-submit", description="Submit a Suno song to the Experimental Radio (max 2 per user)")
+    async def exp_radio_submit(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title="🎙️ Submit to Experimental Radio",
+            description=_EXP_TERMS_DISPLAY,
+            color=discord.Color.purple(),
+        )
+        embed.set_footer(text="Click 'I Agree & Submit' to proceed with your submission.")
+        view = ExpRadioTermsView(self.bot)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    @app_commands.command(name="twitch-delete", description="Remove one of your Experimental Radio submissions")
+    async def exp_radio_delete(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        songs = await self.bot.db.get_exp_radio_songs_by_user(interaction.user.id)
+        if not songs:
+            await interaction.followup.send("You have no active Experimental Radio submissions.", ephemeral=True)
+            return
+        view = ExpRadioDeleteView(self.bot, songs)
+        lines = [f"**{i+1}.** {s['title'] or 'Pending…'} — {s['artist'] or ''} (#{s['id']})" for i, s in enumerate(songs)]
+        await interaction.followup.send(
+            "**Your Experimental Radio submissions:**\n" + "\n".join(lines) + "\n\nSelect a song to delete:",
+            view=view, ephemeral=True,
+        )
 
     @app_commands.command(name="twitch-playlist", description="Show the current Twitch radio playlist")
     async def twitch_playlist(self, interaction: discord.Interaction):
@@ -1776,6 +1803,142 @@ class CommandsCog(commands.Cog):
         await interaction.response.send_message(chunks[0], ephemeral=True)
         for chunk in chunks[1:]:
             await interaction.followup.send(chunk, ephemeral=True)
+
+
+_SUNO_SUBMIT_RE = re.compile(r'(?:suno\.com/(?:s|song)/)([A-Za-z0-9_-]{8,})')
+_EXP_MAX_PER_USER = 2
+
+_EXP_TERMS_DISPLAY = (
+    "**By submitting you confirm:**\n"
+    "• You created this song on Suno.ai and hold the rights to stream it\n"
+    "• You grant a **14-day streaming license** for Twitch live streams & VODs\n"
+    "• The content complies with community guidelines (no hate speech, explicit or illegal content)\n"
+    "• Songs expire and are deleted automatically after **14 days**\n"
+    f"• Maximum **{_EXP_MAX_PER_USER} songs** per user"
+)
+
+_EXP_RIGHTS_DECLARATION = (
+    "I confirm that I created this song on Suno.ai, hold the necessary rights to stream it, "
+    "and grant a non-exclusive 14-day streaming license for Twitch live streams and VODs. "
+    "I confirm the content complies with the community content guidelines."
+)
+
+
+class ExpRadioTermsView(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=120)
+        self.bot = bot
+
+    @discord.ui.button(label="✅ I Agree & Submit", style=discord.ButtonStyle.green)
+    async def agree(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(ExpRadioSubmitModal(self.bot))
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Submission cancelled.", embed=None, view=None)
+
+    async def on_timeout(self):
+        pass
+
+
+class ExpRadioSubmitModal(discord.ui.Modal, title="Submit to Experimental Radio"):
+    url = discord.ui.TextInput(
+        label="Suno Song URL",
+        placeholder="https://suno.com/s/… or https://suno.com/song/…",
+        max_length=250,
+    )
+
+    def __init__(self, bot):
+        super().__init__()
+        self.bot = bot
+
+    async def on_submit(self, interaction: discord.Interaction):
+        import hashlib
+        await interaction.response.defer(ephemeral=True)
+        raw_url = self.url.value.strip()
+
+        if not SUNO_URL_PATTERN.search(raw_url):
+            await interaction.followup.send(
+                "❌ Invalid URL. Please provide a valid Suno song link (e.g. `https://suno.com/s/…`).",
+                ephemeral=True,
+            )
+            return
+
+        m = _SUNO_SUBMIT_RE.search(raw_url)
+        if not m:
+            await interaction.followup.send("❌ Could not extract song ID from URL.", ephemeral=True)
+            return
+        suno_uuid = m.group(1)
+
+        count = await self.bot.db.count_exp_radio_songs_by_user(interaction.user.id)
+        if count >= _EXP_MAX_PER_USER:
+            await interaction.followup.send(
+                f"❌ You already have {_EXP_MAX_PER_USER} submissions. "
+                "Use `/twitch-delete` to remove one first.",
+                ephemeral=True,
+            )
+            return
+
+        rights_hash = hashlib.sha256(
+            f"{_EXP_RIGHTS_DECLARATION}|{interaction.user.id}|{raw_url}|{suno_uuid}".encode()
+        ).hexdigest()
+
+        song_id = await self.bot.db.add_exp_radio_song(
+            user_id=interaction.user.id,
+            user_name=str(interaction.user),
+            suno_url=raw_url,
+            suno_uuid=suno_uuid,
+            rights_declaration=_EXP_RIGHTS_DECLARATION,
+            rights_hash=rights_hash,
+        )
+
+        await interaction.followup.send(
+            f"✅ **Song submitted!** (#{song_id})\n"
+            "⏳ Downloading and analysing your song in the background — "
+            "title and lyrics will appear shortly.\n"
+            f"Use `/twitch-delete` to remove it if needed.",
+            ephemeral=True,
+        )
+
+        # Kick off background pipeline (fire and forget)
+        from bot.exp_radio_worker import process_exp_song
+        asyncio.create_task(
+            process_exp_song(self.bot.db, song_id, self.bot.exp_radio_dir)
+        )
+
+
+class ExpRadioDeleteView(discord.ui.View):
+    def __init__(self, bot, songs: list):
+        super().__init__(timeout=60)
+        self.bot = bot
+        select = discord.ui.Select(
+            placeholder="Select a song to delete…",
+            options=[
+                discord.SelectOption(
+                    label=f"#{s['id']}: {(s['title'] or 'Pending')[:60]}",
+                    description=(s['artist'] or '')[:80],
+                    value=str(s["id"]),
+                )
+                for s in songs[:25]
+            ],
+        )
+        select.callback = self._select_cb
+        self.add_item(select)
+
+    async def _select_cb(self, interaction: discord.Interaction):
+        song_id = int(interaction.data["values"][0])
+        data = await self.bot.db.delete_exp_radio_song(song_id)
+        if data:
+            title = data.get("title") or f"#{song_id}"
+            await interaction.response.edit_message(
+                content=f"🗑️ **{title}** has been removed from the Experimental Radio.",
+                view=None,
+            )
+        else:
+            await interaction.response.edit_message(content="Song not found.", view=None)
+
+    async def on_timeout(self):
+        pass
 
 
 NUMBER_EMOJIS = ["1\u20e3", "2\u20e3", "3\u20e3", "4\u20e3", "5\u20e3", "6\u20e3", "7\u20e3", "8\u20e3", "9\u20e3", "\U0001F51F"]

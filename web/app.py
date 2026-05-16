@@ -69,6 +69,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('image_posting', 'Image Posting'),
         ('polls', 'Polls'),
         ('radio', 'Twitch Radio'),
+        ('exp_radio', 'Experimental Radio'),
         ('suno_analyzer', 'Suno Analyzer'),
         ('suno_promotion', 'Suno Promotion'),
         ('suno_info', 'Suno Info'),
@@ -2492,6 +2493,10 @@ def create_app(db: Database, bot=None) -> Quart:
     RADIO_UPLOAD_DIR = os.path.join(os.path.dirname(db.db_path), "radio")
     os.makedirs(RADIO_UPLOAD_DIR, exist_ok=True)
 
+    EXP_RADIO_DIR = os.path.join(os.path.dirname(db.db_path), "radio", "exp_radio")
+    for _sub in ("mp3", "ass", "assets"):
+        os.makedirs(os.path.join(EXP_RADIO_DIR, _sub), exist_ok=True)
+
     RIGHTS_DECLARATION_TEXT = (
         "I hereby confirm that I am the creator or rights holder of this audio track "
         "and grant a non-exclusive streaming license for a period of 14 days from the "
@@ -3077,9 +3082,173 @@ def create_app(db: Database, bot=None) -> Quart:
             except Exception as e:
                 print(f"[radio] Cleanup error: {e}")
 
+    async def _exp_radio_cleanup_loop():
+        """Periodically soft-delete expired exp_radio songs (every hour).
+        Notifies users via the configured Discord channel."""
+        while True:
+            try:
+                await asyncio.sleep(3600)
+                expired = await db.expire_old_exp_radio_songs()
+                if not expired:
+                    continue
+                print(f"[exp-radio] Expired {len(expired)} song(s).", flush=True)
+                channel_id_str = await db.get_setting("radio_expiry_channel_id")
+                if channel_id_str and bot and bot.is_ready():
+                    guild = get_guild()
+                    if guild:
+                        ch = guild.get_channel(int(channel_id_str))
+                        if ch:
+                            try:
+                                lines = []
+                                for s in expired:
+                                    t = s.get("title") or "Untitled"
+                                    a = s.get("artist") or s.get("user_name") or ""
+                                    u = s.get("suno_url") or ""
+                                    lines.append(f"- **{t}** by {a}  {u}")
+                                msg = (
+                                    f"🗑️ **{len(expired)} Experimental Radio song(s) expired:**\n"
+                                    + "\n".join(lines)
+                                )
+                                await ch.send(msg)
+                            except Exception as e:
+                                print(f"[exp-radio] Expiry notify error: {e}", flush=True)
+            except Exception as e:
+                print(f"[exp-radio] Cleanup error: {e}", flush=True)
+
     @app.before_serving
     async def start_cleanup_task():
         app.radio_cleanup_task = asyncio.create_task(_radio_cleanup_loop())
+        app.exp_radio_cleanup_task = asyncio.create_task(_exp_radio_cleanup_loop())
+
+    # ── Experimental Radio ─────────────────────────────────────────────────────
+
+    from bot.exp_stream_manager import ExpStreamManager
+    exp_stream_manager = ExpStreamManager(db, EXP_RADIO_DIR)
+
+    @app.route("/exp-radio", methods=["GET", "POST"])
+    @permission_required('exp_radio')
+    async def exp_radio_admin():
+        import csv, io, uuid as _uuid
+        from datetime import datetime, timezone
+        from quart import jsonify, send_file
+
+        if request.method == "POST":
+            form = await request.form
+            files = await request.files
+            action = form.get("action", "")
+
+            if action == "delete_song":
+                song_id = int(form.get("song_id", 0))
+                await db.delete_exp_radio_song(song_id)
+                await flash("Song removed.", "success")
+
+            elif action == "save_stream_key":
+                key = form.get("exp_twitch_key", "").strip()
+                await db.set_setting("exp_radio_twitch_key", key)
+                await flash("Stream key saved.", "success")
+
+            elif action == "upload_background":
+                bg_file = files.get("bg_file")
+                if bg_file and bg_file.filename:
+                    ext = bg_file.filename.rsplit(".", 1)[-1].lower()
+                    if ext in ("jpg", "jpeg", "png", "mp4", "webm"):
+                        bg_type = "video" if ext in ("mp4", "webm") else "image"
+                        fn = f"exp_bg_{_uuid.uuid4().hex}.{ext}"
+                        await bg_file.save(os.path.join(EXP_RADIO_DIR, "assets", fn))
+                        old = await db.get_setting("exp_radio_bg_filename")
+                        if old:
+                            old_path = os.path.join(EXP_RADIO_DIR, "assets", old)
+                            if os.path.exists(old_path):
+                                os.remove(old_path)
+                        await db.set_setting("exp_radio_bg_filename", fn)
+                        await db.set_setting("exp_radio_bg_type", bg_type)
+                        await flash("Background uploaded.", "success")
+                    else:
+                        await flash("Unsupported file type.", "danger")
+
+            elif action == "upload_loop_video":
+                lv_file = files.get("lv_file")
+                if lv_file and lv_file.filename:
+                    ext = lv_file.filename.rsplit(".", 1)[-1].lower()
+                    if ext in ("mp4", "webm"):
+                        fn = f"exp_loop_{_uuid.uuid4().hex}.{ext}"
+                        await lv_file.save(os.path.join(EXP_RADIO_DIR, "assets", fn))
+                        old = await db.get_setting("exp_radio_loop_filename")
+                        if old:
+                            old_path = os.path.join(EXP_RADIO_DIR, "assets", old)
+                            if os.path.exists(old_path):
+                                os.remove(old_path)
+                        await db.set_setting("exp_radio_loop_filename", fn)
+                        await flash("Loop video uploaded.", "success")
+                    else:
+                        await flash("Only MP4/WebM supported.", "danger")
+
+            return redirect(request.url)
+
+        songs = await db.get_all_exp_radio_songs(active_only=False)
+        status = await exp_stream_manager.get_status()
+        masked_key = "*" * 20 if await db.get_setting("exp_radio_twitch_key") else ""
+        bg_filename  = await db.get_setting("exp_radio_bg_filename") or ""
+        loop_filename = await db.get_setting("exp_radio_loop_filename") or ""
+        return await render_template(
+            "exp_radio.html",
+            songs=songs, status=status,
+            masked_key=masked_key,
+            bg_filename=bg_filename, loop_filename=loop_filename,
+        )
+
+    @app.route("/exp-radio/stream/<action>", methods=["POST"])
+    @permission_required('exp_radio')
+    async def exp_radio_stream_action(action):
+        from quart import jsonify
+        if action == "start":
+            twitch_key = await db.get_setting("exp_radio_twitch_key") or ""
+            if not twitch_key:
+                return jsonify({"ok": False, "error": "No Twitch stream key configured."}), 400
+            result = await exp_stream_manager.start(twitch_key)
+        elif action == "stop":
+            result = await exp_stream_manager.stop()
+        else:
+            return jsonify({"ok": False, "error": "Unknown action"}), 400
+        return jsonify(result)
+
+    @app.route("/exp-radio/stream/status")
+    @permission_required('exp_radio')
+    async def exp_radio_stream_status():
+        from quart import jsonify
+        return jsonify(await exp_stream_manager.get_status())
+
+    @app.route("/exp-radio/consent-csv")
+    @permission_required('exp_radio')
+    async def exp_radio_consent_csv():
+        import csv, io
+        from datetime import datetime, timezone
+        rows = await db.get_exp_radio_consent_csv_rows()
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow([
+            "ID", "User ID", "Username", "Suno URL", "Title", "Artist",
+            "Status", "Rights Hash", "Agreed At", "Submitted At", "Expires At", "Active",
+        ])
+        for r in rows:
+            def _dt(ts):
+                if not ts:
+                    return ""
+                return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+            writer.writerow([
+                r["id"], r["user_id"], r["user_name"], r["suno_url"],
+                r["title"] or "", r["artist"] or "",
+                r["analysis_status"], r["rights_hash"],
+                _dt(r["rights_agreed_at"]), _dt(r["submitted_at"]), _dt(r["expires_at"]),
+                "Yes" if r["active"] else "No",
+            ])
+        buf.seek(0)
+        from quart import Response
+        return Response(
+            buf.getvalue(),
+            mimetype="text/csv",
+            headers={"Content-Disposition": "attachment; filename=exp_radio_consent.csv"},
+        )
 
     # --- Suno Audio Analyzer ---
     @app.route("/suno-analyzer")

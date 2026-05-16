@@ -1,0 +1,335 @@
+"""Experimental Radio – background processing pipeline.
+
+For each submitted song:
+  1. Download MP3 from Suno CDN
+  2. Scrape title / artist / cover / video URL from Suno embed
+  3. Clean lyrics (strip section tags like [Verse], [Chorus])
+  4. Run faster-whisper (in thread pool) → word-level timestamps
+  5. Generate ASS subtitle file with moving-window karaoke style
+  6. Update DB with all results throughout
+"""
+
+import asyncio
+import aiohttp
+import html as _html
+import json
+import os
+import re
+import time
+
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+
+EXP_RIGHTS_DECLARATION = (
+    "I confirm that I created this song on Suno.ai, hold the necessary rights to stream it, "
+    "and grant a non-exclusive 14-day streaming license for Twitch live streams and VODs. "
+    "I confirm that the content complies with the community content guidelines "
+    "(no hate speech, harassment, explicit or illegal content)."
+)
+
+EXP_TERMS_SHORT = (
+    "**By submitting you confirm:**\n"
+    "• You created this song on Suno.ai and hold the streaming rights\n"
+    "• You grant a **14-day** streaming license for Twitch live streams & VODs\n"
+    "• The content complies with community guidelines (no hate speech, explicit/illegal content)\n"
+    "• Songs expire and are deleted automatically after 14 days\n"
+    "• Maximum **2 songs** per user"
+)
+
+
+# ─── Directory helpers ────────────────────────────────────────────────────────
+
+def ensure_exp_dirs(exp_radio_dir: str):
+    for sub in ("mp3", "ass", "assets"):
+        os.makedirs(os.path.join(exp_radio_dir, sub), exist_ok=True)
+
+
+# ─── MP3 download ─────────────────────────────────────────────────────────────
+
+async def download_mp3(uuid: str, mp3_dir: str) -> str | None:
+    """Download Suno MP3 from CDN. Returns local path or None."""
+    dest = os.path.join(mp3_dir, f"{uuid}.mp3")
+    if os.path.exists(dest):
+        return dest
+    url = f"https://cdn1.suno.ai/{uuid}.mp3"
+    try:
+        async with aiohttp.ClientSession(headers={"User-Agent": _BROWSER_UA}) as sess:
+            async with sess.get(url, timeout=aiohttp.ClientTimeout(total=90)) as resp:
+                if resp.status != 200:
+                    print(f"[exp-radio] MP3 HTTP {resp.status} for {uuid}", flush=True)
+                    return None
+                data = await resp.read()
+        with open(dest, "wb") as f:
+            f.write(data)
+        print(f"[exp-radio] Downloaded {uuid}.mp3 ({len(data) // 1024} KB)", flush=True)
+        return dest
+    except Exception as e:
+        print(f"[exp-radio] MP3 download error {uuid}: {e}", flush=True)
+        return None
+
+
+# ─── Suno metadata scrape ─────────────────────────────────────────────────────
+
+async def scrape_suno(uuid: str) -> dict:
+    """Fetch title, artist, cover_url, video_url, raw_lyrics from Suno embed."""
+    result = {"title": None, "artist": None, "cover_url": None,
+              "video_url": None, "raw_lyrics": None}
+    url = f"https://suno.com/song/{uuid}"
+    try:
+        async with aiohttp.ClientSession(headers={"User-Agent": _BROWSER_UA}) as sess:
+            async with sess.get(url, timeout=aiohttp.ClientTimeout(total=25)) as resp:
+                if resp.status != 200:
+                    return result
+                page = await resp.text()
+
+        # og:title → "Song Title by Artist – Suno"
+        m = re.search(r'<meta\s+(?:name|property)=["\']og:title["\']\s+content=["\']([^"\']+)["\']', page)
+        if m:
+            raw = _html.unescape(m.group(1)).strip()
+            raw = re.sub(r'\s*[|\-–]\s*Suno\s*$', '', raw, flags=re.IGNORECASE).strip()
+            bm = re.search(r'^(.+?)\s+by\s+(.+)$', raw)
+            if bm:
+                result["title"] = bm.group(1).strip()
+                result["artist"] = bm.group(2).strip()
+            else:
+                result["title"] = raw
+
+        # og:image
+        m = re.search(r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']', page)
+        if m:
+            result["cover_url"] = _html.unescape(m.group(1))
+
+        # video_url from RSC payload
+        m = re.search(r'"video_url"\s*:\s*"(https://[^"]+\.mp4[^"]*)"', page)
+        if m:
+            result["video_url"] = _html.unescape(m.group(1))
+
+        # Lyrics from prompt field (two patterns)
+        def _valid(s):
+            return s and len(s.strip()) >= 10 and not re.match(r'^\$\w+$', s.strip())
+
+        for pat in [
+            r'"prompt"\s*:\s*"((?:[^"\\]|\\.)*)"',
+            r'prompt\\":\\"((?:[^\\]|\\.)*?)\\"',
+        ]:
+            m = re.search(pat, page)
+            if m:
+                cand = m.group(1).replace("\\n", "\n").replace('\\"', '"')
+                if _valid(cand):
+                    result["raw_lyrics"] = cand
+                    break
+
+        # RSC long-form lyrics fallback
+        if not result["raw_lyrics"]:
+            rsc = re.findall(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)', page, re.DOTALL)
+            for chunk in rsc:
+                m = re.search(r'"prompt"\s*:\s*"((?:[^"\\]|\\.)*)"', chunk)
+                if m:
+                    cand = m.group(1).replace("\\n", "\n").replace('\\"', '"')
+                    if _valid(cand):
+                        result["raw_lyrics"] = cand
+                        break
+
+    except Exception as e:
+        print(f"[exp-radio] Suno scrape error {uuid}: {e}", flush=True)
+
+    if not result["cover_url"]:
+        result["cover_url"] = f"https://cdn1.suno.ai/image_large_{uuid}.jpeg"
+
+    return result
+
+
+# ─── Lyrics cleaning ─────────────────────────────────────────────────────────
+
+def clean_lyrics(raw: str) -> str:
+    """Remove section headers ([Verse 1], [Chorus], etc.) and normalize whitespace."""
+    if not raw:
+        return ""
+    lines = []
+    for line in raw.splitlines():
+        if re.match(r'^\s*\[[^\]]+\]\s*$', line):
+            continue
+        lines.append(line)
+    result = []
+    prev_blank = False
+    for line in lines:
+        is_blank = not line.strip()
+        if is_blank and prev_blank:
+            continue
+        result.append(line)
+        prev_blank = is_blank
+    return "\n".join(result).strip()
+
+
+# ─── Audio duration ───────────────────────────────────────────────────────────
+
+async def get_duration(mp3_path: str) -> float:
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+            "-of", "csv=p=0", mp3_path,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        out, _ = await proc.communicate()
+        return float(out.strip()) if out.strip() else 0.0
+    except Exception:
+        return 0.0
+
+
+# ─── Whisper analysis ─────────────────────────────────────────────────────────
+
+def _whisper_sync(mp3_path: str) -> list:
+    """Run faster-whisper synchronously (called in thread pool)."""
+    from faster_whisper import WhisperModel
+    model = WhisperModel("base", device="cpu", compute_type="int8")
+    segments, _ = model.transcribe(mp3_path, word_timestamps=True)
+    words = []
+    for seg in segments:
+        for w in (seg.words or []):
+            word = w.word.strip()
+            if word:
+                words.append({
+                    "word": word,
+                    "start": round(w.start, 3),
+                    "end": round(w.end, 3),
+                })
+    return words
+
+
+async def run_whisper(mp3_path: str) -> list:
+    """Run Whisper in thread pool so the event loop is not blocked."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _whisper_sync, mp3_path)
+
+
+# ─── ASS subtitle generation ──────────────────────────────────────────────────
+
+def build_ass(words: list, title: str = "", artist: str = "",
+              res_w: int = 1920, res_h: int = 1080) -> str:
+    """Generate ASS subtitle file with moving-window word highlight.
+
+    Display window:  [gray] [gray] [WHITE BOLD current] [gray] [gray] [gray] [gray]
+    Each Dialogue entry lasts from word.start to next_word.start.
+    Colors:  current = white (#FFFFFF), context = gray (#808080).
+    ASS color format: &HAABBGGRR (alpha=00 → opaque).
+    """
+    BEFORE = 2
+    AFTER  = 4
+
+    def ass_ts(secs: float) -> str:
+        h = int(secs // 3600)
+        m = int((secs % 3600) // 60)
+        s = int(secs % 60)
+        cs = int(round((secs - int(secs)) * 100))
+        return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
+    header = (
+        f"[Script Info]\n"
+        f"ScriptType: v4.00+\n"
+        f"PlayResX: {res_w}\n"
+        f"PlayResY: {res_h}\n"
+        f"ScaledBorderAndShadow: yes\n"
+        f"Title: {title} – {artist}\n\n"
+        f"[V4+ Styles]\n"
+        f"Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,"
+        f"BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,"
+        f"BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding\n"
+        f"Style: Default,Arial,54,&H00FFFFFF,&H00808080,&H00000000,&HA0000000,"
+        f"0,0,0,0,100,100,0,0,1,3,1,2,80,80,90,1\n\n"
+        f"[Events]\n"
+        f"Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n"
+    )
+
+    if not words:
+        return header
+
+    lines = []
+    for i, word in enumerate(words):
+        start = word["start"]
+        end = words[i + 1]["start"] if i + 1 < len(words) else word["end"] + 0.15
+
+        w_start = max(0, i - BEFORE)
+        w_end = min(len(words), i + AFTER + 1)
+        parts = []
+        for j in range(w_start, w_end):
+            w = words[j]["word"].replace("{", "").replace("}", "")
+            if j < i:
+                parts.append(f"{{\\c&H808080&}}{w}")
+            elif j == i:
+                parts.append(f"{{\\c&HFFFFFF&}}{{\\b1}}{w}{{\\b0}}")
+            else:
+                parts.append(f"{{\\c&H808080&}}{w}")
+        text = " ".join(parts) + "{\\r}"
+        lines.append(
+            f"Dialogue: 0,{ass_ts(start)},{ass_ts(end)},Default,,0,0,0,,{text}"
+        )
+
+    return header + "\n".join(lines) + "\n"
+
+
+# ─── Main processing pipeline ─────────────────────────────────────────────────
+
+async def process_exp_song(db, song_id: int, exp_radio_dir: str):
+    """Full async pipeline for one submitted experimental radio song."""
+    mp3_dir = os.path.join(exp_radio_dir, "mp3")
+    ass_dir = os.path.join(exp_radio_dir, "ass")
+    ensure_exp_dirs(exp_radio_dir)
+
+    song = await db.get_exp_radio_song(song_id)
+    if not song:
+        print(f"[exp-radio] Song #{song_id} not found in DB", flush=True)
+        return
+
+    uuid = song["suno_uuid"]
+    print(f"[exp-radio] Processing #{song_id} uuid={uuid}", flush=True)
+    await db.update_exp_radio_song(song_id, analysis_status="processing")
+
+    try:
+        # 1) Download MP3
+        mp3_path = await download_mp3(uuid, mp3_dir)
+        if not mp3_path:
+            await db.update_exp_radio_song(song_id, analysis_status="failed")
+            return
+        await db.update_exp_radio_song(song_id, mp3_filename=os.path.basename(mp3_path))
+
+        # 2) Scrape Suno metadata
+        meta = await scrape_suno(uuid)
+        title     = meta["title"]     or song.get("title")  or "Unknown"
+        artist    = meta["artist"]    or song.get("artist") or "Unknown"
+        cover_url = meta["cover_url"] or f"https://cdn1.suno.ai/image_large_{uuid}.jpeg"
+        video_url = meta["video_url"]
+        lyrics    = clean_lyrics(meta["raw_lyrics"] or "")
+        duration  = await get_duration(mp3_path)
+
+        await db.update_exp_radio_song(
+            song_id,
+            title=title, artist=artist,
+            cover_url=cover_url, video_url=video_url,
+            lyrics=lyrics, duration=duration,
+        )
+
+        # 3) Whisper word-timestamp analysis
+        print(f"[exp-radio] Starting Whisper analysis for #{song_id}…", flush=True)
+        words = await run_whisper(mp3_path)
+        print(f"[exp-radio] Whisper done: {len(words)} words for #{song_id}", flush=True)
+
+        # 4) Build ASS subtitle file
+        ass_content  = build_ass(words, title=title, artist=artist)
+        ass_filename = f"{uuid}.ass"
+        with open(os.path.join(ass_dir, ass_filename), "w", encoding="utf-8") as f:
+            f.write(ass_content)
+
+        await db.update_exp_radio_song(
+            song_id,
+            word_timestamps=json.dumps(words),
+            ass_filename=ass_filename,
+            analysis_status="done",
+        )
+        print(f"[exp-radio] Pipeline complete for #{song_id}", flush=True)
+
+    except Exception as e:
+        print(f"[exp-radio] Pipeline error for #{song_id}: {e}", flush=True)
+        await db.update_exp_radio_song(song_id, analysis_status="failed")

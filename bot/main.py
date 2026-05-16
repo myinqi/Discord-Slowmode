@@ -18,6 +18,7 @@ class SlowmodeBot(commands.Bot):
         )
         self.db = db
         self.config = Config
+        self.exp_radio_dir = Config.EXP_RADIO_DIR
 
     async def setup_hook(self):
         await self.load_extension("bot.cogs.slowmode")

@@ -24,6 +24,9 @@ class Config:
     # Bot
     BOT_NAME: str = os.getenv("BOT_NAME", "Slowmode Bot")
 
+    # Experimental Radio
+    EXP_RADIO_DIR: str = os.getenv("EXP_RADIO_DIR", "data/radio/exp_radio")
+
     # LLM (Corax chat)
     OLLAMA_URL: str = os.getenv("OLLAMA_URL", "http://ollama:11434")
     LLM_MODEL: str = os.getenv("LLM_MODEL", "qwen2.5:7b-instruct")

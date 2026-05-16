@@ -422,6 +422,36 @@ class Database:
                 updated_at REAL DEFAULT (unixepoch())
             );
         """)
+        # Create exp_radio_songs table
+        await self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS exp_radio_songs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                user_name TEXT NOT NULL,
+                suno_url TEXT NOT NULL,
+                suno_uuid TEXT NOT NULL,
+                mp3_filename TEXT,
+                cover_url TEXT,
+                video_url TEXT,
+                title TEXT,
+                artist TEXT,
+                duration REAL,
+                lyrics TEXT,
+                word_timestamps TEXT DEFAULT '[]',
+                ass_filename TEXT,
+                analysis_status TEXT DEFAULT 'pending',
+                rights_declaration TEXT NOT NULL,
+                rights_hash TEXT NOT NULL,
+                rights_agreed_at REAL NOT NULL,
+                submitted_at REAL DEFAULT (unixepoch()),
+                expires_at REAL NOT NULL,
+                active INTEGER DEFAULT 1
+            );
+            CREATE INDEX IF NOT EXISTS idx_exp_radio_user ON exp_radio_songs(user_id);
+            CREATE INDEX IF NOT EXISTS idx_exp_radio_expires ON exp_radio_songs(expires_at);
+        """)
+        await self.db.commit()
+
         # Add DC-player filter columns (migration for existing installs)
         for col, definition in [
             ("dc_channel", "TEXT DEFAULT ''"),
@@ -2324,3 +2354,107 @@ class Database:
             (user_id, value),
         )
         await self.db.commit()
+
+    # ── Experimental Radio ──────────────────────────────────────────────────
+
+    async def add_exp_radio_song(
+        self, user_id: int, user_name: str, suno_url: str, suno_uuid: str,
+        rights_declaration: str, rights_hash: str,
+    ) -> int:
+        expires_at = time.time() + 14 * 86400
+        cursor = await self.db.execute(
+            """INSERT INTO exp_radio_songs
+               (user_id, user_name, suno_url, suno_uuid,
+                rights_declaration, rights_hash, rights_agreed_at, expires_at)
+               VALUES (?, ?, ?, ?, ?, ?, unixepoch(), ?)""",
+            (user_id, user_name, suno_url, suno_uuid,
+             rights_declaration, rights_hash, expires_at),
+        )
+        await self.db.commit()
+        return cursor.lastrowid
+
+    async def get_exp_radio_song(self, song_id: int) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM exp_radio_songs WHERE id = ?", (song_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_exp_radio_songs_by_user(self, user_id: int) -> list[dict]:
+        async with self.db.execute(
+            "SELECT * FROM exp_radio_songs WHERE user_id = ? AND active = 1 ORDER BY submitted_at DESC",
+            (user_id,),
+        ) as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
+
+    async def count_exp_radio_songs_by_user(self, user_id: int) -> int:
+        async with self.db.execute(
+            "SELECT COUNT(*) FROM exp_radio_songs WHERE user_id = ? AND active = 1",
+            (user_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else 0
+
+    async def update_exp_radio_song(self, song_id: int, **fields):
+        """Generic field update for exp_radio_songs."""
+        allowed = {
+            "mp3_filename", "cover_url", "video_url", "title", "artist",
+            "duration", "lyrics", "word_timestamps", "ass_filename",
+            "analysis_status", "active",
+        }
+        updates = {k: v for k, v in fields.items() if k in allowed}
+        if not updates:
+            return
+        sql = "UPDATE exp_radio_songs SET " + ", ".join(f"{k}=?" for k in updates)
+        sql += " WHERE id = ?"
+        await self.db.execute(sql, (*updates.values(), song_id))
+        await self.db.commit()
+
+    async def get_all_exp_radio_songs(self, active_only: bool = True) -> list[dict]:
+        sql = (
+            "SELECT * FROM exp_radio_songs WHERE active = 1 ORDER BY submitted_at ASC"
+            if active_only else
+            "SELECT * FROM exp_radio_songs ORDER BY submitted_at ASC"
+        )
+        async with self.db.execute(sql) as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
+
+    async def delete_exp_radio_song(self, song_id: int) -> Optional[dict]:
+        """Soft-delete by setting active=0. Returns song data for file cleanup."""
+        async with self.db.execute(
+            "SELECT * FROM exp_radio_songs WHERE id = ?", (song_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            data = dict(row)
+        await self.db.execute(
+            "UPDATE exp_radio_songs SET active = 0 WHERE id = ?", (song_id,)
+        )
+        await self.db.commit()
+        return data
+
+    async def expire_old_exp_radio_songs(self) -> list[dict]:
+        """Mark expired songs inactive. Returns list of song dicts for file cleanup."""
+        async with self.db.execute(
+            "SELECT * FROM exp_radio_songs WHERE active = 1 AND expires_at < unixepoch()"
+        ) as cursor:
+            rows = [dict(r) for r in await cursor.fetchall()]
+        if rows:
+            ids = [r["id"] for r in rows]
+            await self.db.execute(
+                f"UPDATE exp_radio_songs SET active = 0 WHERE id IN ({','.join('?'*len(ids))})",
+                ids,
+            )
+            await self.db.commit()
+        return rows
+
+    async def get_exp_radio_consent_csv_rows(self) -> list[dict]:
+        """All consent records for CSV export."""
+        async with self.db.execute(
+            """SELECT id, user_id, user_name, suno_url, title, artist,
+                      analysis_status, rights_hash, rights_agreed_at,
+                      submitted_at, expires_at, active
+               FROM exp_radio_songs ORDER BY submitted_at DESC"""
+        ) as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
