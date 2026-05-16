@@ -181,6 +181,14 @@
                                 <span class="text-gray-600 text-xs">{{ '%.1f'|format(song.duration / 60) }} min</span>
                                 {% endif %}
                                 <span class="text-gray-600 text-xs capitalize">{{ song.analysis_status }}</span>
+                                {% if song.word_count %}
+                                <span class="text-gray-600 text-xs" title="Analyzed word timestamps">
+                                    {{ song.word_count }} words
+                                    {% if song.transcript_span %}
+                                    ({{ '%.0f'|format(song.transcript_span[0]) }}–{{ '%.0f'|format(song.transcript_span[1]) }}s)
+                                    {% endif %}
+                                </span>
+                                {% endif %}
                                 {% if song.expires_at %}
                                 <span class="text-gray-600 text-xs" title="Expires">
                                     exp {{ song.expires_at | timestamp_to_date if song.expires_at else '' }}
@@ -191,8 +199,14 @@
                             </div>
                             {% if song.lyrics %}
                             <details class="mt-2">
-                                <summary class="text-gray-500 text-xs cursor-pointer hover:text-gray-400 select-none">Show lyrics</summary>
-                                <pre class="mt-2 text-gray-400 text-xs whitespace-pre-wrap font-sans bg-gray-900/50 rounded p-3 max-h-40 overflow-y-auto">{{ song.lyrics[:800] }}{% if song.lyrics|length > 800 %}…{% endif %}</pre>
+                                <summary class="text-gray-500 text-xs cursor-pointer hover:text-gray-400 select-none">Show lyrics ({{ song.lyrics|length }} chars)</summary>
+                                <pre class="mt-2 text-gray-400 text-xs whitespace-pre-wrap font-sans bg-gray-900/50 rounded p-3 max-h-60 overflow-y-auto">{{ song.lyrics }}</pre>
+                            </details>
+                            {% endif %}
+                            {% if song.transcript_preview %}
+                            <details class="mt-2">
+                                <summary class="text-gray-500 text-xs cursor-pointer hover:text-gray-400 select-none">Show analyzed transcript ({{ song.word_count }} word timestamps)</summary>
+                                <pre class="mt-2 text-emerald-300/80 text-xs whitespace-pre-wrap font-mono bg-gray-900/50 rounded p-3 max-h-60 overflow-y-auto">{{ song.transcript_preview }}</pre>
                             </details>
                             {% endif %}
                         </div>

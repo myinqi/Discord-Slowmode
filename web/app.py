@@ -3241,6 +3241,37 @@ def create_app(db: Database, bot=None) -> Quart:
             return redirect(request.url)
 
         songs = await db.get_all_exp_radio_songs(active_only=True)
+        # Enrich each song with parsed analysis info for the admin UI:
+        # word_count, coverage span and a transcript preview reconstructed
+        # from the stored word_timestamps JSON.
+        import json as _json
+        for s in songs:
+            wt_raw = s.get("word_timestamps")
+            s["word_count"] = 0
+            s["transcript_preview"] = ""
+            s["transcript_span"] = None
+            if wt_raw:
+                try:
+                    wt = _json.loads(wt_raw) if isinstance(wt_raw, str) else wt_raw
+                    if isinstance(wt, list) and wt:
+                        s["word_count"] = len(wt)
+                        s["transcript_span"] = (
+                            float(wt[0].get("start", 0)),
+                            float(wt[-1].get("end", 0)),
+                        )
+                        # Reconstructed transcript with [mm:ss] markers every ~10s
+                        parts, last_mark = [], -10.0
+                        for w in wt:
+                            st = float(w.get("start", 0))
+                            if st - last_mark >= 10:
+                                m, sec = divmod(int(st), 60)
+                                parts.append(f"\n[{m}:{sec:02d}] ")
+                                last_mark = st
+                            parts.append(w.get("word", ""))
+                            parts.append(" ")
+                        s["transcript_preview"] = "".join(parts).strip()
+                except Exception:
+                    pass
         status = await exp_stream_manager.get_status()
         masked_key = "*" * 20 if await db.get_setting("exp_radio_twitch_key") else ""
         bg_filename  = await db.get_setting("exp_radio_bg_filename") or ""
