@@ -161,10 +161,32 @@ async def scrape_suno(uuid: str) -> dict:
         if m:
             result["cover_url"] = _html.unescape(m.group(1))
 
-        # video_url from RSC payload
-        m = re.search(r'"video_url"\s*:\s*"(https://[^"]+\.mp4[^"]*)"', page)
-        if m:
-            result["video_url"] = _html.unescape(m.group(1))
+        # video_cover_url from RSC payload (Suno's actual field name for 9:16 MP4)
+        for pat in [
+            r'"video_cover_url"\s*:\s*"([^"]+\.mp4[^"]*)"',
+            r'video_cover_url\\":\\"([^"\\]+\.mp4[^"\\]*)\\"',
+        ]:
+            m = re.search(pat, page)
+            if m:
+                result["video_url"] = m.group(1).replace("\\/", "/")
+                break
+
+        # Fallback: /embed/<real_uuid> page exposes video_cover_url more reliably
+        # (same approach used by the working Suno Info player)
+        if not result["video_url"] and result.get("real_uuid"):
+            try:
+                async with aiohttp.ClientSession(headers={"User-Agent": _BROWSER_UA}) as sess:
+                    embed_url = f"https://suno.com/embed/{result['real_uuid']}"
+                    async with sess.get(embed_url, timeout=aiohttp.ClientTimeout(total=15)) as r:
+                        if r.status == 200:
+                            embed_html = await r.text()
+                            m = re.search(r'"video_cover_url"\s*:\s*"([^"]+)"', embed_html)
+                            if not m:
+                                m = re.search(r'video_cover_url\\":\\"([^"\\]+)\\"', embed_html)
+                            if m:
+                                result["video_url"] = m.group(1).replace("\\/", "/")
+            except Exception as e:
+                print(f"[exp-radio] embed fetch error: {e}", flush=True)
 
         # Lyrics from prompt field (two patterns)
         def _valid(s):
