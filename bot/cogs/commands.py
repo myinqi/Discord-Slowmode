@@ -1742,16 +1742,15 @@ class CommandsCog(commands.Cog):
             inline=False,
         )
 
-        # Experimental Radio (admin only)
-        if has_admin:
-            embed.add_field(
-                name="🎙️ Experimental Radio (Admin)",
-                value=(
-                    "**`/twitch-submit`** — Submit a Suno song to the Experimental Radio\n"
-                    "**`/twitch-delete`** — Remove one of your Experimental Radio submissions"
-                ),
-                inline=False,
-            )
+        # Experimental Radio (all users)
+        embed.add_field(
+            name="🎙️ Experimental Radio",
+            value=(
+                "**`/twitch-submit`** — Submit a Suno song to the Experimental Radio (max 3 per user)\n"
+                "**`/twitch-delete`** — Remove one of your Experimental Radio submissions"
+            ),
+            inline=False,
+        )
 
         # Dynamic footer based on permissions
         if has_admin:
@@ -1762,7 +1761,6 @@ class CommandsCog(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="twitch-submit", description="Submit a Suno song to the Experimental Radio (max 3 per user)")
-    @app_commands.default_permissions(administrator=True)
     async def exp_radio_submit(self, interaction: discord.Interaction):
         embed = discord.Embed(
             title="🎙️ Submit to Experimental Radio",
@@ -1774,7 +1772,6 @@ class CommandsCog(commands.Cog):
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
     @app_commands.command(name="twitch-delete", description="Remove one of your Experimental Radio submissions")
-    @app_commands.default_permissions(administrator=True)
     async def exp_radio_delete(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         songs = await self.bot.db.get_exp_radio_songs_by_user(interaction.user.id)
