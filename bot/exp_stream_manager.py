@@ -15,6 +15,8 @@ import os
 import re
 import random
 
+from bot.twitch_bot import TwitchBot
+
 _RTMP_BASE  = "rtmp://live.twitch.tv/app/"
 _FPS        = 30
 _W, _H      = 1920, 1080
@@ -70,6 +72,7 @@ class ExpStreamManager:
         self.current_song: dict | None = None
         self.playlist: list[dict]      = []
         self._twitch_key   = ""
+        self._twitch_chat: TwitchBot | None = None
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -83,6 +86,19 @@ class ExpStreamManager:
         self._twitch_key = twitch_key
         random.shuffle(ready)
         self.playlist    = ready
+        # Connect to Twitch chat if enabled and credentials exist
+        chat_enabled = await self.db.get_setting("exp_radio_twitch_chat_enabled") or "off"
+        client_id    = await self.db.get_setting("radio_twitch_client_id")
+        refresh_tok  = await self.db.get_setting("radio_twitch_refresh_token")
+        broadcaster  = await self.db.get_setting("radio_twitch_broadcaster_login")
+        if chat_enabled == "on" and client_id and refresh_tok and broadcaster:
+            self._twitch_chat = TwitchBot(self.db)
+            ok, msg = await self._twitch_chat.start()
+            if not ok:
+                print(f"[exp-stream] Twitch chat disabled: {msg}", flush=True)
+                self._twitch_chat = None
+            else:
+                print(f"[exp-stream] Twitch chat ready ({msg}).", flush=True)
         self.is_running  = True
         self._task = asyncio.create_task(self._stream_loop())
         print(f"[exp-stream] Started with {len(ready)} songs.", flush=True)
@@ -104,6 +120,9 @@ class ExpStreamManager:
             self._task.cancel()
             self._task = None
         self.current_song = None
+        if self._twitch_chat:
+            await self._twitch_chat.stop()
+            self._twitch_chat = None
         print("[exp-stream] Stopped.", flush=True)
         return {"ok": True}
 
@@ -180,11 +199,34 @@ class ExpStreamManager:
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )
+        chat_task = asyncio.create_task(self._post_now_playing_loop(songs))
         _, stderr = await self._process.communicate()
+        chat_task.cancel()
+        try:
+            await chat_task
+        except asyncio.CancelledError:
+            pass
         rc = self._process.returncode
         if rc and rc != 0 and self.is_running:
             err_tail = (stderr or b"")[-800:].decode("utf-8", errors="replace")
             print(f"[exp-stream] FFmpeg exited {rc}:\n{err_tail}", flush=True)
+
+    async def _post_now_playing_loop(self, songs: list):
+        """Post ♪ Now Playing to Twitch chat at each song boundary."""
+        if not self._twitch_chat:
+            return
+        for song in songs:
+            title    = song.get("title")  or "Unknown"
+            artist   = song.get("artist") or ""
+            suno_url = song.get("suno_url") or ""
+            msg = f"\U0001F3B5 Now Playing: {title}"
+            if artist:
+                msg += f" - {artist}"
+            if suno_url:
+                msg += f" | {suno_url}"
+            await self._twitch_chat.send(msg)
+            dur = song.get("duration") or 300
+            await asyncio.sleep(dur)
 
     # ── Media helpers ──────────────────────────────────────────────────────────
 
