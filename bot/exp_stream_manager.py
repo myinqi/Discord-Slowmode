@@ -215,7 +215,10 @@ class ExpStreamManager:
         """Post ♪ Now Playing to Twitch chat at each song boundary."""
         if not self._twitch_chat:
             return
+        _POST_DELAY = 10  # seconds after song start before posting
         for song in songs:
+            dur = song.get("duration") or 300
+            await asyncio.sleep(min(_POST_DELAY, dur))
             title    = song.get("title")  or "Unknown"
             artist   = song.get("artist") or ""
             suno_url = song.get("suno_url") or ""
@@ -225,8 +228,7 @@ class ExpStreamManager:
             if suno_url:
                 msg += f" | {suno_url}"
             await self._twitch_chat.send(msg)
-            dur = song.get("duration") or 300
-            await asyncio.sleep(dur)
+            await asyncio.sleep(max(0, dur - _POST_DELAY))
 
     # ── Media helpers ──────────────────────────────────────────────────────────
 
