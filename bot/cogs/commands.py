@@ -1785,20 +1785,29 @@ class CommandsCog(commands.Cog):
             view=view, ephemeral=True,
         )
 
-    @app_commands.command(name="twitch-playlist", description="Show the current Twitch radio playlist")
+    @app_commands.command(name="twitch-playlist", description="Show the current Experimental Radio playlist")
     async def twitch_playlist(self, interaction: discord.Interaction):
         from datetime import datetime, timezone
-        songs = await self.bot.db.get_all_radio_songs(active_only=True)
+        songs = await self.bot.db.get_all_exp_radio_songs(active_only=True)
         if not songs:
             await interaction.response.send_message("📻 The playlist is currently empty.", ephemeral=True)
             return
         lines = []
         for i, s in enumerate(songs, 1):
-            expires = datetime.fromtimestamp(s["expires_at"], tz=timezone.utc).strftime("%d.%m.%Y")
-            dur = f"{s['duration'] / 60:.1f}"
-            lines.append(f"**{i}.** {s['title']} — {s['artist']}  ({dur} min, expires {expires})")
+            title  = s.get("title")  or "Unknown"
+            artist = s.get("artist") or "Unknown"
+            dur    = f"{(s.get('duration') or 0) / 60:.1f}"
+            parts  = [f"**{i}.** {title} — {artist}  ({dur} min"]
+            if s.get("expires_at"):
+                expires = datetime.fromtimestamp(s["expires_at"], tz=timezone.utc).strftime("%d.%m.%Y")
+                parts.append(f", expires {expires}")
+            parts.append(")")
+            line = "".join(parts)
+            if s.get("suno_url"):
+                line += f" — <{s['suno_url']}>"
+            lines.append(line)
         # Discord message limit is 2000 chars — split if needed
-        header = f"📻 **Twitch Radio Playlist** ({len(songs)} songs)\n\n"
+        header = f"📻 **Experimental Radio Playlist** ({len(songs)} songs)\n\n"
         chunks = []
         current = header
         for line in lines:
