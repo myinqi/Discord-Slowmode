@@ -435,7 +435,7 @@ class ExpStreamManager:
             dur = song.get("duration") or 300
             filters.append(
                 f"[{mid}:v]scale={_INSET_W}:{_INSET_H}:force_original_aspect_ratio=increase,"
-                f"crop={_INSET_W}:{_INSET_H},"
+                f"crop={_INSET_W}:{_INSET_H},setsar=1,"
                 f"fps={_FPS},trim=0:{dur},setpts=PTS-STARTPTS[cv{i}]"
             )
         concat_in = "".join(f"[cv{i}]" for i in range(n))
