@@ -454,7 +454,10 @@ def _whisper_sync(mp3_path: str, lyrics_prompt: str = "") -> list:
     segments, _ = model.transcribe(
         mp3_path,
         word_timestamps=True,
-        language="en",
+        # language=None → faster-whisper auto-detects from the first 30 s of
+        # audio. Forcing "en" caused German (and other non-English) lyrics
+        # to be mistranscribed as phonetic-English/translation gibberish.
+        language=None,
         initial_prompt=None,
         # vad_filter is deliberately OFF: Silero VAD is too aggressive on
         # sung audio (held vowels and quiet passages get classified as
