@@ -440,22 +440,22 @@ _WHISPER_MODEL = os.environ.get("EXP_RADIO_WHISPER_MODEL", "small")
 
 def _whisper_sync(mp3_path: str, lyrics_prompt: str = "") -> list:
     """Run faster-whisper synchronously (called in thread pool).
-    `lyrics_prompt` is fed to Whisper as an initial_prompt so it can
-    correctly transcribe artistic neologisms like 'Morrowmire'."""
+
+    `lyrics_prompt` is accepted for backwards compatibility but is NOT passed
+    to Whisper as initial_prompt. Earlier experiments fed a comma-separated
+    vocabulary hint hoping it would bias spelling of rare words without being
+    echoed. In practice faster-whisper *does* echo such prompts as the first
+    transcribed words (visible as a garbled token list at t≈0). Spelling
+    correction is handled downstream by `_align_to_lyrics` (exact-match
+    word substitution against the lyric sheet) which is safer and produces
+    no echo artifacts."""
     from faster_whisper import WhisperModel
     model = WhisperModel(_WHISPER_MODEL, device="cpu", compute_type="int8")
-    # Whisper's prompt is capped at ~224 tokens. The prompt biases primarily
-    # the FIRST decoding window (subsequent windows are conditioned on the
-    # previously transcribed text), so we want the SONG'S OPENING LINES here,
-    # not the tail of the lyric sheet. Take the first 220 chars.
-    prompt = (lyrics_prompt or "").strip()
-    if len(prompt) > 220:
-        prompt = prompt[:220]
     segments, _ = model.transcribe(
         mp3_path,
         word_timestamps=True,
         language="en",
-        initial_prompt=prompt or None,
+        initial_prompt=None,
         # vad_filter is deliberately OFF: Silero VAD is too aggressive on
         # sung audio (held vowels and quiet passages get classified as
         # silence and dropped entirely), which causes the karaoke to start

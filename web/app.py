@@ -3174,6 +3174,50 @@ def create_app(db: Database, bot=None) -> Quart:
                     "success",
                 )
 
+            elif action == "rescrape_metadata_one":
+                from bot.exp_radio_worker import scrape_suno
+                sid = int(form.get("song_id", "0") or 0)
+                s = await db.get_exp_radio_song(sid) if sid else None
+                if not s or not s.get("suno_uuid"):
+                    await flash("Song not found.", "error")
+                else:
+                    uuid = s["suno_uuid"]
+                    meta = await scrape_suno(uuid)
+                    fields = {}
+                    if meta.get("title"):     fields["title"]     = meta["title"]
+                    if meta.get("artist"):    fields["artist"]    = meta["artist"]
+                    if meta.get("video_url"): fields["video_url"] = meta["video_url"]
+                    if meta.get("cover_url"): fields["cover_url"] = meta["cover_url"]
+                    if fields:
+                        await db.update_exp_radio_song(sid, **fields)
+                        for ext in (".jpg", ".mp4"):
+                            cached = os.path.join(EXP_RADIO_DIR, "cover_cache", f"{uuid}{ext}")
+                            if os.path.exists(cached):
+                                try: os.remove(cached)
+                                except Exception: pass
+                        await flash(f"Refreshed metadata for “{fields.get('title') or s.get('title')}”.", "success")
+                    else:
+                        await flash("Nothing to update — Suno returned no usable metadata.", "warning")
+
+            elif action == "reanalyze_whisper_one":
+                from bot.exp_radio_worker import process_exp_song
+                sid = int(form.get("song_id", "0") or 0)
+                s = await db.get_exp_radio_song(sid) if sid else None
+                if not s or not s.get("mp3_filename"):
+                    await flash("Song not found or MP3 missing.", "error")
+                else:
+                    await db.update_exp_radio_song(
+                        sid, analysis_status="processing", ass_filename=None,
+                    )
+                    asyncio.create_task(
+                        process_exp_song(db, sid, EXP_RADIO_DIR, bot=bot)
+                    )
+                    await flash(
+                        f"Queued “{s.get('title') or sid}” for Whisper re-analysis. "
+                        "Refresh the page for status.",
+                        "success",
+                    )
+
             elif action == "rescrape_metadata":
                 from bot.exp_radio_worker import scrape_suno
                 songs_all = await db.get_all_exp_radio_songs(active_only=True)
