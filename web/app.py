@@ -3215,9 +3215,29 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.set_setting("exp_radio_expiry_channel_id", expiry_ch)
                 if stream_url_v:
                     await db.set_setting("exp_radio_stream_url", stream_url_v)
-                chat_en = "on" if form.get("exp_twitch_chat_enabled") else "off"
-                await db.set_setting("exp_radio_twitch_chat_enabled", chat_en)
                 await flash("Settings saved.", "success")
+
+            elif action == "save_exp_twitch_settings":
+                exp_tw_cid = form.get("exp_twitch_client_id", "").strip()
+                exp_tw_sec = form.get("exp_twitch_client_secret", "").strip()
+                exp_tw_rt  = form.get("exp_twitch_refresh_token", "").strip()
+                exp_tw_bc  = form.get("exp_twitch_broadcaster_login", "").strip()
+                chat_en    = "on" if form.get("exp_twitch_chat_enabled") else "off"
+                if exp_tw_cid:
+                    await db.set_setting("exp_radio_twitch_client_id", exp_tw_cid)
+                if exp_tw_sec and not exp_tw_sec.startswith("****"):
+                    await db.set_setting("exp_radio_twitch_client_secret", exp_tw_sec)
+                if exp_tw_rt and not exp_tw_rt.startswith("****"):
+                    await db.set_setting("exp_radio_twitch_refresh_token", exp_tw_rt)
+                    await db.set_setting("exp_radio_twitch_bot_login", "")
+                    await db.set_setting("exp_radio_twitch_bot_user_id", "")
+                if exp_tw_bc:
+                    bn = exp_tw_bc.strip().rstrip("/").lstrip("#").lower()
+                    if "twitch.tv/" in bn:
+                        bn = bn.split("twitch.tv/", 1)[1].split("/")[0]
+                    await db.set_setting("exp_radio_twitch_broadcaster_login", bn)
+                await db.set_setting("exp_radio_twitch_chat_enabled", chat_en)
+                await flash("Twitch Chat Bot settings saved.", "success")
 
             elif action == "post_exp_stream_url":
                 ch_id = form.get("post_channel_id_select", "")
@@ -3316,7 +3336,13 @@ def create_app(db: Database, bot=None) -> Quart:
         exp_post_channel_2_id = await db.get_setting("exp_radio_post_channel_2_id") or ""
         exp_expiry_channel_id = await db.get_setting("exp_radio_expiry_channel_id") or ""
         exp_twitch_chat_enabled = await db.get_setting("exp_radio_twitch_chat_enabled") or "off"
-        radio_twitch_configured = bool(await db.get_setting("radio_twitch_client_id"))
+        exp_tw_client_id = await db.get_setting("exp_radio_twitch_client_id") or ""
+        _exp_tw_secret   = await db.get_setting("exp_radio_twitch_client_secret") or ""
+        _exp_tw_refresh  = await db.get_setting("exp_radio_twitch_refresh_token") or ""
+        exp_tw_secret_masked  = f"****{_exp_tw_secret[-4:]}"  if len(_exp_tw_secret)  > 4 else ""
+        exp_tw_refresh_masked = f"****{_exp_tw_refresh[-4:]}" if len(_exp_tw_refresh) > 4 else ""
+        exp_tw_broadcaster = await db.get_setting("exp_radio_twitch_broadcaster_login") or ""
+        exp_tw_bot_login   = await db.get_setting("exp_radio_twitch_bot_login") or ""
         exp_guild = get_guild()
         exp_text_channels = []
         if exp_guild:
@@ -3332,7 +3358,11 @@ def create_app(db: Database, bot=None) -> Quart:
             exp_post_channel_2_id=exp_post_channel_2_id,
             exp_expiry_channel_id=exp_expiry_channel_id,
             exp_twitch_chat_enabled=exp_twitch_chat_enabled,
-            radio_twitch_configured=radio_twitch_configured,
+            exp_tw_client_id=exp_tw_client_id,
+            exp_tw_secret_masked=exp_tw_secret_masked,
+            exp_tw_refresh_masked=exp_tw_refresh_masked,
+            exp_tw_broadcaster=exp_tw_broadcaster,
+            exp_tw_bot_login=exp_tw_bot_login,
             text_channels=exp_text_channels,
         )
 

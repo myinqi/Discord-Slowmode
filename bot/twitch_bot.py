@@ -52,20 +52,17 @@ class TwitchBot:
     UI take effect on the next operation without restart.
     """
 
-    SETTING_KEYS = {
-        "client_id":          "radio_twitch_client_id",
-        "client_secret":      "radio_twitch_client_secret",
-        "refresh_token":      "radio_twitch_refresh_token",
-        "broadcaster_login":  "radio_twitch_broadcaster_login",
-        # Resolved values cached in DB so the UI can show them and we don't
-        # re-resolve on every send.
-        "bot_login":          "radio_twitch_bot_login",
-        "bot_user_id":        "radio_twitch_bot_user_id",
-        "broadcaster_id":     "radio_twitch_broadcaster_user_id",
-    }
-
-    def __init__(self, db):
+    def __init__(self, db, key_prefix: str = "radio_twitch"):
         self.db = db
+        self.SETTING_KEYS = {
+            "client_id":         f"{key_prefix}_client_id",
+            "client_secret":     f"{key_prefix}_client_secret",
+            "refresh_token":     f"{key_prefix}_refresh_token",
+            "broadcaster_login": f"{key_prefix}_broadcaster_login",
+            "bot_login":         f"{key_prefix}_bot_login",
+            "bot_user_id":       f"{key_prefix}_bot_user_id",
+            "broadcaster_id":    f"{key_prefix}_broadcaster_user_id",
+        }
         self._access_token: Optional[str] = None
         self._access_expires_at: float = 0.0
         self._bot_user_id: Optional[str] = None

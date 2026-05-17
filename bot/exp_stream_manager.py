@@ -88,11 +88,11 @@ class ExpStreamManager:
         self.playlist    = ready
         # Connect to Twitch chat if enabled and credentials exist
         chat_enabled = await self.db.get_setting("exp_radio_twitch_chat_enabled") or "off"
-        client_id    = await self.db.get_setting("radio_twitch_client_id")
-        refresh_tok  = await self.db.get_setting("radio_twitch_refresh_token")
-        broadcaster  = await self.db.get_setting("radio_twitch_broadcaster_login")
+        client_id    = await self.db.get_setting("exp_radio_twitch_client_id")
+        refresh_tok  = await self.db.get_setting("exp_radio_twitch_refresh_token")
+        broadcaster  = await self.db.get_setting("exp_radio_twitch_broadcaster_login")
         if chat_enabled == "on" and client_id and refresh_tok and broadcaster:
-            self._twitch_chat = TwitchBot(self.db)
+            self._twitch_chat = TwitchBot(self.db, key_prefix="exp_radio_twitch")
             ok, msg = await self._twitch_chat.start()
             if not ok:
                 print(f"[exp-stream] Twitch chat disabled: {msg}", flush=True)
