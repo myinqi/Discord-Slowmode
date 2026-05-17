@@ -15,6 +15,10 @@ services:
       - OLLAMA_URL=http://ollama:11434
       - LLM_MODEL=qwen2.5:7b-instruct
       - WEB_URL=http://v2202502254147313270.goodsrv.de:5000
+      # Persist HuggingFace / faster-whisper model cache inside bot-data
+      # volume so the ~1.5 GB large-v3-turbo model is not re-downloaded on
+      # every `docker compose up --build`.
+      - HF_HOME=/app/data/hf_cache
     depends_on:
       - ollama
 
