@@ -143,8 +143,8 @@ async def scrape_suno(uuid: str) -> dict:
         # Iterate matches in REVERSE — song owner is usually the last display_name on the page.
         # Filter out version strings (v5.5), "Cover", "Remix", and single-char names.
         if not result["artist"]:
-            # Use (?:[^"\\]|\\.)* so \\uXXXX double-escaped sequences are not truncated
-            candidates = re.findall(r'display_name\\":\\"((?:[^"\\]|\\.)*)\\"', page)
+            # Use (?:[^"\\]|\\[^"])* so \\uXXXX is captured but \" closing delimiter is NOT consumed
+            candidates = re.findall(r'display_name\\":\\"((?:[^"\\]|\\[^"])*)\\"', page)
             if not candidates:
                 candidates = re.findall(r'"display_name"\s*:\s*"((?:[^"\\]|\\.)*)"', page)
             for dn in reversed(candidates):
