@@ -3100,6 +3100,47 @@ def create_app(db: Database, bot=None) -> Quart:
                 if not expired:
                     continue
                 print(f"[exp-radio] Expired {len(expired)} song(s).", flush=True)
+                # File cleanup — but skip songs still referenced by the
+                # currently-running stream's in-memory playlist (FFmpeg would
+                # crash on its next loop iteration if we removed those).
+                in_use_mp3 = set()
+                if exp_stream_manager.is_running:
+                    in_use_mp3 = {
+                        s.get("mp3_filename")
+                        for s in (exp_stream_manager.playlist or [])
+                        if s.get("mp3_filename")
+                    }
+                mp3_dir   = os.path.join(EXP_RADIO_DIR, "mp3")
+                ass_dir   = os.path.join(EXP_RADIO_DIR, "ass")
+                cover_dir = os.path.join(EXP_RADIO_DIR, "cover_cache")
+                removed_files = 0
+                for s in expired:
+                    mp3_fn = s.get("mp3_filename")
+                    if mp3_fn and mp3_fn in in_use_mp3:
+                        print(
+                            f"[exp-radio] Keeping files for #{s['id']} ({s.get('title')!r}) "
+                            f"— still in active stream playlist.", flush=True,
+                        )
+                        continue
+                    targets = []
+                    if mp3_fn:
+                        targets.append(os.path.join(mp3_dir, mp3_fn))
+                    ass_fn = s.get("ass_filename")
+                    if ass_fn:
+                        targets.append(os.path.join(ass_dir, ass_fn))
+                    uuid = s.get("suno_uuid")
+                    if uuid:
+                        for ext in (".jpg", ".mp4"):
+                            targets.append(os.path.join(cover_dir, f"{uuid}{ext}"))
+                    for p in targets:
+                        if os.path.exists(p):
+                            try:
+                                os.remove(p)
+                                removed_files += 1
+                            except Exception as e:
+                                print(f"[exp-radio] Could not remove {p}: {e}", flush=True)
+                if removed_files:
+                    print(f"[exp-radio] Removed {removed_files} expired file(s) from disk.", flush=True)
                 channel_id_str = (
                     await db.get_setting("exp_radio_expiry_channel_id")
                     or await db.get_setting("radio_expiry_channel_id")
