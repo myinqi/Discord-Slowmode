@@ -18,6 +18,7 @@ import re
 import time
 import unicodedata
 from difflib import SequenceMatcher
+from typing import Optional
 
 _BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -438,7 +439,79 @@ async def get_duration(mp3_path: str) -> float:
 _WHISPER_MODEL = os.environ.get("EXP_RADIO_WHISPER_MODEL", "large-v3-turbo")
 
 
-def _whisper_sync(mp3_path: str, lyrics_prompt: str = "") -> list:
+# ── Lyric-sheet language detection ────────────────────────────────────────────
+
+# Whisper supports ~99 languages. We only hard-pin ones we are highly
+# confident about — for everything else we let Whisper auto-detect. This
+# whitelist prevents langdetect's known instability on ambiguous text from
+# pinning the decoder to an exotic language.
+_WHISPER_LANG_WHITELIST = {
+    "en", "de", "fr", "es", "it", "pt", "nl", "sv", "no", "da", "fi",
+    "pl", "cs", "ru", "uk", "tr", "ja", "zh-cn", "zh-tw", "ko",
+}
+
+# Map langdetect language codes to Whisper's two-letter codes where they
+# differ (langdetect uses BCP-47-ish, Whisper uses ISO-639-1).
+_LANG_CODE_MAP = {"zh-cn": "zh", "zh-tw": "zh"}
+
+# Hard character-based overrides — these are unambiguous and faster/safer
+# than langdetect for the common problem cases.
+_LANG_CHAR_RULES = [
+    # Icelandic-specific thorn / eth. Faroese also uses these but is very
+    # rare in Suno content; Whisper handles Faroese-as-Icelandic decently.
+    (re.compile(r"[\u00fe\u00f0\u00de\u00d0]"), "is"),
+    # Cyrillic block → Russian (Whisper's strongest Cyrillic language).
+    (re.compile(r"[\u0400-\u04FF]"), "ru"),
+    # Hiragana / Katakana → Japanese.
+    (re.compile(r"[\u3040-\u30FF]"), "ja"),
+    # Hangul → Korean.
+    (re.compile(r"[\uAC00-\uD7AF]"), "ko"),
+    # CJK Unified Ideographs without kana/hangul → Chinese.
+    (re.compile(r"[\u4E00-\u9FFF]"), "zh"),
+]
+
+# German-specific characters. Used only as a tiebreaker; ASCII-only German
+# text falls through to langdetect.
+_GERMAN_CHARS_RE = re.compile(r"[\u00e4\u00f6\u00fc\u00c4\u00d6\u00dc\u00df]")
+
+
+def detect_lyrics_language(lyrics: str) -> Optional[str]:
+    """Detect the language of a lyric sheet for use as Whisper's `language=` hint.
+
+    Strategy (mirrors `bot/llm.py:_detect_reply_language` lessons learned):
+    1. Hard character-class rules first — unambiguous scripts (Cyrillic,
+       CJK) and distinctive Latin extensions (þ/ð).
+    2. langdetect with a high confidence threshold AND a whitelist of
+       languages Whisper transcribes reliably.
+    3. Return None → caller falls back to Whisper's audio-based auto-detect.
+
+    Returns a Whisper-compatible ISO-639-1 code or None.
+    """
+    if not lyrics or len(lyrics.strip()) < 20:
+        return None
+    for pat, lang in _LANG_CHAR_RULES:
+        if pat.search(lyrics):
+            return lang
+    if _GERMAN_CHARS_RE.search(lyrics):
+        return "de"
+    try:
+        from langdetect import detect_langs, DetectorFactory
+        DetectorFactory.seed = 0  # deterministic
+        candidates = detect_langs(lyrics)
+    except Exception:
+        return None
+    if not candidates:
+        return None
+    top = candidates[0]
+    if top.prob < 0.95:
+        return None
+    code = top.lang.lower()
+    if code not in _WHISPER_LANG_WHITELIST:
+        return None
+    return _LANG_CODE_MAP.get(code, code)
+
+
+def _whisper_sync(mp3_path: str, lyrics_prompt: str = "", language: Optional[str] = None) -> list:
     """Run faster-whisper synchronously (called in thread pool).
 
     `lyrics_prompt` is accepted for backwards compatibility but is NOT passed
@@ -454,10 +527,12 @@ def _whisper_sync(mp3_path: str, lyrics_prompt: str = "") -> list:
     segments, _ = model.transcribe(
         mp3_path,
         word_timestamps=True,
-        # language=None → faster-whisper auto-detects from the first 30 s of
-        # audio. Forcing "en" caused German (and other non-English) lyrics
-        # to be mistranscribed as phonetic-English/translation gibberish.
-        language=None,
+        # `language` is provided by the caller when we could confidently
+        # detect it from the lyric sheet (see detect_lyrics_language). If
+        # None, faster-whisper falls back to audio-based auto-detect which
+        # is unreliable for less common languages (Icelandic gets pegged
+        # as Russian, triggering the famous DimaTorzok watermark).
+        language=language,
         initial_prompt=None,
         # vad_filter is deliberately OFF: Silero VAD is too aggressive on
         # sung audio (held vowels and quiet passages get classified as
@@ -490,10 +565,12 @@ def _whisper_sync(mp3_path: str, lyrics_prompt: str = "") -> list:
     return words
 
 
-async def run_whisper(mp3_path: str, lyrics_prompt: str = "") -> list:
+async def run_whisper(mp3_path: str, lyrics_prompt: str = "", language: Optional[str] = None) -> list:
     """Run Whisper in thread pool so the event loop is not blocked."""
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _whisper_sync, mp3_path, lyrics_prompt)
+    return await loop.run_in_executor(
+        None, _whisper_sync, mp3_path, lyrics_prompt, language,
+    )
 
 
 def _align_to_lyrics(whisper_words: list, lyrics_text: str) -> list:
@@ -713,12 +790,16 @@ async def process_exp_song(db, song_id: int, exp_radio_dir: str, bot=None):
         # from capitalised proper-noun candidates so the model still learns
         # to spell rare names correctly.
         vocab_hint = extract_vocab_hints(lyrics)
+        detected_lang = detect_lyrics_language(lyrics)
         print(
             f"[exp-radio] Starting Whisper analysis for #{song_id} "
-            f"(model={_WHISPER_MODEL}, vocab_hint={vocab_hint!r})…",
+            f"(model={_WHISPER_MODEL}, lang={detected_lang or 'auto'}, "
+            f"vocab_hint={vocab_hint!r})…",
             flush=True,
         )
-        words = await run_whisper(mp3_path, lyrics_prompt=vocab_hint)
+        words = await run_whisper(
+            mp3_path, lyrics_prompt=vocab_hint, language=detected_lang,
+        )
         print(f"[exp-radio] Whisper done: {len(words)} words for #{song_id}", flush=True)
 
         # 3b) Forced-alignment-light: keep Whisper structure/timing, correct
