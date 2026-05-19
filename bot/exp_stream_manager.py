@@ -14,6 +14,8 @@ import asyncio
 import os
 import re
 import random
+import time
+from collections import deque
 
 from bot.twitch_bot import TwitchBot
 
@@ -62,7 +64,18 @@ def _shift_ass_dialogue(content: str, offset_cs: int) -> list:
     return out
 
 
+# FFmpeg progress lines ("frame=  123 fps= 30 q=28 ... time=00:00:04.10 ...")
+# emit roughly once per second and would flood the log buffer. We drop them
+# entirely — anything else (warnings, errors, our own [exp-stream] messages)
+# is interesting and goes through.
+_FFMPEG_PROGRESS_RE = re.compile(r"^frame=\s*\d+.*time=")
+
+
 class ExpStreamManager:
+    # Ring buffer size — keeps roughly the last 10–15 minutes of activity
+    # (the UI then filters by an explicit time window).
+    _LOG_BUFFER_MAX = 1000
+
     def __init__(self, db, exp_radio_dir: str):
         self.db            = db
         self.exp_radio_dir = exp_radio_dir
@@ -73,6 +86,39 @@ class ExpStreamManager:
         self.playlist: list[dict]      = []
         self._twitch_key   = ""
         self._twitch_chat: TwitchBot | None = None
+        # Live log: each entry is (unix_ts: float, level: str, line: str).
+        # `level` is one of 'info', 'ffmpeg', 'error' — used by the UI for
+        # colouring. The buffer is shared with the admin UI via get_log().
+        self._log_buffer: deque = deque(maxlen=self._LOG_BUFFER_MAX)
+
+    # ── Live log buffer ──────────────────────────────────────────────────────────────────────
+
+    def _log(self, line: str, level: str = "info") -> None:
+        """Append a line to the live log buffer AND mirror it to stdout.
+
+        Used both for our own [exp-stream] messages and (filtered) FFmpeg
+        stderr output. The admin UI polls `get_log()` to display the last
+        few minutes for live diagnostics."""
+        ts = time.time()
+        self._log_buffer.append((ts, level, line))
+        # Mirror to docker logs as before so we don't lose existing visibility.
+        prefix = "[exp-stream]" if level != "ffmpeg" else "[ffmpeg]"
+        try:
+            print(f"{prefix} {line}", flush=True)
+        except Exception:
+            pass
+
+    def get_log(self, since_ts: float = 0.0, max_age_secs: float = 300.0) -> list[dict]:
+        """Return log entries newer than `since_ts` (or within max_age_secs).
+
+        The UI uses `since_ts` for incremental polling and falls back to
+        `max_age_secs` on first load."""
+        cutoff = max(since_ts, time.time() - max_age_secs)
+        return [
+            {"ts": ts, "level": level, "line": line}
+            for (ts, level, line) in self._log_buffer
+            if ts > cutoff
+        ]
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -95,13 +141,13 @@ class ExpStreamManager:
             self._twitch_chat = TwitchBot(self.db, key_prefix="exp_radio_twitch")
             ok, msg = await self._twitch_chat.start()
             if not ok:
-                print(f"[exp-stream] Twitch chat disabled: {msg}", flush=True)
+                self._log(f"Twitch chat disabled: {msg}", "error")
                 self._twitch_chat = None
             else:
-                print(f"[exp-stream] Twitch chat ready ({msg}).", flush=True)
+                self._log(f"Twitch chat ready ({msg}).")
         self.is_running  = True
         self._task = asyncio.create_task(self._stream_loop())
-        print(f"[exp-stream] Started with {len(ready)} songs.", flush=True)
+        self._log(f"Started with {len(ready)} songs.")
         return {"ok": True, "song_count": len(ready)}
 
     async def stop(self) -> dict:
@@ -123,7 +169,7 @@ class ExpStreamManager:
         if self._twitch_chat:
             await self._twitch_chat.stop()
             self._twitch_chat = None
-        print("[exp-stream] Stopped.", flush=True)
+        self._log("Stopped.")
         return {"ok": True}
 
     async def get_status(self) -> dict:
@@ -149,7 +195,7 @@ class ExpStreamManager:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                print(f"[exp-stream] Playlist error: {e}", flush=True)
+                self._log(f"Playlist error: {e}", "error")
                 await asyncio.sleep(3)
 
     async def _play_playlist(self, songs: list):
@@ -165,7 +211,7 @@ class ExpStreamManager:
         for song in songs:
             path = await self._get_video(song) or await self._get_cover(song)
             media_paths.append(path)
-            print(f"[exp-stream] Media ready: {song.get('title')} → {path}", flush=True)
+            self._log(f"Media ready: {song.get('title')} → {path}")
 
         # Build combined ASS (subtitles + NowPlaying title cards)
         combined_ass = self._build_combined_ass(songs)
@@ -192,24 +238,52 @@ class ExpStreamManager:
         )
 
         titles = " → ".join(s.get("title") or "?" for s in songs)
-        print(f"[exp-stream] FFmpeg playlist: {titles}", flush=True)
+        self._log(f"FFmpeg playlist: {titles}")
 
         self._process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )
-        chat_task = asyncio.create_task(self._post_now_playing_loop(songs))
-        _, stderr = await self._process.communicate()
+        chat_task   = asyncio.create_task(self._post_now_playing_loop(songs))
+        stderr_task = asyncio.create_task(self._pipe_ffmpeg_stderr(self._process))
+        await self._process.wait()
         chat_task.cancel()
         try:
             await chat_task
         except asyncio.CancelledError:
             pass
+        # stderr task ends naturally when EOF — just await it.
+        try:
+            await stderr_task
+        except Exception:
+            pass
         rc = self._process.returncode
         if rc and rc != 0 and self.is_running:
-            err_tail = (stderr or b"")[-800:].decode("utf-8", errors="replace")
-            print(f"[exp-stream] FFmpeg exited {rc}:\n{err_tail}", flush=True)
+            self._log(f"FFmpeg exited {rc}.", "error")
+
+    async def _pipe_ffmpeg_stderr(self, proc) -> None:
+        """Read FFmpeg stderr line by line and feed it into the live log.
+
+        Filters out the per-second progress lines (frame=... time=...) which
+        would otherwise drown out anything interesting. Warnings and errors
+        pass through."""
+        if not proc.stderr:
+            return
+        try:
+            while True:
+                raw = await proc.stderr.readline()
+                if not raw:
+                    break
+                line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+                if not line or _FFMPEG_PROGRESS_RE.match(line):
+                    continue
+                # Heuristic: anything containing 'error' or starting with
+                # '[<x>] @ ...' suggests a problem worth flagging.
+                level = "error" if ("error" in line.lower() or "failed" in line.lower()) else "ffmpeg"
+                self._log(line, level)
+        except Exception as e:
+            self._log(f"stderr reader exception: {e}", "error")
 
     async def _post_now_playing_loop(self, songs: list):
         """Post ♪ Now Playing to Twitch chat at each song boundary."""
@@ -250,7 +324,7 @@ class ExpStreamManager:
                             f.write(await r.read())
                         return dest
         except Exception as e:
-            print(f"[exp-stream] Cover download error ({uuid}): {e}", flush=True)
+            self._log(f"Cover download error ({uuid}): {e}", "error")
         return None
 
     async def _get_video(self, song: dict) -> str | None:
@@ -271,13 +345,13 @@ class ExpStreamManager:
                     if r.status == 200:
                         with open(dest, "wb") as f:
                             f.write(await r.read())
-                        print(f"[exp-stream] Video cached: {uuid}.mp4", flush=True)
+                        self._log(f"Video cached: {uuid}.mp4")
                         # Normalize immediately so the stream pipeline always
                         # sees lightweight covers (see _normalize_cover_video).
                         await self._normalize_cover_video(dest)
                         return dest
         except Exception as e:
-            print(f"[exp-stream] Video download error ({uuid}): {e}", flush=True)
+            self._log(f"Video download error ({uuid}): {e}", "error")
         return None
 
     async def _normalize_cover_video(self, path: str) -> bool:
@@ -311,11 +385,11 @@ class ExpStreamManager:
             w  = int(parts[0]) if len(parts) > 0 and parts[0] else 0
             h  = int(parts[1]) if len(parts) > 1 and parts[1] else 0
         except Exception as e:
-            print(f"[exp-stream] Cover probe failed ({path}): {e}", flush=True)
+            self._log(f"Cover probe failed ({path}): {e}", "error")
             return False
         # Already small enough → no-op (idempotency)
         if w and h and max(w, h) <= 720:
-            print(f"[exp-stream] Cover already normalized ({w}x{h}): {path}", flush=True)
+            self._log(f"Cover already normalized ({w}x{h}): {path}")
             return True
         tmp = path + ".norm.mp4"
         cmd = [
@@ -334,16 +408,16 @@ class ExpStreamManager:
         _, err = await proc.communicate()
         if proc.returncode != 0:
             err_tail = (err or b"")[-400:].decode("utf-8", errors="replace")
-            print(f"[exp-stream] Cover normalize failed ({path}): {err_tail}", flush=True)
+            self._log(f"Cover normalize failed ({path}): {err_tail}", "error")
             try: os.remove(tmp)
             except Exception: pass
             return False
         try:
             os.replace(tmp, path)
         except Exception as e:
-            print(f"[exp-stream] Cover normalize replace failed ({path}): {e}", flush=True)
+            self._log(f"Cover normalize replace failed ({path}): {e}", "error")
             return False
-        print(f"[exp-stream] Cover normalized ({w}x{h} → ≤720): {os.path.basename(path)}", flush=True)
+        self._log(f"Cover normalized ({w}x{h} → ≤720): {os.path.basename(path)}")
         return True
 
     async def renormalize_cover(self, song: dict) -> tuple[bool, str]:

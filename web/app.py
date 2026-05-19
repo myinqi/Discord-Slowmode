@@ -3564,6 +3564,30 @@ def create_app(db: Database, bot=None) -> Quart:
         from quart import jsonify
         return jsonify(await exp_stream_manager.get_status())
 
+    @app.route("/exp-radio/stream/log")
+    @permission_required('exp_radio')
+    async def exp_radio_stream_log():
+        """Return live-log entries for the admin UI panel.
+
+        Query params:
+          since   – unix timestamp (float). If given, only return entries
+                    strictly newer than this. Used for incremental polling.
+          window  – fallback time window in seconds (default 300 = 5 min).
+        """
+        from quart import jsonify, request
+        try:
+            since = float(request.args.get("since", "0") or 0)
+        except ValueError:
+            since = 0.0
+        try:
+            window = float(request.args.get("window", "300") or 300)
+        except ValueError:
+            window = 300.0
+        return jsonify({
+            "running": exp_stream_manager.is_running,
+            "entries": exp_stream_manager.get_log(since_ts=since, max_age_secs=window),
+        })
+
     @app.route("/exp-radio/consent-csv")
     @permission_required('exp_radio')
     async def exp_radio_consent_csv():

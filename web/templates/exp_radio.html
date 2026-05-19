@@ -220,6 +220,23 @@
             </div>
         </div>
 
+        <!-- Live Log -->
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between">
+                <h3 class="text-white font-semibold">Live Log</h3>
+                <label class="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
+                    <input type="checkbox" id="exp-log-autoscroll" checked
+                        class="w-3.5 h-3.5 accent-discord-blurple">
+                    auto-scroll
+                </label>
+            </div>
+            <div class="p-3">
+                <pre id="exp-log-pre"
+                    class="text-[11px] leading-snug font-mono whitespace-pre-wrap bg-gray-900/60 text-gray-300 rounded p-3 max-h-72 overflow-y-auto">Waiting for stream activity…</pre>
+                <p class="text-gray-600 text-[10px] mt-2">Last 5 minutes. FFmpeg progress lines are filtered. Refreshes every 2&nbsp;s.</p>
+            </div>
+        </div>
+
         <!-- Post to Discord -->
         <div class="bg-discord-dark rounded-xl border border-gray-700/50">
             <div class="px-5 py-4 border-b border-gray-700/50">
@@ -460,9 +477,51 @@ async function updateExpStatus() {
     } catch (_) {}
 }
 
+// ── Live log panel ──────────────────────────────────────────────────────────
+let _expLogSinceTs = 0;
+const _expLogMaxLines = 500;
+const _expLogColors = {
+    info:   'text-gray-300',
+    ffmpeg: 'text-sky-300/80',
+    error:  'text-red-300',
+};
+function _fmtLogTs(ts) {
+    const d = new Date(ts * 1000);
+    const pad = n => String(n).padStart(2, '0');
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+async function updateExpLog() {
+    try {
+        const url = _expLogSinceTs
+            ? `/exp-radio/stream/log?since=${_expLogSinceTs}`
+            : '/exp-radio/stream/log?window=300';
+        const r = await fetch(url);
+        const d = await r.json();
+        if (!d.entries || !d.entries.length) return;
+        const pre = document.getElementById('exp-log-pre');
+        const auto = document.getElementById('exp-log-autoscroll').checked;
+        // First load → replace placeholder
+        if (_expLogSinceTs === 0) pre.innerHTML = '';
+        for (const e of d.entries) {
+            const span = document.createElement('span');
+            span.className = _expLogColors[e.level] || _expLogColors.info;
+            span.textContent = `[${_fmtLogTs(e.ts)}] ${e.line}\n`;
+            pre.appendChild(span);
+            if (e.ts > _expLogSinceTs) _expLogSinceTs = e.ts;
+        }
+        // Trim DOM to keep things light
+        while (pre.childElementCount > _expLogMaxLines) {
+            pre.removeChild(pre.firstChild);
+        }
+        if (auto) pre.scrollTop = pre.scrollHeight;
+    } catch (_) {}
+}
+
 (function init() {
     updateExpStatus();
+    updateExpLog();
     _expPollTimer = setInterval(updateExpStatus, 5000);
+    setInterval(updateExpLog, 2000);
 })();
 </script>
 {% endblock %}
