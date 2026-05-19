@@ -3240,6 +3240,18 @@ def create_app(db: Database, bot=None) -> Quart:
                     else:
                         await flash("Nothing to update — Suno returned no usable metadata.", "warning")
 
+            elif action == "renormalize_cover_one":
+                sid = int(form.get("song_id", "0") or 0)
+                s = await db.get_exp_radio_song(sid) if sid else None
+                if not s:
+                    await flash("Song not found.", "error")
+                else:
+                    ok, msg = await exp_stream_manager.renormalize_cover(s)
+                    await flash(
+                        f"{'✅' if ok else '❌'} {s.get('title') or sid}: {msg}",
+                        "success" if ok else "error",
+                    )
+
             elif action == "reanalyze_whisper_one":
                 from bot.exp_radio_worker import process_exp_song
                 sid = int(form.get("song_id", "0") or 0)

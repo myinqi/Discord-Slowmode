@@ -47,7 +47,7 @@ EXP_TERMS_SHORT = (
 )
 
 
-MAX_DURATION_SECS = 300  # 5 minutes
+MAX_DURATION_SECS = 360  # 6 minutes
 
 
 # ─── Directory helpers ────────────────────────────────────────────────────────

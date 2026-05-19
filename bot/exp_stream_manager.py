@@ -272,10 +272,100 @@ class ExpStreamManager:
                         with open(dest, "wb") as f:
                             f.write(await r.read())
                         print(f"[exp-stream] Video cached: {uuid}.mp4", flush=True)
+                        # Normalize immediately so the stream pipeline always
+                        # sees lightweight covers (see _normalize_cover_video).
+                        await self._normalize_cover_video(dest)
                         return dest
         except Exception as e:
             print(f"[exp-stream] Video download error ({uuid}): {e}", flush=True)
         return None
+
+    async def _normalize_cover_video(self, path: str) -> bool:
+        """Re-encode an over-sized cover MP4 to a stream-friendly form.
+
+        Some Suno cover videos ship at 1440×1440 @ 8 Mbit/s. Looping such a
+        heavy source ~25× per song through scale+crop+fps in the playlist
+        FFmpeg causes periodic CPU spikes on each loop wrap (decoder
+        reinitialisation + heavy 16× downscale) and produces visible stutter.
+        We trim every cover to a uniform, lightweight baseline:
+
+          - Max 720x720 (Lanczos downscale, preserves aspect)
+          - 24 fps (matches Suno's native framerate, no resampling)
+          - Keyframe every second (smoother loop seeks)
+          - libx264 CRF 24, veryfast preset → ~1-2 Mbit/s
+
+        Returns True on success. Files already at or below the target size
+        are skipped (idempotent).
+        """
+        # Probe current properties
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ffprobe", "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=width,height,r_frame_rate,bit_rate",
+                "-of", "csv=p=0", path,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            out, _ = await proc.communicate()
+            parts = (out.decode().strip() or "").split(",")
+            w  = int(parts[0]) if len(parts) > 0 and parts[0] else 0
+            h  = int(parts[1]) if len(parts) > 1 and parts[1] else 0
+        except Exception as e:
+            print(f"[exp-stream] Cover probe failed ({path}): {e}", flush=True)
+            return False
+        # Already small enough → no-op (idempotency)
+        if w and h and max(w, h) <= 720:
+            print(f"[exp-stream] Cover already normalized ({w}x{h}): {path}", flush=True)
+            return True
+        tmp = path + ".norm.mp4"
+        cmd = [
+            "ffmpeg", "-y", "-i", path,
+            "-vf", "scale='min(720,iw)':'min(720,ih)':force_original_aspect_ratio=decrease,fps=24",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "24",
+            "-pix_fmt", "yuv420p",
+            "-g", "24", "-keyint_min", "24",  # one keyframe per second
+            "-movflags", "+faststart",
+            "-an",
+            tmp,
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+        )
+        _, err = await proc.communicate()
+        if proc.returncode != 0:
+            err_tail = (err or b"")[-400:].decode("utf-8", errors="replace")
+            print(f"[exp-stream] Cover normalize failed ({path}): {err_tail}", flush=True)
+            try: os.remove(tmp)
+            except Exception: pass
+            return False
+        try:
+            os.replace(tmp, path)
+        except Exception as e:
+            print(f"[exp-stream] Cover normalize replace failed ({path}): {e}", flush=True)
+            return False
+        print(f"[exp-stream] Cover normalized ({w}x{h} → ≤720): {os.path.basename(path)}", flush=True)
+        return True
+
+    async def renormalize_cover(self, song: dict) -> tuple[bool, str]:
+        """Manual entry point for the per-song UI button.
+
+        If the cached MP4 exists, re-encodes it in place. Otherwise downloads
+        it fresh (which also normalizes via _get_video).
+        Returns (ok, message)."""
+        uuid = song.get("suno_uuid") or ""
+        if not uuid:
+            return False, "Song has no suno_uuid."
+        cache_dir = os.path.join(self.exp_radio_dir, "cover_cache")
+        dest = os.path.join(cache_dir, f"{uuid}.mp4")
+        if os.path.exists(dest):
+            ok = await self._normalize_cover_video(dest)
+            return ok, ("Cover normalized." if ok
+                        else "Normalization failed — see logs.")
+        # No cached file — try a fresh download (also normalizes)
+        path = await self._get_video(song)
+        if path:
+            return True, "Cover downloaded and normalized."
+        return False, "No video_url available or download failed."
 
     # ── Combined ASS builder ───────────────────────────────────────────────────
 

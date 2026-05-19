@@ -1832,7 +1832,7 @@ _EXP_TERMS_DISPLAY = (
     "• The content complies with community guidelines (no hate speech, explicit or illegal content)\n"
     "• Songs expire and are deleted automatically after **14 days**\n"
     f"• Maximum **{_EXP_MAX_PER_USER} songs** per user\n"
-    "• Maximum song length: **5 minutes**"
+    "• Maximum song length: **6 minutes**"
 )
 
 _EXP_RIGHTS_DECLARATION = (
