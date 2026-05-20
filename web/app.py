@@ -3277,12 +3277,18 @@ def create_app(db: Database, bot=None) -> Quart:
                 if not s or not s.get("lyrics"):
                     await flash("Song not found or has no lyrics yet.", "error")
                 else:
+                    from bot.exp_stream_manager import log_event
                     async def _run_remoderation(song_id, snap):
+                        title_s = snap.get("title") or f"#{song_id}"
                         try:
                             client = OllamaClient(
                                 base_url=Config.OLLAMA_URL,
                                 model=Config.LLM_MODEL,
                                 timeout=Config.LLM_REQUEST_TIMEOUT,
+                            )
+                            log_event(
+                                f"Re-moderation start for #{song_id} ({title_s!r})",
+                                prefix="[mod]",
                             )
                             verdict = await moderate_lyrics(
                                 client,
@@ -3296,13 +3302,19 @@ def create_app(db: Database, bot=None) -> Quart:
                                 moderation_reason=verdict.get("reason") or "",
                                 moderation_at=time.time(),
                             )
-                            print(
-                                f"[exp-radio] Manual re-moderation #{song_id}: "
-                                f"{verdict['status']}",
-                                flush=True,
+                            level = "error" if verdict["status"] in ("flagged", "pending") else "info"
+                            summary = (
+                                f"Re-moderation #{song_id} → {verdict['status']}"
+                                f"{' (translated)' if verdict.get('translated') else ''}"
                             )
+                            if verdict.get("reason"):
+                                summary += f": {verdict['reason']}"
+                            log_event(summary, level=level, prefix="[mod]")
                         except Exception as e:
-                            print(f"[exp-radio] Re-moderation error #{song_id}: {e}", flush=True)
+                            log_event(
+                                f"Re-moderation error #{song_id}: {e}",
+                                level="error", prefix="[mod]",
+                            )
                             await db.update_exp_radio_song(
                                 song_id,
                                 moderation_status="pending",

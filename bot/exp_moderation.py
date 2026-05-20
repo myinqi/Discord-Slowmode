@@ -36,10 +36,11 @@ from bot.llm import OllamaClient
 # response fast. 4000 characters comfortably covers a typical song.
 _MAX_LYRIC_CHARS = 4000
 
-# Per-call LLM timeout in seconds. qwen2.5:7b on CPU answers a short JSON
-# question in ~5-15 s; we give it a generous ceiling but bail out if it
-# stalls so the worker stays responsive.
-_LLM_TIMEOUT_SECS = 90
+# Per-call LLM timeout in seconds. qwen2.5:7b on CPU can take 60-150 s on
+# longer lyrics (~2500 chars + an English translation block). We give it a
+# generous ceiling but bail out if it stalls so the worker stays responsive
+# — songs that time out land in 'pending' for manual review.
+_LLM_TIMEOUT_SECS = 240
 
 # Soft translation timeout — we do not want a slow Google Translate response
 # to hold up moderation. If translation fails we proceed with the original

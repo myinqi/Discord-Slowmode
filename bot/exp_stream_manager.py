@@ -71,6 +71,32 @@ def _shift_ass_dialogue(content: str, offset_cs: int) -> list:
 _FFMPEG_PROGRESS_RE = re.compile(r"^frame=\s*\d+.*time=")
 
 
+# ── Module-level Live Log ────────────────────────────────────────────────────
+# Shared ring buffer used by the admin UI's "Live Log" panel. Lives at module
+# scope (instead of inside ExpStreamManager) so that background workers and
+# web actions which don't hold a manager reference can publish into the same
+# stream of events — e.g. LLM moderation results, re-moderation timeouts,
+# Whisper re-analysis kick-offs, etc.
+
+_LOG_BUFFER_MAX = 1000
+_LOG_BUFFER: deque = deque(maxlen=_LOG_BUFFER_MAX)
+
+
+def log_event(line: str, level: str = "info", prefix: str = "[exp-radio]") -> None:
+    """Append `line` to the shared live-log buffer and mirror to stdout.
+
+    `level` is one of 'info', 'ffmpeg', 'error' and is used by the UI for
+    colouring. `prefix` is only used for the stdout mirror, never for the
+    UI buffer (the UI displays just the `line`).
+    """
+    ts = time.time()
+    _LOG_BUFFER.append((ts, level, line))
+    try:
+        print(f"{prefix} {line}", flush=True)
+    except Exception:
+        pass
+
+
 class ExpStreamManager:
     # Ring buffer size — keeps roughly the last 10–15 minutes of activity
     # (the UI then filters by an explicit time window).
@@ -87,26 +113,16 @@ class ExpStreamManager:
         self._twitch_key   = ""
         self._twitch_chat: TwitchBot | None = None
         # Live log: each entry is (unix_ts: float, level: str, line: str).
-        # `level` is one of 'info', 'ffmpeg', 'error' — used by the UI for
-        # colouring. The buffer is shared with the admin UI via get_log().
-        self._log_buffer: deque = deque(maxlen=self._LOG_BUFFER_MAX)
+        # The actual buffer is module-level (see _LOG_BUFFER below) so that
+        # background workers and web actions which don't have a reference to
+        # the manager instance can still publish into the same live log.
+        self._log_buffer = _LOG_BUFFER
 
     # ── Live log buffer ──────────────────────────────────────────────────────────────────────
 
     def _log(self, line: str, level: str = "info") -> None:
-        """Append a line to the live log buffer AND mirror it to stdout.
-
-        Used both for our own [exp-stream] messages and (filtered) FFmpeg
-        stderr output. The admin UI polls `get_log()` to display the last
-        few minutes for live diagnostics."""
-        ts = time.time()
-        self._log_buffer.append((ts, level, line))
-        # Mirror to docker logs as before so we don't lose existing visibility.
-        prefix = "[exp-stream]" if level != "ffmpeg" else "[ffmpeg]"
-        try:
-            print(f"{prefix} {line}", flush=True)
-        except Exception:
-            pass
+        """Instance shortcut that forwards to the module-level `log_event`."""
+        log_event(line, level, prefix="[exp-stream]")
 
     def get_log(self, since_ts: float = 0.0, max_age_secs: float = 300.0) -> list[dict]:
         """Return log entries newer than `since_ts` (or within max_age_secs).

@@ -826,6 +826,7 @@ async def process_exp_song(db, song_id: int, exp_radio_dir: str, bot=None):
         #    and the stream playlist filter treats it as grandfathered/passed.
         moderation_enabled = await db.get_setting("exp_radio_moderation_enabled") or "off"
         if moderation_enabled == "on":
+            from bot.exp_stream_manager import log_event
             try:
                 from bot.exp_moderation import moderate_lyrics
                 from bot.llm import OllamaClient
@@ -835,7 +836,7 @@ async def process_exp_song(db, song_id: int, exp_radio_dir: str, bot=None):
                     model=Config.LLM_MODEL,
                     timeout=Config.LLM_REQUEST_TIMEOUT,
                 )
-                print(f"[exp-radio] Moderation start for #{song_id}", flush=True)
+                log_event(f"Moderation start for #{song_id} ({title!r})", prefix="[mod]")
                 verdict = await moderate_lyrics(
                     client, lyrics=lyrics, title=title, artist=artist,
                 )
@@ -845,11 +846,14 @@ async def process_exp_song(db, song_id: int, exp_radio_dir: str, bot=None):
                     moderation_reason=verdict.get("reason") or "",
                     moderation_at=time.time(),
                 )
-                print(
-                    f"[exp-radio] Moderation result for #{song_id}: "
-                    f"{verdict['status']} (translated={verdict.get('translated')})",
-                    flush=True,
+                level = "error" if verdict["status"] in ("flagged", "pending") else "info"
+                summary = (
+                    f"Moderation #{song_id} → {verdict['status']}"
+                    f"{' (translated)' if verdict.get('translated') else ''}"
                 )
+                if verdict.get("reason"):
+                    summary += f": {verdict['reason']}"
+                log_event(summary, level=level, prefix="[mod]")
                 if verdict["status"] == "flagged":
                     await _notify_user(
                         bot, song["user_id"],
@@ -859,7 +863,10 @@ async def process_exp_song(db, song_id: int, exp_radio_dir: str, bot=None):
                         f"Reason: _{verdict.get('reason') or 'no reason given'}_",
                     )
             except Exception as e:
-                print(f"[exp-radio] Moderation pipeline error for #{song_id}: {e}", flush=True)
+                log_event(
+                    f"Moderation pipeline error for #{song_id}: {e}",
+                    level="error", prefix="[mod]",
+                )
                 await db.update_exp_radio_song(
                     song_id,
                     moderation_status="pending",
