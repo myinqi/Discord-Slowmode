@@ -1823,7 +1823,7 @@ class CommandsCog(commands.Cog):
 
 
 _SUNO_SUBMIT_RE = re.compile(r'(?:suno\.com/(?:s|song)/)([A-Za-z0-9_-]{8,})')
-_EXP_MAX_PER_USER = 3
+_EXP_MAX_PER_USER = 4
 
 _EXP_TERMS_DISPLAY = (
     "**By submitting you confirm:**\n"
