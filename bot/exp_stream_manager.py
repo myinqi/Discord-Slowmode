@@ -394,7 +394,10 @@ class ExpStreamManager:
         tmp = path + ".norm.mp4"
         cmd = [
             "ffmpeg", "-y", "-i", path,
-            "-vf", "scale='min(720,iw)':'min(720,ih)':force_original_aspect_ratio=decrease,fps=24",
+            # force_divisible_by=2 guarantees even W/H, which libx264 + yuv420p
+            # require. Without it sources like 1920x1074 produce odd output
+            # dimensions and FFmpeg fails with `Invalid argument`.
+            "-vf", "scale=720:720:force_original_aspect_ratio=decrease:force_divisible_by=2,fps=24",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "24",
             "-pix_fmt", "yuv420p",
             "-g", "24", "-keyint_min", "24",  # one keyframe per second
