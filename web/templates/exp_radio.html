@@ -83,6 +83,32 @@
                     Original lyrics + an automatic English translation are evaluated.
                 </p>
             </div>
+            <div class="pt-2 border-t border-gray-700/50 space-y-2">
+                <p class="text-white text-sm font-medium">When the playlist ends</p>
+                <label class="flex items-start gap-2 cursor-pointer select-none">
+                    <input type="radio" name="exp_loop_mode" value="stop"
+                        {% if exp_loop_mode == 'stop' %}checked{% endif %}
+                        class="mt-1 w-4 h-4 accent-discord-blurple">
+                    <span class="text-gray-300 text-sm">
+                        <span class="text-white">Stop the stream</span><br>
+                        <span class="text-gray-500 text-xs">Plays each track in the
+                        randomly-shuffled order once, then ends. The bot posts a
+                        heads-up in Twitch chat ~30s before the final track ends.</span>
+                    </span>
+                </label>
+                <label class="flex items-start gap-2 cursor-pointer select-none">
+                    <input type="radio" name="exp_loop_mode" value="reshuffle"
+                        {% if exp_loop_mode != 'stop' %}checked{% endif %}
+                        class="mt-1 w-4 h-4 accent-discord-blurple">
+                    <span class="text-gray-300 text-sm">
+                        <span class="text-white">Restart with a fresh shuffle</span><br>
+                        <span class="text-gray-500 text-xs">Reloads the eligible
+                        playlist (picking up newly approved submissions),
+                        reshuffles, and keeps streaming. A heads-up message is
+                        posted in Twitch chat ~30s before each rotation ends.</span>
+                    </span>
+                </label>
+            </div>
             <button type="submit"
                 class="w-full px-4 py-2 bg-discord-blurple hover:bg-discord-blurple-hover text-white rounded-lg text-sm font-medium transition-colors">
                 Save Settings

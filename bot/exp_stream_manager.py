@@ -228,6 +228,39 @@ class ExpStreamManager:
             except Exception as e:
                 self._log(f"Playlist error: {e}", "error")
                 await asyncio.sleep(3)
+                continue
+
+            # Rotation finished cleanly. Decide what to do next based on the
+            # admin-configured loop mode.
+            if not self.is_running:
+                break
+            mode = (await self.db.get_setting("exp_radio_loop_mode")) or "reshuffle"
+            if mode == "stop":
+                self._log("Loop mode 'stop' — playlist finished, ending stream.")
+                # Trigger normal stop() cleanup (sets is_running=False, closes
+                # Twitch chat, clears current_song). We schedule it instead of
+                # awaiting because stop() will cancel this very task.
+                asyncio.create_task(self.stop())
+                break
+            # mode == "reshuffle": reload eligible songs from DB so newly
+            # approved submissions get picked up, then reshuffle.
+            songs = await self.db.get_all_exp_radio_songs(active_only=True)
+            def _mod_ok(s: dict) -> bool:
+                ms = s.get("moderation_status")
+                return ms is None or ms in ("passed", "approved")
+            ready = [
+                s for s in songs
+                if s.get("analysis_status") == "done"
+                and s.get("mp3_filename")
+                and _mod_ok(s)
+            ]
+            if not ready:
+                self._log("Reshuffle: no eligible songs left — stopping.", "error")
+                asyncio.create_task(self.stop())
+                break
+            random.shuffle(ready)
+            self.playlist = ready
+            self._log(f"Reshuffled playlist ({len(ready)} songs) — next rotation starting.")
 
     async def _play_playlist(self, songs: list):
         """Run one FFmpeg job that covers all songs without stopping between them."""
@@ -278,10 +311,16 @@ class ExpStreamManager:
         )
         chat_task   = asyncio.create_task(self._post_now_playing_loop(songs))
         stderr_task = asyncio.create_task(self._pipe_ffmpeg_stderr(self._process))
+        announce_task = asyncio.create_task(self._announce_rotation_end(total_dur))
         await self._process.wait()
         chat_task.cancel()
+        announce_task.cancel()
         try:
             await chat_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await announce_task
         except asyncio.CancelledError:
             pass
         # stderr task ends naturally when EOF — just await it.
@@ -315,6 +354,38 @@ class ExpStreamManager:
                 self._log(line, level)
         except Exception as e:
             self._log(f"stderr reader exception: {e}", "error")
+
+    async def _announce_rotation_end(self, total_dur: float):
+        """Post a heads-up to Twitch chat ~30s before the rotation ends.
+
+        Message text depends on the configured loop mode:
+          - 'stop':       "Stream ending in ~30s…"
+          - 'reshuffle':  "Restarting with a freshly shuffled playlist in ~30s…"
+        Silently no-ops if there's no Twitch chat connection or the rotation
+        is too short for a meaningful pre-warning (<45s).
+        """
+        try:
+            if not self._twitch_chat:
+                return
+            lead = 30.0
+            wait = total_dur - lead
+            if wait < 15:
+                return
+            await asyncio.sleep(wait)
+            mode = (await self.db.get_setting("exp_radio_loop_mode")) or "reshuffle"
+            if mode == "stop":
+                msg = "\u26A0\uFE0F Heads up: the stream will end in ~30 seconds when the last track finishes. Thanks for tuning in!"
+            else:
+                msg = "\U0001F501 Heads up: the playlist will restart in ~30 seconds with a freshly shuffled order (including any newly approved tracks)."
+            try:
+                await self._twitch_chat.send(msg)
+                self._log(f"Rotation end announcement posted (mode={mode}).")
+            except Exception as e:
+                self._log(f"Rotation end announcement failed: {e}", "error")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self._log(f"_announce_rotation_end error: {e}", "error")
 
     async def _post_now_playing_loop(self, songs: list):
         """Post ♪ Now Playing to Twitch chat at each song boundary."""

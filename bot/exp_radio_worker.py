@@ -719,29 +719,32 @@ async def _notify_user(bot, user_id: int, msg: str):
 
 async def process_exp_song(db, song_id: int, exp_radio_dir: str, bot=None):
     """Full async pipeline for one submitted experimental radio song."""
+    # Late import keeps the worker importable in tests without the streaming
+    # stack — log_event lives in the stream manager module.
+    from bot.exp_stream_manager import log_event
     mp3_dir = os.path.join(exp_radio_dir, "mp3")
     ass_dir = os.path.join(exp_radio_dir, "ass")
     ensure_exp_dirs(exp_radio_dir)
 
     song = await db.get_exp_radio_song(song_id)
     if not song:
-        print(f"[exp-radio] Song #{song_id} not found in DB", flush=True)
+        log_event(f"Song #{song_id} not found in DB", level="error", prefix="[whisper]")
         return
 
     uuid = song["suno_uuid"]
-    print(f"[exp-radio] Processing #{song_id} uuid={uuid}", flush=True)
+    log_event(f"Processing #{song_id} (uuid={uuid})", prefix="[whisper]")
     await db.update_exp_radio_song(song_id, analysis_status="processing")
 
     try:
         # 1) Locate MP3 — supplied by the browser upload endpoint
         mp3_filename = song.get("mp3_filename")
         if not mp3_filename:
-            print(f"[exp-radio] #{song_id}: no mp3_filename in DB yet — upload not completed", flush=True)
+            log_event(f"#{song_id}: no mp3_filename in DB yet — upload not completed", level="error", prefix="[whisper]")
             await db.update_exp_radio_song(song_id, analysis_status="failed")
             return
         mp3_path = os.path.join(mp3_dir, mp3_filename)
         if not os.path.exists(mp3_path):
-            print(f"[exp-radio] #{song_id}: MP3 file missing on disk: {mp3_path}", flush=True)
+            log_event(f"#{song_id}: MP3 file missing on disk: {mp3_path}", level="error", prefix="[whisper]")
             await db.update_exp_radio_song(song_id, analysis_status="failed")
             return
 
@@ -774,7 +777,7 @@ async def process_exp_song(db, song_id: int, exp_radio_dir: str, bot=None):
                 f"The song is {duration / 60:.1f} min long. Maximum allowed is **{mins} minutes**.\n"
                 "Please submit a shorter song."
             )
-            print(f"[exp-radio] #{song_id} rejected: duration {duration:.0f}s > {MAX_DURATION_SECS}s", flush=True)
+            log_event(f"#{song_id} rejected: duration {duration:.0f}s > {MAX_DURATION_SECS}s", level="error", prefix="[whisper]")
             return
 
         await db.update_exp_radio_song(
@@ -791,16 +794,20 @@ async def process_exp_song(db, song_id: int, exp_radio_dir: str, bot=None):
         # to spell rare names correctly.
         vocab_hint = extract_vocab_hints(lyrics)
         detected_lang = detect_lyrics_language(lyrics)
-        print(
-            f"[exp-radio] Starting Whisper analysis for #{song_id} "
-            f"(model={_WHISPER_MODEL}, lang={detected_lang or 'auto'}, "
-            f"vocab_hint={vocab_hint!r})…",
-            flush=True,
+        log_event(
+            f"Starting Whisper analysis for #{song_id} "
+            f"(model={_WHISPER_MODEL}, lang={detected_lang or 'auto'})…",
+            prefix="[whisper]",
         )
+        whisper_t0 = time.time()
         words = await run_whisper(
             mp3_path, lyrics_prompt=vocab_hint, language=detected_lang,
         )
-        print(f"[exp-radio] Whisper done: {len(words)} words for #{song_id}", flush=True)
+        log_event(
+            f"Whisper done for #{song_id}: {len(words)} words in "
+            f"{time.time() - whisper_t0:.1f}s",
+            prefix="[whisper]",
+        )
 
         # 3b) Forced-alignment-light: keep Whisper structure/timing, correct
         # word spellings from the lyric sheet wherever they agree exactly.
@@ -819,7 +826,7 @@ async def process_exp_song(db, song_id: int, exp_radio_dir: str, bot=None):
             ass_filename=ass_filename,
             analysis_status="done",
         )
-        print(f"[exp-radio] Pipeline complete for #{song_id}", flush=True)
+        log_event(f"Pipeline complete for #{song_id} ({title!r})", prefix="[whisper]")
 
         # 5) Optional LLM-based lyric moderation. Runs only when explicitly
         #    enabled in the admin settings; otherwise the column stays NULL
@@ -875,5 +882,5 @@ async def process_exp_song(db, song_id: int, exp_radio_dir: str, bot=None):
                 )
 
     except Exception as e:
-        print(f"[exp-radio] Pipeline error for #{song_id}: {e}", flush=True)
+        log_event(f"Pipeline error for #{song_id}: {e}", level="error", prefix="[whisper]")
         await db.update_exp_radio_song(song_id, analysis_status="failed")

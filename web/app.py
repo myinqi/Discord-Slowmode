@@ -3217,12 +3217,14 @@ def create_app(db: Database, bot=None) -> Quart:
 
             elif action == "rescrape_metadata_one":
                 from bot.exp_radio_worker import scrape_suno
+                from bot.exp_stream_manager import log_event
                 sid = int(form.get("song_id", "0") or 0)
                 s = await db.get_exp_radio_song(sid) if sid else None
                 if not s or not s.get("suno_uuid"):
                     await flash("Song not found.", "error")
                 else:
                     uuid = s["suno_uuid"]
+                    log_event(f"Refreshing metadata for #{sid} (uuid={uuid})…", prefix="[meta]")
                     meta = await scrape_suno(uuid)
                     fields = {}
                     if meta.get("title"):     fields["title"]     = meta["title"]
@@ -3236,8 +3238,17 @@ def create_app(db: Database, bot=None) -> Quart:
                             if os.path.exists(cached):
                                 try: os.remove(cached)
                                 except Exception: pass
+                        log_event(
+                            f"Refreshed metadata for #{sid} ({fields.get('title') or s.get('title')!r}) "
+                            f"— updated: {', '.join(sorted(fields.keys()))}",
+                            prefix="[meta]",
+                        )
                         await flash(f"Refreshed metadata for “{fields.get('title') or s.get('title')}”.", "success")
                     else:
+                        log_event(
+                            f"No usable metadata returned for #{sid} (uuid={uuid})",
+                            level="error", prefix="[meta]",
+                        )
                         await flash("Nothing to update — Suno returned no usable metadata.", "warning")
 
             elif action == "renormalize_cover_one":
@@ -3355,7 +3366,12 @@ def create_app(db: Database, bot=None) -> Quart:
 
             elif action == "rescrape_metadata":
                 from bot.exp_radio_worker import scrape_suno
+                from bot.exp_stream_manager import log_event
                 songs_all = await db.get_all_exp_radio_songs(active_only=True)
+                log_event(
+                    f"Bulk metadata refresh started for {len(songs_all)} song(s)…",
+                    prefix="[meta]",
+                )
                 updated = 0
                 for s in songs_all:
                     uuid = s.get("suno_uuid")
@@ -3371,12 +3387,18 @@ def create_app(db: Database, bot=None) -> Quart:
                     if fields:
                         await db.update_exp_radio_song(s["id"], **fields)
                         updated += 1
+                        log_event(
+                            f"  #{s['id']} ({fields.get('title') or s.get('title')!r}) updated: "
+                            f"{', '.join(sorted(fields.keys()))}",
+                            prefix="[meta]",
+                        )
                         # Invalidate cached media so next stream run downloads fresh
                         for ext in (".jpg", ".mp4"):
                             cached = os.path.join(EXP_RADIO_DIR, "cover_cache", f"{uuid}{ext}")
                             if os.path.exists(cached):
                                 try: os.remove(cached)
                                 except Exception: pass
+                log_event(f"Bulk metadata refresh done: {updated}/{len(songs_all)} updated.", prefix="[meta]")
                 await flash(f"Refreshed metadata for {updated} song(s).", "success")
 
             elif action == "save_stream_key":
@@ -3390,10 +3412,14 @@ def create_app(db: Database, bot=None) -> Quart:
                 expiry_ch = form.get("exp_expiry_channel_id", "").strip()
                 stream_url_v = form.get("exp_stream_url", "").strip()
                 moderation_en = "on" if form.get("exp_moderation_enabled") else "off"
+                loop_mode_v = form.get("exp_loop_mode", "reshuffle").strip()
+                if loop_mode_v not in ("stop", "reshuffle"):
+                    loop_mode_v = "reshuffle"
                 await db.set_setting("exp_radio_post_channel_1_id", ch1)
                 await db.set_setting("exp_radio_post_channel_2_id", ch2)
                 await db.set_setting("exp_radio_expiry_channel_id", expiry_ch)
                 await db.set_setting("exp_radio_moderation_enabled", moderation_en)
+                await db.set_setting("exp_radio_loop_mode", loop_mode_v)
                 if stream_url_v:
                     await db.set_setting("exp_radio_stream_url", stream_url_v)
                 await flash("Settings saved.", "success")
@@ -3518,6 +3544,7 @@ def create_app(db: Database, bot=None) -> Quart:
         exp_expiry_channel_id = await db.get_setting("exp_radio_expiry_channel_id") or ""
         exp_twitch_chat_enabled = await db.get_setting("exp_radio_twitch_chat_enabled") or "off"
         exp_moderation_enabled  = await db.get_setting("exp_radio_moderation_enabled") or "off"
+        exp_loop_mode           = await db.get_setting("exp_radio_loop_mode") or "reshuffle"
         exp_tw_client_id = await db.get_setting("exp_radio_twitch_client_id") or ""
         _exp_tw_secret   = await db.get_setting("exp_radio_twitch_client_secret") or ""
         _exp_tw_refresh  = await db.get_setting("exp_radio_twitch_refresh_token") or ""
@@ -3541,6 +3568,7 @@ def create_app(db: Database, bot=None) -> Quart:
             exp_expiry_channel_id=exp_expiry_channel_id,
             exp_twitch_chat_enabled=exp_twitch_chat_enabled,
             exp_moderation_enabled=exp_moderation_enabled,
+            exp_loop_mode=exp_loop_mode,
             exp_tw_client_id=exp_tw_client_id,
             exp_tw_secret_masked=exp_tw_secret_masked,
             exp_tw_refresh_masked=exp_tw_refresh_masked,
