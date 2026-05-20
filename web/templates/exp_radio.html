@@ -351,9 +351,10 @@
                                 class="w-14 h-14 rounded-lg object-cover bg-gray-800">
                             {% if song.video_url %}
                             <button type="button"
-                                onclick="expPreviewVideo({{ song.id }}, {{ (song.title or '')|tojson }})"
+                                data-preview-song-id="{{ song.id }}"
+                                data-preview-title="{{ song.title or '' }}"
                                 title="Preview the cached cover video"
-                                class="absolute inset-0 flex items-center justify-center rounded-lg bg-black/0 hover:bg-black/50 text-white/0 hover:text-white text-xl transition-all">
+                                class="exp-preview-btn absolute inset-0 flex items-center justify-center rounded-lg bg-black/0 hover:bg-black/50 text-white/0 hover:text-white text-xl transition-all">
                                 ▶
                             </button>
                             {% endif %}
@@ -526,6 +527,13 @@ function expClosePreview() {
 }
 document.addEventListener('keydown', e => {
     if (e.key === 'Escape') expClosePreview();
+});
+document.addEventListener('click', e => {
+    const btn = e.target.closest('.exp-preview-btn');
+    if (!btn) return;
+    const id    = btn.getAttribute('data-preview-song-id');
+    const title = btn.getAttribute('data-preview-title') || '';
+    if (id) expPreviewVideo(id, title);
 });
 
 // ── Live log panel ──────────────────────────────────────────────────────────
