@@ -3252,6 +3252,76 @@ def create_app(db: Database, bot=None) -> Quart:
                         "success" if ok else "error",
                     )
 
+            elif action == "approve_moderation_one":
+                sid = int(form.get("song_id", "0") or 0)
+                s = await db.get_exp_radio_song(sid) if sid else None
+                if not s:
+                    await flash("Song not found.", "error")
+                else:
+                    await db.update_exp_radio_song(
+                        sid,
+                        moderation_status="approved",
+                        moderation_at=time.time(),
+                    )
+                    await flash(
+                        f"✅ Approved “{s.get('title') or sid}” for the stream playlist.",
+                        "success",
+                    )
+
+            elif action == "remoderate_one":
+                from bot.exp_moderation import moderate_lyrics
+                from bot.llm import OllamaClient
+                from config import Config
+                sid = int(form.get("song_id", "0") or 0)
+                s = await db.get_exp_radio_song(sid) if sid else None
+                if not s or not s.get("lyrics"):
+                    await flash("Song not found or has no lyrics yet.", "error")
+                else:
+                    async def _run_remoderation(song_id, snap):
+                        try:
+                            client = OllamaClient(
+                                base_url=Config.OLLAMA_URL,
+                                model=Config.LLM_MODEL,
+                                timeout=Config.LLM_REQUEST_TIMEOUT,
+                            )
+                            verdict = await moderate_lyrics(
+                                client,
+                                lyrics=snap.get("lyrics") or "",
+                                title=snap.get("title") or "",
+                                artist=snap.get("artist") or "",
+                            )
+                            await db.update_exp_radio_song(
+                                song_id,
+                                moderation_status=verdict["status"],
+                                moderation_reason=verdict.get("reason") or "",
+                                moderation_at=time.time(),
+                            )
+                            print(
+                                f"[exp-radio] Manual re-moderation #{song_id}: "
+                                f"{verdict['status']}",
+                                flush=True,
+                            )
+                        except Exception as e:
+                            print(f"[exp-radio] Re-moderation error #{song_id}: {e}", flush=True)
+                            await db.update_exp_radio_song(
+                                song_id,
+                                moderation_status="pending",
+                                moderation_reason=f"Re-moderation error: {e!s}",
+                                moderation_at=time.time(),
+                            )
+                    await db.update_exp_radio_song(
+                        sid,
+                        moderation_status="pending",
+                        moderation_reason="Re-moderation in progress…",
+                        moderation_at=time.time(),
+                    )
+                    asyncio.create_task(_run_remoderation(sid, s))
+                    await flash(
+                        f"Queued “{s.get('title') or sid}” for LLM re-moderation. "
+                        "Refresh the page in a few seconds.",
+                        "success",
+                    )
+
             elif action == "reanalyze_whisper_one":
                 from bot.exp_radio_worker import process_exp_song
                 sid = int(form.get("song_id", "0") or 0)
@@ -3307,9 +3377,11 @@ def create_app(db: Database, bot=None) -> Quart:
                 ch2 = form.get("exp_post_channel_2_id", "").strip()
                 expiry_ch = form.get("exp_expiry_channel_id", "").strip()
                 stream_url_v = form.get("exp_stream_url", "").strip()
+                moderation_en = "on" if form.get("exp_moderation_enabled") else "off"
                 await db.set_setting("exp_radio_post_channel_1_id", ch1)
                 await db.set_setting("exp_radio_post_channel_2_id", ch2)
                 await db.set_setting("exp_radio_expiry_channel_id", expiry_ch)
+                await db.set_setting("exp_radio_moderation_enabled", moderation_en)
                 if stream_url_v:
                     await db.set_setting("exp_radio_stream_url", stream_url_v)
                 await flash("Settings saved.", "success")
@@ -3433,6 +3505,7 @@ def create_app(db: Database, bot=None) -> Quart:
         exp_post_channel_2_id = await db.get_setting("exp_radio_post_channel_2_id") or ""
         exp_expiry_channel_id = await db.get_setting("exp_radio_expiry_channel_id") or ""
         exp_twitch_chat_enabled = await db.get_setting("exp_radio_twitch_chat_enabled") or "off"
+        exp_moderation_enabled  = await db.get_setting("exp_radio_moderation_enabled") or "off"
         exp_tw_client_id = await db.get_setting("exp_radio_twitch_client_id") or ""
         _exp_tw_secret   = await db.get_setting("exp_radio_twitch_client_secret") or ""
         _exp_tw_refresh  = await db.get_setting("exp_radio_twitch_refresh_token") or ""
@@ -3455,6 +3528,7 @@ def create_app(db: Database, bot=None) -> Quart:
             exp_post_channel_2_id=exp_post_channel_2_id,
             exp_expiry_channel_id=exp_expiry_channel_id,
             exp_twitch_chat_enabled=exp_twitch_chat_enabled,
+            exp_moderation_enabled=exp_moderation_enabled,
             exp_tw_client_id=exp_tw_client_id,
             exp_tw_secret_masked=exp_tw_secret_masked,
             exp_tw_refresh_masked=exp_tw_refresh_masked,

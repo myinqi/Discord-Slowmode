@@ -821,6 +821,52 @@ async def process_exp_song(db, song_id: int, exp_radio_dir: str, bot=None):
         )
         print(f"[exp-radio] Pipeline complete for #{song_id}", flush=True)
 
+        # 5) Optional LLM-based lyric moderation. Runs only when explicitly
+        #    enabled in the admin settings; otherwise the column stays NULL
+        #    and the stream playlist filter treats it as grandfathered/passed.
+        moderation_enabled = await db.get_setting("exp_radio_moderation_enabled") or "off"
+        if moderation_enabled == "on":
+            try:
+                from bot.exp_moderation import moderate_lyrics
+                from bot.llm import OllamaClient
+                from config import Config
+                client = OllamaClient(
+                    base_url=Config.OLLAMA_URL,
+                    model=Config.LLM_MODEL,
+                    timeout=Config.LLM_REQUEST_TIMEOUT,
+                )
+                print(f"[exp-radio] Moderation start for #{song_id}", flush=True)
+                verdict = await moderate_lyrics(
+                    client, lyrics=lyrics, title=title, artist=artist,
+                )
+                await db.update_exp_radio_song(
+                    song_id,
+                    moderation_status=verdict["status"],
+                    moderation_reason=verdict.get("reason") or "",
+                    moderation_at=time.time(),
+                )
+                print(
+                    f"[exp-radio] Moderation result for #{song_id}: "
+                    f"{verdict['status']} (translated={verdict.get('translated')})",
+                    flush=True,
+                )
+                if verdict["status"] == "flagged":
+                    await _notify_user(
+                        bot, song["user_id"],
+                        f"⚠️ **Experimental Radio** — your submission **{title}** "
+                        f"was flagged by automated lyric review and is pending "
+                        f"manual approval before it joins the stream playlist.\n"
+                        f"Reason: _{verdict.get('reason') or 'no reason given'}_",
+                    )
+            except Exception as e:
+                print(f"[exp-radio] Moderation pipeline error for #{song_id}: {e}", flush=True)
+                await db.update_exp_radio_song(
+                    song_id,
+                    moderation_status="pending",
+                    moderation_reason=f"Moderation error: {e!s}",
+                    moderation_at=time.time(),
+                )
+
     except Exception as e:
         print(f"[exp-radio] Pipeline error for #{song_id}: {e}", flush=True)
         await db.update_exp_radio_song(song_id, analysis_status="failed")

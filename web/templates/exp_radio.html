@@ -68,6 +68,21 @@
                     {% endfor %}
                 </select>
             </div>
+            <div class="pt-2 border-t border-gray-700/50 space-y-2">
+                <label class="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" name="exp_moderation_enabled"
+                        {% if exp_moderation_enabled == 'on' %}checked{% endif %}
+                        class="w-4 h-4 accent-discord-blurple">
+                    <span class="text-white text-sm">LLM Lyric Moderation</span>
+                </label>
+                <p class="text-gray-500 text-xs">
+                    After Whisper transcription, qwen2.5 checks the lyrics against the
+                    community rules (no hate speech, no explicit/illegal content).
+                    Songs flagged by the model are kept out of the auto-stream playlist
+                    until you manually approve them via the ✓ button on each song.
+                    Original lyrics + an automatic English translation are evaluated.
+                </p>
+            </div>
             <button type="submit"
                 class="w-full px-4 py-2 bg-discord-blurple hover:bg-discord-blurple-hover text-white rounded-lg text-sm font-medium transition-colors">
                 Save Settings
@@ -372,6 +387,15 @@
                                 {% if not song.active %}
                                 <span class="px-1.5 py-0.5 bg-gray-700 text-gray-400 text-xs rounded">Deleted</span>
                                 {% endif %}
+                                {% if song.moderation_status == 'passed' %}
+                                <span class="px-1.5 py-0.5 bg-green-900/40 text-green-300 text-xs rounded" title="LLM moderation: passed">✓ mod ok</span>
+                                {% elif song.moderation_status == 'approved' %}
+                                <span class="px-1.5 py-0.5 bg-emerald-900/40 text-emerald-300 text-xs rounded" title="Manually approved by admin">✓ approved</span>
+                                {% elif song.moderation_status == 'flagged' %}
+                                <span class="px-1.5 py-0.5 bg-red-900/50 text-red-300 text-xs rounded" title="Flagged by LLM moderation — needs manual approval">⚠ flagged</span>
+                                {% elif song.moderation_status == 'pending' %}
+                                <span class="px-1.5 py-0.5 bg-yellow-900/40 text-yellow-300 text-xs rounded" title="Moderation pending / needs manual review">⏳ mod pending</span>
+                                {% endif %}
                             </div>
                             <p class="text-gray-400 text-xs mt-0.5">{{ song.artist or '' }}</p>
                             <div class="flex items-center gap-3 mt-1.5 flex-wrap">
@@ -396,6 +420,13 @@
                                 <a href="{{ song.suno_url }}" target="_blank"
                                     class="text-discord-blurple hover:text-blue-400 text-xs transition-colors">Suno ↗</a>
                             </div>
+                            {% if song.moderation_reason and song.moderation_status in ('flagged', 'pending') %}
+                            <div class="mt-2 px-3 py-2 rounded text-xs
+                                {% if song.moderation_status == 'flagged' %}bg-red-900/30 text-red-200 border border-red-800/50{% else %}bg-yellow-900/30 text-yellow-200 border border-yellow-800/50{% endif %}">
+                                <span class="font-medium">LLM moderation:</span>
+                                {{ song.moderation_reason }}
+                            </div>
+                            {% endif %}
                             {% if song.lyrics %}
                             <details class="mt-2">
                                 <summary class="text-gray-500 text-xs cursor-pointer hover:text-gray-400 select-none">Show lyrics ({{ song.lyrics|length }} chars)</summary>
@@ -440,6 +471,29 @@
                                     ♪
                                 </button>
                             </form>
+                            {% if song.lyrics %}
+                            <form method="POST" class="inline">
+                                <input type="hidden" name="action" value="remoderate_one">
+                                <input type="hidden" name="song_id" value="{{ song.id }}">
+                                <button type="submit"
+                                    title="Re-run LLM lyric moderation for this song"
+                                    class="px-2.5 py-1.5 bg-sky-600/20 hover:bg-sky-600/40 text-sky-300 rounded-lg text-xs transition-colors">
+                                    🤖
+                                </button>
+                            </form>
+                            {% endif %}
+                            {% if song.moderation_status in ('flagged', 'pending') %}
+                            <form method="POST" class="inline"
+                                  onsubmit="return confirm('Manually approve this flagged song for the stream playlist?');">
+                                <input type="hidden" name="action" value="approve_moderation_one">
+                                <input type="hidden" name="song_id" value="{{ song.id }}">
+                                <button type="submit"
+                                    title="Approve flagged song for the stream playlist (overrides LLM verdict)"
+                                    class="px-2.5 py-1.5 bg-emerald-600/30 hover:bg-emerald-600/60 text-emerald-300 rounded-lg text-xs transition-colors">
+                                    ✓
+                                </button>
+                            </form>
+                            {% endif %}
                             <form method="POST" onsubmit="return confirm('Remove this song from Experimental Radio?')">
                                 <input type="hidden" name="action" value="delete_song">
                                 <input type="hidden" name="song_id" value="{{ song.id }}">

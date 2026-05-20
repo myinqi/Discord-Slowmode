@@ -126,7 +126,22 @@ class ExpStreamManager:
         if self.is_running:
             return {"ok": False, "error": "Stream already running."}
         songs = await self.db.get_all_exp_radio_songs(active_only=True)
-        ready = [s for s in songs if s.get("analysis_status") == "done" and s.get("mp3_filename")]
+        # A song is stream-eligible when:
+        #   - Whisper analysis completed and the MP3 exists, AND
+        #   - Moderation either was never run (NULL — grandfathered before the
+        #     moderation feature was enabled) or returned 'passed' / was
+        #     manually 'approved'. 'pending' and 'flagged' songs are held
+        #     back until an admin acts on them.
+        def _mod_ok(s: dict) -> bool:
+            ms = s.get("moderation_status")
+            return ms is None or ms in ("passed", "approved")
+
+        ready = [
+            s for s in songs
+            if s.get("analysis_status") == "done"
+            and s.get("mp3_filename")
+            and _mod_ok(s)
+        ]
         if not ready:
             return {"ok": False, "error": "No ready songs in the playlist."}
         self._twitch_key = twitch_key

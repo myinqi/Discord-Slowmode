@@ -461,6 +461,28 @@ class Database:
         except Exception:
             pass  # column already exists
 
+        # LLM-based lyric moderation columns (migration for existing installs).
+        # moderation_status:
+        #   NULL       — moderation was disabled when this song was processed
+        #                (grandfathered; treated as passed)
+        #   'pending'  — queued for moderation or LLM call failed/timed out
+        #                (excluded from auto-stream; admin must approve manually)
+        #   'passed'   — LLM cleared the lyrics
+        #   'flagged'  — LLM raised a concern (see moderation_reason)
+        #   'approved' — admin manually overrode a 'flagged' song
+        for col, definition in [
+            ("moderation_status", "TEXT"),
+            ("moderation_reason", "TEXT"),
+            ("moderation_at",     "REAL"),
+        ]:
+            try:
+                await self.db.execute(
+                    f"ALTER TABLE exp_radio_songs ADD COLUMN {col} {definition}"
+                )
+                await self.db.commit()
+            except Exception:
+                pass  # column already exists
+
         # Add DC-player filter columns (migration for existing installs)
         for col, definition in [
             ("dc_channel", "TEXT DEFAULT ''"),
@@ -2420,6 +2442,7 @@ class Database:
             "mp3_filename", "cover_url", "video_url", "title", "artist",
             "duration", "lyrics", "word_timestamps", "ass_filename",
             "analysis_status", "active",
+            "moderation_status", "moderation_reason", "moderation_at",
         }
         updates = {k: v for k, v in fields.items() if k in allowed}
         if not updates:
