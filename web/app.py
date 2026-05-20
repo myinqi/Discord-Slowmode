@@ -3564,6 +3564,33 @@ def create_app(db: Database, bot=None) -> Quart:
         from quart import jsonify
         return jsonify(await exp_stream_manager.get_status())
 
+    @app.route("/exp-radio/cover-preview/<int:song_id>")
+    @permission_required('exp_radio')
+    async def exp_radio_cover_preview(song_id):
+        """Serve the locally cached cover MP4 for admin preview.
+
+        Triggers an on-demand download (and normalization) via the stream
+        manager if the file hasn't been cached yet, so an admin can verify
+        what will actually be streamed without starting the full stream.
+        """
+        from quart import send_file, abort
+        s = await db.get_exp_radio_song(song_id)
+        if not s:
+            return abort(404)
+        uuid = s.get("suno_uuid") or ""
+        if not uuid:
+            return abort(404)
+        path = os.path.join(EXP_RADIO_DIR, "cover_cache", f"{uuid}.mp4")
+        if not os.path.exists(path):
+            # Lazily download + normalize through the stream manager so the
+            # preview matches what the stream pipeline will actually use.
+            if not s.get("video_url"):
+                return abort(404)
+            await exp_stream_manager._get_video(s)
+            if not os.path.exists(path):
+                return abort(404)
+        return await send_file(path, mimetype="video/mp4")
+
     @app.route("/exp-radio/stream/log")
     @permission_required('exp_radio')
     async def exp_radio_stream_log():

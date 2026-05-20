@@ -180,6 +180,28 @@
     </div>
 </div>
 
+<!-- Video preview modal -->
+<div id="exp-preview-modal"
+    class="fixed inset-0 z-50 hidden bg-black/80 flex items-center justify-center p-4"
+    onclick="if (event.target === this) expClosePreview()">
+    <div class="bg-discord-dark rounded-xl border border-gray-700 max-w-3xl w-full max-h-[90vh] overflow-hidden">
+        <div class="px-5 py-3 border-b border-gray-700 flex items-center justify-between">
+            <h3 id="exp-preview-title" class="text-white font-semibold text-sm truncate">Preview</h3>
+            <button onclick="expClosePreview()"
+                class="text-gray-400 hover:text-white text-xl leading-none">×</button>
+        </div>
+        <div class="p-4 bg-black flex items-center justify-center">
+            <video id="exp-preview-video" controls autoplay loop
+                class="max-w-full max-h-[70vh] rounded bg-black"></video>
+        </div>
+        <p class="px-5 py-2 text-gray-500 text-xs">
+            This is the locally cached &amp; normalized version that will be looped in the stream
+            (max 720×720, 24&nbsp;fps). If this is the first preview after submission, downloading
+            and re-encoding can take a few seconds.
+        </p>
+    </div>
+</div>
+
 {% with messages = get_flashed_messages(with_categories=true) %}
 {% for cat, msg in messages %}
 <div class="mb-4 px-4 py-3 rounded-lg text-sm {% if cat == 'success' %}bg-green-900/40 text-green-300 border border-green-700/50{% else %}bg-red-900/40 text-red-300 border border-red-700/50{% endif %}">
@@ -327,6 +349,14 @@
                             {% if song.cover_url %}
                             <img src="{{ song.cover_url }}" alt=""
                                 class="w-14 h-14 rounded-lg object-cover bg-gray-800">
+                            {% if song.video_url %}
+                            <button type="button"
+                                onclick="expPreviewVideo({{ song.id }}, {{ (song.title or '')|tojson }})"
+                                title="Preview the cached cover video"
+                                class="absolute inset-0 flex items-center justify-center rounded-lg bg-black/0 hover:bg-black/50 text-white/0 hover:text-white text-xl transition-all">
+                                ▶
+                            </button>
+                            {% endif %}
                             {% else %}
                             <div class="w-14 h-14 rounded-lg bg-gray-800 flex items-center justify-center text-2xl">🎵</div>
                             {% endif %}
@@ -476,6 +506,27 @@ async function updateExpStatus() {
         }
     } catch (_) {}
 }
+
+// ── Cover-video preview ────────────────────────────────────────────────────
+function expPreviewVideo(songId, title) {
+    const modal = document.getElementById('exp-preview-modal');
+    const video = document.getElementById('exp-preview-video');
+    const titleEl = document.getElementById('exp-preview-title');
+    titleEl.textContent = title ? `Preview: ${title}` : 'Preview';
+    video.src = `/exp-radio/cover-preview/${songId}`;
+    modal.classList.remove('hidden');
+}
+function expClosePreview() {
+    const modal = document.getElementById('exp-preview-modal');
+    const video = document.getElementById('exp-preview-video');
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+    modal.classList.add('hidden');
+}
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') expClosePreview();
+});
 
 // ── Live log panel ──────────────────────────────────────────────────────────
 let _expLogSinceTs = 0;
