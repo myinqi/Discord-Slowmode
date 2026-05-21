@@ -3167,6 +3167,37 @@ def create_app(db: Database, bot=None) -> Quart:
             except Exception as e:
                 print(f"[exp-radio] Cleanup error: {e}", flush=True)
 
+    async def _post_exp_stream_announcement(ch_id: str, stream_url: str) -> tuple[bool, str]:
+        """Send the “📺 Live Stream” embed to the given Discord channel id.
+
+        Returns (True, channel_name) on success, (False, error_message) on
+        failure. Called both from the manual “Post Stream Link” buttons on
+        the admin page and from the auto-start scheduler.
+        """
+        if not ch_id or not stream_url:
+            return False, "missing channel id or stream URL"
+        guild = get_guild()
+        if not guild:
+            return False, "Discord guild unavailable"
+        try:
+            ch_int = int(ch_id)
+        except Exception:
+            return False, f"invalid channel id {ch_id!r}"
+        channel = guild.get_channel(ch_int) or guild.get_thread(ch_int)
+        if not channel:
+            return False, f"channel {ch_id} not found"
+        try:
+            import discord
+            embed = discord.Embed(
+                title="\U0001F4FA Live Stream",
+                description=f"Watch the stream now!\n\n**[Tune in]({stream_url})**",
+                color=discord.Color.purple(),
+            )
+            await channel.send(embed=embed)
+            return True, channel.name
+        except Exception as e:
+            return False, f"send failed: {e}"
+
     async def _exp_radio_schedule_loop():
         """Auto-start the exp_radio stream on configured weekdays + time.
 
@@ -3234,6 +3265,31 @@ def create_app(db: Database, bot=None) -> Quart:
                                         f"Scheduler: started with {result.get('song_count')} song(s).",
                                         prefix="[exp-schedule]",
                                     )
+                                    # Auto-post stream URL to configured
+                                    # Discord channels (same embed as the
+                                    # manual “Post Stream Link” buttons).
+                                    stream_url = await db.get_setting("exp_radio_stream_url") or ""
+                                    if stream_url:
+                                        for slot in ("1", "2"):
+                                            ch_id = await db.get_setting(f"exp_radio_post_channel_{slot}_id") or ""
+                                            if not ch_id:
+                                                continue
+                                            ok, info = await _post_exp_stream_announcement(ch_id, stream_url)
+                                            if ok:
+                                                log_event(
+                                                    f"Scheduler: announced in #{info}.",
+                                                    prefix="[exp-schedule]",
+                                                )
+                                            else:
+                                                log_event(
+                                                    f"Scheduler: announcement to channel {ch_id} failed \u2014 {info}",
+                                                    level="error", prefix="[exp-schedule]",
+                                                )
+                                    else:
+                                        log_event(
+                                            "Scheduler: no stream URL configured \u2014 skipping Discord announcement.",
+                                            prefix="[exp-schedule]",
+                                        )
                                 else:
                                     log_event(
                                         f"Scheduler: start failed \u2014 {result.get('error')}",
@@ -3597,20 +3653,14 @@ def create_app(db: Database, bot=None) -> Quart:
             elif action == "post_exp_stream_url":
                 ch_id = form.get("post_channel_id_select", "")
                 exp_stream_url_v = await db.get_setting("exp_radio_stream_url") or ""
-                guild = get_guild()
-                if guild and ch_id and exp_stream_url_v:
-                    channel = guild.get_channel(int(ch_id)) or guild.get_thread(int(ch_id))
-                    if channel:
-                        import discord
-                        embed = discord.Embed(
-                            title="\U0001F4FA Live Stream",
-                            description=f"Watch the stream now!\n\n**[Tune in]({exp_stream_url_v})**",
-                            color=discord.Color.purple(),
-                        )
-                        await channel.send(embed=embed)
-                        await flash(f"Stream link posted to #{channel.name}.", "success")
-                elif not exp_stream_url_v:
+                if not exp_stream_url_v:
                     await flash("No stream URL configured. Open Settings to add one.", "danger")
+                else:
+                    ok, name_or_err = await _post_exp_stream_announcement(ch_id, exp_stream_url_v)
+                    if ok:
+                        await flash(f"Stream link posted to #{name_or_err}.", "success")
+                    else:
+                        await flash(f"Could not post: {name_or_err}", "danger")
 
             elif action == "upload_background":
                 bg_file = files.get("bg_file")
