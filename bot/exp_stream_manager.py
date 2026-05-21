@@ -50,7 +50,10 @@ def _cs_to_ts(cs: int) -> str:
 
 
 def _shift_ass_dialogue(content: str, offset_cs: int) -> list:
-    """Return Dialogue lines from ASS content shifted by offset_cs centiseconds."""
+    """Return Dialogue lines from ASS content shifted by offset_cs centiseconds.
+
+    Also strips emoji codepoints from the text payload — see _strip_emoji.
+    """
     out = []
     for line in content.splitlines():
         match = re.match(
@@ -60,7 +63,7 @@ def _shift_ass_dialogue(content: str, offset_cs: int) -> list:
         if match:
             start = _cs_to_ts(_ts_to_cs(match.group(2)) + offset_cs)
             end   = _cs_to_ts(_ts_to_cs(match.group(3)) + offset_cs)
-            out.append(f"{match.group(1)}{start},{end},{match.group(4)}")
+            out.append(f"{match.group(1)}{start},{end},{_strip_emoji(match.group(4))}")
     return out
 
 
@@ -69,6 +72,21 @@ def _shift_ass_dialogue(content: str, offset_cs: int) -> list:
 # entirely — anything else (warnings, errors, our own [exp-stream] messages)
 # is interesting and goes through.
 _FFMPEG_PROGRESS_RE = re.compile(r"^frame=\s*\d+.*time=")
+
+# Emoji codepoints have no glyph in any font we ship in the container, so
+# libass spams `fontselect: failed to find any fallback with glyph 0xXXXX`
+# once per rendered frame. We strip them before they reach the ASS file.
+# Range U+1F000–U+1FFFF covers all modern emoji (Misc Symbols/Pictographs,
+# Emoticons, Transport, Supplemental Symbols, etc.). U+FE0F is the
+# Variation-Selector-16 that follows many emoji — only meaningful with one,
+# so safe to drop too. We deliberately keep U+2600–U+27BF (♥ ♪ ✨…) since
+# those are used in our title cards and most fonts cover them.
+_EMOJI_STRIP_RE = re.compile("[\U0001F000-\U0001FFFF\uFE0F]")
+
+def _strip_emoji(text: str) -> str:
+    if not text:
+        return text
+    return _EMOJI_STRIP_RE.sub("", text)
 
 
 # ── Module-level Live Log ────────────────────────────────────────────────────
@@ -659,8 +677,8 @@ class ExpStreamManager:
             t_end   = _cs_to_ts(offset_cs + dur_cs)
 
             # NowPlaying card: top-left, full song duration, fades in/out
-            title  = (song.get("title")  or "Unknown").replace("\\", "\\\\").replace("{", "\\{")
-            artist = (song.get("artist") or "").replace("\\", "\\\\").replace("{", "\\{")
+            title  = _strip_emoji(song.get("title")  or "Unknown").replace("\\", "\\\\").replace("{", "\\{")
+            artist = _strip_emoji(song.get("artist") or "").replace("\\", "\\\\").replace("{", "\\{")
             label  = f"\\N{artist}" if artist else ""
             events.append(
                 f"Dialogue: 2,{t_start},{t_end},NowPlaying,,0,0,0,,"
