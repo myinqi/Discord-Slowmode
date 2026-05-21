@@ -322,10 +322,16 @@ class ExpStreamManager:
         titles = " → ".join(s.get("title") or "?" for s in songs)
         self._log(f"FFmpeg playlist: {titles}")
 
+        # limit=1 MiB: FFmpeg can occasionally emit very long progress/banner
+        # lines without an embedded \n (e.g. when a filter logs a giant
+        # parameter dump). The default StreamReader limit is 64 KiB which
+        # made readline() raise LimitOverrunError after ~5 minutes,
+        # killing our stderr reader.
         self._process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
+            limit=1024 * 1024,
         )
         chat_task   = asyncio.create_task(self._post_now_playing_loop(songs))
         stderr_task = asyncio.create_task(self._pipe_ffmpeg_stderr(self._process))
@@ -358,20 +364,44 @@ class ExpStreamManager:
         pass through."""
         if not proc.stderr:
             return
-        try:
-            while True:
+        while True:
+            try:
                 raw = await proc.stderr.readline()
-                if not raw:
-                    break
-                line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
-                if not line or _FFMPEG_PROGRESS_RE.match(line):
-                    continue
-                # Heuristic: anything containing 'error' or starting with
-                # '[<x>] @ ...' suggests a problem worth flagging.
-                level = "error" if ("error" in line.lower() or "failed" in line.lower()) else "ffmpeg"
-                self._log(line, level)
-        except Exception as e:
-            self._log(f"stderr reader exception: {e}", "error")
+            except (asyncio.LimitOverrunError, ValueError) as e:
+                # A single line exceeded the StreamReader buffer. Drain the
+                # over-long chunk in fixed-size reads so we can keep going
+                # instead of letting the reader die for the rest of the
+                # rotation. We log the event once and discard the payload.
+                self._log(
+                    f"stderr reader: dropping over-long line ({type(e).__name__})",
+                    "error",
+                )
+                try:
+                    # Read whatever is currently buffered + a bit more, until
+                    # we hit the next newline. asyncio's readuntil gives no
+                    # easy way to do this once it has raised, so we fall back
+                    # to chunked .read() until '\n'.
+                    while True:
+                        chunk = await proc.stderr.read(64 * 1024)
+                        if not chunk:
+                            return
+                        if b"\n" in chunk:
+                            break
+                except Exception:
+                    return
+                continue
+            except Exception as e:
+                self._log(f"stderr reader exception: {e}", "error")
+                return
+            if not raw:
+                return
+            line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+            if not line or _FFMPEG_PROGRESS_RE.match(line):
+                continue
+            # Heuristic: anything containing 'error' or starting with
+            # '[<x>] @ ...' suggests a problem worth flagging.
+            level = "error" if ("error" in line.lower() or "failed" in line.lower()) else "ffmpeg"
+            self._log(line, level)
 
     async def _announce_rotation_end(self, total_dur: float):
         """Post a heads-up to Twitch chat ~30s before the rotation ends.
