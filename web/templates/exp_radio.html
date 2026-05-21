@@ -109,6 +109,43 @@
                     </span>
                 </label>
             </div>
+            <div class="pt-2 border-t border-gray-700/50 space-y-2">
+                <label class="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" name="exp_schedule_enabled"
+                        {% if exp_schedule_enabled == 'on' %}checked{% endif %}
+                        class="w-4 h-4 accent-discord-blurple">
+                    <span class="text-white text-sm font-medium">Auto-start schedule</span>
+                </label>
+                <p class="text-gray-500 text-xs">
+                    Automatically starts the stream on the selected weekdays
+                    at the time below (server local time). Each scheduled
+                    start clears the cover cache and rebuilds audio/ASS from
+                    scratch. The stream ends according to the
+                    <em>“When the playlist ends”</em> setting above. If a
+                    stream is already running at trigger time, the
+                    auto-start is skipped.
+                </p>
+                <div class="grid grid-cols-7 gap-1 text-center text-xs">
+                    {% for label, idx in [('Mon',0),('Tue',1),('Wed',2),('Thu',3),('Fri',4),('Sat',5),('Sun',6)] %}
+                    <label class="cursor-pointer select-none">
+                        <input type="checkbox" name="exp_schedule_day_{{ idx }}"
+                            class="peer sr-only"
+                            {% if (idx|string) in exp_schedule_days_set %}checked{% endif %}>
+                        <span class="block px-1 py-1.5 rounded bg-gray-800 text-gray-400
+                                     peer-checked:bg-discord-blurple peer-checked:text-white
+                                     hover:bg-gray-700 transition-colors">
+                            {{ label }}
+                        </span>
+                    </label>
+                    {% endfor %}
+                </div>
+                <div class="flex items-center gap-2">
+                    <label class="text-gray-400 text-xs">Start time:</label>
+                    <input type="time" name="exp_schedule_time"
+                           value="{{ exp_schedule_time }}"
+                           class="px-2 py-1 bg-gray-800 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-discord-blurple">
+                </div>
+            </div>
             <button type="submit"
                 class="w-full px-4 py-2 bg-discord-blurple hover:bg-discord-blurple-hover text-white rounded-lg text-sm font-medium transition-colors">
                 Save Settings

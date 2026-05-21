@@ -3167,10 +3167,92 @@ def create_app(db: Database, bot=None) -> Quart:
             except Exception as e:
                 print(f"[exp-radio] Cleanup error: {e}", flush=True)
 
+    async def _exp_radio_schedule_loop():
+        """Auto-start the exp_radio stream on configured weekdays + time.
+
+        Wakes every 30s, checks (now.weekday, now.hour:minute) against the
+        admin-saved schedule. Starts the stream with `fresh_cache=True` so a
+        scheduled session always begins with a freshly downloaded cover
+        cache and rebuilt audio/ASS intermediates. We track the last fired
+        unix-minute on `app.exp_schedule_last_fired` to avoid double-firing
+        within the same minute.
+        """
+        from bot.exp_stream_manager import log_event
+        from datetime import datetime
+        app.exp_schedule_last_fired = 0
+        while True:
+            try:
+                enabled = await db.get_setting("exp_radio_schedule_enabled") or "off"
+                if enabled != "on":
+                    await asyncio.sleep(30)
+                    continue
+                days_csv = await db.get_setting("exp_radio_schedule_days") or ""
+                days = {int(d) for d in days_csv.split(",") if d.strip().isdigit()}
+                hhmm = (await db.get_setting("exp_radio_schedule_time") or "").strip()
+                if not days or not hhmm or ":" not in hhmm:
+                    await asyncio.sleep(30)
+                    continue
+                try:
+                    h_str, m_str = hhmm.split(":", 1)
+                    target_h, target_m = int(h_str), int(m_str)
+                except Exception:
+                    await asyncio.sleep(30)
+                    continue
+                now = datetime.now()  # server-local time
+                cur_min_key = int(now.timestamp() // 60)
+                # Match: today's weekday is in the set AND hh:mm matches AND
+                # we haven't fired in this exact minute yet.
+                if (now.weekday() in days
+                        and now.hour == target_h
+                        and now.minute == target_m
+                        and cur_min_key != app.exp_schedule_last_fired):
+                    app.exp_schedule_last_fired = cur_min_key
+                    if exp_stream_manager.is_running:
+                        log_event(
+                            "Scheduler: stream already running \u2014 skipping auto-start.",
+                            prefix="[exp-schedule]",
+                        )
+                    else:
+                        twitch_key = await db.get_setting("exp_radio_twitch_key") or ""
+                        if not twitch_key:
+                            log_event(
+                                "Scheduler: no Twitch stream key configured \u2014 cannot auto-start.",
+                                level="error", prefix="[exp-schedule]",
+                            )
+                        else:
+                            log_event(
+                                f"Scheduler: triggering auto-start (weekday={now.weekday()}, "
+                                f"time={now.strftime('%H:%M')}) with fresh cache.",
+                                prefix="[exp-schedule]",
+                            )
+                            try:
+                                result = await exp_stream_manager.start(
+                                    twitch_key, fresh_cache=True,
+                                )
+                                if result.get("ok"):
+                                    log_event(
+                                        f"Scheduler: started with {result.get('song_count')} song(s).",
+                                        prefix="[exp-schedule]",
+                                    )
+                                else:
+                                    log_event(
+                                        f"Scheduler: start failed \u2014 {result.get('error')}",
+                                        level="error", prefix="[exp-schedule]",
+                                    )
+                            except Exception as e:
+                                log_event(
+                                    f"Scheduler: start exception: {e}",
+                                    level="error", prefix="[exp-schedule]",
+                                )
+            except Exception as e:
+                print(f"[exp-radio] Scheduler loop error: {e}", flush=True)
+            await asyncio.sleep(30)
+
     @app.before_serving
     async def start_cleanup_task():
         app.radio_cleanup_task = asyncio.create_task(_radio_cleanup_loop())
         app.exp_radio_cleanup_task = asyncio.create_task(_exp_radio_cleanup_loop())
+        app.exp_radio_schedule_task = asyncio.create_task(_exp_radio_schedule_loop())
 
     # ── Experimental Radio ─────────────────────────────────────────────────────
 
@@ -3467,11 +3549,25 @@ def create_app(db: Database, bot=None) -> Quart:
                 loop_mode_v = form.get("exp_loop_mode", "reshuffle").strip()
                 if loop_mode_v not in ("stop", "reshuffle"):
                     loop_mode_v = "reshuffle"
+                # Auto-start scheduler
+                sched_en = "on" if form.get("exp_schedule_enabled") else "off"
+                # Day checkboxes named exp_schedule_day_0..6 (Mon=0 .. Sun=6)
+                sched_days = ",".join(
+                    str(i) for i in range(7) if form.get(f"exp_schedule_day_{i}")
+                )
+                sched_time = (form.get("exp_schedule_time") or "").strip()
+                # Validate HH:MM
+                import re as _re
+                if not _re.match(r"^\d{1,2}:\d{2}$", sched_time):
+                    sched_time = ""
                 await db.set_setting("exp_radio_post_channel_1_id", ch1)
                 await db.set_setting("exp_radio_post_channel_2_id", ch2)
                 await db.set_setting("exp_radio_expiry_channel_id", expiry_ch)
                 await db.set_setting("exp_radio_moderation_enabled", moderation_en)
                 await db.set_setting("exp_radio_loop_mode", loop_mode_v)
+                await db.set_setting("exp_radio_schedule_enabled", sched_en)
+                await db.set_setting("exp_radio_schedule_days", sched_days)
+                await db.set_setting("exp_radio_schedule_time", sched_time)
                 if stream_url_v:
                     await db.set_setting("exp_radio_stream_url", stream_url_v)
                 await flash("Settings saved.", "success")
@@ -3597,6 +3693,10 @@ def create_app(db: Database, bot=None) -> Quart:
         exp_twitch_chat_enabled = await db.get_setting("exp_radio_twitch_chat_enabled") or "off"
         exp_moderation_enabled  = await db.get_setting("exp_radio_moderation_enabled") or "off"
         exp_loop_mode           = await db.get_setting("exp_radio_loop_mode") or "reshuffle"
+        exp_schedule_enabled    = await db.get_setting("exp_radio_schedule_enabled") or "off"
+        exp_schedule_days       = await db.get_setting("exp_radio_schedule_days") or ""
+        exp_schedule_time       = await db.get_setting("exp_radio_schedule_time") or ""
+        exp_schedule_days_set   = set(d for d in exp_schedule_days.split(",") if d)
         exp_tw_client_id = await db.get_setting("exp_radio_twitch_client_id") or ""
         _exp_tw_secret   = await db.get_setting("exp_radio_twitch_client_secret") or ""
         _exp_tw_refresh  = await db.get_setting("exp_radio_twitch_refresh_token") or ""
@@ -3621,6 +3721,9 @@ def create_app(db: Database, bot=None) -> Quart:
             exp_twitch_chat_enabled=exp_twitch_chat_enabled,
             exp_moderation_enabled=exp_moderation_enabled,
             exp_loop_mode=exp_loop_mode,
+            exp_schedule_enabled=exp_schedule_enabled,
+            exp_schedule_time=exp_schedule_time,
+            exp_schedule_days_set=exp_schedule_days_set,
             exp_tw_client_id=exp_tw_client_id,
             exp_tw_secret_masked=exp_tw_secret_masked,
             exp_tw_refresh_masked=exp_tw_refresh_masked,

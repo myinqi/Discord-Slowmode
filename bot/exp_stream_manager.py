@@ -156,9 +156,28 @@ class ExpStreamManager:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    async def start(self, twitch_key: str) -> dict:
+    async def start(self, twitch_key: str, fresh_cache: bool = False) -> dict:
         if self.is_running:
             return {"ok": False, "error": "Stream already running."}
+        if fresh_cache:
+            # Scheduled / forced fresh starts: wipe the per-stream cache so
+            # covers are re-downloaded (any cover_url changes upstream are
+            # picked up) and the audio concat / combined ASS are rebuilt
+            # from scratch. The mp3/ and ass/ directories produced by Whisper
+            # are NOT touched — those are expensive and source-of-truth.
+            import shutil
+            try:
+                cover_cache = os.path.join(self.exp_radio_dir, "cover_cache")
+                if os.path.isdir(cover_cache):
+                    shutil.rmtree(cover_cache, ignore_errors=True)
+                for fn in ("_audio_concat.txt", "_combined.ass"):
+                    p = os.path.join(self.exp_radio_dir, fn)
+                    if os.path.exists(p):
+                        try: os.remove(p)
+                        except Exception: pass
+                self._log("Fresh-cache start: cover cache and intermediates cleared.")
+            except Exception as e:
+                self._log(f"Fresh-cache cleanup error: {e}", "error")
         songs = await self.db.get_all_exp_radio_songs(active_only=True)
         # A song is stream-eligible when:
         #   - Whisper analysis completed and the MP3 exists, AND
