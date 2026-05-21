@@ -164,6 +164,7 @@ async def moderate_lyrics(
     lyrics: str,
     title: str = "",
     artist: str = "",
+    timeout: int | None = None,
 ) -> dict[str, Any]:
     """Run the LLM moderation pipeline against a song's lyrics.
 
@@ -210,6 +211,7 @@ async def moderate_lyrics(
         {"role": "user",   "content": user_msg},
     ]
 
+    call_timeout = timeout if timeout is not None else _LLM_TIMEOUT_SECS
     try:
         resp = await asyncio.wait_for(
             client.chat(
@@ -218,12 +220,12 @@ async def moderate_lyrics(
                 temperature=0.1, top_p=0.9, repeat_penalty=1.05,
                 max_tokens=300,
             ),
-            timeout=_LLM_TIMEOUT_SECS,
+            timeout=call_timeout,
         )
     except asyncio.TimeoutError:
         return {
             "status": "pending",
-            "reason": f"LLM moderation timed out after {_LLM_TIMEOUT_SECS}s — manual review required.",
+            "reason": f"LLM moderation timed out after {call_timeout}s — manual review required.",
             "categories": [], "raw": "", "translated": translated_flag,
         }
     except Exception as e:

@@ -130,13 +130,17 @@ async def screen_posted_song(
             return
 
         try:
+            # Channel moderation is background fire-and-forget; allow a
+            # generous timeout so slower CPUs can finish evaluating.
+            _CHMOD_LLM_TIMEOUT = 600
             client = OllamaClient(
                 base_url=Config.OLLAMA_URL,
                 model=Config.LLM_MODEL,
-                timeout=Config.LLM_REQUEST_TIMEOUT,
+                timeout=_CHMOD_LLM_TIMEOUT,
             )
             verdict = await moderate_lyrics(
                 client, lyrics=lyrics, title=title, artist=artist,
+                timeout=_CHMOD_LLM_TIMEOUT,
             )
         except Exception as e:
             print(f"{log_prefix} LLM error for {uuid}: {e}", flush=True)
