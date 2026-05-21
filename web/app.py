@@ -3263,6 +3263,58 @@ def create_app(db: Database, bot=None) -> Quart:
                         "success" if ok else "error",
                     )
 
+            elif action == "renormalize_cover_all":
+                from bot.exp_stream_manager import log_event
+                songs_all = await db.get_all_exp_radio_songs(active_only=True)
+                log_event(
+                    f"Bulk cover normalize started for {len(songs_all)} song(s)\u2026",
+                    prefix="[cover]",
+                )
+                # Run in the background so the HTTP request returns immediately
+                # (each individual normalization spawns ffprobe + ffmpeg and
+                # would otherwise block the request for tens of seconds).
+                async def _bulk_renorm(songs):
+                    ok_n = fail_n = skip_n = 0
+                    for s in songs:
+                        title = s.get("title") or s.get("id")
+                        try:
+                            ok, msg = await exp_stream_manager.renormalize_cover(s)
+                        except Exception as e:
+                            log_event(
+                                f"  #{s.get('id')} ({title!r}) error: {e}",
+                                level="error", prefix="[cover]",
+                            )
+                            fail_n += 1
+                            continue
+                        if ok:
+                            log_event(
+                                f"  #{s.get('id')} ({title!r}): {msg}",
+                                prefix="[cover]",
+                            )
+                            ok_n += 1
+                        else:
+                            # 'No usable cover URL' / 'failed' — distinguish
+                            level = "error" if "fail" in msg.lower() else "info"
+                            log_event(
+                                f"  #{s.get('id')} ({title!r}): {msg}",
+                                level=level, prefix="[cover]",
+                            )
+                            if level == "error":
+                                fail_n += 1
+                            else:
+                                skip_n += 1
+                    log_event(
+                        f"Bulk cover normalize done: {ok_n} ok, {fail_n} failed, "
+                        f"{skip_n} skipped (no cached cover).",
+                        prefix="[cover]",
+                    )
+                asyncio.create_task(_bulk_renorm(songs_all))
+                await flash(
+                    f"Queued cover normalization for {len(songs_all)} song(s) \u2014 "
+                    "watch the Live Log for progress.",
+                    "success",
+                )
+
             elif action == "approve_moderation_one":
                 sid = int(form.get("song_id", "0") or 0)
                 s = await db.get_exp_radio_song(sid) if sid else None

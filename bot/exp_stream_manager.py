@@ -416,6 +416,11 @@ class ExpStreamManager:
         os.makedirs(cache_dir, exist_ok=True)
         dest = os.path.join(cache_dir, f"{uuid}.jpg")
         if os.path.exists(dest):
+            # Idempotent re-check: covers downloaded before the normaliser
+            # existed (or by some other code path) may still be 2000×2000
+            # mjpeg, which murders FFmpeg performance when looped 25× per
+            # song. The normaliser early-returns if size is already ≤720.
+            await self._normalize_cover_image(dest)
             return dest
         url = song.get("cover_url") or f"https://cdn1.suno.ai/image_large_{uuid}.jpeg"
         try:
@@ -424,6 +429,7 @@ class ExpStreamManager:
                     if r.status == 200:
                         with open(dest, "wb") as f:
                             f.write(await r.read())
+                        await self._normalize_cover_image(dest)
                         return dest
         except Exception as e:
             self._log(f"Cover download error ({uuid}): {e}", "error")
@@ -440,6 +446,11 @@ class ExpStreamManager:
         os.makedirs(cache_dir, exist_ok=True)
         dest = os.path.join(cache_dir, f"{uuid}.mp4")
         if os.path.exists(dest):
+            # Idempotent re-check: files cached before the normaliser was
+            # introduced (or in a previous, looser version of it) may still
+            # exceed 720px on a side. The check is ffprobe-cheap and
+            # early-returns when the file is already compliant.
+            await self._normalize_cover_video(dest)
             return dest
         try:
             async with aiohttp.ClientSession(headers={"User-Agent": _BROWSER_UA}) as sess:
@@ -525,6 +536,66 @@ class ExpStreamManager:
         self._log(f"Cover normalized ({w}x{h} → ≤720): {os.path.basename(path)}")
         return True
 
+    async def _normalize_cover_image(self, path: str) -> bool:
+        """Re-encode an over-sized cover JPG/PNG to a stream-friendly form.
+
+        Suno covers ship at up to 2194×2194 yuvj444p mjpeg (~6–10 MB). The
+        playlist FFmpeg loops each cover ≈25× per song through scale+crop+fps;
+        decoding a multi-MB 4:4:4 JPEG that often causes audible audio/video
+        stutter at every loop boundary. We trim every cover to a uniform,
+        lightweight baseline:
+
+          - Max 720x720 (Lanczos downscale, preserves aspect)
+          - yuvj420p (matches the rest of the pipeline; libx264-friendly)
+          - JPEG q=4 (≈visually lossless thumbnail size, ~50–150 KB)
+
+        Returns True on success. Files already ≤720 on both sides are skipped
+        (idempotent). Files that don't exist or fail probing are no-ops.
+        """
+        if not path or not os.path.exists(path):
+            return False
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ffprobe", "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=width,height",
+                "-of", "csv=p=0", path,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            out, _ = await proc.communicate()
+            parts = (out.decode().strip() or "").split(",")
+            w = int(parts[0]) if len(parts) > 0 and parts[0] else 0
+            h = int(parts[1]) if len(parts) > 1 and parts[1] else 0
+        except Exception as e:
+            self._log(f"Cover image probe failed ({path}): {e}", "error")
+            return False
+        if w and h and max(w, h) <= 720:
+            return True
+        tmp = path + ".norm.jpg"
+        cmd = [
+            "ffmpeg", "-y", "-i", path,
+            "-vf", "scale=720:720:force_original_aspect_ratio=decrease:force_divisible_by=2,format=yuvj420p",
+            "-q:v", "4",
+            tmp,
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+        )
+        _, err = await proc.communicate()
+        if proc.returncode != 0:
+            err_tail = (err or b"")[-400:].decode("utf-8", errors="replace")
+            self._log(f"Cover image normalize failed ({path}): {err_tail}", "error")
+            try: os.remove(tmp)
+            except Exception: pass
+            return False
+        try:
+            os.replace(tmp, path)
+        except Exception as e:
+            self._log(f"Cover image normalize replace failed ({path}): {e}", "error")
+            return False
+        self._log(f"Cover image normalized ({w}x{h} → ≤720): {os.path.basename(path)}")
+        return True
+
     async def renormalize_cover(self, song: dict) -> tuple[bool, str]:
         """Manual entry point for the per-song UI button.
 
@@ -535,16 +606,21 @@ class ExpStreamManager:
         if not uuid:
             return False, "Song has no suno_uuid."
         cache_dir = os.path.join(self.exp_radio_dir, "cover_cache")
-        dest = os.path.join(cache_dir, f"{uuid}.mp4")
-        if os.path.exists(dest):
-            ok = await self._normalize_cover_video(dest)
-            return ok, ("Cover normalized." if ok
-                        else "Normalization failed — see logs.")
+        mp4 = os.path.join(cache_dir, f"{uuid}.mp4")
+        jpg = os.path.join(cache_dir, f"{uuid}.jpg")
+        if os.path.exists(mp4):
+            ok = await self._normalize_cover_video(mp4)
+            return ok, ("Cover video normalized." if ok
+                        else "Video normalization failed — see logs.")
+        if os.path.exists(jpg):
+            ok = await self._normalize_cover_image(jpg)
+            return ok, ("Cover image normalized." if ok
+                        else "Image normalization failed — see logs.")
         # No cached file — try a fresh download (also normalizes)
-        path = await self._get_video(song)
+        path = await self._get_video(song) or await self._get_cover(song)
         if path:
             return True, "Cover downloaded and normalized."
-        return False, "No video_url available or download failed."
+        return False, "No usable cover URL available."
 
     # ── Combined ASS builder ───────────────────────────────────────────────────
 

@@ -366,6 +366,15 @@
                             ⟳ Re-analyze Whisper
                         </button>
                     </form>
+                    <form method="POST" class="inline"
+                          onsubmit="return confirm('Re-normalize covers for all active songs?\n\nDownscales any oversized cached covers (JPG or MP4) to ≤720×720, yuv(j)420p, ~24 fps. Runs in the background — watch the Live Log for progress.');">
+                        <input type="hidden" name="action" value="renormalize_cover_all">
+                        <button type="submit"
+                                class="px-2.5 py-1 bg-amber-600/20 hover:bg-amber-600/40 text-amber-300 rounded transition-colors"
+                                title="Re-normalize all cached covers (JPG + MP4) to a stream-friendly baseline. Helps with stutter on FFmpeg loop boundaries.">
+                            ⟳ Normalize Covers
+                        </button>
+                    </form>
                     <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-green-500 inline-block"></span> Done</span>
                     <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-yellow-500 inline-block"></span> Processing</span>
                     <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-gray-500 inline-block"></span> Pending</span>
