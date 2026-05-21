@@ -19,6 +19,10 @@ services:
       # volume so the ~1.5 GB large-v3-turbo model is not re-downloaded on
       # every `docker compose up --build`.
       - HF_HOME=/app/data/hf_cache
+      # Local timezone so the exp_radio auto-start scheduler matches the
+      # clock time entered in the admin UI. Without this the container
+      # defaults to UTC and would fire ~2 hours late (or 1h during winter).
+      - TZ=Europe/Berlin
     depends_on:
       - ollama
 
