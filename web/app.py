@@ -70,6 +70,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('polls', 'Polls'),
         ('radio', 'Twitch Radio'),
         ('exp_radio', 'Experimental Radio'),
+        ('channel_moderation', 'Channel Moderation'),
         ('suno_analyzer', 'Suno Analyzer'),
         ('suno_promotion', 'Suno Promotion'),
         ('suno_info', 'Suno Info'),
@@ -679,6 +680,71 @@ def create_app(db: Database, bot=None) -> Quart:
             page=page,
             total_pages=total_pages,
             total=total,
+        )
+
+    # --- Channel Moderation ---
+
+    @app.route("/channel-moderation", methods=["GET", "POST"])
+    @permission_required('channel_moderation')
+    async def channel_moderation():
+        if request.method == "POST":
+            form = await request.form
+            action = form.get("action", "")
+            if action == "save_settings":
+                enabled = "on" if form.get("enabled") else "off"
+                report_ch = (form.get("report_channel_id") or "").strip()
+                await db.set_setting("channel_moderation_enabled", enabled)
+                await db.set_setting("channel_moderation_report_channel", report_ch)
+                await flash("Channel moderation settings saved.", "success")
+            elif action == "clear_log":
+                await db.db.execute("DELETE FROM channel_moderation_log")
+                await db.db.commit()
+                await flash("Moderation log cleared.", "success")
+            return redirect(url_for("channel_moderation"))
+
+        enabled = await db.get_setting("channel_moderation_enabled") or "off"
+        report_ch_id = await db.get_setting("channel_moderation_report_channel") or ""
+        verdict_filter = (request.args.get("verdict") or "").strip().lower()
+        if verdict_filter not in ("flagged", "passed", "pending", "skipped", "error"):
+            verdict_filter = ""
+        log_rows = await db.get_channel_moderation_log(
+            limit=200, verdict=verdict_filter or None,
+        )
+        from datetime import datetime as _dt
+        for r in log_rows:
+            try:
+                r["created_pretty"] = _dt.fromtimestamp(float(r["created_at"])).strftime("%d.%m. %H:%M")
+            except Exception:
+                r["created_pretty"] = ""
+
+        # Channel pickers: monitored channels (source list, read-only display)
+        # + all text channels for the report-channel dropdown.
+        monitored = await db.get_monitored_channels()
+        guild = get_guild()
+        text_channels = []
+        monitored_resolved = []
+        if guild:
+            import discord as _discord
+            for ch in guild.channels:
+                if isinstance(ch, _discord.TextChannel):
+                    text_channels.append({"id": ch.id, "name": ch.name})
+            text_channels.sort(key=lambda c: c["name"].lower())
+            for m in monitored:
+                ch = guild.get_channel(m["channel_id"])
+                monitored_resolved.append({
+                    "id": m["channel_id"],
+                    "name": ch.name if ch else m.get("channel_name") or str(m["channel_id"]),
+                    "enabled": bool(m.get("enabled")),
+                })
+
+        return await render_template(
+            "channel_moderation.html",
+            enabled=enabled,
+            report_ch_id=report_ch_id,
+            log_rows=log_rows,
+            verdict_filter=verdict_filter,
+            text_channels=text_channels,
+            monitored=monitored_resolved,
         )
 
     # --- LLM / Corax chat ---

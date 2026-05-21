@@ -51,6 +51,30 @@ class SlowmodeCog(commands.Cog):
                 except Exception:
                     pass
 
+            # ── LLM-based lyric moderation (new admin-tab feature) ───────
+            # Fire-and-forget per URL. The screener internally:
+            #   - dedups against the (message_id, url) history,
+            #   - rate-limits via a Semaphore,
+            #   - silently no-ops if moderation is globally disabled,
+            #   - posts to the configured report channel only on 'flagged'.
+            try:
+                moderation_enabled = await db.get_setting("channel_moderation_enabled") or "off"
+                if moderation_enabled == "on":
+                    from bot.channel_moderation import dispatch as _chmod_dispatch
+                    for url in suno_urls:
+                        _chmod_dispatch(
+                            self.bot,
+                            message_id=message.id,
+                            channel_id=message.channel.id,
+                            channel_name=message.channel.name,
+                            user_id=message.author.id,
+                            user_name=str(message.author),
+                            suno_url=url,
+                            jump_url=message.jump_url,
+                        )
+            except Exception as e:
+                print(f"[chmod] dispatch error: {e}", flush=True)
+
         cooldown_minutes = channel_config["cooldown_minutes"]
         if cooldown_minutes <= 0:
             return

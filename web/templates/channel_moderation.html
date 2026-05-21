@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block title %}Channel Moderation{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+    <h2 class="text-2xl font-bold text-white">🛡️ Channel Moderation</h2>
+</div>
+
+<div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+
+    <!-- ── Left: Settings ───────────────────────────────────────────── -->
+    <div class="xl:col-span-1 space-y-6">
+
+        <div class="bg-discord-dark border border-gray-700/50 rounded-xl overflow-hidden">
+            <div class="px-5 py-3 border-b border-gray-700/50">
+                <h3 class="text-white font-semibold">Settings</h3>
+            </div>
+            <form method="POST" class="p-5 space-y-4">
+                <input type="hidden" name="action" value="save_settings">
+
+                <label class="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" name="enabled"
+                        {% if enabled == 'on' %}checked{% endif %}
+                        class="w-4 h-4 accent-discord-blurple">
+                    <span class="text-white text-sm font-medium">Enable channel moderation</span>
+                </label>
+                <p class="text-gray-500 text-xs">
+                    When enabled, every Suno URL posted in a monitored channel
+                    (see the <a href="{{ url_for('channels') }}" class="text-discord-blurple hover:underline">Channels</a> tab)
+                    is silently screened by the LLM. Lyrics are scraped directly
+                    from the Suno page — no Whisper is run. A flagged song
+                    triggers a single embed in the report channel below; passed
+                    / skipped / errored verdicts are only recorded in the
+                    history table.
+                </p>
+
+                <div class="space-y-2">
+                    <label class="block text-gray-400 text-xs">Report channel</label>
+                    <select name="report_channel_id"
+                        class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                        <option value="">— none —</option>
+                        {% for ch in text_channels %}
+                        <option value="{{ ch.id }}" {% if ch.id|string == report_ch_id %}selected{% endif %}>#{{ ch.name }}</option>
+                        {% endfor %}
+                    </select>
+                    <p class="text-gray-500 text-xs">
+                        Where the bot posts <em>“⚠️ Possibly rule-violating
+                        song”</em> notices. Leave empty to disable Discord
+                        notifications (history is still recorded).
+                    </p>
+                </div>
+
+                <button type="submit"
+                    class="w-full px-4 py-2 bg-discord-blurple hover:bg-discord-blurple-hover text-white rounded-lg text-sm font-medium transition-colors">
+                    Save Settings
+                </button>
+            </form>
+        </div>
+
+        <div class="bg-discord-dark border border-gray-700/50 rounded-xl overflow-hidden">
+            <div class="px-5 py-3 border-b border-gray-700/50">
+                <h3 class="text-white font-semibold">Monitored source channels</h3>
+            </div>
+            <div class="p-5 text-xs">
+                {% if monitored %}
+                <ul class="space-y-1">
+                    {% for m in monitored %}
+                    <li class="flex items-center justify-between">
+                        <span class="text-gray-300">#{{ m.name }}</span>
+                        <span class="text-gray-500">
+                            {% if m.enabled %}enabled{% else %}<span class="text-yellow-400">disabled in Channels tab</span>{% endif %}
+                        </span>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p class="text-gray-500">No monitored channels yet. Add some on the
+                <a href="{{ url_for('channels') }}" class="text-discord-blurple hover:underline">Channels</a> page.</p>
+                {% endif %}
+            </div>
+        </div>
+
+    </div>
+
+    <!-- ── Right: History ──────────────────────────────────────────── -->
+    <div class="xl:col-span-2 bg-discord-dark border border-gray-700/50 rounded-xl overflow-hidden">
+        <div class="px-5 py-3 border-b border-gray-700/50 flex items-center justify-between gap-3 flex-wrap">
+            <h3 class="text-white font-semibold">Recent verdicts</h3>
+            <div class="flex items-center gap-2 text-xs">
+                {% set chips = [('', 'All'), ('flagged', 'Flagged'), ('passed', 'Passed'), ('pending', 'Pending'), ('skipped', 'Skipped'), ('error', 'Errors')] %}
+                {% for val, lbl in chips %}
+                <a href="{{ url_for('channel_moderation', verdict=val) if val else url_for('channel_moderation') }}"
+                   class="px-2 py-1 rounded {% if verdict_filter == val %}bg-discord-blurple text-white{% else %}bg-gray-700/40 text-gray-300 hover:bg-gray-700{% endif %}">
+                    {{ lbl }}
+                </a>
+                {% endfor %}
+                <form method="POST" class="inline" onsubmit="return confirm('Clear the entire moderation log? This cannot be undone.');">
+                    <input type="hidden" name="action" value="clear_log">
+                    <button type="submit"
+                        class="px-2 py-1 rounded bg-red-700/30 hover:bg-red-700/60 text-red-200">Clear log</button>
+                </form>
+            </div>
+        </div>
+
+        {% if log_rows %}
+        <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead class="text-xs text-gray-400 bg-gray-800/40">
+                <tr>
+                    <th class="text-left px-3 py-2">When</th>
+                    <th class="text-left px-3 py-2">Verdict</th>
+                    <th class="text-left px-3 py-2">Song</th>
+                    <th class="text-left px-3 py-2">Posted by</th>
+                    <th class="text-left px-3 py-2">Channel</th>
+                    <th class="text-left px-3 py-2">Reason</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-700/40">
+                {% for r in log_rows %}
+                {% set colour = {
+                    'flagged': 'text-red-300 bg-red-900/30',
+                    'passed':  'text-green-300 bg-green-900/30',
+                    'pending': 'text-yellow-300 bg-yellow-900/30',
+                    'skipped': 'text-gray-400 bg-gray-800/40',
+                    'error':   'text-orange-300 bg-orange-900/30'
+                }.get(r.verdict, 'text-gray-300 bg-gray-800/40') %}
+                <tr class="hover:bg-gray-800/30">
+                    <td class="px-3 py-2 text-gray-400 text-xs whitespace-nowrap">{{ r.created_pretty }}</td>
+                    <td class="px-3 py-2">
+                        <span class="px-2 py-0.5 rounded text-xs font-medium {{ colour }}">{{ r.verdict }}</span>
+                    </td>
+                    <td class="px-3 py-2">
+                        <a href="{{ r.suno_url }}" target="_blank" rel="noopener"
+                           class="text-discord-blurple hover:underline">
+                           {{ r.title or '—' }}{% if r.artist %} <span class="text-gray-500">· {{ r.artist }}</span>{% endif %}
+                        </a>
+                    </td>
+                    <td class="px-3 py-2 text-gray-300 text-xs">{{ r.user_name }}</td>
+                    <td class="px-3 py-2 text-gray-400 text-xs">#{{ r.channel_name or r.channel_id }}</td>
+                    <td class="px-3 py-2 text-gray-400 text-xs max-w-md truncate" title="{{ r.reason }}">{{ r.reason }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% else %}
+        <div class="p-8 text-center text-gray-500 text-sm">
+            No moderation verdicts yet.
+            {% if enabled != 'on' %}<br>Enable moderation in the panel on the left to start screening.{% endif %}
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

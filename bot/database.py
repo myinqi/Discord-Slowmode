@@ -497,6 +497,73 @@ class Database:
             except Exception:
                 pass  # column already exists
 
+        # Channel-moderation audit log: one row per (message, suno_url) that
+        # has been LLM-screened. Used both for dedup and for the admin UI's
+        # recent-verdicts table. Verdict is one of 'flagged' / 'passed' /
+        # 'pending' / 'skipped' / 'error'.
+        await self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS channel_moderation_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                channel_id INTEGER NOT NULL,
+                channel_name TEXT,
+                user_id INTEGER,
+                user_name TEXT,
+                suno_url TEXT NOT NULL,
+                title TEXT,
+                artist TEXT,
+                verdict TEXT NOT NULL,
+                reason TEXT,
+                created_at REAL DEFAULT (unixepoch()),
+                UNIQUE(message_id, suno_url)
+            );
+            CREATE INDEX IF NOT EXISTS idx_chmod_log_ts
+                ON channel_moderation_log(created_at);
+            CREATE INDEX IF NOT EXISTS idx_chmod_log_verdict
+                ON channel_moderation_log(verdict);
+        """)
+        await self.db.commit()
+
+    # --- Channel Moderation ---
+
+    async def has_channel_moderation_check(self, message_id: int, suno_url: str) -> bool:
+        async with self.db.execute(
+            "SELECT 1 FROM channel_moderation_log "
+            "WHERE message_id = ? AND suno_url = ? LIMIT 1",
+            (message_id, suno_url),
+        ) as cur:
+            return await cur.fetchone() is not None
+
+    async def add_channel_moderation_log(
+        self, *, message_id: int, channel_id: int, channel_name: str,
+        user_id: int, user_name: str, suno_url: str,
+        title: str = "", artist: str = "",
+        verdict: str = "pending", reason: str = "",
+    ):
+        await self.db.execute(
+            "INSERT OR REPLACE INTO channel_moderation_log "
+            "(message_id, channel_id, channel_name, user_id, user_name, "
+            " suno_url, title, artist, verdict, reason) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (message_id, channel_id, channel_name, user_id, user_name,
+             suno_url, title, artist, verdict, reason),
+        )
+        await self.db.commit()
+
+    async def get_channel_moderation_log(
+        self, limit: int = 100, verdict: str | None = None,
+    ) -> list[dict]:
+        if verdict:
+            q = ("SELECT * FROM channel_moderation_log WHERE verdict = ? "
+                 "ORDER BY created_at DESC LIMIT ?")
+            args = (verdict, limit)
+        else:
+            q = ("SELECT * FROM channel_moderation_log "
+                 "ORDER BY created_at DESC LIMIT ?")
+            args = (limit,)
+        async with self.db.execute(q, args) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
     # --- Settings ---
 
     async def get_setting(self, key: str, default: str = "") -> str:
