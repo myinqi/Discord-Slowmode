@@ -24,10 +24,11 @@ import asyncio
 import re
 from typing import Optional
 
-# Limit concurrent LLM calls. Each lyric moderation = 1 small-model translate
-# + 1 medium-model verdict; running >2 in parallel on a single Ollama instance
-# starves the queue and yields nothing.
-_MOD_SEMAPHORE = asyncio.Semaphore(2)
+# Serialisation is handled by bot.llm_mod_queue (priority queue, one LLM call
+# at a time).  We keep a lightweight semaphore only to cap how many channel-
+# moderation pipelines can *scrape Suno* concurrently — the LLM call itself
+# is routed through the global queue.
+_SCRAPE_SEMAPHORE = asyncio.Semaphore(3)
 
 _SUNO_ID_RE = re.compile(r'https?://suno\.com/(?:s|song)/([\w-]+)')
 
@@ -68,7 +69,7 @@ async def screen_posted_song(
     except Exception:
         pass  # fail-open: better to re-check than to miss
 
-    async with _MOD_SEMAPHORE:
+    async with _SCRAPE_SEMAPHORE:
         # Re-check inside the semaphore — covers the race where two near-
         # simultaneous posts of the same URL both pass the pre-check.
         try:
@@ -130,17 +131,22 @@ async def screen_posted_song(
             return
 
         try:
-            # Channel moderation is background fire-and-forget; allow a
-            # generous timeout so slower CPUs can finish evaluating.
+            # Channel moderation is lower-priority background work.
+            # Route through the global priority queue so radio submissions
+            # always get processed first and only one Ollama call runs at a time.
             _CHMOD_LLM_TIMEOUT = 600
             client = OllamaClient(
                 base_url=Config.OLLAMA_URL,
                 model=Config.LLM_MODEL,
                 timeout=_CHMOD_LLM_TIMEOUT,
             )
-            verdict = await moderate_lyrics(
-                client, lyrics=lyrics, title=title, artist=artist,
-                timeout=_CHMOD_LLM_TIMEOUT,
+            from bot.llm_mod_queue import enqueue_moderation, PRIO_CHANNEL
+            verdict = await enqueue_moderation(
+                PRIO_CHANNEL,
+                lambda: moderate_lyrics(
+                    client, lyrics=lyrics, title=title, artist=artist,
+                    timeout=_CHMOD_LLM_TIMEOUT,
+                ),
             )
         except Exception as e:
             print(f"{log_prefix} LLM error for {uuid}: {e}", flush=True)

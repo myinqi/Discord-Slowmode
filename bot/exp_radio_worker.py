@@ -844,8 +844,10 @@ async def process_exp_song(db, song_id: int, exp_radio_dir: str, bot=None):
                     timeout=Config.LLM_REQUEST_TIMEOUT,
                 )
                 log_event(f"Moderation start for #{song_id} ({title!r})", prefix="[mod]")
-                verdict = await moderate_lyrics(
-                    client, lyrics=lyrics, title=title, artist=artist,
+                from bot.llm_mod_queue import enqueue_moderation, PRIO_RADIO
+                verdict = await enqueue_moderation(
+                    PRIO_RADIO,
+                    lambda: moderate_lyrics(client, lyrics=lyrics, title=title, artist=artist),
                 )
                 await db.update_exp_radio_song(
                     song_id,
