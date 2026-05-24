@@ -511,6 +511,36 @@ def detect_lyrics_language(lyrics: str) -> Optional[str]:
     return _LANG_CODE_MAP.get(code, code)
 
 
+# ─── Whisper hallucination filter ────────────────────────────────────────────
+#
+# Whisper absorbed German public-broadcasting subtitle conventions during
+# training and injects them verbatim into quiet or ambient passages.
+# These token values are essentially *never* found in actual song lyrics.
+_HALLUC_TOKENS: frozenset[str] = frozenset({
+    "untertitelung", "untertitel", "untertitelt",  # subtitling metadata
+    "zdf", "ndr", "ard", "swr", "mdr", "wdr", "rbb",  # German broadcasters
+    "tagesschau",  # ARD news show
+})
+
+
+def _strip_hallucinations(words: list) -> list:
+    """Drop word tokens that are known Whisper broadcast-metadata hallucinations."""
+    if not words:
+        return words
+    out = [
+        w for w in words
+        if re.sub(r"[^\w]", "", w["word"], flags=re.UNICODE).lower()
+           not in _HALLUC_TOKENS
+    ]
+    dropped = len(words) - len(out)
+    if dropped:
+        print(
+            f"[exp-radio] Stripped {dropped} hallucination token(s) from Whisper output",
+            flush=True,
+        )
+    return out
+
+
 def _whisper_sync(mp3_path: str, lyrics_prompt: str = "", language: Optional[str] = None) -> list:
     """Run faster-whisper synchronously (called in thread pool).
 
@@ -562,6 +592,7 @@ def _whisper_sync(mp3_path: str, lyrics_prompt: str = "", language: Optional[str
                 "start": round(w.start, 3),
                 "end": round(w.end, 3),
             })
+    words = _strip_hallucinations(words)
     return words
 
 
@@ -630,9 +661,27 @@ def _align_to_lyrics(whisper_words: list, lyrics_text: str) -> list:
             if out[i1 + k]["word"] != new_text:
                 out[i1 + k]["word"] = new_text
                 corrected += 1
+    # Trim boundary hallucinations: drop 'delete' words (Whisper words with no
+    # lyric match) that appear before the first or after the last matched word.
+    # Words in the *middle* of the transcript are kept — they may be ad-libs or
+    # bridge sections not captured in the lyric sheet.
+    first_eq = next((i1 for tag, i1, i2, _, _ in opcodes if tag == "equal"), None)
+    last_eq  = next((i2 - 1 for tag, i1, i2, _, _ in reversed(opcodes) if tag == "equal"), None)
+    trimmed = 0
+    if first_eq is not None and last_eq is not None:
+        drop = set()
+        for tag, i1, i2, _, _ in opcodes:
+            if tag == "delete":
+                for wi in range(i1, i2):
+                    if wi < first_eq or wi > last_eq:
+                        drop.add(wi)
+        if drop:
+            trimmed = len(drop)
+            out = [w for idx, w in enumerate(out) if idx not in drop]
+
     print(
         f"[exp-radio] Aligned: {matched}/{len(whisper_words)} exact matches, "
-        f"{corrected} word(s) re-cased from lyrics "
+        f"{corrected} word(s) re-cased, {trimmed} boundary word(s) trimmed "
         f"({len(whisper_words)} whisper vs {len(lyric_tokens)} lyric tokens)",
         flush=True,
     )
