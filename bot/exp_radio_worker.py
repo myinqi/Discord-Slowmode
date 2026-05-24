@@ -315,6 +315,7 @@ _DECOR_RE = re.compile(
 
 _BRACKET_MARKER_RE = re.compile(r'^\s*\[[^\]]+\]\s*$')          # [Verse 1], [Chorus]
 _MARKDOWN_HEADING_RE = re.compile(r'^\s*#{1,6}\s+\S')            # ## Title
+_SEPARATOR_RE        = re.compile(r'^\s*-{3,}\s*$')              # --- or ------
 _NAMED_MARKER_WORDS = {
     "verse", "chorus", "bridge", "intro", "outro",
     "prechorus", "pre-chorus", "hook", "refrain",
@@ -394,19 +395,26 @@ def clean_lyrics(raw: str) -> str:
     text = unicodedata.normalize("NFKC", raw)
     lines = text.splitlines()
 
-    # Find the first structural marker (Verse/Chorus/##/[...]) — anything
-    # before it is treated as preamble (author note, URLs, etc.) and dropped.
-    # If no marker is present we keep all lines.
+    # Find the first structural marker (Verse/Chorus/##/[...]) or a
+    # dash-separator line (--- or ------) — everything before it is preamble
+    # (copyright, URLs, author blurbs) and is dropped.  Suno/Ape_Music songs
+    # frequently use '---...---' as a separator instead of [Verse] markers;
+    # without this the copyright header leaks into lyric_tokens and corrupts
+    # the Whisper alignment boundary detection.
+    # If no marker or separator is found we keep all lines (fallback).
     start = 0
     for i, line in enumerate(lines):
         if _is_section_marker(line):
-            start = i
+            start = i      # marker itself will be skipped in the loop below
+            break
+        if _SEPARATOR_RE.match(line):
+            start = i + 1  # start *after* the separator
             break
 
     out = []
     for line in lines[start:]:
-        # Skip the section marker lines themselves — they are not sung.
-        if _is_section_marker(line):
+        # Skip section markers and separator lines — they are not sung.
+        if _is_section_marker(line) or _SEPARATOR_RE.match(line):
             continue
         line = _DECOR_RE.sub('', line)
         # Strip markdown bold/italic markers but keep their contents
@@ -518,7 +526,7 @@ def detect_lyrics_language(lyrics: str) -> Optional[str]:
 # These token values are essentially *never* found in actual song lyrics.
 _HALLUC_TOKENS: frozenset[str] = frozenset({
     "untertitelung", "untertitel", "untertitelt",  # subtitling metadata
-    "zdf", "ndr", "ard", "swr", "mdr", "wdr", "rbb",  # German broadcasters
+    "zdf", "ndr", "ard", "swr", "mdr", "wdr", "rbb", "br",  # German broadcasters
     "tagesschau",  # ARD news show
 })
 
