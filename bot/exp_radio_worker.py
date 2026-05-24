@@ -838,16 +838,22 @@ async def process_exp_song(db, song_id: int, exp_radio_dir: str, bot=None):
                 from bot.exp_moderation import moderate_lyrics
                 from bot.llm import OllamaClient
                 from config import Config
+                # Generous timeout: queue serialises calls so there's no
+                # competition; CPU inference on long lyrics can take > 4 min.
+                _RADIO_LLM_TIMEOUT = 600
                 client = OllamaClient(
                     base_url=Config.OLLAMA_URL,
                     model=Config.LLM_MODEL,
-                    timeout=Config.LLM_REQUEST_TIMEOUT,
+                    timeout=_RADIO_LLM_TIMEOUT,
                 )
                 log_event(f"Moderation start for #{song_id} ({title!r})", prefix="[mod]")
                 from bot.llm_mod_queue import enqueue_moderation, PRIO_RADIO
                 verdict = await enqueue_moderation(
                     PRIO_RADIO,
-                    lambda: moderate_lyrics(client, lyrics=lyrics, title=title, artist=artist),
+                    lambda: moderate_lyrics(
+                        client, lyrics=lyrics, title=title, artist=artist,
+                        timeout=_RADIO_LLM_TIMEOUT,
+                    ),
                 )
                 await db.update_exp_radio_song(
                     song_id,
