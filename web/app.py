@@ -3766,7 +3766,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     ext = lv_file.filename.rsplit(".", 1)[-1].lower()
                     if ext in ("mp4", "webm"):
                         fn = f"exp_loop_{_uuid.uuid4().hex}.{ext}"
-                        label = form.get("lv_label", "").strip() or fn
+                        label = form.get("lv_label", "").strip() or lv_file.filename
                         await lv_file.save(os.path.join(EXP_RADIO_DIR, "assets", fn))
                         raw = await db.get_setting("exp_radio_loop_videos") or "[]"
                         vids = _jl.loads(raw) if raw else []
