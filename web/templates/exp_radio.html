@@ -238,21 +238,67 @@
                     Upload Background
                 </button>
             </form>
-            <form method="POST" enctype="multipart/form-data" class="space-y-3">
-                <input type="hidden" name="action" value="upload_loop_video">
-                <div>
-                    <label class="block text-gray-400 text-xs mb-1">Loop Video Overlay (MP4/WebM – top-right corner)</label>
-                    {% if loop_filename %}
-                    <p class="text-xs text-green-400 mb-1">Current: {{ loop_filename }}</p>
-                    {% endif %}
+            <!-- Loop Video Overlay (multi-video with selection) -->
+            <div class="space-y-3">
+                <label class="block text-gray-400 text-xs mb-1">Loop Video Overlay (MP4/WebM – top-right corner)</label>
+
+                {% if loop_videos %}
+                <!-- Selection mode -->
+                <form method="POST" class="space-y-2">
+                    <input type="hidden" name="action" value="set_loop_selection">
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="loop_selection" value="shuffle"
+                            {% if loop_selection == 'shuffle' %}checked{% endif %}
+                            onchange="this.form.submit()"
+                            class="w-3.5 h-3.5 accent-discord-blurple">
+                        <span class="text-gray-300 text-xs">🔀 Shuffle (random on each stream start)</span>
+                    </label>
+                    {% for v in loop_videos %}
+                    <div class="flex items-center gap-2 group">
+                        <label class="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
+                            <input type="radio" name="loop_selection" value="{{ v.filename }}"
+                                {% if loop_selection == v.filename %}checked{% endif %}
+                                onchange="this.form.submit()"
+                                class="w-3.5 h-3.5 accent-discord-blurple">
+                            <span class="text-gray-300 text-xs truncate" title="{{ v.filename }}">
+                                {{ v.label or v.filename }}
+                            </span>
+                        </label>
+                    </div>
+                    {% endfor %}
+                </form>
+
+                <!-- Uploaded videos list with delete buttons -->
+                <div class="space-y-1 pt-1 border-t border-gray-700/30">
+                    <p class="text-gray-500 text-[10px] uppercase tracking-wider">Uploaded Videos</p>
+                    {% for v in loop_videos %}
+                    <div class="flex items-center justify-between gap-2 bg-gray-800/30 rounded px-2 py-1">
+                        <span class="text-gray-400 text-xs truncate" title="{{ v.filename }}">{{ v.label or v.filename }}</span>
+                        <form method="POST" class="shrink-0" onsubmit="return confirm('Delete this loop video?')">
+                            <input type="hidden" name="action" value="delete_loop_video">
+                            <input type="hidden" name="loop_filename" value="{{ v.filename }}">
+                            <button type="submit" class="text-red-400/60 hover:text-red-400 text-xs px-1" title="Delete">✕</button>
+                        </form>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-gray-500 text-xs">No loop videos uploaded yet.</p>
+                {% endif %}
+
+                <!-- Upload new -->
+                <form method="POST" enctype="multipart/form-data" class="space-y-2 pt-1 border-t border-gray-700/30">
+                    <input type="hidden" name="action" value="upload_loop_video">
+                    <input type="text" name="lv_label" placeholder="Label (optional)"
+                        class="w-full px-3 py-1.5 bg-discord-darker border border-gray-700 rounded text-gray-300 text-xs placeholder-gray-600 focus:border-discord-blurple focus:outline-none">
                     <input type="file" name="lv_file" accept=".mp4,.webm"
                         class="w-full text-sm text-gray-400 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:bg-discord-blurple/30 file:text-discord-blurple hover:file:bg-discord-blurple/50 file:cursor-pointer">
-                </div>
-                <button type="submit"
-                    class="w-full px-4 py-2 bg-gray-700/50 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">
-                    Upload Loop Video
-                </button>
-            </form>
+                    <button type="submit"
+                        class="w-full px-4 py-2 bg-gray-700/50 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">
+                        Upload Loop Video
+                    </button>
+                </form>
+            </div>
         </div>
         </div>
     </div>

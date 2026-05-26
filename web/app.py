@@ -3760,21 +3760,46 @@ def create_app(db: Database, bot=None) -> Quart:
                         await flash("Unsupported file type.", "danger")
 
             elif action == "upload_loop_video":
+                import json as _jl
                 lv_file = files.get("lv_file")
                 if lv_file and lv_file.filename:
                     ext = lv_file.filename.rsplit(".", 1)[-1].lower()
                     if ext in ("mp4", "webm"):
                         fn = f"exp_loop_{_uuid.uuid4().hex}.{ext}"
+                        label = form.get("lv_label", "").strip() or fn
                         await lv_file.save(os.path.join(EXP_RADIO_DIR, "assets", fn))
-                        old = await db.get_setting("exp_radio_loop_filename")
-                        if old:
-                            old_path = os.path.join(EXP_RADIO_DIR, "assets", old)
-                            if os.path.exists(old_path):
-                                os.remove(old_path)
-                        await db.set_setting("exp_radio_loop_filename", fn)
+                        raw = await db.get_setting("exp_radio_loop_videos") or "[]"
+                        vids = _jl.loads(raw) if raw else []
+                        vids.append({"filename": fn, "label": label})
+                        await db.set_setting("exp_radio_loop_videos", _jl.dumps(vids))
+                        # If this is the first video, auto-select it
+                        if len(vids) == 1:
+                            await db.set_setting("exp_radio_loop_selection", fn)
                         await flash("Loop video uploaded.", "success")
                     else:
                         await flash("Only MP4/WebM supported.", "danger")
+
+            elif action == "delete_loop_video":
+                import json as _jl
+                del_fn = form.get("loop_filename", "")
+                if del_fn:
+                    raw = await db.get_setting("exp_radio_loop_videos") or "[]"
+                    vids = _jl.loads(raw) if raw else []
+                    vids = [v for v in vids if v.get("filename") != del_fn]
+                    await db.set_setting("exp_radio_loop_videos", _jl.dumps(vids))
+                    del_path = os.path.join(EXP_RADIO_DIR, "assets", del_fn)
+                    if os.path.exists(del_path):
+                        os.remove(del_path)
+                    # If the deleted video was selected, fall back to shuffle
+                    sel = await db.get_setting("exp_radio_loop_selection") or "shuffle"
+                    if sel == del_fn:
+                        await db.set_setting("exp_radio_loop_selection", "shuffle")
+                    await flash("Loop video removed.", "success")
+
+            elif action == "set_loop_selection":
+                sel = form.get("loop_selection", "shuffle")
+                await db.set_setting("exp_radio_loop_selection", sel)
+                await flash(f"Loop video selection: {'Shuffle' if sel == 'shuffle' else sel}", "success")
 
             return redirect(request.url)
 
@@ -3813,7 +3838,18 @@ def create_app(db: Database, bot=None) -> Quart:
         status = await exp_stream_manager.get_status()
         masked_key = "*" * 20 if await db.get_setting("exp_radio_twitch_key") else ""
         bg_filename  = await db.get_setting("exp_radio_bg_filename") or ""
-        loop_filename = await db.get_setting("exp_radio_loop_filename") or ""
+        import json as _jlv
+        _loop_raw = await db.get_setting("exp_radio_loop_videos") or "[]"
+        loop_videos = _jlv.loads(_loop_raw) if _loop_raw else []
+        # Auto-migrate legacy single-video setting
+        if not loop_videos:
+            _old_lv = await db.get_setting("exp_radio_loop_filename") or ""
+            if _old_lv:
+                loop_videos = [{"filename": _old_lv, "label": _old_lv}]
+                await db.set_setting("exp_radio_loop_videos", _jlv.dumps(loop_videos))
+                await db.set_setting("exp_radio_loop_selection", _old_lv)
+                await db.set_setting("exp_radio_loop_filename", "")
+        loop_selection = await db.get_setting("exp_radio_loop_selection") or "shuffle"
         exp_stream_url = await db.get_setting("exp_radio_stream_url") or ""
         exp_post_channel_1_id = await db.get_setting("exp_radio_post_channel_1_id") or ""
         exp_post_channel_2_id = await db.get_setting("exp_radio_post_channel_2_id") or ""
@@ -3841,7 +3877,8 @@ def create_app(db: Database, bot=None) -> Quart:
             "exp_radio.html",
             songs=songs, status=status,
             masked_key=masked_key,
-            bg_filename=bg_filename, loop_filename=loop_filename,
+            bg_filename=bg_filename,
+            loop_videos=loop_videos, loop_selection=loop_selection,
             exp_stream_url=exp_stream_url,
             exp_post_channel_1_id=exp_post_channel_1_id,
             exp_post_channel_2_id=exp_post_channel_2_id,

@@ -312,7 +312,29 @@ class ExpStreamManager:
         """Run one FFmpeg job that covers all songs without stopping between them."""
         bg_fn   = await self.db.get_setting("exp_radio_bg_filename") or ""
         bg_type = await self.db.get_setting("exp_radio_bg_type") or "image"
-        loop_fn = await self.db.get_setting("exp_radio_loop_filename") or ""
+
+        # Resolve loop video: supports multiple uploads + shuffle / fixed pick.
+        loop_fn = ""
+        import json as _json
+        loop_raw = await self.db.get_setting("exp_radio_loop_videos") or "[]"
+        loop_vids = _json.loads(loop_raw) if loop_raw else []
+        if loop_vids:
+            loop_sel = await self.db.get_setting("exp_radio_loop_selection") or "shuffle"
+            if loop_sel == "shuffle":
+                loop_fn = random.choice(loop_vids)["filename"]
+                self._log(f"Loop video (shuffle): {loop_fn}")
+            else:
+                # Fixed selection — verify it still exists in the list
+                match = [v for v in loop_vids if v["filename"] == loop_sel]
+                if match:
+                    loop_fn = match[0]["filename"]
+                else:
+                    loop_fn = loop_vids[0]["filename"]
+                    self._log(f"Selected loop video gone, falling back to {loop_fn}", "error")
+        elif not loop_fn:
+            # Legacy fallback: single-video setting from before the migration
+            loop_fn = await self.db.get_setting("exp_radio_loop_filename") or ""
+
         bg_path   = os.path.join(self.exp_radio_dir, "assets", bg_fn)   if bg_fn   else None
         loop_path = os.path.join(self.exp_radio_dir, "assets", loop_fn) if loop_fn else None
 
