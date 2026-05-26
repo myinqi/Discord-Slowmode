@@ -604,12 +604,21 @@ def _whisper_sync(mp3_path: str, lyrics_prompt: str = "", language: Optional[str
     return words
 
 
+_WHISPER_SEM = asyncio.Semaphore(1)   # serialise Whisper runs → prevent OOM
+
+
 async def run_whisper(mp3_path: str, lyrics_prompt: str = "", language: Optional[str] = None) -> list:
-    """Run Whisper in thread pool so the event loop is not blocked."""
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        None, _whisper_sync, mp3_path, lyrics_prompt, language,
-    )
+    """Run Whisper in thread pool so the event loop is not blocked.
+
+    Only one Whisper job may run at a time (guarded by _WHISPER_SEM).
+    The large-v3-turbo model on CPU uses ~2 GB RAM; two concurrent runs
+    exceed the container's memory limit and trigger an OOM-kill.
+    """
+    async with _WHISPER_SEM:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, _whisper_sync, mp3_path, lyrics_prompt, language,
+        )
 
 
 def _align_to_lyrics(whisper_words: list, lyrics_text: str) -> list:

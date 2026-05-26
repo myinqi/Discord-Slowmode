@@ -99,6 +99,11 @@ def _strip_emoji(text: str) -> str:
 _LOG_BUFFER_MAX = 1000
 _LOG_BUFFER: deque = deque(maxlen=_LOG_BUFFER_MAX)
 
+# Module-level flag: True while the exp-radio stream is actively running.
+# Other modules (upload endpoint, channel moderation) import this to skip
+# heavy CPU/RAM work (Whisper, LLM) that could destabilise the stream.
+stream_is_live: bool = False
+
 
 def log_event(line: str, level: str = "info", prefix: str = "[exp-radio]") -> None:
     """Append `line` to the shared live-log buffer and mirror to stdout.
@@ -214,12 +219,16 @@ class ExpStreamManager:
             else:
                 self._log(f"Twitch chat ready ({msg}).")
         self.is_running  = True
+        global stream_is_live
+        stream_is_live = True
         self._task = asyncio.create_task(self._stream_loop())
         self._log(f"Started with {len(ready)} songs.")
         return {"ok": True, "song_count": len(ready)}
 
     async def stop(self) -> dict:
         self.is_running = False
+        global stream_is_live
+        stream_is_live = False
         if self._process and self._process.returncode is None:
             try:
                 self._process.terminate()

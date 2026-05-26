@@ -10,7 +10,24 @@
 <body class="dark bg-discord-darker min-h-screen flex items-center justify-center p-4">
 <div class="w-full max-w-md">
 
-{% if error %}
+{% if stream_live %}
+<div class="bg-yellow-900/40 border border-yellow-700/50 rounded-xl p-6 text-center">
+    <p class="text-4xl mb-3">📡</p>
+    <p class="text-yellow-300 font-semibold">Experimental Radio is currently live!</p>
+    <p class="text-gray-400 text-sm mt-3">
+        Song submissions are paused while the stream is running
+        to keep things stable.
+    </p>
+    <p class="text-gray-400 text-sm mt-2">
+        Please try again after the stream ends — your link will remain valid.
+    </p>
+    <a href="https://www.twitch.tv/sunogermany" target="_blank"
+       class="inline-block mt-4 px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white text-sm font-semibold rounded-lg transition-colors">
+        🎵 Watch the stream
+    </a>
+</div>
+
+{% elif error %}
 <div class="bg-red-900/40 border border-red-700/50 rounded-xl p-6 text-center">
     <p class="text-4xl mb-3">❌</p>
     <p class="text-red-300 font-semibold">{{ error }}</p>

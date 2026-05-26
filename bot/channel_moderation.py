@@ -62,6 +62,13 @@ async def screen_posted_song(
     db = bot.db
     log_prefix = "[chmod]"
 
+    # Skip channel moderation while the exp-radio stream is live — the LLM
+    # call competes for CPU/RAM with FFmpeg and could destabilise the stream.
+    import bot.exp_stream_manager as _esm
+    if _esm.stream_is_live:
+        print(f"{log_prefix} skipped (stream is live): {suno_url}", flush=True)
+        return
+
     # Defensive: dedup. on_message can be invoked twice on resumed sessions.
     try:
         if await db.has_channel_moderation_check(message_id, suno_url):

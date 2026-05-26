@@ -3399,25 +3399,29 @@ def create_app(db: Database, bot=None) -> Quart:
                 await flash("Song removed.", "success")
 
             elif action == "reanalyze_whisper":
-                from bot.exp_radio_worker import process_exp_song
-                songs_all = await db.get_all_exp_radio_songs(active_only=True)
-                queued = 0
-                for s in songs_all:
-                    if not s.get("mp3_filename"):
-                        continue  # MP3 never finished uploading — skip
-                    # Drop stale ASS so the player won't pick it up mid-rebuild
-                    await db.update_exp_radio_song(
-                        s["id"], analysis_status="processing", ass_filename=None,
+                import bot.exp_stream_manager as _esm
+                if _esm.stream_is_live:
+                    await flash("Cannot run Whisper while the stream is live.", "error")
+                else:
+                    from bot.exp_radio_worker import process_exp_song
+                    songs_all = await db.get_all_exp_radio_songs(active_only=True)
+                    queued = 0
+                    for s in songs_all:
+                        if not s.get("mp3_filename"):
+                            continue  # MP3 never finished uploading — skip
+                        # Drop stale ASS so the player won't pick it up mid-rebuild
+                        await db.update_exp_radio_song(
+                            s["id"], analysis_status="processing", ass_filename=None,
+                        )
+                        asyncio.create_task(
+                            process_exp_song(db, s["id"], EXP_RADIO_DIR, bot=bot)
+                        )
+                        queued += 1
+                    await flash(
+                        f"Queued {queued} song(s) for re-analysis. "
+                        "Whisper runs in the background — refresh the page to see status updates.",
+                        "success",
                     )
-                    asyncio.create_task(
-                        process_exp_song(db, s["id"], EXP_RADIO_DIR, bot=bot)
-                    )
-                    queued += 1
-                await flash(
-                    f"Queued {queued} song(s) for re-analysis. "
-                    "Whisper runs in the background — refresh the page to see status updates.",
-                    "success",
-                )
 
             elif action == "rescrape_metadata_one":
                 from bot.exp_radio_worker import scrape_suno
@@ -3536,89 +3540,97 @@ def create_app(db: Database, bot=None) -> Quart:
                     )
 
             elif action == "remoderate_one":
-                from bot.exp_moderation import moderate_lyrics
-                from bot.llm import OllamaClient
-                from config import Config
-                sid = int(form.get("song_id", "0") or 0)
-                s = await db.get_exp_radio_song(sid) if sid else None
-                if not s or not s.get("lyrics"):
-                    await flash("Song not found or has no lyrics yet.", "error")
+                import bot.exp_stream_manager as _esm
+                if _esm.stream_is_live:
+                    await flash("Cannot run LLM moderation while the stream is live.", "error")
                 else:
-                    from bot.exp_stream_manager import log_event
-                    async def _run_remoderation(song_id, snap):
-                        title_s = snap.get("title") or f"#{song_id}"
-                        try:
-                            client = OllamaClient(
-                                base_url=Config.OLLAMA_URL,
-                                model=Config.LLM_MODEL,
-                                timeout=Config.LLM_REQUEST_TIMEOUT,
-                            )
-                            log_event(
-                                f"Re-moderation start for #{song_id} ({title_s!r})",
-                                prefix="[mod]",
-                            )
-                            verdict = await moderate_lyrics(
-                                client,
-                                lyrics=snap.get("lyrics") or "",
-                                title=snap.get("title") or "",
-                                artist=snap.get("artist") or "",
-                            )
-                            await db.update_exp_radio_song(
-                                song_id,
-                                moderation_status=verdict["status"],
-                                moderation_reason=verdict.get("reason") or "",
-                                moderation_at=time.time(),
-                            )
-                            level = "error" if verdict["status"] in ("flagged", "pending") else "info"
-                            summary = (
-                                f"Re-moderation #{song_id} → {verdict['status']}"
-                                f"{' (translated)' if verdict.get('translated') else ''}"
-                            )
-                            if verdict.get("reason"):
-                                summary += f": {verdict['reason']}"
-                            log_event(summary, level=level, prefix="[mod]")
-                        except Exception as e:
-                            log_event(
-                                f"Re-moderation error #{song_id}: {e}",
-                                level="error", prefix="[mod]",
-                            )
-                            await db.update_exp_radio_song(
-                                song_id,
-                                moderation_status="pending",
-                                moderation_reason=f"Re-moderation error: {e!s}",
-                                moderation_at=time.time(),
-                            )
-                    await db.update_exp_radio_song(
-                        sid,
-                        moderation_status="pending",
-                        moderation_reason="Re-moderation in progress…",
-                        moderation_at=time.time(),
-                    )
-                    asyncio.create_task(_run_remoderation(sid, s))
-                    await flash(
-                        f"Queued “{s.get('title') or sid}” for LLM re-moderation. "
-                        "Refresh the page in a few seconds.",
-                        "success",
-                    )
+                    from bot.exp_moderation import moderate_lyrics
+                    from bot.llm import OllamaClient
+                    from config import Config
+                    sid = int(form.get("song_id", "0") or 0)
+                    s = await db.get_exp_radio_song(sid) if sid else None
+                    if not s or not s.get("lyrics"):
+                        await flash("Song not found or has no lyrics yet.", "error")
+                    else:
+                        from bot.exp_stream_manager import log_event
+                        async def _run_remoderation(song_id, snap):
+                            title_s = snap.get("title") or f"#{song_id}"
+                            try:
+                                client = OllamaClient(
+                                    base_url=Config.OLLAMA_URL,
+                                    model=Config.LLM_MODEL,
+                                    timeout=Config.LLM_REQUEST_TIMEOUT,
+                                )
+                                log_event(
+                                    f"Re-moderation start for #{song_id} ({title_s!r})",
+                                    prefix="[mod]",
+                                )
+                                verdict = await moderate_lyrics(
+                                    client,
+                                    lyrics=snap.get("lyrics") or "",
+                                    title=snap.get("title") or "",
+                                    artist=snap.get("artist") or "",
+                                )
+                                await db.update_exp_radio_song(
+                                    song_id,
+                                    moderation_status=verdict["status"],
+                                    moderation_reason=verdict.get("reason") or "",
+                                    moderation_at=time.time(),
+                                )
+                                level = "error" if verdict["status"] in ("flagged", "pending") else "info"
+                                summary = (
+                                    f"Re-moderation #{song_id} → {verdict['status']}"
+                                    f"{' (translated)' if verdict.get('translated') else ''}"
+                                )
+                                if verdict.get("reason"):
+                                    summary += f": {verdict['reason']}"
+                                log_event(summary, level=level, prefix="[mod]")
+                            except Exception as e:
+                                log_event(
+                                    f"Re-moderation error #{song_id}: {e}",
+                                    level="error", prefix="[mod]",
+                                )
+                                await db.update_exp_radio_song(
+                                    song_id,
+                                    moderation_status="pending",
+                                    moderation_reason=f"Re-moderation error: {e!s}",
+                                    moderation_at=time.time(),
+                                )
+                        await db.update_exp_radio_song(
+                            sid,
+                            moderation_status="pending",
+                            moderation_reason="Re-moderation in progress…",
+                            moderation_at=time.time(),
+                        )
+                        asyncio.create_task(_run_remoderation(sid, s))
+                        await flash(
+                            f"Queued “{s.get('title') or sid}” for LLM re-moderation. "
+                            "Refresh the page in a few seconds.",
+                            "success",
+                        )
 
             elif action == "reanalyze_whisper_one":
-                from bot.exp_radio_worker import process_exp_song
-                sid = int(form.get("song_id", "0") or 0)
-                s = await db.get_exp_radio_song(sid) if sid else None
-                if not s or not s.get("mp3_filename"):
-                    await flash("Song not found or MP3 missing.", "error")
+                import bot.exp_stream_manager as _esm
+                if _esm.stream_is_live:
+                    await flash("Cannot run Whisper while the stream is live.", "error")
                 else:
-                    await db.update_exp_radio_song(
-                        sid, analysis_status="processing", ass_filename=None,
-                    )
-                    asyncio.create_task(
-                        process_exp_song(db, sid, EXP_RADIO_DIR, bot=bot)
-                    )
-                    await flash(
-                        f"Queued “{s.get('title') or sid}” for Whisper re-analysis. "
-                        "Refresh the page for status.",
-                        "success",
-                    )
+                    from bot.exp_radio_worker import process_exp_song
+                    sid = int(form.get("song_id", "0") or 0)
+                    s = await db.get_exp_radio_song(sid) if sid else None
+                    if not s or not s.get("mp3_filename"):
+                        await flash("Song not found or MP3 missing.", "error")
+                    else:
+                        await db.update_exp_radio_song(
+                            sid, analysis_status="processing", ass_filename=None,
+                        )
+                        asyncio.create_task(
+                            process_exp_song(db, sid, EXP_RADIO_DIR, bot=bot)
+                        )
+                        await flash(
+                            f"Queued “{s.get('title') or sid}” for Whisper re-analysis. "
+                            "Refresh the page for status.",
+                            "success",
+                        )
 
             elif action == "rescrape_metadata":
                 from bot.exp_radio_worker import scrape_suno
@@ -3892,23 +3904,35 @@ def create_app(db: Database, bot=None) -> Quart:
     @app.route("/exp-radio/upload/<token>")
     async def exp_radio_upload_page(token: str):
         """Public page (no login) — browser fetches MP3 from Suno CDN and POSTs it here."""
+        import bot.exp_stream_manager as _esm
         song = await db.get_exp_radio_song_by_token(token)
         if not song:
             return await render_template("exp_radio_upload.html", error="Link invalid or expired.")
         if song.get("mp3_filename"):
             return await render_template("exp_radio_upload.html", done=True,
                                          title=song.get("title") or "Your song")
+        if _esm.stream_is_live:
+            return await render_template("exp_radio_upload.html", stream_live=True)
         return await render_template("exp_radio_upload.html", song=song, token=token)
 
     @app.route("/exp-radio/upload/<token>", methods=["POST"])
     async def exp_radio_upload_receive(token: str):
         """Receive the MP3 posted by the browser upload page."""
         from quart import jsonify
+        import bot.exp_stream_manager as _esm
         song = await db.get_exp_radio_song_by_token(token)
         if not song:
             return jsonify({"ok": False, "error": "Invalid token"}), 403
         if song.get("mp3_filename"):
             return jsonify({"ok": True, "already": True})
+
+        # Reject uploads while the stream is live — Whisper + LLM would
+        # compete with FFmpeg for CPU/RAM and risk an OOM crash.
+        if _esm.stream_is_live:
+            return jsonify({
+                "ok": False,
+                "error": "The stream is currently live. Please try again later.",
+            }), 503
 
         files = await request.files
         mp3_file = files.get("mp3")
