@@ -228,7 +228,15 @@
                           transition-colors">
                     🔑 {% if exp_tw_scopes_ok %}Re-authorize Bot{% else %}Authorize Bot (chat:read required){% endif %}
                 </a>
-                <p class="text-gray-600 text-xs">Scopes requested: <code class="bg-gray-800 px-1 rounded">user:bot user:write:chat chat:read</code></p>
+                <p class="text-gray-600 text-xs">Scopes: <code class="bg-gray-800 px-1 rounded">user:bot user:write:chat chat:read</code></p>
+                <div class="bg-gray-800/60 rounded-lg px-3 py-2 text-xs space-y-1">
+                    <p class="text-gray-400 font-medium">Add this URI in <a href="https://dev.twitch.tv/console/apps" target="_blank" class="text-discord-blurple underline">Twitch Dev Console</a> → Your App → OAuth Redirect URLs:</p>
+                    <div class="flex items-center gap-2">
+                        <code id="oauth-callback-uri" class="text-yellow-300 break-all select-all flex-1">{{ request.url_root.rstrip('/') }}{{ url_for('exp_radio_twitch_oauth_callback') }}</code>
+                        <button onclick="navigator.clipboard.writeText(document.getElementById('oauth-callback-uri').textContent).then(()=>this.textContent='✓').catch(()=>{}); setTimeout(()=>this.textContent='Copy',1500)"
+                            class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 whitespace-nowrap transition-colors">Copy</button>
+                    </div>
+                </div>
                 {% endif %}
             </div>
         </div>
