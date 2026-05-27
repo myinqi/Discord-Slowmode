@@ -402,7 +402,7 @@
       ] %}
       <label class="flex items-center gap-2 cursor-pointer">
         <input type="checkbox" name="{{ field }}" value="true"
-          {% if settings.get(field) not in ('false','') %}checked{% endif %}
+          {% if settings.get(field) == 'true' %}checked{% endif %}
           class="w-4 h-4 accent-discord-blurple">
         <span class="text-white text-sm">{{ label }}</span>
       </label>

@@ -4312,6 +4312,7 @@ def create_app(db: Database, bot=None) -> Quart:
             action = form.get("action", "")
 
             if action == "save_settings":
+                _bool_keys = {"announce_level_ups", "announce_rank_ups", "mods_bypass_cooldowns"}
                 for key in (
                     "enabled", "command_prefix", "timezone",
                     "raven_cooldown_seconds", "ritual_cooldown_seconds",
@@ -4321,7 +4322,10 @@ def create_app(db: Database, bot=None) -> Quart:
                     "ritual_reward_xp", "ritual_legendary_chance",
                     "ritual_active_window_minutes",
                 ):
-                    val = form.get(key, "")
+                    if key in _bool_keys:
+                        val = "true" if form.get(key) else "false"
+                    else:
+                        val = form.get(key, "")
                     await db.relic_set_setting(key, val)
                 await flash("Settings saved.", "success")
 

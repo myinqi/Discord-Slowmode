@@ -277,7 +277,7 @@ class RelicHunt:
 
     async def _is_game_enabled(self) -> bool:
         val = await self.db.relic_get_setting("enabled")
-        return val != "false"
+        return val != "false"  # default ON unless explicitly disabled
 
     async def _get_active_events_with_cfg(self) -> list:
         await self.db.relic_expire_events()
@@ -309,7 +309,7 @@ class RelicHunt:
         # Cooldown check
         cd_secs = int((await self.db.relic_get_setting("raven_cooldown_seconds")) or 300)
         is_mod  = ctx.get("is_mod") or ctx.get("is_broadcaster")
-        bypass  = is_mod and (await self.db.relic_get_setting("mods_bypass_cooldowns")) != "false"
+        bypass  = is_mod and (await self.db.relic_get_setting("mods_bypass_cooldowns")) == "true"
         if not bypass and user.get("last_raven_at"):
             elapsed = time.time() - user["last_raven_at"]
             # Apply subscriber / VIP multiplier
@@ -379,7 +379,7 @@ class RelicHunt:
         _rlog(f"{name} found {iname} ({rarity}) | +{pts}pts +{xp}xp")
 
         # Level-up / rank announcement
-        announce_lvl = (await self.db.relic_get_setting("announce_level_ups")) != "false"
+        announce_lvl = (await self.db.relic_get_setting("announce_level_ups")) == "true"
         if level_ups and announce_lvl:
             rank_str = f" and became a {new_rank['icon']} {new_rank['name']}!" if new_rank else "!"
             await self._send(f"⬆️ @{name} reached level {user['level']}{rank_str}")
