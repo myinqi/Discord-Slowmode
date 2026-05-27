@@ -158,7 +158,7 @@
         <!-- Twitch Chat Bot -->
         <div class="p-5 space-y-4">
             <p class="text-white text-sm font-medium">Twitch Chat Bot</p>
-            <p class="text-gray-500 text-xs">Posts ♪ Now Playing messages to Twitch chat on each song change. Run <code class="bg-gray-800 px-1 rounded">python scripts/twitch_auth.py</code> to get a refresh token.</p>
+            <p class="text-gray-500 text-xs">Posts ♪ Now Playing messages and listens for chat commands (Ravel Hunt). Use the button below to authorize the bot with the correct scopes.</p>
             <form method="POST" class="space-y-3">
                 <input type="hidden" name="action" value="save_exp_twitch_settings">
                 <div class="space-y-1.5">
@@ -208,6 +208,29 @@
                     Save Twitch Settings
                 </button>
             </form>
+
+            {# Re-authorize button #}
+            <div class="pt-3 border-t border-gray-700/50 space-y-2">
+                {% if exp_tw_bot_login %}
+                <div class="flex items-center gap-2 text-xs">
+                    <span class="text-green-400">✓ Bot: {{ exp_tw_bot_login }}</span>
+                    {% if exp_tw_scopes_ok %}
+                    <span class="px-1.5 py-0.5 rounded bg-green-900/50 text-green-300">chat:read ✓</span>
+                    {% else %}
+                    <span class="px-1.5 py-0.5 rounded bg-red-900/50 text-red-300">chat:read missing ⚠</span>
+                    {% endif %}
+                </div>
+                {% endif %}
+                {% if exp_tw_client_id %}
+                <a href="{{ url_for('exp_radio_twitch_oauth_start') }}"
+                   class="flex items-center justify-center gap-2 w-full px-4 py-2 rounded-lg text-sm font-medium
+                          {% if exp_tw_scopes_ok %}bg-gray-700 hover:bg-gray-600 text-gray-300{% else %}bg-purple-700 hover:bg-purple-600 text-white{% endif %}
+                          transition-colors">
+                    🔑 {% if exp_tw_scopes_ok %}Re-authorize Bot{% else %}Authorize Bot (chat:read required){% endif %}
+                </a>
+                <p class="text-gray-600 text-xs">Scopes requested: <code class="bg-gray-800 px-1 rounded">user:bot user:write:chat chat:read</code></p>
+                {% endif %}
+            </div>
         </div>
         <!-- Twitch Stream Key -->
         <div class="p-5 space-y-3">

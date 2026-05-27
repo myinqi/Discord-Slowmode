@@ -3900,6 +3900,33 @@ def create_app(db: Database, bot=None) -> Quart:
         exp_tw_refresh_masked = f"****{_exp_tw_refresh[-4:]}" if len(_exp_tw_refresh) > 4 else ""
         exp_tw_broadcaster = await db.get_setting("exp_radio_twitch_broadcaster_login") or ""
         exp_tw_bot_login   = await db.get_setting("exp_radio_twitch_bot_login") or ""
+        # Quick scope check for UI badge (uses cached access token if available)
+        exp_tw_scopes_ok = False
+        try:
+            import aiohttp as _ah
+            _rt = await db.get_setting("exp_radio_twitch_refresh_token") or ""
+            _cid = await db.get_setting("exp_radio_twitch_client_id") or ""
+            _cs  = await db.get_setting("exp_radio_twitch_client_secret") or ""
+            if _rt and _cid and _cs:
+                async with _ah.ClientSession() as _hs:
+                    async with _hs.post(
+                        "https://id.twitch.tv/oauth2/token",
+                        data={"client_id": _cid, "client_secret": _cs,
+                              "grant_type": "refresh_token", "refresh_token": _rt},
+                        timeout=_ah.ClientTimeout(total=8),
+                    ) as _hr:
+                        _hd = await _hr.json()
+                        _tok = _hd.get("access_token", "")
+                    if _tok:
+                        async with _hs.get(
+                            "https://id.twitch.tv/oauth2/validate",
+                            headers={"Authorization": f"OAuth {_tok}"},
+                            timeout=_ah.ClientTimeout(total=8),
+                        ) as _hr:
+                            _hv = await _hr.json()
+                            exp_tw_scopes_ok = "chat:read" in (_hv.get("scopes") or [])
+        except Exception:
+            pass
         exp_guild = get_guild()
         exp_text_channels = []
         if exp_guild:
@@ -3926,6 +3953,7 @@ def create_app(db: Database, bot=None) -> Quart:
             exp_tw_refresh_masked=exp_tw_refresh_masked,
             exp_tw_broadcaster=exp_tw_broadcaster,
             exp_tw_bot_login=exp_tw_bot_login,
+            exp_tw_scopes_ok=exp_tw_scopes_ok,
             text_channels=exp_text_channels,
         )
 
@@ -4092,6 +4120,94 @@ def create_app(db: Database, bot=None) -> Quart:
             "running": exp_stream_manager.is_running,
             "entries": exp_stream_manager.get_log(since_ts=since, max_age_secs=window),
         })
+
+    # ── Twitch Bot OAuth re-authorization ──────────────────────────────────────
+    _TWITCH_BOT_SCOPES = "user:bot user:write:chat chat:read"
+    _TWITCH_OAUTH_STATE_KEY = "twitch_oauth_state"
+
+    @app.route("/exp-radio/twitch-oauth-start")
+    @permission_required('exp_radio')
+    async def exp_radio_twitch_oauth_start():
+        import secrets as _sec
+        client_id = await db.get_setting("exp_radio_twitch_client_id")
+        if not client_id:
+            await flash("Client ID not configured — save it first.", "error")
+            return redirect(url_for("exp_radio_admin"))
+        state = _sec.token_urlsafe(16)
+        session[_TWITCH_OAUTH_STATE_KEY] = state
+        redirect_uri = request.url_root.rstrip("/") + url_for("exp_radio_twitch_oauth_callback")
+        params = (
+            f"client_id={client_id}"
+            f"&redirect_uri={redirect_uri}"
+            f"&response_type=code"
+            f"&scope={_TWITCH_BOT_SCOPES.replace(' ', '+')}"
+            f"&state={state}"
+        )
+        return redirect(f"https://id.twitch.tv/oauth2/authorize?{params}")
+
+    @app.route("/exp-radio/twitch-oauth-callback")
+    @permission_required('exp_radio')
+    async def exp_radio_twitch_oauth_callback():
+        import aiohttp as _aio
+        code      = request.args.get("code", "")
+        state_got = request.args.get("state", "")
+        error     = request.args.get("error_description") or request.args.get("error", "")
+        if error:
+            await flash(f"Twitch authorization denied: {error}", "error")
+            return redirect(url_for("exp_radio_admin"))
+        state_exp = session.pop(_TWITCH_OAUTH_STATE_KEY, None)
+        if not state_exp or state_got != state_exp:
+            await flash("OAuth state mismatch — possible CSRF. Try again.", "error")
+            return redirect(url_for("exp_radio_admin"))
+        client_id     = await db.get_setting("exp_radio_twitch_client_id") or ""
+        client_secret = await db.get_setting("exp_radio_twitch_client_secret") or ""
+        redirect_uri  = request.url_root.rstrip("/") + url_for("exp_radio_twitch_oauth_callback")
+        try:
+            async with _aio.ClientSession() as _s:
+                async with _s.post(
+                    "https://id.twitch.tv/oauth2/token",
+                    data={
+                        "client_id":     client_id,
+                        "client_secret": client_secret,
+                        "code":          code,
+                        "grant_type":    "authorization_code",
+                        "redirect_uri":  redirect_uri,
+                    },
+                    timeout=_aio.ClientTimeout(total=15),
+                ) as _r:
+                    _d = await _r.json()
+                    if _r.status != 200 or "refresh_token" not in _d:
+                        await flash(f"Token exchange failed: {_d.get('message', _d)}", "error")
+                        return redirect(url_for("exp_radio_admin"))
+                    access_token  = _d["access_token"]
+                    refresh_token = _d["refresh_token"]
+                # Resolve bot login from the new token
+                async with _aio.ClientSession() as _s:
+                    async with _s.get(
+                        "https://id.twitch.tv/oauth2/validate",
+                        headers={"Authorization": f"OAuth {access_token}"},
+                        timeout=_aio.ClientTimeout(total=10),
+                    ) as _r:
+                        _v = await _r.json()
+                        bot_login = _v.get("login", "")
+                        new_scopes = _v.get("scopes", [])
+            await db.set_setting("exp_radio_twitch_refresh_token", refresh_token)
+            await db.set_setting("exp_radio_twitch_bot_login", bot_login)
+            await db.set_setting("exp_radio_twitch_bot_user_id", "")
+            scope_ok = "chat:read" in new_scopes
+            msg = (
+                f"✅ Bot re-authorized as {bot_login} with scopes: {new_scopes}. "
+                + ("chat:read present — Relic Hunt will work!" if scope_ok
+                   else "⚠️ chat:read still missing — check the app's Twitch scopes.")
+            )
+            await flash(msg, "success" if scope_ok else "error")
+            # Auto-restart the relic hunt listener with the new token
+            if scope_ok:
+                await relic_hunt.stop()
+                asyncio.create_task(_relic_hunt_autostart())
+        except Exception as _e:
+            await flash(f"OAuth callback error: {_e}", "error")
+        return redirect(url_for("exp_radio_admin"))
 
     @app.route("/exp-radio/consent-csv")
     @permission_required('exp_radio')
