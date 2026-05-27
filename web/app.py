@@ -3376,6 +3376,7 @@ def create_app(db: Database, bot=None) -> Quart:
         app.radio_cleanup_task = asyncio.create_task(_radio_cleanup_loop())
         app.exp_radio_cleanup_task = asyncio.create_task(_exp_radio_cleanup_loop())
         app.exp_radio_schedule_task = asyncio.create_task(_exp_radio_schedule_loop())
+        asyncio.create_task(_relic_hunt_autostart())
 
     # ── Experimental Radio ─────────────────────────────────────────────────────
 
@@ -3383,7 +3384,33 @@ def create_app(db: Database, bot=None) -> Quart:
     exp_stream_manager = ExpStreamManager(db, EXP_RADIO_DIR)
 
     from bot.relic_hunt import RelicHunt
+    from bot.twitch_bot import TwitchBot as _TwitchBot
     relic_hunt = RelicHunt(db)
+
+    async def _relic_hunt_autostart():
+        """Auto-start the Relic Hunt IRC listener on app boot if the game is enabled
+        and the exp_radio_twitch credentials are configured."""
+        await asyncio.sleep(3)  # brief delay so DB is fully ready
+        try:
+            await db.ensure_relic_tables()
+            enabled = (await db.relic_get_setting("enabled")) != "false"
+            if not enabled:
+                return
+            client_id   = await db.get_setting("exp_radio_twitch_client_id")
+            refresh_tok = await db.get_setting("exp_radio_twitch_refresh_token")
+            broadcaster = await db.get_setting("exp_radio_twitch_broadcaster_login")
+            if not (client_id and refresh_tok and broadcaster):
+                print("[relic-hunt] Twitch credentials not configured, skipping auto-start")
+                return
+            bot = _TwitchBot(db, key_prefix="exp_radio_twitch")
+            ok, msg = await bot.start()
+            if not ok:
+                print(f"[relic-hunt] Auto-start failed: {msg}")
+                return
+            await relic_hunt.start(bot)
+            print("[relic-hunt] Auto-started successfully")
+        except Exception as e:
+            print(f"[relic-hunt] Auto-start error: {e}")
 
     @app.route("/exp-radio", methods=["GET", "POST"])
     @permission_required('exp_radio')
@@ -4129,12 +4156,21 @@ def create_app(db: Database, bot=None) -> Quart:
 
             elif action == "start_listener":
                 await db.ensure_relic_tables()
-                twitch_bot_inst = getattr(exp_stream_manager, '_twitch_chat', None)
-                if twitch_bot_inst:
-                    await relic_hunt.start(twitch_bot_inst)
-                    await flash("Relic Hunt listener started.", "success")
+                if relic_hunt._running:
+                    await relic_hunt.stop()
+                client_id   = await db.get_setting("exp_radio_twitch_client_id")
+                refresh_tok = await db.get_setting("exp_radio_twitch_refresh_token")
+                broadcaster = await db.get_setting("exp_radio_twitch_broadcaster_login")
+                if not (client_id and refresh_tok and broadcaster):
+                    await flash("Twitch credentials not configured. Set them in Exp. Radio \u2192 Settings.", "error")
                 else:
-                    await flash("No active Twitch bot — start the Exp. Radio stream first.", "error")
+                    bot = _TwitchBot(db, key_prefix="exp_radio_twitch")
+                    ok, msg = await bot.start()
+                    if ok:
+                        await relic_hunt.start(bot)
+                        await flash("Relic Hunt listener started.", "success")
+                    else:
+                        await flash(f"Twitch bot error: {msg}", "error")
 
             elif action == "stop_listener":
                 await relic_hunt.stop()
