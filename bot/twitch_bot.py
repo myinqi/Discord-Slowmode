@@ -20,20 +20,28 @@ broadcaster's channel — easiest done by the broadcaster typing
 from __future__ import annotations
 
 import asyncio
+import re
 import time
-from typing import Awaitable, Callable, Dict, Optional, Tuple
+from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
 import aiohttp
 
 
-_TOKEN_URL = "https://id.twitch.tv/oauth2/token"
+_TOKEN_URL    = "https://id.twitch.tv/oauth2/token"
 _VALIDATE_URL = "https://id.twitch.tv/oauth2/validate"
-_USERS_URL = "https://api.twitch.tv/helix/users"
-_CHAT_URL = "https://api.twitch.tv/helix/chat/messages"
+_USERS_URL    = "https://api.twitch.tv/helix/users"
+_CHAT_URL     = "https://api.twitch.tv/helix/chat/messages"
+_IRC_URL      = "wss://irc-ws.chat.twitch.tv:443"
 
 # How early (in seconds) to proactively refresh the access token before its
 # stated expiry. Twitch tokens last ~4h, 5 minutes safety is plenty.
 _REFRESH_LEAD_TIME = 300
+
+# Parse: @tag=val;tag2=val2 :nick!nick@nick.tmi.twitch.tv PRIVMSG #channel :message
+_PRIVMSG_RE = re.compile(
+    r"^(?:@(?P<tags>[^ ]+) )?:(?P<user>[^!]+)![^ ]+ PRIVMSG #(?P<channel>[^ ]+) :(?P<text>.+)$"
+)
+_TAG_RE = re.compile(r"([^;=]+)=([^;]*)")
 
 
 def _normalize_login(value: str) -> str:
@@ -70,6 +78,8 @@ class TwitchBot:
         self._client_id: Optional[str] = None
         self._command_handlers: Dict[str, Callable[[dict], Awaitable[None]]] = {}
         self._lock = asyncio.Lock()
+        self._irc_task: Optional[asyncio.Task] = None
+        self._irc_running: bool = False
 
     # ------------------------------------------------------------------
     # Public API used by stream_manager.py
@@ -87,10 +97,134 @@ class TwitchBot:
         return True, "Connected"
 
     async def stop(self) -> None:
-        # Nothing persistent yet (HTTP-only). When IRC command-listener is
-        # added, cancel its task here.
         self._access_token = None
         self._access_expires_at = 0.0
+        await self.stop_listener()
+
+    # ------------------------------------------------------------------
+    # IRC WebSocket listener (chat command reading)
+    # ------------------------------------------------------------------
+    async def start_listener(self) -> None:
+        """Start the background IRC WebSocket task that reads chat messages
+        and dispatches registered !commands. Safe to call multiple times."""
+        if self._irc_task and not self._irc_task.done():
+            return
+        self._irc_running = True
+        self._irc_task = asyncio.create_task(self._irc_loop())
+
+    async def stop_listener(self) -> None:
+        """Cancel the IRC listener task gracefully."""
+        self._irc_running = False
+        if self._irc_task and not self._irc_task.done():
+            self._irc_task.cancel()
+            try:
+                await self._irc_task
+            except asyncio.CancelledError:
+                pass
+        self._irc_task = None
+
+    async def _irc_loop(self) -> None:
+        """Persistent IRC WebSocket loop with automatic reconnect."""
+        backoff = 2.0
+        while self._irc_running:
+            try:
+                await self._irc_session()
+                backoff = 2.0
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                print(f"[twitch-irc] connection error: {e} — reconnecting in {backoff:.0f}s")
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 120.0)
+
+    async def _irc_session(self) -> None:
+        """Single IRC WebSocket session: authenticate, join channel, read messages."""
+        if not await self._ensure_token():
+            print("[twitch-irc] no valid token, skipping connect")
+            await asyncio.sleep(30)
+            return
+        broadcaster_login = _normalize_login(
+            await self.db.get_setting(self.SETTING_KEYS["broadcaster_login"]) or ""
+        )
+        bot_login = await self.db.get_setting(self.SETTING_KEYS["bot_login"]) or ""
+        if not broadcaster_login or not bot_login:
+            print("[twitch-irc] broadcaster_login / bot_login not configured, skipping")
+            await asyncio.sleep(30)
+            return
+
+        print(f"[twitch-irc] connecting to {_IRC_URL} as {bot_login} → #{broadcaster_login}")
+        async with aiohttp.ClientSession() as session:
+            async with session.ws_connect(
+                _IRC_URL,
+                heartbeat=120,
+                timeout=aiohttp.ClientWSTimeout(ws_close=10),
+            ) as ws:
+                await ws.send_str(f"PASS oauth:{self._access_token}")
+                await ws.send_str(f"NICK {bot_login}")
+                await ws.send_str("CAP REQ :twitch.tv/tags twitch.tv/commands twitch.tv/membership")
+                await ws.send_str(f"JOIN #{broadcaster_login}")
+                print(f"[twitch-irc] joined #{broadcaster_login}")
+
+                async for msg in ws:
+                    if not self._irc_running:
+                        break
+                    if msg.type == aiohttp.WSMsgType.TEXT:
+                        for line in msg.data.strip().split("\r\n"):
+                            await self._handle_irc_line(line, ws)
+                    elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                        print(f"[twitch-irc] ws closed/error: {msg.type}")
+                        break
+
+    async def _handle_irc_line(self, line: str, ws) -> None:
+        """Parse one IRC line and dispatch commands."""
+        if line.startswith("PING"):
+            pong = "PONG" + line[4:]
+            await ws.send_str(pong)
+            return
+
+        m = _PRIVMSG_RE.match(line)
+        if not m:
+            return
+
+        tags_raw = m.group("tags") or ""
+        tags: Dict[str, str] = dict(_TAG_RE.findall(tags_raw))
+        username    = tags.get("display-name") or m.group("user")
+        user_id     = tags.get("user-id") or ""
+        text        = m.group("text").strip()
+        is_mod      = tags.get("mod") == "1"
+        is_sub      = tags.get("subscriber") == "1"
+        is_vip      = "vip" in (tags.get("badges") or "")
+        is_broadcaster = "broadcaster" in (tags.get("badges") or "")
+
+        if not text.startswith("!"):
+            return
+
+        parts   = text.split(None, 1)
+        cmd     = parts[0].lstrip("!").lower()
+        args    = parts[1] if len(parts) > 1 else ""
+
+        handler = self._command_handlers.get(cmd)
+        if not handler:
+            return
+
+        context = {
+            "username":       username,
+            "user_id":        user_id,
+            "text":           text,
+            "args":           args,
+            "is_mod":         is_mod,
+            "is_sub":         is_sub,
+            "is_vip":         is_vip,
+            "is_broadcaster": is_broadcaster,
+            "tags":           tags,
+        }
+        asyncio.create_task(self._dispatch(handler, context))
+
+    async def _dispatch(self, handler, context: dict) -> None:
+        try:
+            await handler(context)
+        except Exception as e:
+            print(f"[twitch-irc] command handler error: {e}")
 
     async def send(self, message: str) -> bool:
         """Post a chat message in the broadcaster's channel.

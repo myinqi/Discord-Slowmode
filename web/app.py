@@ -77,6 +77,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('audit', 'Audit Log'),
         ('settings', 'Settings'),
         ('llm', 'Corax Chat (LLM)'),
+        ('relic_hunt', "Raven's Nest"),
     ]
 
     def admin_required(f):
@@ -3381,6 +3382,9 @@ def create_app(db: Database, bot=None) -> Quart:
     from bot.exp_stream_manager import ExpStreamManager
     exp_stream_manager = ExpStreamManager(db, EXP_RADIO_DIR)
 
+    from bot.relic_hunt import RelicHunt
+    relic_hunt = RelicHunt(db)
+
     @app.route("/exp-radio", methods=["GET", "POST"])
     @permission_required('exp_radio')
     async def exp_radio_admin():
@@ -4091,6 +4095,285 @@ def create_app(db: Database, bot=None) -> Quart:
             buf.getvalue(),
             mimetype="text/csv",
             headers={"Content-Disposition": "attachment; filename=exp_radio_consent.csv"},
+        )
+
+    # --- Raven's Nest: Relic Hunt ---
+    @app.route("/relic-hunt", methods=["GET", "POST"])
+    @permission_required('relic_hunt')
+    async def relic_hunt_admin():
+        import json as _json
+        from quart import jsonify
+
+        if request.method == "POST":
+            form = await request.form
+            action = form.get("action", "")
+
+            if action == "save_settings":
+                for key in (
+                    "enabled", "command_prefix", "timezone",
+                    "raven_cooldown_seconds", "ritual_cooldown_seconds",
+                    "leaderboard_size", "announce_level_ups", "announce_rank_ups",
+                    "mods_bypass_cooldowns", "subscriber_cooldown_multiplier",
+                    "vip_cooldown_multiplier", "ritual_reward_points",
+                    "ritual_reward_xp", "ritual_legendary_chance",
+                    "ritual_active_window_minutes",
+                ):
+                    val = form.get(key, "")
+                    await db.relic_set_setting(key, val)
+                await flash("Settings saved.", "success")
+
+            elif action == "toggle_game":
+                enabled = (await db.relic_get_setting("enabled")) != "false"
+                await db.relic_set_setting("enabled", "false" if enabled else "true")
+                await flash(f"Game {'disabled' if enabled else 'enabled'}.", "success")
+
+            elif action == "start_listener":
+                await db.ensure_relic_tables()
+                twitch_bot_inst = getattr(exp_stream_manager, '_twitch_chat', None)
+                if twitch_bot_inst:
+                    await relic_hunt.start(twitch_bot_inst)
+                    await flash("Relic Hunt listener started.", "success")
+                else:
+                    await flash("No active Twitch bot — start the Exp. Radio stream first.", "error")
+
+            elif action == "stop_listener":
+                await relic_hunt.stop()
+                await flash("Relic Hunt listener stopped.", "success")
+
+            elif action == "upsert_item":
+                item_id = form.get("item_id", "").strip().replace(" ", "_").lower()
+                if not item_id:
+                    await flash("Item ID is required.", "error")
+                else:
+                    item = {
+                        "id": item_id,
+                        "name": form.get("name", ""),
+                        "rarity": form.get("rarity", "common"),
+                        "enabled": 1 if form.get("enabled") else 0,
+                        "drop_weight": float(form.get("drop_weight") or 1),
+                        "min_points": int(form.get("min_points") or 0),
+                        "max_points": int(form.get("max_points") or 0),
+                        "min_xp": int(form.get("min_xp") or 0),
+                        "max_xp": int(form.get("max_xp") or 0),
+                        "flavor_text": form.get("flavor_text", ""),
+                        "announce_globally": 1 if form.get("announce_globally") else 0,
+                        "can_be_used_in_ritual": 1 if form.get("can_be_used_in_ritual") else 0,
+                        "ritual_energy": int(form.get("ritual_energy") or 0),
+                        "icon": form.get("icon", ""),
+                        "category": form.get("category", ""),
+                        "seasonal_tag": form.get("seasonal_tag") or None,
+                        "required_event": form.get("required_event") or None,
+                    }
+                    await db.relic_upsert_item(item)
+                    await flash(f"Item '{item['name']}' saved.", "success")
+
+            elif action == "delete_item":
+                item_id = form.get("item_id", "")
+                await db.relic_delete_item(item_id)
+                await flash("Item deleted.", "success")
+
+            elif action == "toggle_item":
+                item_id = form.get("item_id", "")
+                item = await db.relic_get_item(item_id)
+                if item:
+                    item["enabled"] = 0 if item["enabled"] else 1
+                    await db.relic_upsert_item(item)
+
+            elif action == "import_items":
+                raw = form.get("items_json", "")
+                try:
+                    items = _json.loads(raw)
+                    if not isinstance(items, list):
+                        raise ValueError("Expected a JSON array")
+                    count = 0
+                    for it in items:
+                        it.setdefault("enabled", True)
+                        it.setdefault("announce_globally", it.get("rarity") in ("rare","epic","legendary","mythic"))
+                        it["enabled"] = 1 if it["enabled"] else 0
+                        it["announce_globally"] = 1 if it["announce_globally"] else 0
+                        it["can_be_used_in_ritual"] = 1 if it.get("can_be_used_in_ritual") else 0
+                        await db.relic_upsert_item(it)
+                        count += 1
+                    await flash(f"Imported {count} item(s).", "success")
+                except Exception as e:
+                    await flash(f"Import failed: {e}", "error")
+
+            elif action == "reset_items":
+                from bot.relic_hunt import DEFAULT_ITEMS
+                import time as _time
+                for item in DEFAULT_ITEMS:
+                    row = {
+                        "id": item["id"], "name": item["name"],
+                        "rarity": item.get("rarity","common"), "enabled": 1,
+                        "drop_weight": item.get("drop_weight",1),
+                        "min_points": item.get("min_points",0), "max_points": item.get("max_points",0),
+                        "min_xp": item.get("min_xp",0), "max_xp": item.get("max_xp",0),
+                        "flavor_text": item.get("flavor_text",""),
+                        "announce_globally": 1 if item.get("announce_globally") else 0,
+                        "can_be_used_in_ritual": 1 if item.get("can_be_used_in_ritual") else 0,
+                        "ritual_energy": item.get("ritual_energy",0),
+                        "icon": item.get("icon",""), "category": item.get("category",""),
+                        "seasonal_tag": None, "required_event": None,
+                    }
+                    await db.relic_upsert_item(row)
+                await flash(f"Default item library restored ({len(DEFAULT_ITEMS)} items).", "success")
+
+            elif action == "edit_user_points":
+                uid = form.get("twitch_user_id", "")
+                user = await db.relic_get_user(uid)
+                if user:
+                    user["points"] = max(0, int(form.get("points") or 0))
+                    await db.relic_upsert_user(user)
+                    await flash(f"Updated points for {user['username']}.", "success")
+
+            elif action == "reset_user":
+                uid = form.get("twitch_user_id", "")
+                await db.relic_delete_user(uid)
+                await flash("User reset.", "success")
+
+            elif action == "give_item":
+                uid = form.get("twitch_user_id", "")
+                item_id = form.get("item_id", "")
+                amount = int(form.get("amount") or 1)
+                for _ in range(amount):
+                    await db.relic_add_item_to_user(uid, item_id)
+                await flash(f"Gave {amount}x {item_id} to user.", "success")
+
+            elif action == "upsert_event":
+                eid = form.get("event_id", "").strip().replace(" ","_").lower()
+                if not eid:
+                    await flash("Event ID required.", "error")
+                else:
+                    cfg = {
+                        "durationMinutes": int(form.get("duration_minutes") or 10),
+                        "rareDropMultiplier": float(form.get("rare_drop_multiplier") or 1.0),
+                        "epicDropMultiplier": float(form.get("epic_drop_multiplier") or 1.0),
+                        "pointsMultiplier": float(form.get("points_multiplier") or 1.0),
+                        "xpMultiplier": float(form.get("xp_multiplier") or 1.0),
+                        "ritualEnergyMultiplier": float(form.get("ritual_energy_multiplier") or 1.0),
+                        "startMessage": form.get("start_message",""),
+                        "endMessage": form.get("end_message",""),
+                    }
+                    await db.relic_upsert_event({
+                        "id": eid, "name": form.get("event_name",eid),
+                        "enabled": 1 if form.get("event_enabled") else 0,
+                        "config_json": _json.dumps(cfg),
+                    })
+                    await flash(f"Event '{eid}' saved.", "success")
+
+            elif action == "delete_event":
+                await db.relic_delete_event(form.get("event_id",""))
+                await flash("Event deleted.", "success")
+
+            elif action == "start_event":
+                eid = form.get("event_id","")
+                events = {e["id"]: e for e in await db.relic_get_all_events()}
+                if eid in events:
+                    cfg = _json.loads(events[eid]["config_json"])
+                    dur = int(form.get("duration_minutes") or cfg.get("durationMinutes",10))
+                    await db.relic_start_event(eid, dur * 60, "admin")
+                    msg = cfg.get("startMessage", f"Event {eid} started!")
+                    if relic_hunt._bot:
+                        await relic_hunt._bot.send(msg)
+                    await flash(f"Event started: {msg}", "success")
+
+            elif action == "stop_event":
+                eid = form.get("event_id","")
+                events = {e["id"]: e for e in await db.relic_get_all_events()}
+                if eid in events:
+                    cfg = _json.loads(events[eid]["config_json"])
+                    await db.relic_stop_event(eid)
+                    msg = cfg.get("endMessage", f"Event {eid} stopped.")
+                    if relic_hunt._bot:
+                        await relic_hunt._bot.send(msg)
+                    await flash(f"Event stopped.", "success")
+
+            elif action == "ritual_add_energy":
+                ritual = await db.relic_get_ritual()
+                add = int(form.get("add_energy") or 0)
+                await db.relic_update_ritual(ritual["energy"] + add)
+                await flash(f"Added {add} ritual energy.", "success")
+
+            elif action == "ritual_reset":
+                await db.relic_update_ritual(0)
+                await flash("Ritual reset.", "success")
+
+            elif action == "ritual_save_settings":
+                for key in ("ritual_goal", "ritual_reward_points", "ritual_reward_xp",
+                             "ritual_legendary_chance", "ritual_active_window_minutes",
+                             "ritual_cooldown_seconds"):
+                    await db.relic_set_setting(key.replace("ritual_","",1), form.get(key,""))
+                goal = int(form.get("ritual_goal") or 500)
+                ritual = await db.relic_get_ritual()
+                await db.relic_update_ritual(ritual["energy"], goal)
+                await flash("Ritual settings saved.", "success")
+
+            return redirect(request.url)
+
+        # GET
+        await db.ensure_relic_tables()
+        items   = await db.relic_get_all_items()
+        users   = await db.relic_get_all_users()
+        events  = await db.relic_get_all_events()
+        active_events = await db.relic_get_active_events()
+        active_event_ids = {ae["event_id"] for ae in active_events}
+        ritual  = await db.relic_get_ritual()
+        log     = await db.relic_get_recent_log(30)
+        game_enabled = (await db.relic_get_setting("enabled")) != "false"
+        listener_running = relic_hunt._running
+
+        # Load settings
+        import json as _jrh
+        settings = {}
+        for key in (
+            "command_prefix", "timezone", "raven_cooldown_seconds",
+            "ritual_cooldown_seconds", "leaderboard_size", "announce_level_ups",
+            "announce_rank_ups", "mods_bypass_cooldowns",
+            "subscriber_cooldown_multiplier", "vip_cooldown_multiplier",
+            "ritual_reward_points", "ritual_reward_xp", "ritual_legendary_chance",
+            "ritual_active_window_minutes",
+        ):
+            settings[key] = await db.relic_get_setting(key) or ""
+
+        # Enrich events with parsed config
+        events_parsed = []
+        for ev in events:
+            try:
+                cfg = _jrh.loads(ev["config_json"])
+            except Exception:
+                cfg = {}
+            events_parsed.append({**ev, "cfg": cfg, "is_active": ev["id"] in active_event_ids})
+
+        # Stats
+        total_hunts = sum(u.get("commands_used", 0) for u in users)
+        total_legendary = sum(u.get("legendary_finds", 0) for u in users)
+        total_mythic = sum(u.get("mythic_finds", 0) for u in users)
+
+        from bot.relic_hunt import DEFAULT_RANKS
+        return await render_template(
+            "relic_hunt.html",
+            items=items, users=users[:50],
+            events=events_parsed, ritual=ritual,
+            log=log, game_enabled=game_enabled,
+            listener_running=listener_running,
+            settings=settings,
+            total_hunts=total_hunts,
+            total_legendary=total_legendary,
+            total_mythic=total_mythic,
+            ranks=DEFAULT_RANKS,
+            active_event_ids=active_event_ids,
+        )
+
+    @app.route("/relic-hunt/export-items")
+    @permission_required('relic_hunt')
+    async def relic_hunt_export_items():
+        import json as _json
+        from quart import Response
+        items = await db.relic_get_all_items()
+        return Response(
+            _json.dumps(items, indent=2),
+            mimetype="application/json",
+            headers={"Content-Disposition": "attachment; filename=relic_items.json"},
         )
 
     # --- Suno Audio Analyzer ---

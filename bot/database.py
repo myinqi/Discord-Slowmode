@@ -2567,3 +2567,359 @@ class Database:
                FROM exp_radio_songs ORDER BY submitted_at DESC"""
         ) as cursor:
             return [dict(r) for r in await cursor.fetchall()]
+
+    # -----------------------------------------------------------------------
+    # Relic Hunt — table creation
+    # -----------------------------------------------------------------------
+    async def ensure_relic_tables(self):
+        """Create all Relic Hunt tables if they don't exist yet."""
+        await self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS relic_items (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                rarity TEXT NOT NULL DEFAULT 'common',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                drop_weight REAL NOT NULL DEFAULT 1,
+                min_points INTEGER NOT NULL DEFAULT 0,
+                max_points INTEGER NOT NULL DEFAULT 0,
+                min_xp INTEGER NOT NULL DEFAULT 0,
+                max_xp INTEGER NOT NULL DEFAULT 0,
+                flavor_text TEXT,
+                announce_globally INTEGER NOT NULL DEFAULT 0,
+                can_be_used_in_ritual INTEGER NOT NULL DEFAULT 0,
+                ritual_energy INTEGER NOT NULL DEFAULT 0,
+                icon TEXT,
+                category TEXT,
+                seasonal_tag TEXT,
+                required_event TEXT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS relic_users (
+                twitch_user_id TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                points INTEGER NOT NULL DEFAULT 0,
+                xp INTEGER NOT NULL DEFAULT 0,
+                level INTEGER NOT NULL DEFAULT 1,
+                last_raven_at REAL,
+                last_daily_at REAL,
+                last_ritual_at REAL,
+                commands_used INTEGER NOT NULL DEFAULT 0,
+                legendary_finds INTEGER NOT NULL DEFAULT 0,
+                mythic_finds INTEGER NOT NULL DEFAULT 0,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS relic_user_items (
+                twitch_user_id TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                amount INTEGER NOT NULL DEFAULT 0,
+                first_found_at REAL,
+                last_found_at REAL,
+                PRIMARY KEY (twitch_user_id, item_id)
+            );
+            CREATE TABLE IF NOT EXISTS relic_hunt_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                twitch_user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                item_id TEXT,
+                item_name TEXT,
+                rarity TEXT,
+                points_awarded INTEGER NOT NULL DEFAULT 0,
+                xp_awarded INTEGER NOT NULL DEFAULT 0,
+                result_type TEXT NOT NULL,
+                message TEXT,
+                created_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS relic_events (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                config_json TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS relic_active_events (
+                event_id TEXT PRIMARY KEY,
+                started_at REAL NOT NULL,
+                ends_at REAL NOT NULL,
+                started_by TEXT
+            );
+            CREATE TABLE IF NOT EXISTS relic_ritual_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                energy INTEGER NOT NULL DEFAULT 0,
+                goal INTEGER NOT NULL DEFAULT 500,
+                updated_at REAL NOT NULL
+            );
+        """)
+        await self.db.commit()
+
+    # -----------------------------------------------------------------------
+    # Relic Hunt — items
+    # -----------------------------------------------------------------------
+    async def relic_get_all_items(self) -> list[dict]:
+        async with self.db.execute(
+            "SELECT * FROM relic_items ORDER BY rarity, name"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def relic_get_item(self, item_id: str) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM relic_items WHERE id = ?", (item_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def relic_upsert_item(self, item: dict) -> None:
+        now = time.time()
+        await self.db.execute("""
+            INSERT INTO relic_items
+              (id, name, rarity, enabled, drop_weight,
+               min_points, max_points, min_xp, max_xp,
+               flavor_text, announce_globally, can_be_used_in_ritual,
+               ritual_energy, icon, category, seasonal_tag,
+               required_event, created_at, updated_at)
+            VALUES
+              (:id,:name,:rarity,:enabled,:drop_weight,
+               :min_points,:max_points,:min_xp,:max_xp,
+               :flavor_text,:announce_globally,:can_be_used_in_ritual,
+               :ritual_energy,:icon,:category,:seasonal_tag,
+               :required_event,:now,:now)
+            ON CONFLICT(id) DO UPDATE SET
+              name=excluded.name, rarity=excluded.rarity,
+              enabled=excluded.enabled, drop_weight=excluded.drop_weight,
+              min_points=excluded.min_points, max_points=excluded.max_points,
+              min_xp=excluded.min_xp, max_xp=excluded.max_xp,
+              flavor_text=excluded.flavor_text,
+              announce_globally=excluded.announce_globally,
+              can_be_used_in_ritual=excluded.can_be_used_in_ritual,
+              ritual_energy=excluded.ritual_energy,
+              icon=excluded.icon, category=excluded.category,
+              seasonal_tag=excluded.seasonal_tag,
+              required_event=excluded.required_event,
+              updated_at=excluded.updated_at
+        """, {**item, "now": now})
+        await self.db.commit()
+
+    async def relic_delete_item(self, item_id: str) -> None:
+        await self.db.execute("DELETE FROM relic_items WHERE id = ?", (item_id,))
+        await self.db.commit()
+
+    async def relic_get_eligible_items(self, active_event_ids: list) -> list[dict]:
+        """Items that are enabled, have drop_weight > 0, and whose requiredEvent
+        is NULL or matches an active event."""
+        async with self.db.execute(
+            "SELECT * FROM relic_items WHERE enabled = 1 AND drop_weight > 0"
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+        return [
+            r for r in rows
+            if not r.get("required_event")
+            or r["required_event"] in active_event_ids
+        ]
+
+    # -----------------------------------------------------------------------
+    # Relic Hunt — users
+    # -----------------------------------------------------------------------
+    async def relic_get_user(self, twitch_user_id: str) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM relic_users WHERE twitch_user_id = ?", (twitch_user_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def relic_upsert_user(self, user: dict) -> None:
+        now = time.time()
+        await self.db.execute("""
+            INSERT INTO relic_users
+              (twitch_user_id, username, points, xp, level,
+               last_raven_at, last_daily_at, last_ritual_at,
+               commands_used, legendary_finds, mythic_finds,
+               created_at, updated_at)
+            VALUES
+              (:twitch_user_id,:username,:points,:xp,:level,
+               :last_raven_at,:last_daily_at,:last_ritual_at,
+               :commands_used,:legendary_finds,:mythic_finds,
+               :now,:now)
+            ON CONFLICT(twitch_user_id) DO UPDATE SET
+              username=excluded.username,
+              points=excluded.points, xp=excluded.xp, level=excluded.level,
+              last_raven_at=excluded.last_raven_at,
+              last_daily_at=excluded.last_daily_at,
+              last_ritual_at=excluded.last_ritual_at,
+              commands_used=excluded.commands_used,
+              legendary_finds=excluded.legendary_finds,
+              mythic_finds=excluded.mythic_finds,
+              updated_at=excluded.updated_at
+        """, {**user, "now": now})
+        await self.db.commit()
+
+    async def relic_get_leaderboard(self, limit: int = 10) -> list[dict]:
+        async with self.db.execute(
+            "SELECT * FROM relic_users ORDER BY points DESC LIMIT ?", (limit,)
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def relic_get_all_users(self) -> list[dict]:
+        async with self.db.execute(
+            "SELECT * FROM relic_users ORDER BY points DESC"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def relic_delete_user(self, twitch_user_id: str) -> None:
+        await self.db.execute(
+            "DELETE FROM relic_users WHERE twitch_user_id = ?", (twitch_user_id,)
+        )
+        await self.db.execute(
+            "DELETE FROM relic_user_items WHERE twitch_user_id = ?", (twitch_user_id,)
+        )
+        await self.db.commit()
+
+    # -----------------------------------------------------------------------
+    # Relic Hunt — user inventory
+    # -----------------------------------------------------------------------
+    async def relic_get_inventory(self, twitch_user_id: str) -> list[dict]:
+        async with self.db.execute("""
+            SELECT ui.*, i.name, i.rarity, i.icon, i.can_be_used_in_ritual,
+                   i.ritual_energy, i.flavor_text
+            FROM relic_user_items ui
+            JOIN relic_items i ON i.id = ui.item_id
+            WHERE ui.twitch_user_id = ? AND ui.amount > 0
+            ORDER BY i.rarity DESC, ui.amount DESC
+        """, (twitch_user_id,)) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def relic_add_item_to_user(self, twitch_user_id: str, item_id: str) -> None:
+        now = time.time()
+        await self.db.execute("""
+            INSERT INTO relic_user_items (twitch_user_id, item_id, amount, first_found_at, last_found_at)
+            VALUES (?, ?, 1, ?, ?)
+            ON CONFLICT(twitch_user_id, item_id) DO UPDATE SET
+              amount = amount + 1, last_found_at = excluded.last_found_at
+        """, (twitch_user_id, item_id, now, now))
+        await self.db.commit()
+
+    async def relic_consume_ritual_item(self, twitch_user_id: str) -> Optional[dict]:
+        """Remove 1 of the lowest-rarity ritual-eligible item from the user.
+        Returns the item dict if consumed, None if user has no ritual items."""
+        inv = await self.relic_get_inventory(twitch_user_id)
+        rarity_order = ["common", "uncommon", "rare", "epic", "legendary", "mythic"]
+        eligible = [i for i in inv if i.get("can_be_used_in_ritual") and i["amount"] > 0]
+        if not eligible:
+            return None
+        eligible.sort(key=lambda i: rarity_order.index(i.get("rarity", "common")
+                                                        if i.get("rarity") in rarity_order else "common"))
+        item = eligible[0]
+        await self.db.execute("""
+            UPDATE relic_user_items SET amount = amount - 1
+            WHERE twitch_user_id = ? AND item_id = ?
+        """, (twitch_user_id, item["item_id"]))
+        await self.db.commit()
+        return item
+
+    # -----------------------------------------------------------------------
+    # Relic Hunt — hunt log
+    # -----------------------------------------------------------------------
+    async def relic_log_hunt(self, entry: dict) -> None:
+        await self.db.execute("""
+            INSERT INTO relic_hunt_log
+              (twitch_user_id, username, item_id, item_name, rarity,
+               points_awarded, xp_awarded, result_type, message, created_at)
+            VALUES
+              (:twitch_user_id,:username,:item_id,:item_name,:rarity,
+               :points_awarded,:xp_awarded,:result_type,:message,:created_at)
+        """, entry)
+        await self.db.commit()
+
+    async def relic_get_recent_log(self, limit: int = 50) -> list[dict]:
+        async with self.db.execute(
+            "SELECT * FROM relic_hunt_log ORDER BY created_at DESC LIMIT ?", (limit,)
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    # -----------------------------------------------------------------------
+    # Relic Hunt — events
+    # -----------------------------------------------------------------------
+    async def relic_get_all_events(self) -> list[dict]:
+        async with self.db.execute("SELECT * FROM relic_events ORDER BY name") as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def relic_upsert_event(self, event: dict) -> None:
+        now = time.time()
+        await self.db.execute("""
+            INSERT INTO relic_events (id, name, enabled, config_json, created_at, updated_at)
+            VALUES (:id,:name,:enabled,:config_json,:now,:now)
+            ON CONFLICT(id) DO UPDATE SET
+              name=excluded.name, enabled=excluded.enabled,
+              config_json=excluded.config_json, updated_at=excluded.updated_at
+        """, {**event, "now": now})
+        await self.db.commit()
+
+    async def relic_delete_event(self, event_id: str) -> None:
+        await self.db.execute("DELETE FROM relic_events WHERE id = ?", (event_id,))
+        await self.db.execute("DELETE FROM relic_active_events WHERE event_id = ?", (event_id,))
+        await self.db.commit()
+
+    async def relic_get_active_events(self) -> list[dict]:
+        now = time.time()
+        async with self.db.execute(
+            "SELECT * FROM relic_active_events WHERE ends_at > ?", (now,)
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def relic_start_event(self, event_id: str, duration_seconds: float,
+                                started_by: str = "") -> None:
+        now = time.time()
+        await self.db.execute("""
+            INSERT INTO relic_active_events (event_id, started_at, ends_at, started_by)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(event_id) DO UPDATE SET
+              started_at=excluded.started_at, ends_at=excluded.ends_at,
+              started_by=excluded.started_by
+        """, (event_id, now, now + duration_seconds, started_by))
+        await self.db.commit()
+
+    async def relic_stop_event(self, event_id: str) -> None:
+        await self.db.execute(
+            "DELETE FROM relic_active_events WHERE event_id = ?", (event_id,)
+        )
+        await self.db.commit()
+
+    async def relic_expire_events(self) -> None:
+        await self.db.execute(
+            "DELETE FROM relic_active_events WHERE ends_at <= ?", (time.time(),)
+        )
+        await self.db.commit()
+
+    # -----------------------------------------------------------------------
+    # Relic Hunt — ritual state
+    # -----------------------------------------------------------------------
+    async def relic_get_ritual(self) -> dict:
+        async with self.db.execute(
+            "SELECT * FROM relic_ritual_state WHERE id = 1"
+        ) as cur:
+            row = await cur.fetchone()
+            if row:
+                return dict(row)
+        return {"id": 1, "energy": 0, "goal": 500, "updated_at": time.time()}
+
+    async def relic_update_ritual(self, energy: int, goal: Optional[int] = None) -> None:
+        now = time.time()
+        await self.db.execute("""
+            INSERT INTO relic_ritual_state (id, energy, goal, updated_at)
+            VALUES (1, ?, COALESCE(?, 500), ?)
+            ON CONFLICT(id) DO UPDATE SET
+              energy=excluded.energy,
+              goal=CASE WHEN excluded.goal IS NOT NULL THEN excluded.goal ELSE goal END,
+              updated_at=excluded.updated_at
+        """, (energy, goal, now))
+        await self.db.commit()
+
+    # -----------------------------------------------------------------------
+    # Relic Hunt — settings helpers
+    # -----------------------------------------------------------------------
+    async def relic_get_setting(self, key: str) -> Optional[str]:
+        return await self.get_setting(f"relic_{key}")
+
+    async def relic_set_setting(self, key: str, value: str) -> None:
+        await self.set_setting(f"relic_{key}", value)

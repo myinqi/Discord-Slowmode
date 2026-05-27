@@ -1,0 +1,668 @@
+{% extends "base.html" %}
+{% block title %}Raven's Nest: Relic Hunt{% endblock %}
+{% block content %}
+
+{% set rarity_colors = {
+  'common':    '#b8b8b8',
+  'uncommon':  '#4caf50',
+  'rare':      '#2196f3',
+  'epic':      '#9c27b0',
+  'legendary': '#ff9800',
+  'mythic':    '#e91e63'
+} %}
+{% set rarity_order = ['common','uncommon','rare','epic','legendary','mythic'] %}
+
+{# ── Header ─────────────────────────────────────────────────────────────── #}
+<div class="flex items-center justify-between mb-6 flex-wrap gap-3">
+  <div class="flex items-center gap-3">
+    <h2 class="text-2xl font-bold text-white">🪶 Raven's Nest: Relic Hunt</h2>
+    <span class="px-2 py-0.5 rounded text-xs font-medium {% if game_enabled %}bg-green-900/50 text-green-300{% else %}bg-red-900/50 text-red-300{% endif %}">
+      {{ 'Enabled' if game_enabled else 'Disabled' }}
+    </span>
+    <span class="px-2 py-0.5 rounded text-xs font-medium {% if listener_running %}bg-blue-900/50 text-blue-300{% else %}bg-gray-700 text-gray-400{% endif %}">
+      IRC {{ 'Listening' if listener_running else 'Stopped' }}
+    </span>
+  </div>
+  <div class="flex gap-2 flex-wrap">
+    <form method="POST">
+      <input type="hidden" name="action" value="toggle_game">
+      <button class="px-3 py-1.5 rounded-lg text-sm font-medium {% if game_enabled %}bg-red-700/50 hover:bg-red-700 text-red-200{% else %}bg-green-700/50 hover:bg-green-700 text-green-200{% endif %} transition-colors">
+        {{ 'Disable Game' if game_enabled else 'Enable Game' }}
+      </button>
+    </form>
+    {% if listener_running %}
+    <form method="POST">
+      <input type="hidden" name="action" value="stop_listener">
+      <button class="px-3 py-1.5 rounded-lg text-sm bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors">Stop Listener</button>
+    </form>
+    {% else %}
+    <form method="POST">
+      <input type="hidden" name="action" value="start_listener">
+      <button class="px-3 py-1.5 rounded-lg text-sm bg-discord-blurple hover:bg-indigo-500 text-white transition-colors">▶ Start Listener</button>
+    </form>
+    {% endif %}
+    <a href="{{ url_for('relic_hunt_export_items') }}" class="px-3 py-1.5 rounded-lg text-sm bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">⬇ Export Items</a>
+  </div>
+</div>
+
+{# ── Tabs ────────────────────────────────────────────────────────────────── #}
+<div class="border-b border-gray-700/50 mb-6">
+  <nav class="flex gap-1" id="rh-tabs">
+    {% for tab_id, tab_label in [('dashboard','Dashboard'),('items','Items'),('users','Users'),('ritual','Ritual'),('events','Events'),('settings','Settings')] %}
+    <button onclick="switchTab('{{ tab_id }}')" id="tab-{{ tab_id }}"
+      class="rh-tab px-4 py-2 text-sm rounded-t-lg border-b-2 transition-colors {% if loop.first %}border-discord-blurple text-white{% else %}border-transparent text-gray-400 hover:text-gray-200{% endif %}">
+      {{ tab_label }}
+    </button>
+    {% endfor %}
+  </nav>
+</div>
+
+{# ══════════════════════════════════════════════════════════════════════════
+   TAB: Dashboard
+══════════════════════════════════════════════════════════════════════════ #}
+<div id="pane-dashboard" class="rh-pane">
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    {% for label, value in [('Hunters', users|length), ('Total Hunts', total_hunts), ('Legendary Finds', total_legendary), ('Mythic Finds', total_mythic)] %}
+    <div class="bg-discord-dark rounded-xl p-4 border border-gray-700/50 text-center">
+      <div class="text-2xl font-bold text-white">{{ value }}</div>
+      <div class="text-gray-400 text-xs mt-1">{{ label }}</div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    {# Top Hunters #}
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50 overflow-hidden">
+      <div class="px-4 py-3 border-b border-gray-700/50 text-white font-semibold text-sm">🏆 Top Hunters</div>
+      <div class="divide-y divide-gray-700/30">
+        {% for u in users[:10] %}
+        {% set level = u.level or 1 %}
+        {% set rank = namespace(name='Nestling', icon='🐣') %}
+        {% for r in ranks %}{% if level >= r.required_level %}{% set rank.name = r.name %}{% set rank.icon = r.icon %}{% endif %}{% endfor %}
+        <div class="flex items-center gap-3 px-4 py-2.5">
+          <span class="text-gray-500 text-xs w-4">{{ loop.index }}</span>
+          <span class="flex-1 text-white text-sm">{{ u.username }}</span>
+          <span class="text-gray-400 text-xs">{{ rank.icon }} {{ rank.name }}</span>
+          <span class="text-yellow-400 text-sm font-mono">{{ u.points }} pts</span>
+        </div>
+        {% else %}
+        <div class="px-4 py-4 text-gray-500 text-sm text-center">No hunters yet.</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    {# Ritual + Recent Log #}
+    <div class="space-y-4">
+      <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-4">
+        <div class="text-white font-semibold text-sm mb-3">🔥 Ritual Progress</div>
+        {% set pct = [(ritual.energy / ritual.goal * 100)|int, 100]|min %}
+        <div class="flex justify-between text-xs text-gray-400 mb-1">
+          <span>{{ ritual.energy }} / {{ ritual.goal }}</span>
+          <span>{{ pct }}%</span>
+        </div>
+        <div class="w-full bg-gray-700 rounded-full h-3">
+          <div class="bg-gradient-to-r from-orange-600 to-red-500 h-3 rounded-full transition-all" style="width:{{ pct }}%"></div>
+        </div>
+      </div>
+
+      <div class="bg-discord-dark rounded-xl border border-gray-700/50 overflow-hidden">
+        <div class="px-4 py-3 border-b border-gray-700/50 text-white font-semibold text-sm">📜 Recent Finds</div>
+        <div class="divide-y divide-gray-700/30 max-h-48 overflow-y-auto">
+          {% for entry in log[:15] %}
+          {% set rcolor = rarity_colors.get(entry.rarity or 'common', '#b8b8b8') %}
+          <div class="flex items-center gap-2 px-4 py-1.5">
+            <span class="text-xs font-medium" style="color:{{ rcolor }}">{{ entry.rarity|capitalize if entry.rarity else '' }}</span>
+            <span class="flex-1 text-gray-300 text-xs">{{ entry.username }} → {{ entry.item_name or '—' }}</span>
+            <span class="text-yellow-500 text-xs">+{{ entry.points_awarded }}</span>
+          </div>
+          {% else %}
+          <div class="px-4 py-3 text-gray-500 text-sm text-center">No hunts yet.</div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ══════════════════════════════════════════════════════════════════════════
+   TAB: Items
+══════════════════════════════════════════════════════════════════════════ #}
+<div id="pane-items" class="rh-pane hidden">
+  <div class="flex items-center justify-between mb-4 gap-3 flex-wrap">
+    <div class="flex gap-2 flex-wrap">
+      <input id="item-search" type="text" placeholder="Search items…"
+        oninput="filterItems()"
+        class="bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none w-48">
+      <select id="item-rarity-filter" onchange="filterItems()"
+        class="bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:outline-none">
+        <option value="">All rarities</option>
+        {% for r in ['common','uncommon','rare','epic','legendary','mythic'] %}
+        <option value="{{ r }}">{{ r|capitalize }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="flex gap-2">
+      <button onclick="document.getElementById('import-modal').classList.remove('hidden')"
+        class="px-3 py-1.5 rounded-lg text-sm bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">⬆ Import JSON</button>
+      <form method="POST" onsubmit="return confirm('Restore all default items? Custom items will be overwritten if their ID matches.')">
+        <input type="hidden" name="action" value="reset_items">
+        <button class="px-3 py-1.5 rounded-lg text-sm bg-yellow-800/50 hover:bg-yellow-800 text-yellow-200 transition-colors">↺ Restore Defaults</button>
+      </form>
+      <button onclick="openItemModal()"
+        class="px-3 py-1.5 rounded-lg text-sm bg-discord-blurple hover:bg-indigo-500 text-white transition-colors">+ New Item</button>
+    </div>
+  </div>
+
+  <div class="bg-discord-dark rounded-xl border border-gray-700/50 overflow-hidden">
+    <table class="w-full text-sm">
+      <thead class="border-b border-gray-700/50">
+        <tr class="text-left text-gray-400 text-xs">
+          <th class="px-3 py-2">On</th>
+          <th class="px-3 py-2">Icon</th>
+          <th class="px-3 py-2">Name</th>
+          <th class="px-3 py-2">Rarity</th>
+          <th class="px-3 py-2">Weight</th>
+          <th class="px-3 py-2">Points</th>
+          <th class="px-3 py-2">XP</th>
+          <th class="px-3 py-2">Ritual</th>
+          <th class="px-3 py-2">Actions</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-700/30" id="items-table-body">
+        {% for item in items %}
+        {% set rcolor = rarity_colors.get(item.rarity or 'common', '#b8b8b8') %}
+        <tr class="item-row hover:bg-discord-lighter/30 transition-colors"
+          data-name="{{ item.name|lower }}" data-rarity="{{ item.rarity }}">
+          <td class="px-3 py-2">
+            <form method="POST" class="inline">
+              <input type="hidden" name="action" value="toggle_item">
+              <input type="hidden" name="item_id" value="{{ item.id }}">
+              <button type="submit" class="w-4 h-4 rounded border transition-colors
+                {% if item.enabled %}bg-discord-blurple border-discord-blurple{% else %}border-gray-600{% endif %}">
+              </button>
+            </form>
+          </td>
+          <td class="px-3 py-2 text-lg">{{ item.icon or '' }}</td>
+          <td class="px-3 py-2 text-white">{{ item.name }}</td>
+          <td class="px-3 py-2 text-xs font-medium" style="color:{{ rcolor }}">{{ item.rarity|capitalize }}</td>
+          <td class="px-3 py-2 text-gray-400">{{ item.drop_weight }}</td>
+          <td class="px-3 py-2 text-gray-400">{{ item.min_points }}–{{ item.max_points }}</td>
+          <td class="px-3 py-2 text-gray-400">{{ item.min_xp }}–{{ item.max_xp }}</td>
+          <td class="px-3 py-2 text-gray-400">{{ item.ritual_energy if item.can_be_used_in_ritual else '—' }}</td>
+          <td class="px-3 py-2">
+            <div class="flex gap-1">
+              <button onclick="openItemModal({{ item|tojson|e }})"
+                class="px-2 py-1 rounded text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">Edit</button>
+              <button onclick="openItemModal({{ item|tojson|e }}, true)"
+                class="px-2 py-1 rounded text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">Dup</button>
+              <form method="POST" onsubmit="return confirm('Delete this item?')" class="inline">
+                <input type="hidden" name="action" value="delete_item">
+                <input type="hidden" name="item_id" value="{{ item.id }}">
+                <button class="px-2 py-1 rounded text-xs bg-red-900/50 hover:bg-red-900 text-red-300 transition-colors">✕</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if not items %}
+    <div class="px-4 py-8 text-center text-gray-500">No items yet. Click "Restore Defaults" to seed the library.</div>
+    {% endif %}
+  </div>
+</div>
+
+{# ══════════════════════════════════════════════════════════════════════════
+   TAB: Users
+══════════════════════════════════════════════════════════════════════════ #}
+<div id="pane-users" class="rh-pane hidden">
+  <div class="bg-discord-dark rounded-xl border border-gray-700/50 overflow-hidden">
+    <table class="w-full text-sm">
+      <thead class="border-b border-gray-700/50">
+        <tr class="text-left text-gray-400 text-xs">
+          <th class="px-3 py-2">Username</th>
+          <th class="px-3 py-2">Points</th>
+          <th class="px-3 py-2">Level</th>
+          <th class="px-3 py-2">Rank</th>
+          <th class="px-3 py-2">XP</th>
+          <th class="px-3 py-2">Hunts</th>
+          <th class="px-3 py-2">Leg.</th>
+          <th class="px-3 py-2">Actions</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-700/30">
+        {% for u in users %}
+        {% set level = u.level or 1 %}
+        {% set rank = namespace(name='Nestling', icon='🐣') %}
+        {% for r in ranks %}{% if level >= r.required_level %}{% set rank.name = r.name %}{% set rank.icon = r.icon %}{% endif %}{% endfor %}
+        <tr class="hover:bg-discord-lighter/30 transition-colors">
+          <td class="px-3 py-2 text-white">{{ u.username }}</td>
+          <td class="px-3 py-2 text-yellow-400 font-mono">{{ u.points }}</td>
+          <td class="px-3 py-2 text-gray-300">{{ u.level }}</td>
+          <td class="px-3 py-2 text-gray-400 text-xs">{{ rank.icon }} {{ rank.name }}</td>
+          <td class="px-3 py-2 text-gray-400">{{ u.xp }}</td>
+          <td class="px-3 py-2 text-gray-400">{{ u.commands_used or 0 }}</td>
+          <td class="px-3 py-2 text-orange-400">{{ u.legendary_finds or 0 }}</td>
+          <td class="px-3 py-2">
+            <button onclick="openUserModal({{ u|tojson|e }})"
+              class="px-2 py-1 rounded text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">Edit</button>
+            <form method="POST" onsubmit="return confirm('Reset this user? All data will be deleted.')" class="inline">
+              <input type="hidden" name="action" value="reset_user">
+              <input type="hidden" name="twitch_user_id" value="{{ u.twitch_user_id }}">
+              <button class="px-2 py-1 rounded text-xs bg-red-900/50 hover:bg-red-900 text-red-300 transition-colors">✕</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if not users %}<div class="px-4 py-8 text-center text-gray-500">No hunters registered yet.</div>{% endif %}
+  </div>
+</div>
+
+{# ══════════════════════════════════════════════════════════════════════════
+   TAB: Ritual
+══════════════════════════════════════════════════════════════════════════ #}
+<div id="pane-ritual" class="rh-pane hidden">
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-5 space-y-4">
+      <h3 class="text-white font-semibold">🔥 Current State</h3>
+      {% set pct = [(ritual.energy / ritual.goal * 100)|int, 100]|min %}
+      <div>
+        <div class="flex justify-between text-xs text-gray-400 mb-1">
+          <span>Energy</span><span>{{ ritual.energy }} / {{ ritual.goal }}</span>
+        </div>
+        <div class="w-full bg-gray-700 rounded-full h-4">
+          <div class="bg-gradient-to-r from-orange-600 to-red-500 h-4 rounded-full" style="width:{{ pct }}%"></div>
+        </div>
+      </div>
+      <div class="flex gap-2">
+        <form method="POST" class="flex gap-2 flex-1">
+          <input type="hidden" name="action" value="ritual_add_energy">
+          <input type="number" name="add_energy" value="50" min="1"
+            class="flex-1 bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none">
+          <button class="px-3 py-1.5 rounded-lg text-sm bg-discord-blurple hover:bg-indigo-500 text-white transition-colors">+ Add</button>
+        </form>
+        <form method="POST" onsubmit="return confirm('Reset ritual to 0?')">
+          <input type="hidden" name="action" value="ritual_reset">
+          <button class="px-3 py-1.5 rounded-lg text-sm bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">↺ Reset</button>
+        </form>
+      </div>
+    </div>
+
+    <form method="POST" class="bg-discord-dark rounded-xl border border-gray-700/50 p-5 space-y-3">
+      <input type="hidden" name="action" value="ritual_save_settings">
+      <h3 class="text-white font-semibold">⚙️ Ritual Settings</h3>
+      {% for label, field, default in [
+        ('Goal','ritual_goal','500'),
+        ('Cooldown (sec)','ritual_cooldown_seconds','600'),
+        ('Reward Points','ritual_reward_points','100'),
+        ('Reward XP','ritual_reward_xp','50'),
+        ('Legendary Chance (0–1)','ritual_legendary_chance','0.05'),
+        ('Active User Window (min)','ritual_active_window_minutes','30'),
+      ] %}
+      <div class="flex items-center gap-3">
+        <label class="text-gray-400 text-xs w-40">{{ label }}</label>
+        <input type="text" name="{{ field }}" value="{{ settings.get(field.replace('ritual_','',1), default) }}"
+          class="flex-1 bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none">
+      </div>
+      {% endfor %}
+      <button class="w-full mt-2 px-4 py-2 rounded-lg bg-discord-blurple hover:bg-indigo-500 text-white text-sm transition-colors">Save Ritual Settings</button>
+    </form>
+  </div>
+</div>
+
+{# ══════════════════════════════════════════════════════════════════════════
+   TAB: Events
+══════════════════════════════════════════════════════════════════════════ #}
+<div id="pane-events" class="rh-pane hidden">
+  <div class="flex justify-end mb-4">
+    <button onclick="openEventModal()"
+      class="px-3 py-1.5 rounded-lg text-sm bg-discord-blurple hover:bg-indigo-500 text-white transition-colors">+ New Event</button>
+  </div>
+  <div class="space-y-3">
+    {% for ev in events %}
+    <div class="bg-discord-dark rounded-xl border {% if ev.is_active %}border-orange-500/50{% else %}border-gray-700/50{% endif %} p-4">
+      <div class="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <span class="text-white font-medium">{{ ev.name }}</span>
+          <span class="ml-2 text-gray-500 text-xs">{{ ev.id }}</span>
+          {% if ev.is_active %}<span class="ml-2 px-1.5 py-0.5 rounded text-xs bg-orange-800/50 text-orange-300">ACTIVE</span>{% endif %}
+        </div>
+        <div class="flex gap-2 flex-wrap">
+          {% if ev.is_active %}
+          <form method="POST" class="inline">
+            <input type="hidden" name="action" value="stop_event">
+            <input type="hidden" name="event_id" value="{{ ev.id }}">
+            <button class="px-2 py-1 rounded text-xs bg-red-800/50 hover:bg-red-800 text-red-200 transition-colors">⏹ Stop</button>
+          </form>
+          {% else %}
+          <form method="POST" class="inline flex gap-1">
+            <input type="hidden" name="action" value="start_event">
+            <input type="hidden" name="event_id" value="{{ ev.id }}">
+            <input type="number" name="duration_minutes" value="{{ ev.cfg.get('durationMinutes', 10) }}" min="1" max="1440"
+              class="w-16 bg-discord-darker border border-gray-600 rounded px-2 py-1 text-white text-xs focus:outline-none"
+              title="Duration (minutes)">
+            <button class="px-2 py-1 rounded text-xs bg-green-800/50 hover:bg-green-800 text-green-200 transition-colors">▶ Start</button>
+          </form>
+          {% endif %}
+          <button onclick="openEventModal({{ ev|tojson|e }})"
+            class="px-2 py-1 rounded text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">Edit</button>
+          <form method="POST" onsubmit="return confirm('Delete event?')" class="inline">
+            <input type="hidden" name="action" value="delete_event">
+            <input type="hidden" name="event_id" value="{{ ev.id }}">
+            <button class="px-2 py-1 rounded text-xs bg-red-900/50 hover:bg-red-900 text-red-300 transition-colors">✕</button>
+          </form>
+        </div>
+      </div>
+      <div class="mt-2 flex flex-wrap gap-4 text-xs text-gray-400">
+        <span>⏱ {{ ev.cfg.get('durationMinutes','?') }}min</span>
+        <span>🪶 Rare ×{{ ev.cfg.get('rareDropMultiplier',1) }}</span>
+        <span>🌘 Epic ×{{ ev.cfg.get('epicDropMultiplier',1) }}</span>
+        <span>⭐ Pts ×{{ ev.cfg.get('pointsMultiplier',1) }}</span>
+        <span>✨ XP ×{{ ev.cfg.get('xpMultiplier',1) }}</span>
+        {% if ev.cfg.get('ritualEnergyMultiplier') %}<span>🔥 Ritual ×{{ ev.cfg.get('ritualEnergyMultiplier') }}</span>{% endif %}
+      </div>
+    </div>
+    {% else %}
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50 px-4 py-8 text-center text-gray-500">No events yet.</div>
+    {% endfor %}
+  </div>
+</div>
+
+{# ══════════════════════════════════════════════════════════════════════════
+   TAB: Settings
+══════════════════════════════════════════════════════════════════════════ #}
+<div id="pane-settings" class="rh-pane hidden">
+  <form method="POST" class="bg-discord-dark rounded-xl border border-gray-700/50 p-6 space-y-4 max-w-lg">
+    <input type="hidden" name="action" value="save_settings">
+    <h3 class="text-white font-semibold mb-2">⚙️ Game Settings</h3>
+    {% for label, field, default, hint in [
+      ('Command Prefix','command_prefix','!','Character before commands'),
+      ('Timezone','timezone','Europe/Berlin','Used for daily reset'),
+      ('!raven Cooldown (sec)','raven_cooldown_seconds','300','Per user'),
+      ('!ritual Cooldown (sec)','ritual_cooldown_seconds','600','Per user'),
+      ('Leaderboard Size','leaderboard_size','5','Number of entries in !top'),
+      ('Sub Cooldown Multiplier','subscriber_cooldown_multiplier','1.0','e.g. 0.75 = 25% faster'),
+      ('VIP Cooldown Multiplier','vip_cooldown_multiplier','1.0','e.g. 0.8 = 20% faster'),
+    ] %}
+    <div>
+      <label class="block text-gray-400 text-xs mb-1">{{ label }}</label>
+      <input type="text" name="{{ field }}" value="{{ settings.get(field, default) }}"
+        class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+      {% if hint %}<p class="text-gray-600 text-xs mt-0.5">{{ hint }}</p>{% endif %}
+    </div>
+    {% endfor %}
+
+    <div class="pt-2 border-t border-gray-700/50 space-y-2">
+      {% for label, field in [
+        ('Announce level-ups in chat','announce_level_ups'),
+        ('Announce rank-ups in chat','announce_rank_ups'),
+        ('Mods bypass cooldowns','mods_bypass_cooldowns'),
+      ] %}
+      <label class="flex items-center gap-2 cursor-pointer">
+        <input type="checkbox" name="{{ field }}" value="true"
+          {% if settings.get(field) not in ('false','') %}checked{% endif %}
+          class="w-4 h-4 accent-discord-blurple">
+        <span class="text-white text-sm">{{ label }}</span>
+      </label>
+      {% endfor %}
+    </div>
+
+    <button class="w-full mt-2 px-4 py-2 rounded-lg bg-discord-blurple hover:bg-indigo-500 text-white text-sm transition-colors">Save Settings</button>
+  </form>
+</div>
+
+{# ══════════════════════════════════════════════════════════════════════════
+   MODALS
+══════════════════════════════════════════════════════════════════════════ #}
+
+{# Item modal #}
+<div id="item-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+  onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="bg-discord-dark rounded-xl border border-gray-700/50 shadow-2xl w-full max-w-xl max-h-[90vh] flex flex-col">
+    <div class="px-5 py-4 border-b border-gray-700/50 flex justify-between items-center">
+      <h3 id="item-modal-title" class="text-white font-semibold">New Item</h3>
+      <button onclick="document.getElementById('item-modal').classList.add('hidden')" class="text-gray-400 hover:text-white text-lg">✕</button>
+    </div>
+    <form method="POST" class="overflow-y-auto p-5 space-y-3">
+      <input type="hidden" name="action" value="upsert_item">
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="text-gray-400 text-xs block mb-1">Item ID *</label>
+          <input type="text" name="item_id" id="imod-id" required
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+        <div><label class="text-gray-400 text-xs block mb-1">Display Name *</label>
+          <input type="text" name="name" id="imod-name" required
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+        <div><label class="text-gray-400 text-xs block mb-1">Rarity</label>
+          <select name="rarity" id="imod-rarity"
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:outline-none">
+            {% for r in ['common','uncommon','rare','epic','legendary','mythic'] %}
+            <option value="{{ r }}">{{ r|capitalize }}</option>{% endfor %}
+          </select></div>
+        <div><label class="text-gray-400 text-xs block mb-1">Icon / Emoji</label>
+          <input type="text" name="icon" id="imod-icon"
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+        <div><label class="text-gray-400 text-xs block mb-1">Drop Weight</label>
+          <input type="number" step="0.01" name="drop_weight" id="imod-dw" value="1"
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+        <div><label class="text-gray-400 text-xs block mb-1">Category</label>
+          <input type="text" name="category" id="imod-cat"
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+        <div><label class="text-gray-400 text-xs block mb-1">Min Points</label>
+          <input type="number" name="min_points" id="imod-minp" value="0"
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+        <div><label class="text-gray-400 text-xs block mb-1">Max Points</label>
+          <input type="number" name="max_points" id="imod-maxp" value="0"
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+        <div><label class="text-gray-400 text-xs block mb-1">Min XP</label>
+          <input type="number" name="min_xp" id="imod-minx" value="0"
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+        <div><label class="text-gray-400 text-xs block mb-1">Max XP</label>
+          <input type="number" name="max_xp" id="imod-maxx" value="0"
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+        <div><label class="text-gray-400 text-xs block mb-1">Ritual Energy</label>
+          <input type="number" name="ritual_energy" id="imod-re" value="0"
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+        <div><label class="text-gray-400 text-xs block mb-1">Required Event ID</label>
+          <input type="text" name="required_event" id="imod-ev"
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+      </div>
+      <div><label class="text-gray-400 text-xs block mb-1">Flavor Text</label>
+        <input type="text" name="flavor_text" id="imod-ft"
+          class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+      <div class="flex gap-4 pt-1">
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" name="enabled" id="imod-en" value="1" checked class="w-4 h-4 accent-discord-blurple">
+          <span class="text-white text-sm">Enabled</span></label>
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" name="can_be_used_in_ritual" id="imod-rit" value="1" class="w-4 h-4 accent-discord-blurple">
+          <span class="text-white text-sm">Ritual item</span></label>
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" name="announce_globally" id="imod-ann" value="1" class="w-4 h-4 accent-discord-blurple">
+          <span class="text-white text-sm">Announce globally</span></label>
+      </div>
+      <button class="w-full mt-2 px-4 py-2 rounded-lg bg-discord-blurple hover:bg-indigo-500 text-white text-sm transition-colors">Save Item</button>
+    </form>
+  </div>
+</div>
+
+{# User edit modal #}
+<div id="user-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+  onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="bg-discord-dark rounded-xl border border-gray-700/50 shadow-2xl w-full max-w-sm">
+    <div class="px-5 py-4 border-b border-gray-700/50 flex justify-between items-center">
+      <h3 id="user-modal-title" class="text-white font-semibold">Edit User</h3>
+      <button onclick="document.getElementById('user-modal').classList.add('hidden')" class="text-gray-400 hover:text-white text-lg">✕</button>
+    </div>
+    <div class="p-5 space-y-3">
+      <form method="POST" class="space-y-3">
+        <input type="hidden" name="action" value="edit_user_points">
+        <input type="hidden" name="twitch_user_id" id="umod-id">
+        <div><label class="text-gray-400 text-xs block mb-1">Points</label>
+          <input type="number" name="points" id="umod-pts" min="0"
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+        <button class="w-full px-4 py-2 rounded-lg bg-discord-blurple hover:bg-indigo-500 text-white text-sm transition-colors">Save Points</button>
+      </form>
+      <form method="POST" class="space-y-3 pt-3 border-t border-gray-700/50">
+        <input type="hidden" name="action" value="give_item">
+        <input type="hidden" name="twitch_user_id" id="umod-give-id">
+        <div class="grid grid-cols-3 gap-2">
+          <div class="col-span-2"><label class="text-gray-400 text-xs block mb-1">Item ID</label>
+            <input type="text" name="item_id"
+              class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+          <div><label class="text-gray-400 text-xs block mb-1">Amount</label>
+            <input type="number" name="amount" value="1" min="1"
+              class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+        </div>
+        <button class="w-full px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm transition-colors">Give Item</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+{# Event modal #}
+<div id="event-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+  onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="bg-discord-dark rounded-xl border border-gray-700/50 shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
+    <div class="px-5 py-4 border-b border-gray-700/50 flex justify-between items-center">
+      <h3 class="text-white font-semibold">Event</h3>
+      <button onclick="document.getElementById('event-modal').classList.add('hidden')" class="text-gray-400 hover:text-white text-lg">✕</button>
+    </div>
+    <form method="POST" class="overflow-y-auto p-5 space-y-3">
+      <input type="hidden" name="action" value="upsert_event">
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="text-gray-400 text-xs block mb-1">Event ID *</label>
+          <input type="text" name="event_id" id="emod-id" required
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+        <div><label class="text-gray-400 text-xs block mb-1">Display Name *</label>
+          <input type="text" name="event_name" id="emod-name" required
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+        <div><label class="text-gray-400 text-xs block mb-1">Duration (min)</label>
+          <input type="number" name="duration_minutes" id="emod-dur" value="10" min="1"
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+        <div><label class="text-gray-400 text-xs block mb-1">Rare Drop ×</label>
+          <input type="number" step="0.1" name="rare_drop_multiplier" id="emod-rare" value="1.0"
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+        <div><label class="text-gray-400 text-xs block mb-1">Epic Drop ×</label>
+          <input type="number" step="0.1" name="epic_drop_multiplier" id="emod-epic" value="1.0"
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+        <div><label class="text-gray-400 text-xs block mb-1">Points ×</label>
+          <input type="number" step="0.1" name="points_multiplier" id="emod-pts" value="1.0"
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+        <div><label class="text-gray-400 text-xs block mb-1">XP ×</label>
+          <input type="number" step="0.1" name="xp_multiplier" id="emod-xp" value="1.0"
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+        <div><label class="text-gray-400 text-xs block mb-1">Ritual Energy ×</label>
+          <input type="number" step="0.1" name="ritual_energy_multiplier" id="emod-rit" value="1.0"
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+      </div>
+      <div><label class="text-gray-400 text-xs block mb-1">Start Message</label>
+        <input type="text" name="start_message" id="emod-sm"
+          class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+      <div><label class="text-gray-400 text-xs block mb-1">End Message</label>
+        <input type="text" name="end_message" id="emod-em"
+          class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+      <label class="flex items-center gap-2 cursor-pointer">
+        <input type="checkbox" name="event_enabled" id="emod-en" value="1" checked class="w-4 h-4 accent-discord-blurple">
+        <span class="text-white text-sm">Enabled</span>
+      </label>
+      <button class="w-full mt-2 px-4 py-2 rounded-lg bg-discord-blurple hover:bg-indigo-500 text-white text-sm transition-colors">Save Event</button>
+    </form>
+  </div>
+</div>
+
+{# Import JSON modal #}
+<div id="import-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+  onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="bg-discord-dark rounded-xl border border-gray-700/50 shadow-2xl w-full max-w-lg">
+    <div class="px-5 py-4 border-b border-gray-700/50 flex justify-between items-center">
+      <h3 class="text-white font-semibold">Import Items (JSON)</h3>
+      <button onclick="document.getElementById('import-modal').classList.add('hidden')" class="text-gray-400 hover:text-white text-lg">✕</button>
+    </div>
+    <form method="POST" class="p-5 space-y-3">
+      <input type="hidden" name="action" value="import_items">
+      <p class="text-gray-400 text-xs">Paste a JSON array of item objects. Existing items with the same ID will be updated.</p>
+      <textarea name="items_json" rows="10" placeholder='[{"id":"...","name":"...","rarity":"common",...}]'
+        class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm font-mono focus:border-discord-blurple focus:outline-none"></textarea>
+      <button class="w-full px-4 py-2 rounded-lg bg-discord-blurple hover:bg-indigo-500 text-white text-sm transition-colors">Import</button>
+    </form>
+  </div>
+</div>
+
+<script>
+function switchTab(id) {
+  document.querySelectorAll('.rh-pane').forEach(p => p.classList.add('hidden'));
+  document.querySelectorAll('.rh-tab').forEach(t => {
+    t.classList.remove('border-discord-blurple','text-white');
+    t.classList.add('border-transparent','text-gray-400');
+  });
+  document.getElementById('pane-' + id).classList.remove('hidden');
+  var btn = document.getElementById('tab-' + id);
+  btn.classList.remove('border-transparent','text-gray-400');
+  btn.classList.add('border-discord-blurple','text-white');
+  localStorage.setItem('rh-tab', id);
+}
+
+(function(){
+  var t = localStorage.getItem('rh-tab') || 'dashboard';
+  switchTab(t);
+})();
+
+function filterItems() {
+  var q = (document.getElementById('item-search').value || '').toLowerCase();
+  var r = document.getElementById('item-rarity-filter').value;
+  document.querySelectorAll('#items-table-body .item-row').forEach(function(row) {
+    var nameMatch = !q || row.dataset.name.includes(q);
+    var rarityMatch = !r || row.dataset.rarity === r;
+    row.style.display = (nameMatch && rarityMatch) ? '' : 'none';
+  });
+}
+
+function openItemModal(item, duplicate) {
+  var m = document.getElementById('item-modal');
+  document.getElementById('item-modal-title').textContent = item && !duplicate ? 'Edit Item' : 'New Item';
+  document.getElementById('imod-id').value      = (item && !duplicate) ? (item.id||'') : '';
+  document.getElementById('imod-name').value    = item ? (item.name||'') : '';
+  document.getElementById('imod-rarity').value  = item ? (item.rarity||'common') : 'common';
+  document.getElementById('imod-icon').value    = item ? (item.icon||'') : '';
+  document.getElementById('imod-dw').value      = item ? (item.drop_weight||1) : 1;
+  document.getElementById('imod-cat').value     = item ? (item.category||'') : '';
+  document.getElementById('imod-minp').value    = item ? (item.min_points||0) : 0;
+  document.getElementById('imod-maxp').value    = item ? (item.max_points||0) : 0;
+  document.getElementById('imod-minx').value    = item ? (item.min_xp||0) : 0;
+  document.getElementById('imod-maxx').value    = item ? (item.max_xp||0) : 0;
+  document.getElementById('imod-re').value      = item ? (item.ritual_energy||0) : 0;
+  document.getElementById('imod-ft').value      = item ? (item.flavor_text||'') : '';
+  document.getElementById('imod-ev').value      = item ? (item.required_event||'') : '';
+  document.getElementById('imod-en').checked    = !item || !!item.enabled;
+  document.getElementById('imod-rit').checked   = item ? !!item.can_be_used_in_ritual : false;
+  document.getElementById('imod-ann').checked   = item ? !!item.announce_globally : false;
+  m.classList.remove('hidden');
+}
+
+function openUserModal(u) {
+  document.getElementById('umod-id').value    = u.twitch_user_id;
+  document.getElementById('umod-give-id').value = u.twitch_user_id;
+  document.getElementById('umod-pts').value   = u.points;
+  document.getElementById('user-modal-title').textContent = 'Edit: ' + u.username;
+  document.getElementById('user-modal').classList.remove('hidden');
+}
+
+function openEventModal(ev) {
+  var cfg = ev ? (ev.cfg || {}) : {};
+  document.getElementById('emod-id').value    = ev ? (ev.id||'') : '';
+  document.getElementById('emod-name').value  = ev ? (ev.name||'') : '';
+  document.getElementById('emod-dur').value   = cfg.durationMinutes || 10;
+  document.getElementById('emod-rare').value  = cfg.rareDropMultiplier || 1;
+  document.getElementById('emod-epic').value  = cfg.epicDropMultiplier || 1;
+  document.getElementById('emod-pts').value   = cfg.pointsMultiplier || 1;
+  document.getElementById('emod-xp').value    = cfg.xpMultiplier || 1;
+  document.getElementById('emod-rit').value   = cfg.ritualEnergyMultiplier || 1;
+  document.getElementById('emod-sm').value    = cfg.startMessage || '';
+  document.getElementById('emod-em').value    = cfg.endMessage || '';
+  document.getElementById('emod-en').checked  = !ev || !!ev.enabled;
+  document.getElementById('event-modal').classList.remove('hidden');
+}
+</script>
+{% endblock %}
