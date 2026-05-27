@@ -3385,6 +3385,7 @@ def create_app(db: Database, bot=None) -> Quart:
 
     from bot.relic_hunt import RelicHunt
     from bot.twitch_bot import TwitchBot as _TwitchBot
+    from bot.live_log import log_event as _rh_log
     relic_hunt = RelicHunt(db)
 
     async def _relic_hunt_autostart():
@@ -3400,17 +3401,17 @@ def create_app(db: Database, bot=None) -> Quart:
             refresh_tok = await db.get_setting("exp_radio_twitch_refresh_token")
             broadcaster = await db.get_setting("exp_radio_twitch_broadcaster_login")
             if not (client_id and refresh_tok and broadcaster):
-                print("[relic-hunt] Twitch credentials not configured, skipping auto-start")
+                _rh_log("Twitch credentials not configured, skipping auto-start", "error", "[relic-hunt]")
                 return
             bot = _TwitchBot(db, key_prefix="exp_radio_twitch")
             ok, msg = await bot.start()
             if not ok:
-                print(f"[relic-hunt] Auto-start failed: {msg}")
+                _rh_log(f"Auto-start failed: {msg}", "error", "[relic-hunt]")
                 return
             await relic_hunt.start(bot)
-            print("[relic-hunt] Auto-started successfully")
+            _rh_log("Auto-started successfully", "info", "[relic-hunt]")
         except Exception as e:
-            print(f"[relic-hunt] Auto-start error: {e}")
+            _rh_log(f"Auto-start error: {e}", "error", "[relic-hunt]")
 
     @app.route("/exp-radio", methods=["GET", "POST"])
     @permission_required('exp_radio')

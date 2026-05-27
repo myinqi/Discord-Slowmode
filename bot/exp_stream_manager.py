@@ -90,34 +90,19 @@ def _strip_emoji(text: str) -> str:
 
 
 # ── Module-level Live Log ────────────────────────────────────────────────────
-# Shared ring buffer used by the admin UI's "Live Log" panel. Lives at module
-# scope (instead of inside ExpStreamManager) so that background workers and
-# web actions which don't hold a manager reference can publish into the same
-# stream of events — e.g. LLM moderation results, re-moderation timeouts,
-# Whisper re-analysis kick-offs, etc.
+# Re-exported from bot.live_log so the rest of this file can keep calling
+# log_event() / _LOG_BUFFER unchanged, and other modules (twitch_bot,
+# relic_hunt) share the same buffer without a circular import.
+from bot.live_log import _LOG_BUFFER, log_event as _live_log_event
 
 _LOG_BUFFER_MAX = 1000
-_LOG_BUFFER: deque = deque(maxlen=_LOG_BUFFER_MAX)
 
 # Module-level flag: True while the exp-radio stream is actively running.
-# Other modules (upload endpoint, channel moderation) import this to skip
-# heavy CPU/RAM work (Whisper, LLM) that could destabilise the stream.
 stream_is_live: bool = False
 
 
 def log_event(line: str, level: str = "info", prefix: str = "[exp-radio]") -> None:
-    """Append `line` to the shared live-log buffer and mirror to stdout.
-
-    `level` is one of 'info', 'ffmpeg', 'error' and is used by the UI for
-    colouring. `prefix` is only used for the stdout mirror, never for the
-    UI buffer (the UI displays just the `line`).
-    """
-    ts = time.time()
-    _LOG_BUFFER.append((ts, level, line))
-    try:
-        print(f"{prefix} {line}", flush=True)
-    except Exception:
-        pass
+    _live_log_event(line, level, prefix)
 
 
 class ExpStreamManager:

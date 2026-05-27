@@ -14,6 +14,12 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 
+from bot.live_log import log_event as _log
+
+
+def _rlog(msg: str, level: str = "info") -> None:
+    _log(msg, level, "[relic-hunt]")
+
 # XP required to advance from `level` to `level + 1`
 def _xp_for_next(level: int) -> int:
     return 100 + level * level * 10
@@ -185,13 +191,13 @@ class RelicHunt:
             twitch_bot.register_command(cmd, handler)
 
         await twitch_bot.start_listener()
-        print("[relic-hunt] started, IRC listener active")
+        _rlog("Started — IRC listener active")
 
     async def stop(self) -> None:
         self._running = False
         if self._bot:
             await self._bot.stop_listener()
-        print("[relic-hunt] stopped")
+        _rlog("Stopped")
 
     async def _send(self, msg: str) -> None:
         if self._bot:
@@ -203,7 +209,7 @@ class RelicHunt:
     async def _seed_if_empty(self) -> None:
         items = await self.db.relic_get_all_items()
         if not items:
-            print("[relic-hunt] seeding default item library…")
+            _rlog("Seeding default item library…")
             now = time.time()
             for item in DEFAULT_ITEMS:
                 row = {
@@ -226,13 +232,13 @@ class RelicHunt:
                     "required_event": None,
                 }
                 await self.db.relic_upsert_item(row)
-            print(f"[relic-hunt] seeded {len(DEFAULT_ITEMS)} items")
+            _rlog(f"Seeded {len(DEFAULT_ITEMS)} default items")
 
         events = await self.db.relic_get_all_events()
         if not events:
             for ev in DEFAULT_EVENTS:
                 await self.db.relic_upsert_event(ev)
-            print("[relic-hunt] seeded default events")
+            _rlog(f"Seeded {len(DEFAULT_EVENTS)} default events")
 
     # ------------------------------------------------------------------ #
     # Helpers                                                              #
@@ -370,6 +376,7 @@ class RelicHunt:
             msg = f"@{name} sends a raven into the mist... It returns with {icon} {iname}. +{pts} points, +{xp} XP."
 
         await self._send(msg)
+        _rlog(f"{name} found {iname} ({rarity}) | +{pts}pts +{xp}xp")
 
         # Level-up / rank announcement
         announce_lvl = (await self.db.relic_get_setting("announce_level_ups")) != "false"
@@ -532,6 +539,7 @@ class RelicHunt:
 
         if new_energy >= goal:
             # RITUAL COMPLETE
+            _rlog(f"Ritual COMPLETE by {name} (energy {new_energy}/{goal})!")
             await self.db.relic_update_ritual(0, goal)
             reward_pts = int((await self.db.relic_get_setting("ritual_reward_points")) or 100)
             reward_xp  = int((await self.db.relic_get_setting("ritual_reward_xp")) or 50)
@@ -560,6 +568,7 @@ class RelicHunt:
         else:
             await self.db.relic_update_ritual(new_energy, goal)
             await self._send(f"@{name} adds {item_icon} {item_name} to the ritual circle. Ritual energy: {new_energy}/{goal}.")
+            _rlog(f"Ritual +{add_energy} energy by {name} via {item_name} ({new_energy}/{goal})")
 
     async def _cmd_help(self, ctx: dict) -> None:
         await self._send("Raven's Nest commands: !raven, !nest, !items, !top, !rank, !daily, !ritual, !relichelp")

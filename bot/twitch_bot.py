@@ -26,6 +26,8 @@ from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
 import aiohttp
 
+from bot.live_log import log_event as _log
+
 
 _TOKEN_URL    = "https://id.twitch.tv/oauth2/token"
 _VALIDATE_URL = "https://id.twitch.tv/oauth2/validate"
@@ -92,8 +94,7 @@ class TwitchBot:
         ok, msg = await self._resolve_user_ids()
         if not ok:
             return False, msg
-        print(f"[twitch] Connected as bot_id={self._bot_user_id} → "
-              f"broadcaster_id={self._broadcaster_user_id}")
+        _log(f"Connected: bot_id={self._bot_user_id} broadcaster_id={self._broadcaster_user_id}", "info", "[twitch]")
         return True, "Connected"
 
     async def stop(self) -> None:
@@ -133,26 +134,49 @@ class TwitchBot:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                print(f"[twitch-irc] connection error: {e} — reconnecting in {backoff:.0f}s")
+                _log(f"IRC connection error: {e} — reconnecting in {backoff:.0f}s", "error", "[twitch-irc]")
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 120.0)
 
     async def _irc_session(self) -> None:
         """Single IRC WebSocket session: authenticate, join channel, read messages."""
         if not await self._ensure_token():
-            print("[twitch-irc] no valid token, skipping connect")
+            _log("IRC: no valid token, skipping connect", "error", "[twitch-irc]")
             await asyncio.sleep(30)
             return
+
+        # ── Scope check ──────────────────────────────────────────────
+        try:
+            async with aiohttp.ClientSession() as _s:
+                async with _s.get(
+                    _VALIDATE_URL,
+                    headers={"Authorization": f"OAuth {self._access_token}"},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as _r:
+                    _v = await _r.json()
+                    _scopes = _v.get("scopes") or []
+                    _login  = _v.get("login", "?")
+                    _log(f"Token owner: {_login} | scopes: {_scopes}", "info", "[twitch-irc]")
+                    if "chat:read" not in _scopes:
+                        _log(
+                            "⚠️ MISSING SCOPE: chat:read — re-authorize the bot in "
+                            "Exp. Radio → Twitch settings and add the chat:read scope.",
+                            "error", "[twitch-irc]")
+                        await asyncio.sleep(60)
+                        return
+        except Exception as _e:
+            _log(f"Scope check error (non-fatal): {_e}", "error", "[twitch-irc]")
+
         broadcaster_login = _normalize_login(
             await self.db.get_setting(self.SETTING_KEYS["broadcaster_login"]) or ""
         )
         bot_login = await self.db.get_setting(self.SETTING_KEYS["bot_login"]) or ""
         if not broadcaster_login or not bot_login:
-            print("[twitch-irc] broadcaster_login / bot_login not configured, skipping")
+            _log("IRC: broadcaster_login / bot_login not configured, skipping", "error", "[twitch-irc]")
             await asyncio.sleep(30)
             return
 
-        print(f"[twitch-irc] connecting to {_IRC_URL} as {bot_login} → #{broadcaster_login}")
+        _log(f"IRC connecting as {bot_login} → #{broadcaster_login}", "info", "[twitch-irc]")
         async with aiohttp.ClientSession() as session:
             async with session.ws_connect(
                 _IRC_URL,
@@ -163,7 +187,7 @@ class TwitchBot:
                 await ws.send_str(f"NICK {bot_login}")
                 await ws.send_str("CAP REQ :twitch.tv/tags twitch.tv/commands twitch.tv/membership")
                 await ws.send_str(f"JOIN #{broadcaster_login}")
-                print(f"[twitch-irc] joined #{broadcaster_login}")
+                _log(f"Joined #{broadcaster_login} — listening for commands", "info", "[twitch-irc]")
 
                 async for msg in ws:
                     if not self._irc_running:
@@ -172,7 +196,7 @@ class TwitchBot:
                         for line in msg.data.strip().split("\r\n"):
                             await self._handle_irc_line(line, ws)
                     elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
-                        print(f"[twitch-irc] ws closed/error: {msg.type}")
+                        _log(f"IRC WebSocket closed/error: {msg.type}", "error", "[twitch-irc]")
                         break
 
     async def _handle_irc_line(self, line: str, ws) -> None:
@@ -203,6 +227,8 @@ class TwitchBot:
         cmd     = parts[0].lstrip("!").lower()
         args    = parts[1] if len(parts) > 1 else ""
 
+        _log(f"Command !{cmd} from {username}", "info", "[twitch-irc]")
+
         handler = self._command_handlers.get(cmd)
         if not handler:
             return
@@ -224,7 +250,7 @@ class TwitchBot:
         try:
             await handler(context)
         except Exception as e:
-            print(f"[twitch-irc] command handler error: {e}")
+            _log(f"Command handler error: {e}", "error", "[twitch-irc]")
 
     async def send(self, message: str) -> bool:
         """Post a chat message in the broadcaster's channel.
@@ -268,11 +294,11 @@ class TwitchBot:
                         return False
                     if r.status >= 300:
                         body = await r.text()
-                        print(f"[twitch] send failed {r.status}: {body[:300]}")
+                        _log(f"Send failed {r.status}: {body[:300]}", "error", "[twitch]")
                         return False
                     return True
         except Exception as e:
-            print(f"[twitch] send error: {e}")
+            _log(f"Send error: {e}", "error", "[twitch]")
             return False
 
     def register_command(self, name: str,
@@ -315,7 +341,7 @@ class TwitchBot:
                         if new_rt and new_rt != refresh_token:
                             await self.db.set_setting(
                                 self.SETTING_KEYS["refresh_token"], new_rt)
-                            print("[twitch] Refresh token rotated, saved.")
+                            _log("Refresh token rotated and saved.", "info", "[twitch]")
                         return True, "Token refreshed"
             except Exception as e:
                 return False, f"Token refresh error: {e}"
