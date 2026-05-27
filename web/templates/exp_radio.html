@@ -209,8 +209,8 @@
                 </button>
             </form>
 
-            {# Re-authorize button #}
-            <div class="pt-3 border-t border-gray-700/50 space-y-2">
+            {# Bot scope status + token helper #}
+            <div class="pt-3 border-t border-gray-700/50 space-y-3">
                 {% if exp_tw_bot_login %}
                 <div class="flex items-center gap-2 text-xs">
                     <span class="text-green-400">✓ Bot: {{ exp_tw_bot_login }}</span>
@@ -221,24 +221,46 @@
                     {% endif %}
                 </div>
                 {% endif %}
-                {% if exp_tw_client_id %}
-                <a href="{{ url_for('exp_radio_twitch_oauth_start') }}"
-                   class="flex items-center justify-center gap-2 w-full px-4 py-2 rounded-lg text-sm font-medium
-                          {% if exp_tw_scopes_ok %}bg-gray-700 hover:bg-gray-600 text-gray-300{% else %}bg-purple-700 hover:bg-purple-600 text-white{% endif %}
-                          transition-colors">
-                    🔑 {% if exp_tw_scopes_ok %}Re-authorize Bot{% else %}Authorize Bot (chat:read required){% endif %}
-                </a>
-                <p class="text-gray-600 text-xs">Scopes: <code class="bg-gray-800 px-1 rounded">user:bot user:write:chat chat:read</code></p>
-                <div class="bg-gray-800/60 rounded-lg px-3 py-2 text-xs space-y-1">
-                    <p class="text-gray-400 font-medium">Add this URI in <a href="https://dev.twitch.tv/console/apps" target="_blank" class="text-discord-blurple underline">Twitch Dev Console</a> → Your App → OAuth Redirect URLs:</p>
-                    <div class="flex items-center gap-2">
-                        <code id="oauth-callback-uri" class="text-yellow-300 break-all select-all flex-1">{{ request.url_root.rstrip('/') }}{{ url_for('exp_radio_twitch_oauth_callback') }}</code>
-                        <button onclick="navigator.clipboard.writeText(document.getElementById('oauth-callback-uri').textContent).then(()=>this.textContent='✓').catch(()=>{}); setTimeout(()=>this.textContent='Copy',1500)"
-                            class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 whitespace-nowrap transition-colors">Copy</button>
-                    </div>
+
+                {% if exp_tw_client_id and not exp_tw_scopes_ok %}
+                <div class="bg-yellow-900/20 border border-yellow-700/40 rounded-lg p-3 space-y-2 text-xs">
+                    <p class="text-yellow-300 font-medium">🔑 New token required (chat:read missing)</p>
+                    <p class="text-gray-400">Step 1: Open the link below, log in as the <strong class="text-white">bot account</strong>, and authorize.</p>
+                    <a id="twitch-auth-link" href="#" target="_blank"
+                       onclick="buildAuthLink(event)"
+                       class="block text-center px-3 py-2 rounded-lg bg-purple-700 hover:bg-purple-600 text-white transition-colors">
+                        → Open Twitch Authorization Page
+                    </a>
+                    <p class="text-gray-400 pt-1">Step 2: After authorizing, Twitch redirects to a URL like<br>
+                    <code class="text-gray-300">https://localhost/?code=<strong>XXXXXX</strong>&state=…</code><br>
+                    Copy the <strong class="text-yellow-300">code=…</strong> value and paste it below.</p>
+                    <form method="POST" action="{{ url_for('exp_radio_twitch_exchange_code') }}" class="flex gap-2">
+                        <input type="text" name="twitch_code" placeholder="Paste code here…"
+                            class="flex-1 bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                        <button class="px-3 py-1.5 rounded-lg bg-discord-blurple hover:bg-indigo-500 text-white text-sm whitespace-nowrap transition-colors">Exchange</button>
+                    </form>
                 </div>
+                {% elif exp_tw_client_id and exp_tw_scopes_ok %}
+                <a id="twitch-auth-link" href="#" target="_blank"
+                   onclick="buildAuthLink(event)"
+                   class="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg text-sm bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">
+                    🔑 Re-authorize Bot
+                </a>
                 {% endif %}
             </div>
+            <script>
+            function buildAuthLink(e) {
+                var cid = {{ exp_tw_client_id | tojson }};
+                if (!cid) { e.preventDefault(); alert('Save Client ID first.'); return; }
+                var url = 'https://id.twitch.tv/oauth2/authorize'
+                    + '?client_id=' + encodeURIComponent(cid)
+                    + '&redirect_uri=' + encodeURIComponent('https://localhost')
+                    + '&response_type=code'
+                    + '&scope=user%3Abot+user%3Awrite%3Achat+chat%3Aread'
+                    + '&state=adminflow';
+                e.currentTarget.href = url;
+            }
+            </script>
         </div>
         <!-- Twitch Stream Key -->
         <div class="p-5 space-y-3">
