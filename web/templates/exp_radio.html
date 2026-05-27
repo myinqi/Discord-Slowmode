@@ -468,17 +468,24 @@
 
         <!-- Live Log -->
         <div class="bg-discord-dark rounded-xl border border-gray-700/50">
-            <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between">
+            <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between gap-2">
                 <h3 class="text-white font-semibold">Live Log</h3>
-                <label class="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
-                    <input type="checkbox" id="exp-log-autoscroll" checked
-                        class="w-3.5 h-3.5 accent-discord-blurple">
-                    auto-scroll
-                </label>
+                <div class="flex items-center gap-3">
+                    <button type="button" id="exp-log-copy" onclick="copyExpLog(this)"
+                        class="px-2.5 py-1 bg-gray-600/20 hover:bg-gray-600/40 text-gray-300 rounded text-xs font-medium transition-colors"
+                        title="Copy log to clipboard">
+                        &#128203; Copy
+                    </button>
+                    <label class="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
+                        <input type="checkbox" id="exp-log-autoscroll" checked
+                            class="w-3.5 h-3.5 accent-discord-blurple">
+                        auto-scroll
+                    </label>
+                </div>
             </div>
             <div class="p-3">
                 <pre id="exp-log-pre"
-                    class="text-[11px] leading-snug font-mono whitespace-pre-wrap bg-gray-900/60 text-gray-300 rounded p-3 max-h-[32rem] overflow-y-auto">Waiting for stream activity…</pre>
+                    class="text-[11px] leading-snug font-mono whitespace-pre-wrap bg-gray-900/60 text-gray-300 rounded p-3 max-h-[48rem] overflow-y-auto">Waiting for stream activity…</pre>
                 <p class="text-gray-600 text-[10px] mt-2">Last 5 minutes. FFmpeg progress lines are filtered. Refreshes every 2&nbsp;s.</p>
             </div>
         </div>
@@ -790,6 +797,27 @@ function _fmtLogTs(ts) {
     const pad = n => String(n).padStart(2, '0');
     return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
+function copyExpLog(btn) {
+    const pre = document.getElementById('exp-log-pre');
+    const text = pre ? (pre.innerText || pre.textContent || '') : '';
+    if (!text) return;
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(ta);
+    const orig = btn.innerHTML;
+    btn.innerHTML = '&#10003; Copied';
+    btn.classList.add('text-green-400');
+    setTimeout(function () {
+        btn.innerHTML = orig;
+        btn.classList.remove('text-green-400');
+    }, 1500);
+}
+
 async function updateExpLog() {
     try {
         const url = _expLogSinceTs

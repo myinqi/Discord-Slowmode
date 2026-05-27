@@ -1873,6 +1873,21 @@ class ExpRadioSubmitModal(discord.ui.Modal, title="Submit to Experimental Radio"
     async def on_submit(self, interaction: discord.Interaction):
         import hashlib
         await interaction.response.defer(ephemeral=True)
+
+        # Block submissions while the experimental radio stream is live —
+        # otherwise users register DB entries they cannot complete (the
+        # upload endpoint rejects with 503 until the stream stops), which
+        # shows up as orphan "Analysing…" rows in the admin playlist.
+        import bot.exp_stream_manager as _esm
+        if _esm.stream_is_live:
+            await interaction.followup.send(
+                "🔴 The Experimental Radio stream is currently live. "
+                "Submissions are paused while a stream is in progress — "
+                "please try again after the stream ends.",
+                ephemeral=True,
+            )
+            return
+
         raw_url = self.url.value.strip()
 
         if not SUNO_URL_PATTERN.search(raw_url):
