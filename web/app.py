@@ -4040,7 +4040,40 @@ def create_app(db: Database, bot=None) -> Quart:
         os.makedirs(mp3_dir, exist_ok=True)
         mp3_filename = f"{song['suno_uuid']}.mp3"
         mp3_path     = os.path.join(mp3_dir, mp3_filename)
-        await mp3_file.save(mp3_path)
+
+        # Detect upload extension. Suno is migrating some songs from .mp3 to
+        # .m4a (Opus codec). The browser tries .mp3 first and falls back to
+        # .m4a, sending the filename with the right extension.
+        upload_name = (mp3_file.filename or "").lower()
+        is_m4a = upload_name.endswith(".m4a")
+        if is_m4a:
+            # Save the m4a temporarily, then transcode to mp3 so the rest of
+            # the pipeline (FFmpeg concat demuxer, Whisper, cover normalize)
+            # keeps working unchanged.
+            tmp_path = os.path.join(mp3_dir, f"{song['suno_uuid']}.m4a")
+            await mp3_file.save(tmp_path)
+            try:
+                _proc = await asyncio.create_subprocess_exec(
+                    "ffmpeg", "-y", "-i", tmp_path,
+                    "-vn", "-acodec", "libmp3lame", "-b:a", "192k",
+                    mp3_path,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _, _err = await _proc.communicate()
+                if _proc.returncode != 0:
+                    try: os.remove(tmp_path)
+                    except OSError: pass
+                    return jsonify({
+                        "ok": False,
+                        "error": f"M4A→MP3 transcode failed: {(_err or b'').decode('utf-8', 'replace')[:200]}",
+                    }), 500
+            finally:
+                try: os.remove(tmp_path)
+                except OSError: pass
+        else:
+            await mp3_file.save(mp3_path)
+
         await db.update_exp_radio_song(song["id"], mp3_filename=mp3_filename)
 
         from bot.exp_radio_worker import process_exp_song

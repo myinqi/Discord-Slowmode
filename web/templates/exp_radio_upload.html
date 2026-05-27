@@ -112,17 +112,15 @@ async function startUpload() {
         return;
     }
 
-    // Step 2: Fetch MP3 from Suno CDN using real UUID
-    var cdnUrl = 'https://cdn1.suno.ai/' + realUuid + '.mp3';
+    // Step 2: Fetch audio from Suno CDN — try .mp3 first, fall back to .m4a.
+    // (Suno is migrating some users to M4A/Opus-only downloads; the CDN still
+    // serves both formats for now but we future-proof here.)
     progLabel.textContent = 'Fetching audio from Suno…';
 
-    var blob;
-    try {
-        var resp = await fetch(cdnUrl);
-        if (!resp.ok) {
-            throw new Error('Suno returned HTTP ' + resp.status + '. The song may be private or unavailable.');
-        }
-        // Stream response to track progress
+    async function tryFetch(ext) {
+        var url = 'https://cdn1.suno.ai/' + realUuid + '.' + ext;
+        var resp = await fetch(url);
+        if (!resp.ok) return null;
         var reader = resp.body.getReader();
         var total = parseInt(resp.headers.get('Content-Length') || '0');
         var received = 0;
@@ -138,19 +136,33 @@ async function startUpload() {
                 progPct.textContent = pct + '%';
             }
         }
-        blob = new Blob(chunks, { type: 'audio/mpeg' });
+        return { blob: new Blob(chunks), ext: ext };
+    }
+
+    var fetched;
+    try {
+        fetched = await tryFetch('mp3');
+        if (!fetched) {
+            progLabel.textContent = 'MP3 unavailable, trying M4A…';
+            fetched = await tryFetch('m4a');
+        }
+        if (!fetched) {
+            throw new Error('Audio not available on Suno CDN (neither .mp3 nor .m4a). The song may be private or unavailable.');
+        }
     } catch (e) {
         showError('Could not fetch audio: ' + e.message);
         return;
     }
+    var blob = fetched.blob;
+    var audioExt = fetched.ext;
 
     // Step 2: POST to our server
-    progLabel.textContent = 'Uploading to server…';
+    progLabel.textContent = 'Uploading to server (' + audioExt.toUpperCase() + ')…';
     progBar.style.width = '65%';
     progPct.textContent = '65%';
 
     var formData = new FormData();
-    formData.append('mp3', blob, SUNO_UUID + '.mp3');
+    formData.append('mp3', blob, SUNO_UUID + '.' + audioExt);
 
     try {
         var r = await fetch('/exp-radio/upload/' + UPLOAD_TOKEN, {

@@ -60,25 +60,64 @@ def ensure_exp_dirs(exp_radio_dir: str):
 # ─── MP3 download ─────────────────────────────────────────────────────────────
 
 async def download_mp3(uuid: str, mp3_dir: str) -> str | None:
-    """Download Suno MP3 from CDN. Returns local path or None."""
+    """Download Suno audio from CDN. Tries .mp3 first, falls back to .m4a
+    (Opus codec) which Suno now serves to a subset of users. Any .m4a is
+    transcoded to .mp3 so downstream code (FFmpeg concat demuxer, Whisper,
+    cover normalize) can keep treating the file as MP3 uniformly.
+
+    Returns the local .mp3 path or None on failure.
+    """
+    import asyncio
     dest = os.path.join(mp3_dir, f"{uuid}.mp3")
     if os.path.exists(dest):
         return dest
-    url = f"https://cdn1.suno.ai/{uuid}.mp3"
-    try:
-        async with aiohttp.ClientSession(headers={"User-Agent": _BROWSER_UA}) as sess:
-            async with sess.get(url, timeout=aiohttp.ClientTimeout(total=90)) as resp:
-                if resp.status != 200:
-                    print(f"[exp-radio] MP3 HTTP {resp.status} for {uuid}", flush=True)
-                    return None
-                data = await resp.read()
+
+    async def _fetch(ext: str) -> bytes | None:
+        url = f"https://cdn1.suno.ai/{uuid}.{ext}"
+        try:
+            async with aiohttp.ClientSession(headers={"User-Agent": _BROWSER_UA}) as sess:
+                async with sess.get(url, timeout=aiohttp.ClientTimeout(total=90)) as resp:
+                    if resp.status != 200:
+                        return None
+                    return await resp.read()
+        except Exception as e:
+            print(f"[exp-radio] {ext.upper()} fetch error {uuid}: {e}", flush=True)
+            return None
+
+    data = await _fetch("mp3")
+    if data:
         with open(dest, "wb") as f:
             f.write(data)
         print(f"[exp-radio] Downloaded {uuid}.mp3 ({len(data) // 1024} KB)", flush=True)
         return dest
-    except Exception as e:
-        print(f"[exp-radio] MP3 download error {uuid}: {e}", flush=True)
+
+    # MP3 unavailable — try M4A (Opus-in-MP4) and transcode.
+    print(f"[exp-radio] MP3 unavailable for {uuid}, trying M4A…", flush=True)
+    data = await _fetch("m4a")
+    if not data:
+        print(f"[exp-radio] Neither MP3 nor M4A available for {uuid}", flush=True)
         return None
+    tmp_path = os.path.join(mp3_dir, f"{uuid}.m4a")
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(data)
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-i", tmp_path,
+            "-vn", "-acodec", "libmp3lame", "-b:a", "192k",
+            dest,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, err = await proc.communicate()
+        if proc.returncode != 0:
+            print(f"[exp-radio] M4A→MP3 transcode failed for {uuid}: "
+                  f"{(err or b'').decode('utf-8', 'replace')[:200]}", flush=True)
+            return None
+        print(f"[exp-radio] Downloaded {uuid}.m4a ({len(data) // 1024} KB) → transcoded to MP3", flush=True)
+        return dest
+    finally:
+        try: os.remove(tmp_path)
+        except OSError: pass
 
 
 # ─── Suno metadata scrape ─────────────────────────────────────────────────────
