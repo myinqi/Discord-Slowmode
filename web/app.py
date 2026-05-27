@@ -4060,6 +4060,8 @@ def create_app(db: Database, bot=None) -> Quart:
             result = await exp_stream_manager.start(twitch_key)
         elif action == "stop":
             result = await exp_stream_manager.stop()
+        elif action == "safe_stop":
+            result = await exp_stream_manager.safe_stop()
         else:
             return jsonify({"ok": False, "error": "Unknown action"}), 400
         return jsonify(result)

@@ -414,6 +414,11 @@
                         class="flex-1 px-3 py-2 bg-green-600/30 hover:bg-green-600/50 text-green-400 rounded-lg text-sm font-medium transition-colors">
                         ▶ Start
                     </button>
+                    <button onclick="expStreamAction('safe_stop')" id="exp-btn-safe-stop"
+                        class="flex-1 px-3 py-2 bg-yellow-600/30 hover:bg-yellow-600/50 text-yellow-400 rounded-lg text-sm font-medium transition-colors"
+                        title="Post a chat notice and stop after the current song ends">
+                        🌙 Safe Stop
+                    </button>
                     <button onclick="expStreamAction('stop')" id="exp-btn-stop"
                         class="flex-1 px-3 py-2 bg-red-600/30 hover:bg-red-600/50 text-red-400 rounded-lg text-sm font-medium transition-colors">
                         ⏹ Stop
@@ -699,9 +704,10 @@
 let _expPollTimer = null;
 
 async function expStreamAction(action) {
-    const startBtn = document.getElementById('exp-btn-start');
-    const stopBtn  = document.getElementById('exp-btn-stop');
-    startBtn.disabled = stopBtn.disabled = true;
+    const startBtn    = document.getElementById('exp-btn-start');
+    const stopBtn     = document.getElementById('exp-btn-stop');
+    const safeStopBtn = document.getElementById('exp-btn-safe-stop');
+    startBtn.disabled = stopBtn.disabled = safeStopBtn.disabled = true;
     try {
         const r = await fetch(`/exp-radio/stream/${action}`, { method: 'POST' });
         const d = await r.json();
@@ -711,7 +717,7 @@ async function expStreamAction(action) {
     } catch (e) {
         alert('Request failed: ' + e.message);
     } finally {
-        startBtn.disabled = stopBtn.disabled = false;
+        startBtn.disabled = stopBtn.disabled = safeStopBtn.disabled = false;
         await updateExpStatus();
     }
 }
@@ -723,9 +729,14 @@ async function updateExpStatus() {
         const dot  = document.getElementById('exp-status-dot');
         const text = document.getElementById('exp-status-text');
         const np   = document.getElementById('exp-now-playing');
+        const safeStopBtn = document.getElementById('exp-btn-safe-stop');
         if (d.running) {
             dot.className  = 'inline-block w-2.5 h-2.5 rounded-full bg-green-500';
-            text.textContent = 'Live';
+            text.textContent = d.safe_stop_pending ? 'Live — stopping after current song…' : 'Live';
+            if (safeStopBtn) {
+                safeStopBtn.disabled = d.safe_stop_pending;
+                safeStopBtn.textContent = d.safe_stop_pending ? '🌙 Stopping…' : '🌙 Safe Stop';
+            }
             if (d.song) {
                 np.textContent = `${d.song.title || '?'} — ${d.song.artist || ''}  (${d.song_index || 0}/${d.playlist_length || 0})`;
             }
@@ -733,6 +744,7 @@ async function updateExpStatus() {
             dot.className  = 'inline-block w-2.5 h-2.5 rounded-full bg-gray-500';
             text.textContent = 'Offline';
             np.textContent   = '—';
+            if (safeStopBtn) { safeStopBtn.disabled = false; safeStopBtn.textContent = '🌙 Safe Stop'; }
         }
     } catch (_) {}
 }

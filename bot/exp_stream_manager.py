@@ -120,6 +120,9 @@ class ExpStreamManager:
         self.playlist: list[dict]      = []
         self._twitch_key   = ""
         self._twitch_chat: TwitchBot | None = None
+        # Safe-stop: when set, the stream stops after the current song ends.
+        self._safe_stop_requested: bool = False
+        self._current_song_end_time: float = 0.0   # monotonic
         # Live log: each entry is (unix_ts: float, level: str, line: str).
         # The actual buffer is module-level (see _LOG_BUFFER below) so that
         # background workers and web actions which don't have a reference to
@@ -224,6 +227,7 @@ class ExpStreamManager:
                 except Exception:
                     pass
         self._process = None
+        self._safe_stop_requested = False
         if self._task:
             self._task.cancel()
             self._task = None
@@ -234,9 +238,41 @@ class ExpStreamManager:
         self._log("Stopped.")
         return {"ok": True}
 
+    async def safe_stop(self) -> dict:
+        """Post a chat notice and stop the stream after the current song ends."""
+        if not self.is_running:
+            return {"ok": False, "error": "Stream is not running."}
+        if self._safe_stop_requested:
+            return {"ok": False, "error": "Safe stop already pending."}
+        self._safe_stop_requested = True
+        # Announce in chat
+        if self._twitch_chat:
+            song_title = (self.current_song or {}).get("title") or "current song"
+            try:
+                await self._twitch_chat.send(
+                    f"🎙️ The stream will end after '{song_title}' finishes. Thanks for listening!"
+                )
+            except Exception as e:
+                self._log(f"Safe-stop announcement failed: {e}", "error")
+        self._log("Safe stop requested — stream will end after current song.")
+        # Schedule the actual stop to fire when the current song ends.
+        asyncio.create_task(self._safe_stop_waiter())
+        return {"ok": True}
+
+    async def _safe_stop_waiter(self) -> None:
+        """Wait until the current song is expected to end, then stop."""
+        end_t = self._current_song_end_time
+        remaining = end_t - time.monotonic()
+        if remaining > 0:
+            await asyncio.sleep(remaining + 1.0)   # +1s buffer
+        if self._safe_stop_requested and self.is_running:
+            self._log("Safe stop: current song ended — stopping stream.")
+            await self.stop()
+
     async def get_status(self) -> dict:
         return {
             "running": self.is_running,
+            "safe_stop_pending": self._safe_stop_requested,
             "song": {
                 "title":    self.current_song.get("title")    if self.current_song else None,
                 "artist":   self.current_song.get("artist")   if self.current_song else None,
@@ -471,22 +507,28 @@ class ExpStreamManager:
             self._log(f"_announce_rotation_end error: {e}", "error")
 
     async def _post_now_playing_loop(self, songs: list):
-        """Post ♪ Now Playing to Twitch chat at each song boundary."""
-        if not self._twitch_chat:
-            return
+        """Post ♪ Now Playing to Twitch chat at each song boundary.
+        Also updates current_song and _current_song_end_time for safe_stop."""
         _POST_DELAY = 10  # seconds after song start before posting
         for song in songs:
             dur = song.get("duration") or 300
+            # Update current song tracking for safe-stop
+            self.current_song = song
+            self._current_song_end_time = time.monotonic() + dur
+            # Cancel safe-stop for this song if it was requested mid-prev-song
+            if self._safe_stop_requested:
+                self._log(f"Safe stop: finishing after '{song.get('title','?')}' ({dur}s).")
             await asyncio.sleep(min(_POST_DELAY, dur))
-            title    = song.get("title")  or "Unknown"
-            artist   = song.get("artist") or ""
-            suno_url = song.get("suno_url") or ""
-            msg = f"\U0001F3B5 Now Playing: {title}"
-            if artist:
-                msg += f" - {artist}"
-            if suno_url:
-                msg += f" | {suno_url}"
-            await self._twitch_chat.send(msg)
+            if self._twitch_chat:
+                title    = song.get("title")  or "Unknown"
+                artist   = song.get("artist") or ""
+                suno_url = song.get("suno_url") or ""
+                msg = f"\U0001F3B5 Now Playing: {title}"
+                if artist:
+                    msg += f" - {artist}"
+                if suno_url:
+                    msg += f" | {suno_url}"
+                await self._twitch_chat.send(msg)
             await asyncio.sleep(max(0, dur - _POST_DELAY))
 
     # ── Media helpers ──────────────────────────────────────────────────────────
