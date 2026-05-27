@@ -382,15 +382,28 @@ async function analyze(){
   setProgress(10);setStatus('Loading audio…');
   // Use real UUID from meta if available (for share links), otherwise use input
   var audioId=meta&&meta.realId?meta.realId:uuid;
-  var mp3url='https://cdn1.suno.ai/'+audioId+'.mp3';
-  player.src=mp3url;
+  // Suno is migrating some songs from .mp3 to .m4a (Opus codec).
+  // Try .mp3 first, fall back to .m4a if unavailable.
+  var audioUrl='https://cdn1.suno.ai/'+audioId+'.mp3';
+  player.src=audioUrl;
+  player.onerror=function(){
+    player.onerror=null;
+    player.src='https://cdn1.suno.ai/'+audioId+'.m4a';
+  };
   try{
     var arrayBuf;
     var cacheKey=audioId;
     if(mp3Cache[cacheKey]){setStatus('From cache…');arrayBuf=mp3Cache[cacheKey];}
     else{
-      var resp=await fetch(mp3url);
-      if(!resp.ok){setStatus('MP3 unavailable ('+resp.status+')');return;}
+      var resp=await fetch(audioUrl);
+      if(!resp.ok){
+        // MP3 not available — try M4A (Opus-in-MP4) instead.
+        audioUrl='https://cdn1.suno.ai/'+audioId+'.m4a';
+        setStatus('MP3 unavailable, trying M4A…');
+        resp=await fetch(audioUrl);
+        if(!resp.ok){setStatus('Audio unavailable ('+resp.status+')');return;}
+        player.src=audioUrl;
+      }
       setStatus('Decoding…');setProgress(20);
       arrayBuf=await resp.arrayBuffer();
       mp3Cache[cacheKey]=arrayBuf;
