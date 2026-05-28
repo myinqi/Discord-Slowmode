@@ -322,6 +322,15 @@
                             class="w-3.5 h-3.5 accent-discord-blurple">
                         <span class="text-gray-300 text-xs">🔀 Shuffle (random on each stream start)</span>
                     </label>
+                    {% if loop_videos|length > 1 %}
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="loop_selection" value="concat_all"
+                            {% if loop_selection == 'concat_all' %}checked{% endif %}
+                            onchange="this.form.submit()"
+                            class="w-3.5 h-3.5 accent-discord-blurple">
+                        <span class="text-gray-300 text-xs">🎞️ Alle Videos aneinandergereiht (ein großes Video)</span>
+                    </label>
+                    {% endif %}
                     {% for v in loop_videos %}
                     <div class="flex items-center gap-2 group">
                         <label class="flex items-center gap-2 cursor-pointer flex-1 min-w-0">

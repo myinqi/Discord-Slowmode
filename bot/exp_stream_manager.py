@@ -334,14 +334,24 @@ class ExpStreamManager:
         bg_fn   = await self.db.get_setting("exp_radio_bg_filename") or ""
         bg_type = await self.db.get_setting("exp_radio_bg_type") or "image"
 
-        # Resolve loop video: supports multiple uploads + shuffle / fixed pick.
-        loop_fn = ""
+        # Resolve loop video: supports multiple uploads + shuffle / fixed / concat-all.
+        loop_fn   = ""
+        loop_path = None
         import json as _json
         loop_raw = await self.db.get_setting("exp_radio_loop_videos") or "[]"
         loop_vids = _json.loads(loop_raw) if loop_raw else []
         if loop_vids:
             loop_sel = await self.db.get_setting("exp_radio_loop_selection") or "shuffle"
-            if loop_sel == "shuffle":
+            if loop_sel == "concat_all":
+                if len(loop_vids) == 1:
+                    loop_fn = loop_vids[0]["filename"]
+                    self._log(f"Loop video (concat_all single): {loop_fn}")
+                else:
+                    loop_path = await self._build_concat_all_video(loop_vids)
+                    if not loop_path:
+                        loop_fn = random.choice(loop_vids)["filename"]
+                        self._log(f"Concat-all failed, shuffle fallback: {loop_fn}", "error")
+            elif loop_sel == "shuffle":
                 loop_fn = random.choice(loop_vids)["filename"]
                 self._log(f"Loop video (shuffle): {loop_fn}")
             else:
@@ -356,8 +366,9 @@ class ExpStreamManager:
             # Legacy fallback: single-video setting from before the migration
             loop_fn = await self.db.get_setting("exp_radio_loop_filename") or ""
 
-        bg_path   = os.path.join(self.exp_radio_dir, "assets", bg_fn)   if bg_fn   else None
-        loop_path = os.path.join(self.exp_radio_dir, "assets", loop_fn) if loop_fn else None
+        bg_path = os.path.join(self.exp_radio_dir, "assets", bg_fn) if bg_fn else None
+        if loop_path is None:
+            loop_path = os.path.join(self.exp_radio_dir, "assets", loop_fn) if loop_fn else None
 
         # Prefetch all covers/videos
         media_paths = []
@@ -747,6 +758,69 @@ class ExpStreamManager:
         if path:
             return True, "Cover downloaded and normalized."
         return False, "No usable cover URL available."
+
+    # ── Concat-all loop video builder ─────────────────────────────────────────
+
+    async def _build_concat_all_video(self, loop_vids: list) -> str | None:
+        """Concatenate every uploaded loop video into one MP4.
+
+        The result is cached in assets/_concat_all.mp4. A sidecar hash file
+        (_concat_all.hash) records the sorted filename list so the file is
+        rebuilt automatically whenever videos are added or removed."""
+        import hashlib
+        assets   = os.path.join(self.exp_radio_dir, "assets")
+        out_path = os.path.join(assets, "_concat_all.mp4")
+        hash_file = os.path.join(assets, "_concat_all.hash")
+
+        vid_sig  = ",".join(sorted(v["filename"] for v in loop_vids))
+        cur_hash = hashlib.md5(vid_sig.encode()).hexdigest()
+
+        # Cache hit?
+        if os.path.exists(out_path) and os.path.exists(hash_file):
+            try:
+                with open(hash_file) as fh:
+                    if fh.read().strip() == cur_hash:
+                        self._log("Concat-all loop video: cache hit.")
+                        return out_path
+            except Exception:
+                pass
+
+        paths = [os.path.join(assets, v["filename"]) for v in loop_vids]
+        missing = [p for p in paths if not os.path.exists(p)]
+        if missing:
+            self._log(f"Concat-all: missing files: {missing}", "error")
+            return None
+
+        concat_list = os.path.join(assets, "_concat_all_list.txt")
+        with open(concat_list, "w", encoding="utf-8") as fh:
+            for p in paths:
+                fh.write(f"file '{p}'\n")
+
+        self._log(f"Building concat-all loop video ({len(paths)} clips)…")
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "concat", "-safe", "0", "-i", concat_list,
+            "-vf", "scale=720:720:force_original_aspect_ratio=decrease:force_divisible_by=2,fps=24",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "24",
+            "-pix_fmt", "yuv420p",
+            "-g", "24", "-keyint_min", "24",
+            "-movflags", "+faststart",
+            "-an",
+            out_path,
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+        )
+        _, err = await proc.communicate()
+        if proc.returncode != 0:
+            err_tail = (err or b"")[-400:].decode("utf-8", errors="replace")
+            self._log(f"Concat-all build failed: {err_tail}", "error")
+            return None
+
+        with open(hash_file, "w") as fh:
+            fh.write(cur_hash)
+        self._log(f"Concat-all loop video ready ({len(paths)} clips combined).")
+        return out_path
 
     # ── Combined ASS builder ───────────────────────────────────────────────────
 
