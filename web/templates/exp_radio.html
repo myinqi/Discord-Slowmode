@@ -88,6 +88,18 @@
                 </p>
             </div>
             <div class="pt-2 border-t border-gray-700/50 space-y-2">
+                <label class="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" name="exp_progress_overlay"
+                        {% if exp_progress_overlay == 'on' %}checked{% endif %}
+                        class="w-4 h-4 accent-discord-blurple">
+                    <span class="text-white text-sm">Show song progress in stream overlay</span>
+                </label>
+                <p class="text-gray-500 text-xs">
+                    Displays a bottom-right info card in the Twitch stream video showing the
+                    current song's duration and playlist position (e.g. <em>4:33 · Song 9/30</em>).
+                </p>
+            </div>
+            <div class="pt-2 border-t border-gray-700/50 space-y-2">
                 <p class="text-white text-sm font-medium">When the playlist ends</p>
                 <label class="flex items-start gap-2 cursor-pointer select-none">
                     <input type="radio" name="exp_loop_mode" value="stop"

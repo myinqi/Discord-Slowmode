@@ -3729,11 +3729,13 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.set_setting("exp_radio_post_channel_1_id", ch1)
                 await db.set_setting("exp_radio_post_channel_2_id", ch2)
                 await db.set_setting("exp_radio_expiry_channel_id", expiry_ch)
+                progress_overlay_en = "on" if form.get("exp_progress_overlay") else "off"
                 await db.set_setting("exp_radio_moderation_enabled", moderation_en)
                 await db.set_setting("exp_radio_loop_mode", loop_mode_v)
                 await db.set_setting("exp_radio_schedule_enabled", sched_en)
                 await db.set_setting("exp_radio_schedule_days", sched_days)
                 await db.set_setting("exp_radio_schedule_time", sched_time)
+                await db.set_setting("exp_radio_progress_overlay", progress_overlay_en)
                 if stream_url_v:
                     await db.set_setting("exp_radio_stream_url", stream_url_v)
                 await flash("Settings saved.", "success")
@@ -3889,6 +3891,7 @@ def create_app(db: Database, bot=None) -> Quart:
         exp_twitch_chat_enabled = await db.get_setting("exp_radio_twitch_chat_enabled") or "off"
         exp_moderation_enabled  = await db.get_setting("exp_radio_moderation_enabled") or "off"
         exp_loop_mode           = await db.get_setting("exp_radio_loop_mode") or "reshuffle"
+        exp_progress_overlay    = await db.get_setting("exp_radio_progress_overlay") or "off"
         exp_schedule_enabled    = await db.get_setting("exp_radio_schedule_enabled") or "off"
         exp_schedule_days       = await db.get_setting("exp_radio_schedule_days") or ""
         exp_schedule_time       = await db.get_setting("exp_radio_schedule_time") or ""
@@ -3945,6 +3948,7 @@ def create_app(db: Database, bot=None) -> Quart:
             exp_twitch_chat_enabled=exp_twitch_chat_enabled,
             exp_moderation_enabled=exp_moderation_enabled,
             exp_loop_mode=exp_loop_mode,
+            exp_progress_overlay=exp_progress_overlay,
             exp_schedule_enabled=exp_schedule_enabled,
             exp_schedule_time=exp_schedule_time,
             exp_schedule_days_set=exp_schedule_days_set,

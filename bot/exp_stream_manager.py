@@ -367,7 +367,8 @@ class ExpStreamManager:
             self._log(f"Media ready: {song.get('title')} → {path}")
 
         # Build combined ASS (subtitles + NowPlaying title cards)
-        combined_ass = self._build_combined_ass(songs)
+        show_progress = (await self.db.get_setting("exp_radio_progress_overlay") or "off") == "on"
+        combined_ass = self._build_combined_ass(songs, show_progress=show_progress)
 
         # Build audio concat file
         concat_txt = os.path.join(self.exp_radio_dir, "_audio_concat.txt")
@@ -749,9 +750,11 @@ class ExpStreamManager:
 
     # ── Combined ASS builder ───────────────────────────────────────────────────
 
-    def _build_combined_ass(self, songs: list) -> str | None:
+    def _build_combined_ass(self, songs: list, show_progress: bool = False) -> str | None:
         """Merge all per-song ASS files into one with time offsets.
-        Adds a NowPlaying title card at the start of each song."""
+        Adds a NowPlaying title card at the start of each song.
+        When show_progress=True also adds a bottom-right card with
+        song duration and playlist position (e.g. '4:33  ·  Song 9/30')."""
         ass_dir = os.path.join(self.exp_radio_dir, "ass")
         out_path = os.path.join(self.exp_radio_dir, "_combined.ass")
 
@@ -768,7 +771,9 @@ class ExpStreamManager:
             "Style: Default,Arial,52,&H00FFFFFF,&H000000FF,&H00000000,"
             "&H80000000,-1,0,0,0,100,100,0,0,1,2.5,1,2,10,10,30,1\n"
             "Style: NowPlaying,Arial,48,&H00E8C97A,&H000000FF,&H00000000,"
-            "&HC8000000,0,0,0,0,100,100,0,0,1,1.5,0.8,7,20,20,14,1\n\n"
+            "&HC8000000,0,0,0,0,100,100,0,0,1,1.5,0.8,7,20,20,14,1\n"
+            "Style: Progress,Arial,34,&H00FFFFFF,&H000000FF,&H00000000,"
+            "&HA0000000,0,0,0,0,100,100,0,0,1,1.2,0.5,3,10,30,18,1\n\n"
             "[Events]\n"
             "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
         )
@@ -776,8 +781,9 @@ class ExpStreamManager:
         events = []
         offset_cs = 0
         has_any = False
+        n_songs = len(songs)
 
-        for song in songs:
+        for song_idx, song in enumerate(songs):
             dur = song.get("duration") or 300
             dur_cs = int(dur * 100)
             t_start = _cs_to_ts(offset_cs)
@@ -791,6 +797,17 @@ class ExpStreamManager:
                 f"Dialogue: 2,{t_start},{t_end},NowPlaying,,0,0,0,,"
                 f"{{\\pos(20,20)\\an7\\fad(600,600)}}♪  {title}{label}  ♪"
             )
+
+            # Progress info card: bottom-right, e.g. "4:33  ·  Song 9/30"
+            if show_progress:
+                dur_mins = int(dur) // 60
+                dur_secs = int(dur) % 60
+                dur_str  = f"{dur_mins}:{dur_secs:02d}"
+                info     = f"{dur_str}  \u00b7  Song {song_idx + 1}/{n_songs}"
+                events.append(
+                    f"Dialogue: 1,{t_start},{t_end},Progress,,0,0,0,,"
+                    f"{{\\fad(400,400)}}{info}"
+                )
 
             # Per-song subtitle lines (shifted)
             ass_fn = song.get("ass_filename")
