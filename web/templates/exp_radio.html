@@ -73,6 +73,15 @@
                 </select>
             </div>
             <div class="pt-2 border-t border-gray-700/50 space-y-2">
+                <label class="block text-white text-sm">Max submissions per user</label>
+                <div class="flex items-center gap-3">
+                    <input type="number" name="exp_max_per_user" min="1" max="20"
+                        value="{{ exp_max_per_user }}"
+                        class="w-20 px-3 py-1.5 bg-discord-darker border border-gray-700 rounded text-white text-sm focus:border-discord-blurple focus:outline-none">
+                    <span class="text-gray-500 text-xs">songs per person (1–20) — only affects new submissions</span>
+                </div>
+            </div>
+            <div class="pt-2 border-t border-gray-700/50 space-y-2">
                 <label class="flex items-center gap-2 cursor-pointer select-none">
                     <input type="checkbox" name="exp_moderation_enabled"
                         {% if exp_moderation_enabled == 'on' %}checked{% endif %}

@@ -1746,7 +1746,7 @@ class CommandsCog(commands.Cog):
         embed.add_field(
             name="🎙️ Experimental Radio",
             value=(
-                "**`/twitch-submit`** — Submit a Suno song to the Experimental Radio (max 3 per user)\n"
+                "**`/twitch-submit`** — Submit a Suno song to the Experimental Radio\n"
                 "**`/twitch-delete`** — Remove one of your Experimental Radio submissions"
             ),
             inline=False,
@@ -1760,16 +1760,18 @@ class CommandsCog(commands.Cog):
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="twitch-submit", description="Submit a Suno song to the Experimental Radio (max 3 per user)")
+    @app_commands.command(name="twitch-submit", description="Submit a Suno song to the Experimental Radio")
     async def exp_radio_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        max_per_user = int(await self.bot.db.get_setting("exp_radio_max_per_user") or "4")
         embed = discord.Embed(
             title="🎙️ Submit to Experimental Radio",
-            description=_EXP_TERMS_DISPLAY,
+            description=_exp_terms_display(max_per_user),
             color=discord.Color.purple(),
         )
         embed.set_footer(text="Click 'I Agree & Submit' to proceed with your submission.")
         view = ExpRadioTermsView(self.bot)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
     @app_commands.command(name="twitch-delete", description="Remove one of your Experimental Radio submissions")
     async def exp_radio_delete(self, interaction: discord.Interaction):
@@ -1823,17 +1825,19 @@ class CommandsCog(commands.Cog):
 
 
 _SUNO_SUBMIT_RE = re.compile(r'(?:suno\.com/(?:s|song)/)([A-Za-z0-9_-]{8,})')
-_EXP_MAX_PER_USER = 4
+_EXP_MAX_PER_USER_DEFAULT = 4
 
-_EXP_TERMS_DISPLAY = (
-    "**By submitting you confirm:**\n"
-    "• You created this song on Suno.ai and hold the rights to stream it\n"
-    "• You grant a **14-day streaming license** for Twitch live streams & VODs\n"
-    "• The content complies with community guidelines (no hate speech, explicit or illegal content)\n"
-    "• Songs expire and are deleted automatically after **14 days**\n"
-    f"• Maximum **{_EXP_MAX_PER_USER} songs** per user\n"
-    "• Maximum song length: **6 minutes**"
-)
+
+def _exp_terms_display(limit: int) -> str:
+    return (
+        "**By submitting you confirm:**\n"
+        "• You created this song on Suno.ai and hold the rights to stream it\n"
+        "• You grant a **14-day streaming license** for Twitch live streams & VODs\n"
+        "• The content complies with community guidelines (no hate speech, explicit or illegal content)\n"
+        "• Songs expire and are deleted automatically after **14 days**\n"
+        f"• Maximum **{limit} songs** per user\n"
+        "• Maximum song length: **6 minutes**"
+    )
 
 _EXP_RIGHTS_DECLARATION = (
     "I confirm that I created this song on Suno.ai, hold the necessary rights to stream it, "
@@ -1903,10 +1907,11 @@ class ExpRadioSubmitModal(discord.ui.Modal, title="Submit to Experimental Radio"
             return
         suno_uuid = m.group(1)
 
+        max_per_user = int(await self.bot.db.get_setting("exp_radio_max_per_user") or str(_EXP_MAX_PER_USER_DEFAULT))
         count = await self.bot.db.count_exp_radio_songs_by_user(interaction.user.id)
-        if count >= _EXP_MAX_PER_USER:
+        if count >= max_per_user:
             await interaction.followup.send(
-                f"❌ You already have {_EXP_MAX_PER_USER} submissions. "
+                f"❌ You already have {max_per_user} submissions. "
                 "Use `/twitch-delete` to remove one first.",
                 ephemeral=True,
             )
