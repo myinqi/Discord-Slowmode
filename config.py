@@ -12,7 +12,7 @@ class Config:
     # Web
     WEB_HOST: str = os.getenv("WEB_HOST", "0.0.0.0")
     WEB_PORT: int = int(os.getenv("WEB_PORT", "5000"))
-    WEB_URL: str = os.getenv("WEB_URL", "")  # e.g. http://yourserver.de:5000
+    WEB_URL: str = os.getenv("WEB_URL", "")  # e.g. https://yourserver.de
     SECRET_KEY: str = os.getenv("SECRET_KEY", "change-me")
 
     # Admin

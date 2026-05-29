@@ -25,6 +25,11 @@ def create_app(db: Database, bot=None) -> Quart:
     # Allow larger uploads (PiP videos, radio backgrounds). Default is 16 MB.
     app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024   # 50 MB
     app.config["BODY_TIMEOUT"]       = 120                # 2 min for slow uplinks
+    # Session cookies: Secure flag so browsers only send them over HTTPS;
+    # SameSite=Lax prevents CSRF while keeping normal navigation working.
+    app.config["SESSION_COOKIE_SECURE"]   = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.db = db
     app.bot = bot
     app.scan_status = {"running": False, "progress": "", "result": ""}

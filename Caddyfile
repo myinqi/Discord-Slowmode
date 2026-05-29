@@ -1,0 +1,3 @@
+v2202502254147313270.goodsrv.de {
+    reverse_proxy slowmode-bot:5000
+}

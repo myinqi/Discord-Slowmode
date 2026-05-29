@@ -4,7 +4,7 @@ services:
     container_name: slowmode-bot
     restart: unless-stopped
     ports:
-      - "5000:5000"
+      # Port 5000 is NOT exposed to the host — Caddy proxies internally.
       - "1936:1936"
     volumes:
       - bot-data:/app/data
@@ -14,7 +14,7 @@ services:
       - DATABASE_PATH=/app/data/bot.db
       - OLLAMA_URL=http://ollama:11434
       - LLM_MODEL=qwen2.5:7b-instruct
-      - WEB_URL=http://v2202502254147313270.goodsrv.de:5000
+      - WEB_URL=https://v2202502254147313270.goodsrv.de
       # Persist HuggingFace / faster-whisper model cache inside bot-data
       # volume so the ~1.5 GB large-v3-turbo model is not re-downloaded on
       # every `docker compose up --build`.
@@ -25,6 +25,21 @@ services:
       - TZ=Europe/Berlin
     depends_on:
       - ollama
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: slowmode-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - slowmode-bot
 
   ollama:
     image: ollama/ollama:latest
@@ -52,3 +67,5 @@ services:
 volumes:
   bot-data:
   ollama-data:
+  caddy_data:
+  caddy_config:
