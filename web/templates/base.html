@@ -73,10 +73,10 @@
             {% endmacro %}
             <nav class="flex-1 p-3 space-y-1 overflow-y-auto">
                 <a href="{{ url_for('dashboard') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'dashboard' %}active{% endif %}">
-                    <span class="sidebar-icon mr-3">�</span><span class="sidebar-label">Dashboard</span>
+                    <span class="sidebar-icon mr-3">🏠</span><span class="sidebar-label">Dashboard</span>
                 </a>
                 {{ nav_link('channels', '📢', 'Channels', 'channels') }}
-                {{ nav_link('roles', '�️', 'Roles', 'roles') }}
+                {{ nav_link('roles', '🛡️', 'Roles', 'roles') }}
                 {{ nav_link('users', '👥', 'Users', 'users') }}
                 {{ nav_link('welcome', '👋', 'Welcome', 'welcome') }}
                 {{ nav_link('party_playlist', '🎧', 'Party Playlist', 'party_playlist') }}
