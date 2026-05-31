@@ -565,7 +565,15 @@
             </div>
 
             {% if songs %}
-            <div class="divide-y divide-gray-700/30">
+            <!-- Sort bar -->
+            <div class="px-5 py-2.5 border-b border-gray-700/30 flex items-center gap-2 text-xs flex-wrap">
+                <span class="text-gray-500 mr-1">Sort:</span>
+                <button onclick="sortSongs('default')" id="sort-btn-default" class="sort-btn px-2.5 py-1 rounded text-blue-300 bg-blue-600/20 hover:bg-blue-600/40 transition-colors">Default</button>
+                <button onclick="sortSongs('artist')" id="sort-btn-artist" class="sort-btn px-2.5 py-1 rounded text-gray-400 bg-gray-700/40 hover:bg-gray-600/40 transition-colors" data-dir="asc">Artist A→Z</button>
+                <button onclick="sortSongs('green')" id="sort-btn-green" class="sort-btn px-2.5 py-1 rounded text-gray-400 bg-gray-700/40 hover:bg-gray-600/40 transition-colors">✓ Grün zuerst</button>
+                <button onclick="sortSongs('no-status')" id="sort-btn-no-status" class="sort-btn px-2.5 py-1 rounded text-gray-400 bg-gray-700/40 hover:bg-gray-600/40 transition-colors">⬜ Kein Status</button>
+            </div>
+            <div class="divide-y divide-gray-700/30" id="song-list">
                 {% for song in songs %}
                 {% set status_color = {
                     'done': 'bg-green-500',
@@ -574,7 +582,9 @@
                     'failed': 'bg-red-500'
                 }.get(song.analysis_status, 'bg-gray-500') %}
                 {% set row_opacity = '' if song.active else 'opacity-40' %}
-                <div class="px-5 py-4 hover:bg-gray-800/20 transition-colors {{ row_opacity }}">
+                <div class="px-5 py-4 hover:bg-gray-800/20 transition-colors {{ row_opacity }} song-row"
+                     data-artist="{{ (song.artist or '') | lower }}"
+                     data-mod-status="{{ song.moderation_status or '' }}">
                     <div class="flex items-start gap-4">
                         <!-- Status dot + cover -->
                         <div class="flex-shrink-0 relative">
@@ -875,11 +885,63 @@ async function updateExpLog() {
     } catch (_) {}
 }
 
+// ── Song list sorting ──────────────────────────────────────────────────────
+let _songOriginalOrder = null;
+
+function _setSortActive(by) {
+    document.querySelectorAll('.sort-btn').forEach(b => {
+        b.classList.remove('text-blue-300', 'bg-blue-600/20');
+        b.classList.add('text-gray-400', 'bg-gray-700/40');
+    });
+    const btn = document.getElementById('sort-btn-' + by);
+    if (btn) {
+        btn.classList.add('text-blue-300', 'bg-blue-600/20');
+        btn.classList.remove('text-gray-400', 'bg-gray-700/40');
+    }
+}
+
+function sortSongs(by) {
+    const container = document.getElementById('song-list');
+    if (!container) return;
+    const rows = Array.from(container.querySelectorAll('.song-row'));
+    if (!rows.length) return;
+    if (!_songOriginalOrder) _songOriginalOrder = [...rows];
+
+    _setSortActive(by);
+
+    if (by === 'default') {
+        _songOriginalOrder.forEach(el => container.appendChild(el));
+        return;
+    }
+
+    const sorted = [...rows];
+
+    if (by === 'artist') {
+        const btn = document.getElementById('sort-btn-artist');
+        const dir = btn && btn.dataset.dir === 'desc' ? 'asc' : 'desc';
+        if (btn) { btn.dataset.dir = dir; btn.textContent = dir === 'asc' ? 'Artist A→Z' : 'Artist Z→A'; }
+        sorted.sort((a, b) => {
+            const av = a.dataset.artist || '', bv = b.dataset.artist || '';
+            return dir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+        });
+    } else if (by === 'green') {
+        const pri = { passed: 0, approved: 0, pending: 2, flagged: 3 };
+        sorted.sort((a, b) => (pri[a.dataset.modStatus] ?? 1) - (pri[b.dataset.modStatus] ?? 1));
+    } else if (by === 'no-status') {
+        sorted.sort((a, b) => (a.dataset.modStatus ? 1 : 0) - (b.dataset.modStatus ? 1 : 0));
+    }
+
+    sorted.forEach(el => container.appendChild(el));
+}
+
 (function init() {
     updateExpStatus();
     updateExpLog();
     _expPollTimer = setInterval(updateExpStatus, 5000);
     setInterval(updateExpLog, 2000);
+    // Save original song order for Default reset
+    const songList = document.getElementById('song-list');
+    if (songList) _songOriginalOrder = Array.from(songList.querySelectorAll('.song-row'));
 })();
 </script>
 {% endblock %}
