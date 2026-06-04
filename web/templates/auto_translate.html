@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Auto Translate{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+    <h2 class="text-2xl font-bold text-white">🌐 Auto Translate</h2>
+</div>
+
+<div class="max-w-xl space-y-6">
+
+    <div class="bg-discord-dark border border-gray-700/50 rounded-xl overflow-hidden">
+        <div class="px-5 py-3 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">Settings</h3>
+        </div>
+        <form method="POST" class="p-5 space-y-5">
+
+            <!-- Enable toggle -->
+            <label class="flex items-center gap-3 cursor-pointer select-none">
+                <input type="checkbox" name="enabled" {% if enabled %}checked{% endif %}
+                    class="w-4 h-4 accent-discord-blurple">
+                <span class="text-white text-sm font-medium">Enable auto-translate</span>
+            </label>
+            <p class="text-gray-500 text-xs -mt-3">
+                When enabled, every message posted in the selected channel is
+                automatically translated into each target language and posted
+                as a follow-up message directly below the original.
+            </p>
+
+            <!-- Channel -->
+            <div class="space-y-2">
+                <label class="block text-gray-400 text-xs font-medium">Source channel</label>
+                <select name="channel_id"
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                    <option value="">— none —</option>
+                    {% for ch in text_channels %}
+                    <option value="{{ ch.id }}"
+                        {% if ch.id|string == channel_id %}selected{% endif %}>
+                        #{{ ch.name }}
+                    </option>
+                    {% endfor %}
+                </select>
+                <p class="text-gray-500 text-xs">
+                    Messages in this channel will be auto-translated.
+                    Consider setting Discord slow mode on the channel to
+                    prevent interleaving with other messages.
+                </p>
+            </div>
+
+            <!-- Target languages -->
+            <div class="space-y-2">
+                <label class="block text-gray-400 text-xs font-medium">Target languages</label>
+                <p class="text-gray-500 text-xs">
+                    One follow-up message is posted per selected language.
+                    If the original is already in that language, it is skipped.
+                </p>
+                <div class="grid grid-cols-2 gap-2 pt-1">
+                    {% set lang_meta = [
+                        ('en', '🇬🇧', 'English'),
+                        ('de', '🇩🇪', 'German'),
+                        ('fr', '🇫🇷', 'French'),
+                        ('es', '🇪🇸', 'Spanish'),
+                        ('it', '🇮🇹', 'Italian'),
+                        ('pt', '🇵🇹', 'Portuguese'),
+                        ('nl', '🇳🇱', 'Dutch'),
+                        ('ru', '🇷🇺', 'Russian'),
+                        ('no', '🇳🇴', 'Norwegian'),
+                        ('ja', '🇯🇵', 'Japanese'),
+                        ('sv', '🇸🇪', 'Swedish'),
+                        ('pl', '🇵🇱', 'Polish'),
+                        ('tr', '🇹🇷', 'Turkish'),
+                        ('ko', '🇰🇷', 'Korean'),
+                        ('zh', '🇨🇳', 'Chinese'),
+                    ] %}
+                    {% for code, flag, label in lang_meta %}
+                    <label class="flex items-center gap-2 cursor-pointer select-none bg-discord-darker rounded-lg px-3 py-2 hover:bg-gray-700/50 transition-colors">
+                        <input type="checkbox" name="languages" value="{{ code }}"
+                            {% if code in selected_langs %}checked{% endif %}
+                            class="w-4 h-4 accent-discord-blurple flex-shrink-0">
+                        <span class="text-sm text-gray-300">{{ flag }} {{ label }}</span>
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <button type="submit"
+                class="w-full px-4 py-2 bg-discord-blurple hover:opacity-90 text-white rounded-lg text-sm font-medium transition-opacity">
+                Save Settings
+            </button>
+        </form>
+    </div>
+
+    <!-- Preview of output format -->
+    <div class="bg-discord-dark border border-gray-700/50 rounded-xl overflow-hidden">
+        <div class="px-5 py-3 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold text-sm">Output format preview</h3>
+        </div>
+        <div class="p-5 space-y-2 text-sm text-gray-300 font-mono">
+            <div class="bg-discord-darker rounded-lg px-3 py-2 text-gray-400 text-xs">
+                <span class="text-white font-semibold">banzai0377</span>
+                <span class="ml-2">Bonjour tout le monde, c'est un test !</span>
+            </div>
+            <div class="bg-discord-darker rounded-lg px-3 py-2 text-xs">
+                <span class="text-gray-500">Bot ›</span>
+                <span class="text-white font-semibold ml-1">banzai0377</span>
+                <span class="ml-1">🇩🇪 Hallo alle, das ist ein Test!</span>
+            </div>
+            <div class="bg-discord-darker rounded-lg px-3 py-2 text-xs">
+                <span class="text-gray-500">Bot ›</span>
+                <span class="text-white font-semibold ml-1">banzai0377</span>
+                <span class="ml-1">🇬🇧 Hello everyone, this is a test!</span>
+            </div>
+        </div>
+    </div>
+
+</div>
+{% endblock %}

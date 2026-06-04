@@ -75,6 +75,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('polls', 'Polls'),
         ('radio', 'Twitch Radio'),
         ('exp_radio', 'Experimental Radio'),
+        ('auto_translate', 'Auto Translate'),
         ('channel_moderation', 'Channel Moderation'),
         ('suno_analyzer', 'Suno Analyzer'),
         ('suno_promotion', 'Suno Promotion'),
@@ -5915,5 +5916,39 @@ def create_app(db: Database, bot=None) -> Quart:
             print(f"[api_set_user_preferences] Error: {e}")
             print(traceback.format_exc())
             return jsonify({"error": str(e)}), 500
+
+    # --- Auto Translate ---
+
+    @app.route("/auto-translate", methods=["GET", "POST"])
+    @permission_required('auto_translate')
+    async def auto_translate_admin():
+        if request.method == "POST":
+            form = await request.form
+            enabled = "on" if form.get("enabled") else "off"
+            channel_id = (form.get("channel_id") or "").strip()
+            langs = form.getlist("languages")
+            await db.set_setting("auto_translate_enabled", enabled)
+            await db.set_setting("auto_translate_channel_id", channel_id)
+            await db.set_setting("auto_translate_languages", ",".join(langs))
+            await flash("Auto-translate settings saved.", "success")
+            return redirect(url_for("auto_translate_admin"))
+
+        enabled = (await db.get_setting("auto_translate_enabled")) == "on"
+        channel_id = str(await db.get_setting("auto_translate_channel_id") or "")
+        langs_str = await db.get_setting("auto_translate_languages") or ""
+        selected_langs = [l.strip() for l in langs_str.split(",") if l.strip()]
+        guild = get_guild()
+        text_channels = []
+        if guild:
+            import discord as _discord
+            for ch in sorted(guild.text_channels, key=lambda c: c.position):
+                text_channels.append({"id": ch.id, "name": ch.name})
+        return await render_template(
+            "auto_translate.html",
+            enabled=enabled,
+            channel_id=channel_id,
+            selected_langs=selected_langs,
+            text_channels=text_channels,
+        )
 
     return app
