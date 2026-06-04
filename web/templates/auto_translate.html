@@ -45,6 +45,32 @@
                 </p>
             </div>
 
+            <!-- Translation engine -->
+            <div class="space-y-2">
+                <label class="block text-gray-400 text-xs font-medium">Translation engine</label>
+                <div class="space-y-2">
+                    <label class="flex items-start gap-3 cursor-pointer select-none bg-discord-darker rounded-lg px-3 py-2.5 hover:bg-gray-700/50 transition-colors">
+                        <input type="radio" name="engine" value="google"
+                            {% if engine != 'llm' %}checked{% endif %}
+                            class="mt-0.5 w-4 h-4 accent-discord-blurple flex-shrink-0">
+                        <span>
+                            <span class="text-sm text-gray-300 font-medium">🌐 Google Translate (free)</span>
+                            <span class="block text-xs text-gray-500 mt-0.5">Fast (~1 s/msg). Occasionally mistranslates language names within the text.</span>
+                        </span>
+                    </label>
+                    <label class="flex items-start gap-3 cursor-pointer select-none bg-discord-darker rounded-lg px-3 py-2.5 hover:bg-gray-700/50 transition-colors">
+                        <input type="radio" name="engine" value="llm"
+                            {% if engine == 'llm' %}checked{% endif %}
+                            class="mt-0.5 w-4 h-4 accent-discord-blurple flex-shrink-0">
+                        <span>
+                            <span class="text-sm text-gray-300 font-medium">🤖 Local LLM ({{ llm_model }})</span>
+                            <span class="block text-xs text-gray-500 mt-0.5">Slower (~5–15 s/msg), but context-aware and more accurate. Uses your local Ollama instance — no external API, no costs.</span>
+                            <span class="block text-xs text-amber-500/80 mt-1">⚠ Automatically disabled while the Exp. Radio stream is live — translations are skipped to protect the stream.</span>
+                        </span>
+                    </label>
+                </div>
+            </div>
+
             <!-- Target languages -->
             <div class="space-y-2">
                 <label class="block text-gray-400 text-xs font-medium">Target languages</label>

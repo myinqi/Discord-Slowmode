@@ -5927,9 +5927,13 @@ def create_app(db: Database, bot=None) -> Quart:
             enabled = "on" if form.get("enabled") else "off"
             channel_id = (form.get("channel_id") or "").strip()
             langs = form.getlist("languages")
+            engine = form.get("engine", "google")
+            if engine not in ("google", "llm"):
+                engine = "google"
             await db.set_setting("auto_translate_enabled", enabled)
             await db.set_setting("auto_translate_channel_id", channel_id)
             await db.set_setting("auto_translate_languages", ",".join(langs))
+            await db.set_setting("auto_translate_engine", engine)
             await flash("Auto-translate settings saved.", "success")
             return redirect(url_for("auto_translate_admin"))
 
@@ -5937,17 +5941,21 @@ def create_app(db: Database, bot=None) -> Quart:
         channel_id = str(await db.get_setting("auto_translate_channel_id") or "")
         langs_str = await db.get_setting("auto_translate_languages") or ""
         selected_langs = [l.strip() for l in langs_str.split(",") if l.strip()]
+        engine = await db.get_setting("auto_translate_engine") or "google"
         guild = get_guild()
         text_channels = []
         if guild:
             import discord as _discord
             for ch in sorted(guild.text_channels, key=lambda c: c.position):
                 text_channels.append({"id": ch.id, "name": ch.name})
+        from config import Config as _Cfg
         return await render_template(
             "auto_translate.html",
             enabled=enabled,
             channel_id=channel_id,
             selected_langs=selected_langs,
+            engine=engine,
+            llm_model=_Cfg.LLM_MODEL,
             text_channels=text_channels,
         )
 
