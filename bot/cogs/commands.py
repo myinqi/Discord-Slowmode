@@ -1878,18 +1878,26 @@ class ExpRadioSubmitModal(discord.ui.Modal, title="Submit to Experimental Radio"
         import hashlib
         await interaction.response.defer(ephemeral=True)
 
-        # Block submissions while the experimental radio stream is live —
-        # otherwise users register DB entries they cannot complete (the
-        # upload endpoint rejects with 503 until the stream stops), which
-        # shows up as orphan "Analysing…" rows in the admin playlist.
-        import bot.exp_stream_manager as _esm
-        if _esm.stream_is_live:
-            await interaction.followup.send(
-                "🔴 The Experimental Radio stream is currently live. "
-                "Submissions are paused while a stream is in progress — "
-                "please try again after the stream ends.",
-                ephemeral=True,
-            )
+        # Block submissions while the stream is live or within 60 min of
+        # a scheduled start — upload endpoint rejects with 503 anyway, which
+        # would leave orphan "Analysing…" rows in the admin playlist.
+        from bot.exp_stream_manager import is_submissions_locked as _is_locked
+        _locked, _lock_reason = await _is_locked(self.bot.db)
+        if _locked:
+            if _lock_reason == "stream_live":
+                _lock_msg = (
+                    "🔴 The Experimental Radio stream is currently live. "
+                    "Submissions are paused while a stream is in progress — "
+                    "please try again after the stream ends."
+                )
+            else:
+                _mins = _lock_reason.replace("pre_start_", "").replace("min", "")
+                _lock_msg = (
+                    f"🔴 The Experimental Radio stream starts in approximately "
+                    f"**{_mins} minutes**. Submissions close 60 minutes before "
+                    f"the stream — please try again afterwards."
+                )
+            await interaction.followup.send(_lock_msg, ephemeral=True)
             return
 
         raw_url = self.url.value.strip()

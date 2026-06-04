@@ -4018,14 +4018,15 @@ def create_app(db: Database, bot=None) -> Quart:
     @app.route("/exp-radio/upload/<token>")
     async def exp_radio_upload_page(token: str):
         """Public page (no login) — browser fetches MP3 from Suno CDN and POSTs it here."""
-        import bot.exp_stream_manager as _esm
+        from bot.exp_stream_manager import is_submissions_locked as _is_locked
         song = await db.get_exp_radio_song_by_token(token)
         if not song:
             return await render_template("exp_radio_upload.html", error="Link invalid or expired.")
         if song.get("mp3_filename"):
             return await render_template("exp_radio_upload.html", done=True,
                                          title=song.get("title") or "Your song")
-        if _esm.stream_is_live:
+        _locked, _lock_reason = await _is_locked(db)
+        if _locked:
             return await render_template("exp_radio_upload.html", stream_live=True)
         return await render_template("exp_radio_upload.html", song=song, token=token)
 
@@ -4040,12 +4041,14 @@ def create_app(db: Database, bot=None) -> Quart:
         if song.get("mp3_filename"):
             return jsonify({"ok": True, "already": True})
 
-        # Reject uploads while the stream is live — Whisper + LLM would
-        # compete with FFmpeg for CPU/RAM and risk an OOM crash.
-        if _esm.stream_is_live:
+        # Reject uploads while the stream is live or within 60 min of
+        # a scheduled start — Whisper + LLM compete with FFmpeg for CPU/RAM.
+        from bot.exp_stream_manager import is_submissions_locked as _is_locked
+        _locked, _lock_reason = await _is_locked(db)
+        if _locked:
             return jsonify({
                 "ok": False,
-                "error": "The stream is currently live. Please try again later.",
+                "error": "Submissions are currently closed (stream live or starting soon). Please try again later.",
             }), 503
 
         files = await request.files

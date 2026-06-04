@@ -100,6 +100,43 @@ _LOG_BUFFER_MAX = 1000
 # Module-level flag: True while the exp-radio stream is actively running.
 stream_is_live: bool = False
 
+_PRE_START_LOCK_MINUTES = 60
+
+
+async def is_submissions_locked(db) -> tuple[bool, str]:
+    """Return (locked, reason_str).
+
+    Locked when:
+      • the stream is currently live  →  reason "stream_live"
+      • OR the scheduler is enabled, today is a scheduled day, and the
+        configured start time is within the next 60 minutes
+        →  reason "pre_start_Nmin"
+    """
+    if stream_is_live:
+        return True, "stream_live"
+
+    from datetime import datetime
+    try:
+        enabled = await db.get_setting("exp_radio_schedule_enabled") or "off"
+        if enabled != "on":
+            return False, ""
+        days_csv = await db.get_setting("exp_radio_schedule_days") or ""
+        days = {int(d) for d in days_csv.split(",") if d.strip().isdigit()}
+        hhmm = (await db.get_setting("exp_radio_schedule_time") or "").strip()
+        if not days or not hhmm or ":" not in hhmm:
+            return False, ""
+        h_str, m_str = hhmm.split(":", 1)
+        target_h, target_m = int(h_str), int(m_str)
+        now = datetime.now()
+        if now.weekday() not in days:
+            return False, ""
+        diff = (target_h * 60 + target_m) - (now.hour * 60 + now.minute)
+        if 0 < diff <= _PRE_START_LOCK_MINUTES:
+            return True, f"pre_start_{diff}min"
+        return False, ""
+    except Exception:
+        return False, ""
+
 
 def log_event(line: str, level: str = "info", prefix: str = "[exp-radio]") -> None:
     _live_log_event(line, level, prefix)
