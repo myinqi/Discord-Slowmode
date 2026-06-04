@@ -525,10 +525,18 @@
     <!-- ── Right column: Song Playlist ── -->
     <div class="xl:col-span-2">
         <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            {% set _ns = namespace(total_sec=0) %}
+            {% for song in songs %}{% if song.active and song.duration %}{% set _ns.total_sec = _ns.total_sec + song.duration %}{% endif %}{% endfor %}
+            {% set _th = (_ns.total_sec // 3600) | int %}
+            {% set _tm = ((_ns.total_sec % 3600) // 60) | int %}
             <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between">
                 <h3 class="text-white font-semibold">
                     Song Submissions
-                    <span class="ml-2 text-xs text-gray-500 font-normal">{{ songs|length }} total</span>
+                    <span class="ml-2 text-xs text-gray-500 font-normal">
+                        {{ songs|length }} total
+                        &middot;
+                        {% if _th > 0 %}{{ _th }}h {{ _tm }}m{% else %}{{ _tm }} min{% endif %}
+                    </span>
                 </h3>
                 <div class="flex items-center gap-3 text-xs text-gray-500">
                     <form method="POST" class="inline">
@@ -570,8 +578,8 @@
                 <span class="text-gray-500 mr-1">Sort:</span>
                 <button onclick="sortSongs('default')" id="sort-btn-default" class="sort-btn px-2.5 py-1 rounded text-blue-300 bg-blue-600/20 hover:bg-blue-600/40 transition-colors">Default</button>
                 <button onclick="sortSongs('artist')" id="sort-btn-artist" class="sort-btn px-2.5 py-1 rounded text-gray-400 bg-gray-700/40 hover:bg-gray-600/40 transition-colors" data-dir="asc">Artist A→Z</button>
-                <button onclick="sortSongs('green')" id="sort-btn-green" class="sort-btn px-2.5 py-1 rounded text-gray-400 bg-gray-700/40 hover:bg-gray-600/40 transition-colors">✓ Grün zuerst</button>
-                <button onclick="sortSongs('no-status')" id="sort-btn-no-status" class="sort-btn px-2.5 py-1 rounded text-gray-400 bg-gray-700/40 hover:bg-gray-600/40 transition-colors">⬜ Kein Status</button>
+                <button onclick="sortSongs('green')" id="sort-btn-green" class="sort-btn px-2.5 py-1 rounded text-gray-400 bg-gray-700/40 hover:bg-gray-600/40 transition-colors">✓ Green first</button>
+                <button onclick="sortSongs('no-status')" id="sort-btn-no-status" class="sort-btn px-2.5 py-1 rounded text-gray-400 bg-gray-700/40 hover:bg-gray-600/40 transition-colors">⬜ No status</button>
             </div>
             <div class="divide-y divide-gray-700/30" id="song-list">
                 {% for song in songs %}
