@@ -3436,6 +3436,14 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.delete_exp_radio_song(song_id)
                 await flash("Song removed.", "success")
 
+            elif action == "delete_all_songs":
+                import bot.exp_stream_manager as _esm
+                if _esm.stream_is_live:
+                    await flash("Cannot clear the playlist while the stream is live.", "error")
+                else:
+                    count = await db.delete_all_exp_radio_songs()
+                    await flash(f"Playlist cleared — {count} song(s) removed.", "success")
+
             elif action == "reanalyze_whisper":
                 import bot.exp_stream_manager as _esm
                 if _esm.stream_is_live:

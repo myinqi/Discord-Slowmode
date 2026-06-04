@@ -565,6 +565,16 @@
                             ⟳ Normalize Covers
                         </button>
                     </form>
+                    <form method="POST" class="inline"
+                          onsubmit="return confirm('⚠️ Clear entire playlist?\n\nThis will permanently remove ALL {{ songs|length }} song(s) from the playlist.\nThis action cannot be undone.\n\nProceed?');">
+                        <input type="hidden" name="action" value="delete_all_songs">
+                        <button type="submit"
+                                class="px-2.5 py-1 bg-red-600/20 hover:bg-red-600/50 text-red-400 hover:text-red-300 rounded transition-colors font-medium"
+                                title="Remove all songs from the playlist (cannot be undone)">
+                            🗑 Clear Playlist
+                        </button>
+                    </form>
+                    <span class="text-gray-700">|</span>
                     <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-green-500 inline-block"></span> Done</span>
                     <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-yellow-500 inline-block"></span> Processing</span>
                     <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-gray-500 inline-block"></span> Pending</span>
