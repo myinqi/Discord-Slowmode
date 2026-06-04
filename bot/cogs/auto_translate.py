@@ -97,6 +97,15 @@ class AutoTranslateCog(commands.Cog):
         if not langs:
             return
 
+        skip_open  = (await db.get_setting("auto_translate_skip_open")  or "").strip()
+        skip_close = (await db.get_setting("auto_translate_skip_close") or "").strip()
+        if skip_open and skip_close:
+            if text.startswith(skip_open) and text.endswith(skip_close):
+                return
+        elif skip_open:
+            if text.startswith(skip_open):
+                return
+
         engine = (await db.get_setting("auto_translate_engine") or "google").strip()
 
         if engine == "llm":
@@ -105,10 +114,23 @@ class AutoTranslateCog(commands.Cog):
                 print("[auto_translate] skipped (stream is live, LLM disabled during stream)", flush=True)
                 return
 
+        loop = asyncio.get_event_loop()
+        src_lang: str | None = None
+        try:
+            from langdetect import detect as _detect
+            src_lang = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: _detect(text)),
+                timeout=3.0,
+            )
+        except Exception:
+            pass
+
         author_name = message.author.display_name
 
         for lang in langs:
             try:
+                if src_lang and src_lang.lower() == lang.lower():
+                    continue
                 meta = _LANG_META.get(lang, (lang.capitalize(), f"`{lang}`"))
                 lang_name, flag = meta
                 if engine == "llm":

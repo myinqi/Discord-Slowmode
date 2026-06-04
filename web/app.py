@@ -5930,10 +5930,14 @@ def create_app(db: Database, bot=None) -> Quart:
             engine = form.get("engine", "google")
             if engine not in ("google", "llm"):
                 engine = "google"
+            skip_open  = (form.get("skip_open")  or "").strip()[:4]
+            skip_close = (form.get("skip_close") or "").strip()[:4]
             await db.set_setting("auto_translate_enabled", enabled)
             await db.set_setting("auto_translate_channel_id", channel_id)
             await db.set_setting("auto_translate_languages", ",".join(langs))
             await db.set_setting("auto_translate_engine", engine)
+            await db.set_setting("auto_translate_skip_open", skip_open)
+            await db.set_setting("auto_translate_skip_close", skip_close)
             await flash("Auto-translate settings saved.", "success")
             return redirect(url_for("auto_translate_admin"))
 
@@ -5941,7 +5945,9 @@ def create_app(db: Database, bot=None) -> Quart:
         channel_id = str(await db.get_setting("auto_translate_channel_id") or "")
         langs_str = await db.get_setting("auto_translate_languages") or ""
         selected_langs = [l.strip() for l in langs_str.split(",") if l.strip()]
-        engine = await db.get_setting("auto_translate_engine") or "google"
+        engine     = await db.get_setting("auto_translate_engine") or "google"
+        skip_open  = await db.get_setting("auto_translate_skip_open")  or ""
+        skip_close = await db.get_setting("auto_translate_skip_close") or ""
         guild = get_guild()
         text_channels = []
         if guild:
@@ -5955,6 +5961,8 @@ def create_app(db: Database, bot=None) -> Quart:
             channel_id=channel_id,
             selected_langs=selected_langs,
             engine=engine,
+            skip_open=skip_open,
+            skip_close=skip_close,
             llm_model=_Cfg.LLM_MODEL,
             text_channels=text_channels,
         )

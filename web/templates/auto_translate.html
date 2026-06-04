@@ -107,6 +107,35 @@
                 </div>
             </div>
 
+            <!-- Skip markers -->
+            <div class="space-y-2">
+                <label class="block text-gray-400 text-xs font-medium">Skip markers</label>
+                <p class="text-gray-500 text-xs">
+                    If a message starts with the opening marker and ends with the
+                    closing marker, it will not be translated at all.
+                    Example: opening <code class="text-gray-300">&lt;</code> and closing
+                    <code class="text-gray-300">&gt;</code> — a message like
+                    <code class="text-gray-300">&lt;Hallo Welt&gt;</code> is skipped.
+                    Leave empty to disable.
+                </p>
+                <div class="flex gap-3">
+                    <div class="flex-1 space-y-1">
+                        <label class="block text-gray-500 text-xs">Opening</label>
+                        <input type="text" name="skip_open" maxlength="4"
+                            value="{{ skip_open }}"
+                            placeholder="e.g. &lt;"
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm font-mono focus:border-discord-blurple focus:outline-none">
+                    </div>
+                    <div class="flex-1 space-y-1">
+                        <label class="block text-gray-500 text-xs">Closing</label>
+                        <input type="text" name="skip_close" maxlength="4"
+                            value="{{ skip_close }}"
+                            placeholder="e.g. &gt;"
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm font-mono focus:border-discord-blurple focus:outline-none">
+                    </div>
+                </div>
+            </div>
+
             <button type="submit"
                 class="w-full px-4 py-2 bg-discord-blurple hover:opacity-90 text-white rounded-lg text-sm font-medium transition-opacity">
                 Save Settings
