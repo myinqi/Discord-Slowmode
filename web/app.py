@@ -73,6 +73,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('reaction_roles', 'Reaction Roles'),
         ('image_posting', 'Image Posting'),
         ('polls', 'Polls'),
+        ('quiz', 'Quiz'),
         ('radio', 'Twitch Radio'),
         ('exp_radio', 'Experimental Radio'),
         ('auto_translate', 'Auto Translate'),
@@ -752,6 +753,110 @@ def create_app(db: Database, bot=None) -> Quart:
             verdict_filter=verdict_filter,
             text_channels=text_channels,
             monitored=monitored_resolved,
+        )
+
+    # --- Quiz ---
+
+    @app.route("/quiz", methods=["GET", "POST"])
+    @permission_required('quiz')
+    async def quiz_admin():
+        def _clean_quiz_form(form):
+            mode = (form.get("mode") or "film").strip().lower()
+            if mode not in ("film", "music"):
+                mode = "film"
+            question = (form.get("question") or "").strip()
+            answers = [
+                (form.get(f"answer_{idx}") or "").strip()
+                for idx in range(1, 6)
+            ]
+            correct_answer = (form.get("correct_answer") or "").strip()
+            return mode, question, answers, correct_answer
+
+        if request.method == "POST":
+            form = await request.form
+            action = form.get("action", "")
+
+            if action == "save_settings":
+                mode = (form.get("quiz_mode") or "film").strip().lower()
+                if mode not in ("film", "music"):
+                    mode = "film"
+                channel_id = (form.get("quiz_channel_id") or "").strip()
+                await db.set_setting("quiz_mode", mode)
+                await db.set_setting("quiz_channel_id", channel_id)
+                await flash("Quiz settings saved.", "success")
+                return redirect(url_for("quiz_admin"))
+
+            if action in ("create", "edit"):
+                mode, question, answers, correct_answer = _clean_quiz_form(form)
+                if not question:
+                    await flash("Question is required.", "error")
+                    return redirect(url_for("quiz_admin"))
+                if any(not answer for answer in answers):
+                    await flash("All five answers are required.", "error")
+                    return redirect(url_for("quiz_admin"))
+                if not correct_answer:
+                    await flash("Correct answer is required.", "error")
+                    return redirect(url_for("quiz_admin"))
+                if correct_answer not in answers:
+                    await flash("Correct answer must match one of the five answers exactly.", "error")
+                    return redirect(url_for("quiz_admin"))
+
+                if action == "create":
+                    question_id = await db.create_quiz_question(mode, question, answers, correct_answer)
+                    await db.add_audit_log(
+                        event_type="quiz_question_created",
+                        details=f"Quiz question #{question_id} created for mode={mode}",
+                        actor=session.get("username", "unknown"),
+                    )
+                    await flash("Quiz question created.", "success")
+                else:
+                    question_id = int(form.get("question_id") or 0)
+                    await db.update_quiz_question(question_id, mode, question, answers, correct_answer)
+                    await db.add_audit_log(
+                        event_type="quiz_question_updated",
+                        details=f"Quiz question #{question_id} updated for mode={mode}",
+                        actor=session.get("username", "unknown"),
+                    )
+                    await flash("Quiz question updated.", "success")
+                return redirect(url_for("quiz_admin"))
+
+            if action == "delete":
+                question_id = int(form.get("question_id") or 0)
+                await db.delete_quiz_question(question_id)
+                await db.add_audit_log(
+                    event_type="quiz_question_deleted",
+                    details=f"Quiz question #{question_id} deleted",
+                    actor=session.get("username", "unknown"),
+                )
+                await flash("Quiz question deleted.", "success")
+                return redirect(url_for("quiz_admin"))
+
+        quiz_mode = await db.get_setting("quiz_mode") or "film"
+        if quiz_mode not in ("film", "music"):
+            quiz_mode = "film"
+        quiz_channel_id = await db.get_setting("quiz_channel_id") or ""
+        questions = await db.get_quiz_questions()
+        for question in questions:
+            question["answers"] = [
+                question["answer_1"],
+                question["answer_2"],
+                question["answer_3"],
+                question["answer_4"],
+                question["answer_5"],
+            ]
+
+        guild = get_guild()
+        text_channels = []
+        if guild:
+            for ch in sorted(guild.text_channels, key=lambda c: c.position):
+                text_channels.append({"id": ch.id, "name": ch.name})
+
+        return await render_template(
+            "quiz.html",
+            quiz_mode=quiz_mode,
+            quiz_channel_id=quiz_channel_id,
+            questions=questions,
+            text_channels=text_channels,
         )
 
     # --- LLM / Corax chat ---

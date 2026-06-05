@@ -1730,6 +1730,7 @@ class CommandsCog(commands.Cog):
             "**`/imageposting <category> [title]`** — Post an image from the library\n"
             "**`/poll-create [channel]`** — Create a poll\n"
             "**`/poll-edit`** — Edit your existing polls\n"
+            "**`/quiz`** — Post a random quiz question\n"
             "**`/twitch-playlist`** — Show the Twitch radio playlist\n"
             "**`/help`** — Show this help message"
         )

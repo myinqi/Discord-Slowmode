@@ -195,6 +195,22 @@ class Database:
                 active INTEGER DEFAULT 1,
                 creator_id INTEGER
             );
+
+            CREATE TABLE IF NOT EXISTS quiz_questions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mode TEXT NOT NULL CHECK (mode IN ('film', 'music')),
+                question TEXT NOT NULL,
+                answer_1 TEXT NOT NULL,
+                answer_2 TEXT NOT NULL,
+                answer_3 TEXT NOT NULL,
+                answer_4 TEXT NOT NULL,
+                answer_5 TEXT NOT NULL,
+                correct_answer TEXT NOT NULL,
+                created_at REAL DEFAULT (unixepoch()),
+                updated_at REAL DEFAULT (unixepoch())
+            );
+            CREATE INDEX IF NOT EXISTS idx_quiz_questions_mode
+                ON quiz_questions(mode);
         """)
         await self.db.commit()
 
@@ -1824,6 +1840,70 @@ class Database:
         await self.db.execute("DELETE FROM polls WHERE id = ?", (poll_id,))
         await self.db.commit()
         return filename
+
+    # --- Quiz ---
+
+    async def create_quiz_question(
+        self,
+        mode: str,
+        question: str,
+        answers: list[str],
+        correct_answer: str,
+    ) -> int:
+        cursor = await self.db.execute(
+            "INSERT INTO quiz_questions "
+            "(mode, question, answer_1, answer_2, answer_3, answer_4, answer_5, correct_answer) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (mode, question, answers[0], answers[1], answers[2], answers[3], answers[4], correct_answer),
+        )
+        await self.db.commit()
+        return cursor.lastrowid
+
+    async def get_quiz_question(self, question_id: int) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM quiz_questions WHERE id = ?", (question_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_quiz_questions(self, mode: str | None = None) -> list[dict]:
+        if mode:
+            sql = "SELECT * FROM quiz_questions WHERE mode = ? ORDER BY updated_at DESC, id DESC"
+            args = (mode,)
+        else:
+            sql = "SELECT * FROM quiz_questions ORDER BY mode, updated_at DESC, id DESC"
+            args = ()
+        async with self.db.execute(sql, args) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def get_random_quiz_question(self, mode: str) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM quiz_questions WHERE mode = ? ORDER BY RANDOM() LIMIT 1",
+            (mode,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def update_quiz_question(
+        self,
+        question_id: int,
+        mode: str,
+        question: str,
+        answers: list[str],
+        correct_answer: str,
+    ):
+        await self.db.execute(
+            "UPDATE quiz_questions SET "
+            "mode = ?, question = ?, answer_1 = ?, answer_2 = ?, answer_3 = ?, "
+            "answer_4 = ?, answer_5 = ?, correct_answer = ?, updated_at = unixepoch() "
+            "WHERE id = ?",
+            (mode, question, answers[0], answers[1], answers[2], answers[3], answers[4], correct_answer, question_id),
+        )
+        await self.db.commit()
+
+    async def delete_quiz_question(self, question_id: int):
+        await self.db.execute("DELETE FROM quiz_questions WHERE id = ?", (question_id,))
+        await self.db.commit()
 
     # --- Radio Songs ---
 
