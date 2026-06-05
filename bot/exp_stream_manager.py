@@ -909,12 +909,21 @@ class ExpStreamManager:
                 f"{{\\pos(20,20)\\an7\\fad(600,600)}}♪  {title}{label}  ♪"
             )
 
-            # Progress info card: bottom-right, e.g. "4:33  ·  Song 9/30"
+            # Progress info card: bottom-right, e.g. "4:33  ·  Song 9/30  ·  ~1h 12m left"
             if show_progress:
                 dur_mins = int(dur) // 60
                 dur_secs = int(dur) % 60
                 dur_str  = f"{dur_mins}:{dur_secs:02d}"
-                info     = f"{dur_str}  \u00b7  Song {song_idx + 1}/{n_songs}"
+                remaining_secs = int(sum(s.get("duration") or 300 for s in songs[song_idx:]))
+                if remaining_secs >= 3600:
+                    r_h = remaining_secs // 3600
+                    r_m = (remaining_secs % 3600) // 60
+                    rem_str = f"~{r_h}h {r_m}m left"
+                elif remaining_secs >= 60:
+                    rem_str = f"~{remaining_secs // 60}m left"
+                else:
+                    rem_str = f"~{remaining_secs}s left"
+                info = f"{dur_str}  \u00b7  Song {song_idx + 1}/{n_songs}  \u00b7  {rem_str}"
                 events.append(
                     f"Dialogue: 1,{t_start},{t_end},Progress,,0,0,0,,"
                     f"{{\\fad(400,400)}}{info}"
