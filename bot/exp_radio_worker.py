@@ -843,23 +843,46 @@ async def process_admin_song(db, suno_url: str, exp_radio_dir: str) -> tuple[boo
             return False, f"Song already in admin playlist (id={s['id']})."
 
     song_id = await db.add_admin_exp_radio_song(suno_url, uuid)
-    log_event(f"Admin song #{song_id} added (uuid={uuid}), downloading…", prefix="[admin-pl]")
+    log_event(f"Admin song #{song_id} added (uuid={uuid}), scraping metadata…", prefix="[admin-pl]")
 
-    mp3_path = await download_mp3(uuid, mp3_dir)
+    # Resolve the real full UUID before downloading — the CDN requires it
+    meta = await scrape_suno(uuid)
+    real_uuid = meta.get("real_uuid") or uuid
+    if real_uuid != uuid:
+        log_event(f"Admin song #{song_id}: resolved real UUID {real_uuid}", prefix="[admin-pl]")
+        await db.update_exp_radio_song(song_id, playlist_source="admin")  # keep source; update suno_uuid below
+        await db.db.execute(
+            "UPDATE exp_radio_songs SET suno_uuid = ? WHERE id = ?", (real_uuid, song_id)
+        )
+        await db.db.commit()
+
+    log_event(f"Admin song #{song_id} downloading MP3 (uuid={real_uuid})…", prefix="[admin-pl]")
+    mp3_path = await download_mp3(real_uuid, mp3_dir)
     if not mp3_path:
         await db.update_exp_radio_song(song_id, analysis_status="failed")
-        return False, f"MP3 download failed for {uuid}."
+        return False, f"MP3 download failed for {real_uuid}."
 
     mp3_filename = os.path.basename(mp3_path)
-    await db.update_exp_radio_song(song_id, mp3_filename=mp3_filename)
+    await db.update_exp_radio_song(
+        song_id,
+        mp3_filename=mp3_filename,
+        title=meta.get("title") or None,
+        artist=meta.get("artist") or None,
+        cover_url=meta.get("cover_url") or None,
+        video_url=meta.get("video_url") or None,
+    )
 
-    # Run Whisper pipeline, skip LLM moderation for admin-submitted songs
-    await process_exp_song(db, song_id, exp_radio_dir, bot=None, skip_moderation=True)
+    # Run Whisper pipeline — skip LLM moderation and duration gate for admin songs
+    await process_exp_song(
+        db, song_id, exp_radio_dir,
+        bot=None, skip_moderation=True, max_duration=None,
+    )
     return True, f"Song #{song_id} added and queued for Whisper analysis."
 
 
 async def process_exp_song(db, song_id: int, exp_radio_dir: str, bot=None,
-                           skip_moderation: bool = False):
+                           skip_moderation: bool = False,
+                           max_duration: int | None = MAX_DURATION_SECS):
     """Full async pipeline for one submitted experimental radio song."""
     # Late import keeps the worker importable in tests without the streaming
     # stack — log_event lives in the stream manager module.
@@ -906,20 +929,20 @@ async def process_exp_song(db, song_id: int, exp_radio_dir: str, bot=None,
         )
         duration  = await get_duration(mp3_path)
 
-        # Duration gate: reject songs longer than MAX_DURATION_SECS
-        if duration and duration > MAX_DURATION_SECS:
+        # Duration gate: reject songs that are too long (skipped for admin songs)
+        if max_duration is not None and duration and duration > max_duration:
             os.remove(mp3_path)
             await db.update_exp_radio_song(
                 song_id, duration=duration, analysis_status="failed"
             )
-            mins = int(MAX_DURATION_SECS // 60)
+            mins = int(max_duration // 60)
             await _notify_user(
                 bot, song["user_id"],
                 f"❌ **Experimental Radio** — your submission **{title}** was rejected.\n"
                 f"The song is {duration / 60:.1f} min long. Maximum allowed is **{mins} minutes**.\n"
                 "Please submit a shorter song."
             )
-            log_event(f"#{song_id} rejected: duration {duration:.0f}s > {MAX_DURATION_SECS}s", level="error", prefix="[whisper]")
+            log_event(f"#{song_id} rejected: duration {duration:.0f}s > {max_duration}s", level="error", prefix="[whisper]")
             return
 
         await db.update_exp_radio_song(
