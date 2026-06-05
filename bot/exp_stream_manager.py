@@ -208,7 +208,9 @@ class ExpStreamManager:
                 self._log("Fresh-cache start: cover cache and intermediates cleared.")
             except Exception as e:
                 self._log(f"Fresh-cache cleanup error: {e}", "error")
-        songs = await self.db.get_all_exp_radio_songs(active_only=True)
+        active_pl = (await self.db.get_setting("exp_radio_active_playlist")) or "submission"
+        pl_source = None if active_pl == "both" else active_pl
+        songs = await self.db.get_all_exp_radio_songs(active_only=True, source=pl_source)
         # A song is stream-eligible when:
         #   - Whisper analysis completed and the MP3 exists, AND
         #   - Moderation either was never run (NULL — grandfathered before the
@@ -226,7 +228,8 @@ class ExpStreamManager:
             and _mod_ok(s)
         ]
         if not ready:
-            return {"ok": False, "error": "No ready songs in the playlist."}
+            pl_label = {"submission": "submission", "admin": "admin", "both": "either"}.get(active_pl, active_pl)
+            return {"ok": False, "error": f"No ready songs in the {pl_label} playlist."}
         self._twitch_key = twitch_key
         random.shuffle(ready)
         self.playlist    = ready
@@ -348,7 +351,9 @@ class ExpStreamManager:
                 break
             # mode == "reshuffle": reload eligible songs from DB so newly
             # approved submissions get picked up, then reshuffle.
-            songs = await self.db.get_all_exp_radio_songs(active_only=True)
+            active_pl = (await self.db.get_setting("exp_radio_active_playlist")) or "submission"
+            pl_source = None if active_pl == "both" else active_pl
+            songs = await self.db.get_all_exp_radio_songs(active_only=True, source=pl_source)
             def _mod_ok(s: dict) -> bool:
                 ms = s.get("moderation_status")
                 return ms is None or ms in ("passed", "approved")

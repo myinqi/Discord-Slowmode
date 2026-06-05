@@ -822,7 +822,44 @@ async def _notify_user(bot, user_id: int, msg: str):
         print(f"[exp-radio] DM to {user_id} failed: {e}", flush=True)
 
 
-async def process_exp_song(db, song_id: int, exp_radio_dir: str, bot=None):
+async def process_admin_song(db, suno_url: str, exp_radio_dir: str) -> tuple[bool, str]:
+    """Download + process a Suno URL added via the admin UI.
+
+    Returns (ok, message) — 'ok' is True on success, False on error.
+    """
+    from bot.channel_moderation import extract_suno_uuid
+    from bot.exp_stream_manager import log_event
+    ensure_exp_dirs(exp_radio_dir)
+    mp3_dir = os.path.join(exp_radio_dir, "mp3")
+
+    uuid = extract_suno_uuid(suno_url)
+    if not uuid:
+        return False, f"Could not extract Suno UUID from URL: {suno_url}"
+
+    # Dedup: don't re-add the same UUID
+    songs = await db.get_all_exp_radio_songs(active_only=False, source="admin")
+    for s in songs:
+        if s.get("suno_uuid") == uuid and s.get("active"):
+            return False, f"Song already in admin playlist (id={s['id']})."
+
+    song_id = await db.add_admin_exp_radio_song(suno_url, uuid)
+    log_event(f"Admin song #{song_id} added (uuid={uuid}), downloading…", prefix="[admin-pl]")
+
+    mp3_path = await download_mp3(uuid, mp3_dir)
+    if not mp3_path:
+        await db.update_exp_radio_song(song_id, analysis_status="failed")
+        return False, f"MP3 download failed for {uuid}."
+
+    mp3_filename = os.path.basename(mp3_path)
+    await db.update_exp_radio_song(song_id, mp3_filename=mp3_filename)
+
+    # Run Whisper pipeline, skip LLM moderation for admin-submitted songs
+    await process_exp_song(db, song_id, exp_radio_dir, bot=None, skip_moderation=True)
+    return True, f"Song #{song_id} added and queued for Whisper analysis."
+
+
+async def process_exp_song(db, song_id: int, exp_radio_dir: str, bot=None,
+                           skip_moderation: bool = False):
     """Full async pipeline for one submitted experimental radio song."""
     # Late import keeps the worker importable in tests without the streaming
     # stack — log_event lives in the stream manager module.
@@ -934,10 +971,9 @@ async def process_exp_song(db, song_id: int, exp_radio_dir: str, bot=None):
         log_event(f"Pipeline complete for #{song_id} ({title!r})", prefix="[whisper]")
 
         # 5) Optional LLM-based lyric moderation. Runs only when explicitly
-        #    enabled in the admin settings; otherwise the column stays NULL
-        #    and the stream playlist filter treats it as grandfathered/passed.
+        #    enabled in the admin settings AND not bypassed for admin songs.
         moderation_enabled = await db.get_setting("exp_radio_moderation_enabled") or "off"
-        if moderation_enabled == "on":
+        if moderation_enabled == "on" and not skip_moderation:
             from bot.exp_stream_manager import log_event
             try:
                 from bot.exp_moderation import moderate_lyrics

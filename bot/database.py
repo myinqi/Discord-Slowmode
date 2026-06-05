@@ -483,6 +483,17 @@ class Database:
             except Exception:
                 pass  # column already exists
 
+        # Add playlist_source column (migration for existing installs).
+        # 'submission' = user-submitted via /twitch-submit (default)
+        # 'admin'      = added directly in admin UI
+        try:
+            await self.db.execute(
+                "ALTER TABLE exp_radio_songs ADD COLUMN playlist_source TEXT NOT NULL DEFAULT 'submission'"
+            )
+            await self.db.commit()
+        except Exception:
+            pass  # column already exists
+
         # Add DC-player filter columns (migration for existing installs)
         for col, definition in [
             ("dc_channel", "TEXT DEFAULT ''"),
@@ -2508,7 +2519,7 @@ class Database:
         allowed = {
             "mp3_filename", "cover_url", "video_url", "title", "artist",
             "duration", "lyrics", "word_timestamps", "ass_filename",
-            "analysis_status", "active",
+            "analysis_status", "active", "playlist_source",
             "moderation_status", "moderation_reason", "moderation_at",
         }
         updates = {k: v for k, v in fields.items() if k in allowed}
@@ -2519,14 +2530,36 @@ class Database:
         await self.db.execute(sql, (*updates.values(), song_id))
         await self.db.commit()
 
-    async def get_all_exp_radio_songs(self, active_only: bool = True) -> list[dict]:
-        sql = (
-            "SELECT * FROM exp_radio_songs WHERE active = 1 ORDER BY submitted_at ASC"
-            if active_only else
-            "SELECT * FROM exp_radio_songs ORDER BY submitted_at ASC"
-        )
-        async with self.db.execute(sql) as cursor:
+    async def get_all_exp_radio_songs(
+        self, active_only: bool = True, source: str | None = None
+    ) -> list[dict]:
+        """Return songs, optionally filtered by playlist_source ('submission'|'admin').
+        source=None returns all sources."""
+        conditions = ["active = 1"] if active_only else []
+        params: list = []
+        if source is not None:
+            conditions.append("playlist_source = ?")
+            params.append(source)
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        sql = f"SELECT * FROM exp_radio_songs {where} ORDER BY submitted_at ASC"
+        async with self.db.execute(sql, params) as cursor:
             return [dict(r) for r in await cursor.fetchall()]
+
+    async def add_admin_exp_radio_song(self, suno_url: str, suno_uuid: str) -> int:
+        """Insert an admin-playlist song (no user, no rights, no expiry).
+        Returns the new song ID."""
+        cursor = await self.db.execute(
+            """
+            INSERT INTO exp_radio_songs
+               (user_id, user_name, suno_url, suno_uuid,
+                rights_declaration, rights_hash, rights_agreed_at,
+                expires_at, playlist_source)
+            VALUES (0, 'admin', ?, ?, '', '', unixepoch(), 9999999999, 'admin')
+            """,
+            (suno_url, suno_uuid),
+        )
+        await self.db.commit()
+        return cursor.lastrowid
 
     async def delete_exp_radio_song(self, song_id: int) -> Optional[dict]:
         """Soft-delete by setting active=0. Returns song data for file cleanup."""

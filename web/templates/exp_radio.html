@@ -171,6 +171,30 @@
                            class="px-2 py-1 bg-gray-800 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-discord-blurple">
                 </div>
             </div>
+            <div class="pt-2 border-t border-gray-700/50 space-y-2">
+                <p class="text-white text-sm font-medium">🎵 Active Playlist</p>
+                <p class="text-gray-500 text-xs">Which playlist the stream will use when started. Switch here before starting a planned stream.</p>
+                <div class="space-y-1.5">
+                    <label class="flex items-center gap-2 cursor-pointer select-none">
+                        <input type="radio" name="exp_active_playlist" value="submission"
+                            {% if exp_active_playlist != 'admin' and exp_active_playlist != 'both' %}checked{% endif %}
+                            class="w-4 h-4 accent-discord-blurple">
+                        <span class="text-gray-300 text-sm"><span class="text-white">Submission Playlist</span> — songs submitted via /twitch-submit</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer select-none">
+                        <input type="radio" name="exp_active_playlist" value="admin"
+                            {% if exp_active_playlist == 'admin' %}checked{% endif %}
+                            class="w-4 h-4 accent-discord-blurple">
+                        <span class="text-gray-300 text-sm"><span class="text-white">Admin Playlist</span> — songs added directly in this UI</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer select-none">
+                        <input type="radio" name="exp_active_playlist" value="both"
+                            {% if exp_active_playlist == 'both' %}checked{% endif %}
+                            class="w-4 h-4 accent-discord-blurple">
+                        <span class="text-gray-300 text-sm"><span class="text-white">Both</span> — mix submission + admin songs</span>
+                    </label>
+                </div>
+            </div>
             <button type="submit"
                 class="w-full px-4 py-2 bg-discord-blurple hover:bg-discord-blurple-hover text-white rounded-lg text-sm font-medium transition-colors">
                 Save Settings
@@ -523,7 +547,7 @@
     </div>
 
     <!-- ── Right column: Song Playlist ── -->
-    <div class="xl:col-span-2">
+    <div class="xl:col-span-2 space-y-6">
         <div class="bg-discord-dark rounded-xl border border-gray-700/50">
             {% set _ns = namespace(total_sec=0) %}
             {% for song in songs %}{% if song.active and song.duration %}{% set _ns.total_sec = _ns.total_sec + song.duration %}{% endif %}{% endfor %}
@@ -759,6 +783,71 @@
                 <p class="text-4xl mb-3">🎙️</p>
                 <p class="font-medium">No submissions yet</p>
                 <p class="text-sm mt-1">Users can submit songs via <code class="bg-gray-800 px-1 rounded">/twitch-submit</code> on Discord.</p>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- ── Admin Playlist ── -->
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between flex-wrap gap-3">
+                <h3 class="text-white font-semibold">
+                    🎛 Admin Playlist
+                    <span class="ml-2 text-xs text-gray-500 font-normal">{{ admin_songs|selectattr('active')|list|length }} active</span>
+                </h3>
+                <form method="POST" class="flex items-center gap-2">
+                    <input type="hidden" name="action" value="add_admin_song">
+                    <input type="url" name="suno_url" required
+                        placeholder="https://suno.com/s/..."
+                        class="w-64 bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm placeholder-gray-500 focus:border-discord-blurple focus:outline-none">
+                    <button type="submit"
+                        class="px-3 py-1.5 bg-discord-blurple hover:bg-indigo-500 text-white text-sm rounded-lg transition-colors whitespace-nowrap">
+                        + Add Song
+                    </button>
+                </form>
+            </div>
+
+            {% set active_admin = admin_songs|selectattr('active')|list %}
+            {% if active_admin %}
+            <div id="admin-song-list" class="divide-y divide-gray-700/30">
+                {% for song in active_admin %}
+                <div class="px-5 py-3 flex items-center gap-3">
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-2">
+                            {% if song.analysis_status == 'done' %}
+                            <span class="w-2 h-2 rounded-full bg-green-500 flex-shrink-0"></span>
+                            {% elif song.analysis_status in ('processing', 'pending') %}
+                            <span class="w-2 h-2 rounded-full bg-yellow-500 flex-shrink-0"></span>
+                            {% else %}
+                            <span class="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" title="{{ song.analysis_status }}"></span>
+                            {% endif %}
+                            <span class="text-white text-sm font-medium truncate">{{ song.title or '⏳ Processing…' }}</span>
+                            {% if song.artist %}<span class="text-gray-400 text-xs truncate">— {{ song.artist }}</span>{% endif %}
+                        </div>
+                        <div class="text-gray-500 text-xs mt-0.5 truncate">{{ song.suno_url }}</div>
+                    </div>
+                    <div class="flex items-center gap-1.5 flex-shrink-0">
+                        {% if song.analysis_status != 'done' and not status.running %}
+                        <form method="POST" class="inline">
+                            <input type="hidden" name="action" value="reanalyze_whisper_one">
+                            <input type="hidden" name="song_id" value="{{ song.id }}">
+                            <button type="submit" title="Re-run Whisper"
+                                class="px-2.5 py-1.5 bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 rounded-lg text-xs transition-colors">🔁</button>
+                        </form>
+                        {% endif %}
+                        <form method="POST" onsubmit="return confirm('Remove this song from the admin playlist?')">
+                            <input type="hidden" name="action" value="delete_song">
+                            <input type="hidden" name="song_id" value="{{ song.id }}">
+                            <button type="submit" title="Remove"
+                                class="px-2.5 py-1.5 bg-red-900/30 hover:bg-red-900/60 text-red-400 rounded-lg text-xs transition-colors">🗑</button>
+                        </form>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="px-5 py-8 text-center text-gray-500">
+                <p class="text-3xl mb-2">🎛</p>
+                <p class="text-sm">No admin songs yet. Paste a Suno URL above to add one.</p>
             </div>
             {% endif %}
         </div>
