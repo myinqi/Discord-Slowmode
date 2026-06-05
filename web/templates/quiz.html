@@ -98,6 +98,38 @@
                 </div>
             </form>
         </div>
+
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            <div class="px-5 py-4 border-b border-gray-700/50">
+                <h3 class="text-white font-semibold">JSON Import</h3>
+            </div>
+            <form method="POST" class="p-5 space-y-4">
+                <input type="hidden" name="action" value="import_json">
+                <div>
+                    <label class="block text-gray-400 text-xs mb-1">Questions JSON</label>
+                    <textarea name="quiz_json" rows="10" required
+                        class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-xs font-mono focus:border-discord-blurple focus:outline-none resize-y"
+                        placeholder='[
+  {
+    "mode": "film",
+    "question": "Which movie features the line \"I am your father\"?",
+    "answers": ["Star Wars", "Alien", "Blade Runner", "Dune", "The Matrix"],
+    "correct_answer": "Star Wars"
+  }
+]'></textarea>
+                    <p class="text-gray-500 text-xs mt-2">
+                        Use an array or an object with a <code class="text-gray-300">questions</code> array.
+                        Each item needs <code class="text-gray-300">mode</code>, <code class="text-gray-300">question</code>,
+                        five <code class="text-gray-300">answers</code>, and either <code class="text-gray-300">correct_answer</code>
+                        or <code class="text-gray-300">correct_index</code> from 1 to 5.
+                    </p>
+                </div>
+                <button type="submit" onclick="return confirm('Import these quiz questions?')"
+                    class="w-full px-4 py-2 bg-discord-green/20 hover:bg-discord-green/40 text-green-300 rounded-lg text-sm font-medium transition-colors">
+                    Import Questions
+                </button>
+            </form>
+        </div>
     </div>
 
     <div class="xl:col-span-2 space-y-4">

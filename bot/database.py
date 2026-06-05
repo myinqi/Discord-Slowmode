@@ -1859,6 +1859,22 @@ class Database:
         await self.db.commit()
         return cursor.lastrowid
 
+    async def create_quiz_questions_bulk(self, questions: list[tuple[str, str, list[str], str]]) -> int:
+        if not questions:
+            return 0
+        rows = [
+            (mode, question, answers[0], answers[1], answers[2], answers[3], answers[4], correct_answer)
+            for mode, question, answers, correct_answer in questions
+        ]
+        await self.db.executemany(
+            "INSERT INTO quiz_questions "
+            "(mode, question, answer_1, answer_2, answer_3, answer_4, answer_5, correct_answer) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        await self.db.commit()
+        return len(rows)
+
     async def get_quiz_question(self, question_id: int) -> Optional[dict]:
         async with self.db.execute(
             "SELECT * FROM quiz_questions WHERE id = ?", (question_id,)

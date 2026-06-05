@@ -820,6 +820,89 @@ def create_app(db: Database, bot=None) -> Quart:
                     await flash("Quiz question updated.", "success")
                 return redirect(url_for("quiz_admin"))
 
+            if action == "import_json":
+                import json as _json
+                raw_json = (form.get("quiz_json") or "").strip()
+                if not raw_json:
+                    await flash("JSON input is required.", "error")
+                    return redirect(url_for("quiz_admin"))
+
+                try:
+                    payload = _json.loads(raw_json)
+                except _json.JSONDecodeError as exc:
+                    await flash(f"Invalid JSON: {exc.msg} at line {exc.lineno}.", "error")
+                    return redirect(url_for("quiz_admin"))
+
+                items = payload.get("questions") if isinstance(payload, dict) else payload
+                if not isinstance(items, list):
+                    await flash("JSON must be an array or an object with a questions array.", "error")
+                    return redirect(url_for("quiz_admin"))
+
+                prepared = []
+                errors = []
+                for idx, item in enumerate(items, start=1):
+                    if not isinstance(item, dict):
+                        errors.append(f"Item {idx}: expected an object.")
+                        continue
+                    mode = str(item.get("mode") or "").strip().lower()
+                    if mode not in ("film", "music"):
+                        errors.append(f"Item {idx}: mode must be film or music.")
+                        continue
+                    question = str(item.get("question") or "").strip()
+                    answers = item.get("answers")
+                    if not question:
+                        errors.append(f"Item {idx}: question is required.")
+                        continue
+                    if not isinstance(answers, list) or len(answers) != 5:
+                        errors.append(f"Item {idx}: answers must contain exactly 5 entries.")
+                        continue
+                    answers = [str(answer).strip() for answer in answers]
+                    if any(not answer for answer in answers):
+                        errors.append(f"Item {idx}: all answers must be non-empty.")
+                        continue
+
+                    correct_answer = str(
+                        item.get("correct_answer")
+                        or item.get("correctAnswer")
+                        or ""
+                    ).strip()
+                    correct_index = item.get("correct_index", item.get("correctIndex"))
+                    if not correct_answer and correct_index is not None:
+                        try:
+                            correct_idx = int(correct_index)
+                            if 1 <= correct_idx <= 5:
+                                correct_answer = answers[correct_idx - 1]
+                        except (TypeError, ValueError):
+                            pass
+                    if not correct_answer:
+                        errors.append(f"Item {idx}: correct_answer or correct_index is required.")
+                        continue
+                    if correct_answer not in answers:
+                        errors.append(f"Item {idx}: correct answer must match one of the answers exactly.")
+                        continue
+                    prepared.append((mode, question, answers, correct_answer))
+
+                if errors:
+                    preview = " ".join(errors[:5])
+                    if len(errors) > 5:
+                        preview += f" ... and {len(errors) - 5} more."
+                    await flash(preview, "error")
+                    return redirect(url_for("quiz_admin"))
+
+                if not prepared:
+                    await flash("No quiz questions found in the JSON input.", "error")
+                    return redirect(url_for("quiz_admin"))
+
+                imported_count = await db.create_quiz_questions_bulk(prepared)
+
+                await db.add_audit_log(
+                    event_type="quiz_questions_imported",
+                    details=f"Imported {imported_count} quiz question(s) from JSON",
+                    actor=session.get("username", "unknown"),
+                )
+                await flash(f"Imported {imported_count} quiz question(s).", "success")
+                return redirect(url_for("quiz_admin"))
+
             if action == "delete":
                 question_id = int(form.get("question_id") or 0)
                 await db.delete_quiz_question(question_id)
