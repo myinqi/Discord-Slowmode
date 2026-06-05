@@ -1901,11 +1901,14 @@ class Database:
         async with self.db.execute(sql, args) as cursor:
             return [dict(row) for row in await cursor.fetchall()]
 
-    async def get_random_quiz_question(self, mode: str) -> Optional[dict]:
-        async with self.db.execute(
-            "SELECT * FROM quiz_questions WHERE mode = ? ORDER BY RANDOM() LIMIT 1",
-            (mode,),
-        ) as cursor:
+    async def get_random_quiz_question(self, mode: str | None = None) -> Optional[dict]:
+        if mode in ("film", "music"):
+            sql = "SELECT * FROM quiz_questions WHERE mode = ? ORDER BY RANDOM() LIMIT 1"
+            args = (mode,)
+        else:
+            sql = "SELECT * FROM quiz_questions ORDER BY RANDOM() LIMIT 1"
+            args = ()
+        async with self.db.execute(sql, args) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None
 

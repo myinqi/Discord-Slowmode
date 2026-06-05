@@ -778,7 +778,7 @@ def create_app(db: Database, bot=None) -> Quart:
 
             if action == "save_settings":
                 mode = (form.get("quiz_mode") or "film").strip().lower()
-                if mode not in ("film", "music"):
+                if mode not in ("film", "music", "mixed"):
                     mode = "film"
                 channel_id = (form.get("quiz_channel_id") or "").strip()
                 await db.set_setting("quiz_mode", mode)
@@ -915,7 +915,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 return redirect(url_for("quiz_admin"))
 
         quiz_mode = await db.get_setting("quiz_mode") or "film"
-        if quiz_mode not in ("film", "music"):
+        if quiz_mode not in ("film", "music", "mixed"):
             quiz_mode = "film"
         quiz_channel_id = await db.get_setting("quiz_channel_id") or ""
         questions = await db.get_quiz_questions()

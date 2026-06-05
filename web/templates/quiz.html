@@ -14,7 +14,7 @@
 
                 <div class="space-y-2">
                     <label class="block text-gray-400 text-xs font-medium">Mode</label>
-                    <div class="grid grid-cols-2 gap-2">
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
                         <label class="flex items-center gap-2 cursor-pointer select-none bg-discord-darker rounded-lg px-3 py-2 hover:bg-gray-700/50 transition-colors">
                             <input type="radio" name="quiz_mode" value="film" {% if quiz_mode == 'film' %}checked{% endif %}
                                 class="w-4 h-4 accent-discord-blurple">
@@ -24,6 +24,11 @@
                             <input type="radio" name="quiz_mode" value="music" {% if quiz_mode == 'music' %}checked{% endif %}
                                 class="w-4 h-4 accent-discord-blurple">
                             <span class="text-sm text-gray-300">Music Quiz</span>
+                        </label>
+                        <label class="flex items-center gap-2 cursor-pointer select-none bg-discord-darker rounded-lg px-3 py-2 hover:bg-gray-700/50 transition-colors">
+                            <input type="radio" name="quiz_mode" value="mixed" {% if quiz_mode == 'mixed' %}checked{% endif %}
+                                class="w-4 h-4 accent-discord-blurple">
+                            <span class="text-sm text-gray-300">Mixed Quiz</span>
                         </label>
                     </div>
                 </div>

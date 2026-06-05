@@ -35,7 +35,7 @@ class QuizCog(commands.Cog):
             return
 
         mode = (await self.bot.db.get_setting("quiz_mode") or "film").strip().lower()
-        if mode not in ("film", "music"):
+        if mode not in ("film", "music", "mixed"):
             mode = "film"
 
         channel_id_str = (await self.bot.db.get_setting("quiz_channel_id") or "").strip()
@@ -56,14 +56,15 @@ class QuizCog(commands.Cog):
 
         question = await self.bot.db.get_random_quiz_question(mode)
         if not question:
+            mode_name = "any" if mode == "mixed" else mode
             await interaction.response.send_message(
-                f"No {mode} quiz questions are configured yet.",
+                f"No {mode_name} quiz questions are configured yet.",
                 ephemeral=True,
             )
             return
 
         answers = _answers_from_question(question)
-        mode_label = "Film Quiz" if mode == "film" else "Music Quiz"
+        mode_label = "Film Quiz" if question["mode"] == "film" else "Music Quiz"
         options_text = "\n".join(f"**{idx}.** {answer}" for idx, answer in enumerate(answers, start=1))
 
         embed = discord.Embed(
