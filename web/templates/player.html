@@ -230,6 +230,86 @@ function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace
 function fmt(s){var m=Math.floor(s/60),ss=Math.floor(s%60);return m+':'+(ss<10?'0':'')+ss;}
 function setStatus(msg){document.getElementById('p-status').textContent=msg;}
 
+/* --- OS / car display metadata via Media Session API --- */
+function mediaSessionSupported(){
+    return 'mediaSession' in navigator && typeof MediaMetadata !== 'undefined';
+}
+
+function mediaArtwork(uuid,imageUrl){
+    var art=[];
+    if(imageUrl)art.push({src:imageUrl,sizes:'512x512',type:'image/jpeg'});
+    if(uuid){
+        art.push({src:'https://cdn1.suno.ai/image_large_'+uuid+'.jpeg',sizes:'512x512',type:'image/jpeg'});
+        art.push({src:'https://cdn1.suno.ai/image_'+uuid+'.jpeg',sizes:'512x512',type:'image/jpeg'});
+    }
+    return art;
+}
+
+function updateMediaSession(e,uuid){
+    if(!mediaSessionSupported()||!e)return;
+    try{
+        navigator.mediaSession.metadata=new MediaMetadata({
+            title:e.title||'Unknown Title',
+            artist:e.sunoArtist||e.author||'Unknown Artist',
+            album:'Corax Suno Player',
+            artwork:mediaArtwork(uuid,e.imageUrl||null)
+        });
+    }catch(err){console.warn('Media session metadata failed',err);}
+}
+
+function updateMediaSessionPlaybackState(){
+    if(!('mediaSession' in navigator))return;
+    try{
+        navigator.mediaSession.playbackState=player.paused||player.ended?'paused':'playing';
+    }catch(err){}
+}
+
+function updateMediaSessionPosition(){
+    if(!('mediaSession' in navigator)||typeof navigator.mediaSession.setPositionState!=='function')return;
+    if(!isFinite(player.duration)||player.duration<=0)return;
+    try{
+        navigator.mediaSession.setPositionState({
+            duration:player.duration,
+            playbackRate:player.playbackRate||1,
+            position:Math.min(player.currentTime||0,player.duration)
+        });
+    }catch(err){}
+}
+
+function setupMediaSessionActions(){
+    if(!('mediaSession' in navigator)||typeof navigator.mediaSession.setActionHandler!=='function')return;
+    var actions={
+        play:function(){
+            if(cur>=0){player.play().catch(function(){setStatus('Press ▶ to play');});return;}
+            var start=0;while(start<T.length&&_skip(start))start++;
+            if(start<T.length)play(start);
+        },
+        pause:function(){player.pause();},
+        previoustrack:function(){prev();},
+        nexttrack:function(){next();},
+        seekbackward:function(details){
+            var offset=(details&&details.seekOffset)||10;
+            player.currentTime=Math.max((player.currentTime||0)-offset,0);
+            updateMediaSessionPosition();
+        },
+        seekforward:function(details){
+            var offset=(details&&details.seekOffset)||10;
+            if(isFinite(player.duration))player.currentTime=Math.min((player.currentTime||0)+offset,player.duration);
+            updateMediaSessionPosition();
+        },
+        seekto:function(details){
+            if(!details||typeof details.seekTime!=='number')return;
+            if(details.fastSeek&&typeof player.fastSeek==='function')player.fastSeek(details.seekTime);
+            else player.currentTime=details.seekTime;
+            updateMediaSessionPosition();
+        }
+    };
+    Object.keys(actions).forEach(function(action){
+        try{navigator.mediaSession.setActionHandler(action,actions[action]);}
+        catch(err){}
+    });
+}
+
 /* --- Load songs from API --- */
 async function fetchSongs(append){
     var ch=document.getElementById('channelSel').value;
@@ -436,6 +516,7 @@ async function playTrack(uuid,idx){
     setStatus('Loading…');
     var realIdx=getPlayIndex(idx);var e=T[realIdx];
     setArtwork(uuid,e.imageUrl||null,e.videoUrl||null);setSunoLink(uuid);setArtistLink(e.sunoHandle||null);
+    updateMediaSession(e,uuid);
     // Suno is migrating some songs from .mp3 to .m4a (Opus codec).
     // Try .mp3 first; on error, fall back to .m4a once.
     player.src='https://cdn1.suno.ai/'+uuid+'.mp3';
@@ -456,6 +537,7 @@ async function playTrack(uuid,idx){
         if(meta.image_url||meta.video_url){if(meta.image_url)e.imageUrl=meta.image_url;setArtwork(uuid,e.imageUrl||null,e.videoUrl||null);}
         if(meta.artist&&!e.sunoArtist){e.sunoArtist=meta.artist;changed=true;updateArtistOptions();}
         if(meta.handle&&!e.sunoHandle){e.sunoHandle=meta.handle;setArtistLink(meta.handle);}
+        updateMediaSession(e,uuid);
         if(changed){updateSub(e,idx);renderQ();}
     });
 }
@@ -476,6 +558,7 @@ function updatePlayBtn(){
     var btn=document.getElementById('btnPlay');
     var playing=!player.paused&&!player.ended;
     btn.classList.toggle('playing',playing);
+    updateMediaSessionPlaybackState();
 }
 
 async function play(i){
@@ -510,8 +593,9 @@ player.addEventListener('timeupdate',function(){
     var pct=(player.currentTime/player.duration)*100;
     document.getElementById('seekFill').style.width=pct+'%';
     document.getElementById('timeNow').textContent=fmt(player.currentTime);
+    updateMediaSessionPosition();
 });
-player.addEventListener('loadedmetadata',function(){document.getElementById('timeDur').textContent=fmt(player.duration);});
+player.addEventListener('loadedmetadata',function(){document.getElementById('timeDur').textContent=fmt(player.duration);updateMediaSessionPosition();});
 document.getElementById('seekTrack').addEventListener('click',function(ev){
     if(!player.duration)return;
     var rect=this.getBoundingClientRect();var pct=(ev.clientX-rect.left)/rect.width;
@@ -690,6 +774,7 @@ player.addEventListener('play',function(){
 });
 
 /* Auto-load on page open */
+setupMediaSessionActions();
 loadSettings();
 fetchSongs(false);
 </script>
