@@ -211,6 +211,15 @@ class Database:
             );
             CREATE INDEX IF NOT EXISTS idx_quiz_questions_mode
                 ON quiz_questions(mode);
+
+            CREATE TABLE IF NOT EXISTS quiz_scores (
+                user_id INTEGER PRIMARY KEY,
+                user_name TEXT NOT NULL,
+                points INTEGER NOT NULL DEFAULT 0,
+                last_solved_at REAL DEFAULT (unixepoch())
+            );
+            CREATE INDEX IF NOT EXISTS idx_quiz_scores_points
+                ON quiz_scores(points DESC, last_solved_at ASC);
         """)
         await self.db.commit()
 
@@ -1920,6 +1929,33 @@ class Database:
     async def delete_quiz_question(self, question_id: int):
         await self.db.execute("DELETE FROM quiz_questions WHERE id = ?", (question_id,))
         await self.db.commit()
+
+    async def increment_quiz_score(self, user_id: int, user_name: str) -> int:
+        await self.db.execute(
+            "INSERT INTO quiz_scores (user_id, user_name, points, last_solved_at) "
+            "VALUES (?, ?, 1, unixepoch()) "
+            "ON CONFLICT(user_id) DO UPDATE SET "
+            "user_name = excluded.user_name, "
+            "points = points + 1, "
+            "last_solved_at = excluded.last_solved_at",
+            (user_id, user_name),
+        )
+        await self.db.commit()
+        async with self.db.execute(
+            "SELECT points FROM quiz_scores WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return int(row["points"]) if row else 0
+
+    async def get_quiz_highscore(self, limit: int = 10) -> list[dict]:
+        async with self.db.execute(
+            "SELECT user_id, user_name, points, last_solved_at "
+            "FROM quiz_scores "
+            "ORDER BY points DESC, last_solved_at ASC "
+            "LIMIT ?",
+            (limit,),
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
 
     # --- Radio Songs ---
 

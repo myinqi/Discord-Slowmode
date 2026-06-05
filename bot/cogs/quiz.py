@@ -90,6 +90,31 @@ class QuizCog(commands.Cog):
         else:
             await interaction.response.send_message(f"Quiz question posted in {channel.mention}.", ephemeral=True)
 
+    @app_commands.command(name="quiz-highscore", description="Show the private quiz top 10 highscore")
+    async def quiz_highscore(self, interaction: discord.Interaction):
+        rows = await self.bot.db.get_quiz_highscore(limit=10)
+        if not rows:
+            await interaction.response.send_message("No quiz scores yet.", ephemeral=True)
+            return
+
+        lines = []
+        medals = ["🥇", "🥈", "🥉"]
+        for idx, row in enumerate(rows, start=1):
+            rank = medals[idx - 1] if idx <= len(medals) else f"**{idx}.**"
+            member = interaction.guild.get_member(row["user_id"]) if interaction.guild else None
+            name = member.display_name if member else row["user_name"]
+            point_label = "point" if row["points"] == 1 else "points"
+            lines.append(f"{rank} **{name}** — {row['points']} {point_label}")
+
+        embed = discord.Embed(
+            title="Quiz Highscore",
+            description="\n".join(lines),
+            color=discord.Color.gold(),
+        )
+        embed.set_footer(text="Only you can see this highscore.")
+        embed.timestamp = discord.utils.utcnow()
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot or not message.guild:
@@ -108,10 +133,18 @@ class QuizCog(commands.Cog):
 
         correct_answer = active["correct_answer"]
         self.active_quizzes.pop(message.channel.id, None)
+        total_points = await self.bot.db.increment_quiz_score(
+            message.author.id,
+            message.author.display_name,
+        )
 
         embed = discord.Embed(
             title="Quiz Solved",
-            description=f"{message.author.mention} solved the quiz.\nCorrect answer: **{correct_answer}**",
+            description=(
+                f"{message.author.mention} solved the quiz.\n"
+                f"Correct answer: **{correct_answer}**\n"
+                f"Score: **{total_points}**"
+            ),
             color=discord.Color.green(),
         )
         embed.timestamp = discord.utils.utcnow()

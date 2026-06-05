@@ -1731,7 +1731,7 @@ class CommandsCog(commands.Cog):
             "**`/poll-create [channel]`** — Create a poll\n"
             "**`/poll-edit`** — Edit your existing polls\n"
             "**`/quiz`** — Post a random quiz question\n"
-            "**`/twitch-playlist`** — Show the Twitch radio playlist\n"
+            "**`/quiz-highscore`** — Show the private quiz top 10\n"
             "**`/help`** — Show this help message"
         )
         embed.add_field(name="🛠️ Utility & Fun", value=utility_cmds, inline=False)
@@ -1748,7 +1748,8 @@ class CommandsCog(commands.Cog):
             name="🎙️ Experimental Radio",
             value=(
                 "**`/twitch-submit`** — Submit a Suno song to the Experimental Radio\n"
-                "**`/twitch-delete`** — Remove one of your Experimental Radio submissions"
+                "**`/twitch-delete`** — Remove one of your Experimental Radio submissions\n"
+                "**`/twitch-playlist`** — Show the Experimental Radio playlist"
             ),
             inline=False,
         )
