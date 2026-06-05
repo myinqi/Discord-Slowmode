@@ -3876,7 +3876,7 @@ def create_app(db: Database, bot=None) -> Quart:
 
             return redirect(request.url)
 
-        songs = await db.get_all_exp_radio_songs(active_only=True)
+        songs = await db.get_all_exp_radio_songs(active_only=True, source="submission")
         # Enrich each song with parsed analysis info for the admin UI:
         # word_count, coverage span and a transcript preview reconstructed
         # from the stored word_timestamps JSON.

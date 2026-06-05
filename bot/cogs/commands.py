@@ -1790,7 +1790,7 @@ class CommandsCog(commands.Cog):
     @app_commands.command(name="twitch-playlist", description="Show the current Experimental Radio playlist")
     async def twitch_playlist(self, interaction: discord.Interaction):
         from datetime import datetime, timezone
-        songs = await self.bot.db.get_all_exp_radio_songs(active_only=True)
+        songs = await self.bot.db.get_all_exp_radio_songs(active_only=True, source="submission")
         if not songs:
             await interaction.response.send_message("📻 The playlist is currently empty.", ephemeral=True)
             return
