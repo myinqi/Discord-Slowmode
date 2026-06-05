@@ -2896,11 +2896,19 @@ class Database:
         )
         await self.db.commit()
 
-    async def relic_expire_events(self) -> None:
-        await self.db.execute(
-            "DELETE FROM relic_active_events WHERE ends_at <= ?", (time.time(),)
-        )
-        await self.db.commit()
+    async def relic_expire_events(self) -> list[dict]:
+        """Delete and return active events whose time has elapsed."""
+        now = time.time()
+        async with self.db.execute(
+            "SELECT * FROM relic_active_events WHERE ends_at <= ?", (now,)
+        ) as cur:
+            expired = [dict(r) for r in await cur.fetchall()]
+        if expired:
+            await self.db.execute(
+                "DELETE FROM relic_active_events WHERE ends_at <= ?", (now,)
+            )
+            await self.db.commit()
+        return expired
 
     # -----------------------------------------------------------------------
     # Relic Hunt — ritual state

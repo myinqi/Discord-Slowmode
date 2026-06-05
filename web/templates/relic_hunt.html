@@ -409,6 +409,35 @@
       {% endfor %}
     </div>
 
+    <div class="pt-3 border-t border-gray-700/50 space-y-3">
+      <h4 class="text-white text-sm font-medium">🎲 Auto Random Events</h4>
+      <label class="flex items-center gap-2 cursor-pointer">
+        <input type="checkbox" name="auto_event_enabled" value="true"
+          {% if settings.get('auto_event_enabled') == 'true' %}checked{% endif %}
+          class="w-4 h-4 accent-discord-blurple">
+        <span class="text-white text-sm">Automatically start random events</span>
+      </label>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">Min. interval (minutes)</label>
+          <input type="number" min="1" name="auto_event_min_interval_minutes"
+            value="{{ settings.get('auto_event_min_interval_minutes', '20') }}"
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+        </div>
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">Max. interval (minutes)</label>
+          <input type="number" min="1" name="auto_event_max_interval_minutes"
+            value="{{ settings.get('auto_event_max_interval_minutes', '45') }}"
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+        </div>
+      </div>
+      <p class="text-gray-500 text-xs">
+        A random enabled event fires at a random interval between min and max minutes.
+        The next event is scheduled after the current one ends plus a new random wait.
+        Saving new interval values resets the timer immediately.
+      </p>
+    </div>
+
     <button class="w-full mt-2 px-4 py-2 rounded-lg bg-discord-blurple hover:bg-indigo-500 text-white text-sm transition-colors">Save Settings</button>
   </form>
 </div>

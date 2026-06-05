@@ -190,6 +190,7 @@ class RelicHunt:
         ]:
             twitch_bot.register_command(cmd, handler)
 
+        asyncio.create_task(self._event_watcher_loop())
         await twitch_bot.start_listener()
         _rlog("Started — IRC listener active")
 
@@ -198,6 +199,69 @@ class RelicHunt:
         if self._bot:
             await self._bot.stop_listener()
         _rlog("Stopped")
+
+    # ------------------------------------------------------------------ #
+    # Event watcher loop                                                   #
+    # ------------------------------------------------------------------ #
+    async def _event_watcher_loop(self) -> None:
+        """Every 10 s: post end messages for expired events; fire auto-starts."""
+        while self._running:
+            try:
+                await self._tick_expired_events()
+                await self._tick_auto_event()
+            except Exception as e:
+                _rlog(f"Event watcher error: {e}", "error")
+            await asyncio.sleep(10)
+
+    async def _tick_expired_events(self) -> None:
+        all_events = {e["id"]: e for e in await self.db.relic_get_all_events()}
+        expired = await self.db.relic_expire_events()
+        for ae in expired:
+            ev = all_events.get(ae["event_id"])
+            if not ev:
+                continue
+            try:
+                cfg = json.loads(ev.get("config_json") or "{}")
+            except Exception:
+                cfg = {}
+            end_msg = cfg.get("endMessage", f"The {ev['name']} event has ended.")
+            await self._send(end_msg)
+            _rlog(f"Event expired: {ev['name']}")
+
+    async def _tick_auto_event(self) -> None:
+        if (await self.db.relic_get_setting("auto_event_enabled")) != "true":
+            return
+        if await self.db.relic_get_active_events():
+            return
+        now = time.time()
+        next_at = float((await self.db.relic_get_setting("auto_event_next_at")) or 0)
+        if next_at == 0:
+            min_m = int((await self.db.relic_get_setting("auto_event_min_interval_minutes")) or 20)
+            max_m = int((await self.db.relic_get_setting("auto_event_max_interval_minutes")) or 45)
+            interval = random.uniform(min_m * 60, max_m * 60)
+            await self.db.relic_set_setting("auto_event_next_at", str(now + interval))
+            _rlog(f"Auto-event: first event scheduled in ~{int(interval // 60)}m")
+            return
+        if now < next_at:
+            return
+        all_events = [e for e in await self.db.relic_get_all_events() if e.get("enabled")]
+        if not all_events:
+            return
+        event = random.choice(all_events)
+        try:
+            cfg = json.loads(event.get("config_json") or "{}")
+        except Exception:
+            cfg = {}
+        duration_min = int(cfg.get("durationMinutes", 10))
+        await self.db.relic_start_event(event["id"], duration_min * 60, "auto")
+        start_msg = cfg.get("startMessage", f"{event['name']} has begun!")
+        await self._send(start_msg)
+        _rlog(f"Auto-started event: {event['name']} ({duration_min}min)")
+        min_m = int((await self.db.relic_get_setting("auto_event_min_interval_minutes")) or 20)
+        max_m = int((await self.db.relic_get_setting("auto_event_max_interval_minutes")) or 45)
+        gap = random.uniform(min_m * 60, max_m * 60)
+        await self.db.relic_set_setting("auto_event_next_at", str(now + duration_min * 60 + gap))
+        _rlog(f"Auto-event: next scheduled in ~{int((duration_min * 60 + gap) // 60)}m")
 
     async def _send(self, msg: str) -> None:
         if self._bot:
@@ -280,7 +344,6 @@ class RelicHunt:
         return val != "false"  # default ON unless explicitly disabled
 
     async def _get_active_events_with_cfg(self) -> list:
-        await self.db.relic_expire_events()
         active = await self.db.relic_get_active_events()
         result = []
         for ae in active:

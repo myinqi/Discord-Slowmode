@@ -4375,7 +4375,10 @@ def create_app(db: Database, bot=None) -> Quart:
             action = form.get("action", "")
 
             if action == "save_settings":
-                _bool_keys = {"announce_level_ups", "announce_rank_ups", "mods_bypass_cooldowns"}
+                _bool_keys = {"announce_level_ups", "announce_rank_ups",
+                              "mods_bypass_cooldowns", "auto_event_enabled"}
+                _interval_keys = {"auto_event_min_interval_minutes",
+                                  "auto_event_max_interval_minutes"}
                 for key in (
                     "enabled", "command_prefix", "timezone",
                     "raven_cooldown_seconds", "ritual_cooldown_seconds",
@@ -4384,12 +4387,19 @@ def create_app(db: Database, bot=None) -> Quart:
                     "vip_cooldown_multiplier", "ritual_reward_points",
                     "ritual_reward_xp", "ritual_legendary_chance",
                     "ritual_active_window_minutes",
+                    "auto_event_enabled",
+                    "auto_event_min_interval_minutes",
+                    "auto_event_max_interval_minutes",
                 ):
                     if key in _bool_keys:
                         val = "true" if form.get(key) else "false"
                     else:
                         val = form.get(key, "")
                     await db.relic_set_setting(key, val)
+                # Reset the next-event timer whenever interval settings change
+                # so the new values take effect immediately.
+                if _interval_keys & set(form.keys()):
+                    await db.relic_set_setting("auto_event_next_at", "0")
                 await flash("Settings saved.", "success")
 
             elif action == "toggle_game":
