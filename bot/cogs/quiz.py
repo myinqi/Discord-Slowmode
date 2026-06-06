@@ -1,3 +1,4 @@
+import random
 import re
 import time
 
@@ -64,6 +65,7 @@ class QuizCog(commands.Cog):
             return
 
         answers = _answers_from_question(question)
+        random.shuffle(answers)
         mode_label = "Film Quiz" if question["mode"] == "film" else "Music Quiz"
         options_text = "\n".join(f"**{idx}.** {answer}" for idx, answer in enumerate(answers, start=1))
 
