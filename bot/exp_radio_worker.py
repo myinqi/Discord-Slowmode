@@ -974,6 +974,20 @@ async def process_exp_song(db, song_id: int, exp_radio_dir: str, bot=None,
             prefix="[whisper]",
         )
 
+        latest = await db.get_exp_radio_song(song_id)
+        if (
+            latest
+            and latest.get("playlist_source") == "admin"
+            and latest.get("analysis_status") == "done"
+            and (latest.get("word_timestamps") or "") == "[]"
+            and not latest.get("ass_filename")
+        ):
+            log_event(
+                f"#{song_id}: Whisper result discarded; admin playlist bypass is active.",
+                prefix="[whisper]",
+            )
+            return
+
         # 3b) Forced-alignment-light: keep Whisper structure/timing, correct
         # word spellings from the lyric sheet wherever they agree exactly.
         if lyrics:

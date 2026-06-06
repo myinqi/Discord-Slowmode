@@ -3789,6 +3789,36 @@ def create_app(db: Database, bot=None) -> Quart:
                         "success",
                     )
 
+            elif action == "approve_admin_whisper_bypass":
+                from bot.exp_stream_manager import log_event
+                sid = int(form.get("song_id", "0") or 0)
+                s = await db.get_exp_radio_song(sid) if sid else None
+                if not s:
+                    await flash("Song not found.", "error")
+                elif s.get("playlist_source") != "admin":
+                    await flash("This bypass is only available for admin playlist songs.", "error")
+                elif not s.get("mp3_filename"):
+                    await flash("Cannot approve yet: MP3 download is not complete.", "error")
+                else:
+                    await db.update_exp_radio_song(
+                        sid,
+                        analysis_status="done",
+                        word_timestamps="[]",
+                        ass_filename=None,
+                        moderation_status="approved",
+                        moderation_reason="Admin playlist: Whisper transcript bypassed.",
+                        moderation_at=time.time(),
+                    )
+                    log_event(
+                        f"Admin bypassed Whisper transcript for #{sid} "
+                        f"({s.get('title') or s.get('suno_url') or sid!r}); marked stream-ready.",
+                        prefix="[admin-pl]",
+                    )
+                    await flash(
+                        f"✅ Marked “{s.get('title') or sid}” as ready without Whisper transcript.",
+                        "success",
+                    )
+
             elif action == "remoderate_one":
                 import bot.exp_stream_manager as _esm
                 if _esm.stream_is_live:
