@@ -72,6 +72,25 @@
                     {% endfor %}
                 </select>
             </div>
+            <div class="pt-2 border-t border-gray-700/50 space-y-3">
+                <div class="space-y-2">
+                    <label class="block text-gray-400 text-xs">Announcement Channel</label>
+                    <p class="text-gray-500 text-xs">Used by the manual announcement button in the Discord posting panel.</p>
+                    <select name="exp_announcement_channel_id"
+                        class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                        <option value="">Disabled</option>
+                        {% for ch in text_channels %}
+                        <option value="{{ ch.id }}" {% if ch.id|string == exp_announcement_channel_id %}selected{% endif %}>#{{ ch.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="space-y-2">
+                    <label class="block text-gray-400 text-xs">Announcement Message</label>
+                    <textarea name="exp_announcement_message" rows="4"
+                        placeholder="Submissions are open! Send your songs with /twitch-submit."
+                        class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm placeholder-gray-500 focus:border-discord-blurple focus:outline-none resize-y">{{ exp_announcement_message }}</textarea>
+                </div>
+            </div>
             <div class="pt-2 border-t border-gray-700/50 space-y-2">
                 <label class="block text-white text-sm">Max submissions per user</label>
                 <div class="flex items-center gap-3">
@@ -533,6 +552,24 @@
                     </form>
                 </div>
                 {% endif %}
+                <div class="pt-3 mt-3 border-t border-gray-700/50">
+                    <p class="text-gray-400 text-xs mb-2">
+                        Announcement:
+                        {% if exp_announcement_channel_id %}
+                        #{% for ch in text_channels %}{% if ch.id|string == exp_announcement_channel_id %}{{ ch.name }}{% endif %}{% endfor %}
+                        {% else %}
+                        not configured
+                        {% endif %}
+                    </p>
+                    <form method="POST">
+                        <input type="hidden" name="action" value="post_exp_announcement">
+                        <button type="submit"
+                            {% if not exp_announcement_channel_id or not exp_announcement_message %}disabled title="Set an announcement channel and message in ⚙️ Settings first"{% endif %}
+                            class="w-full px-3 py-2 bg-emerald-600/25 hover:bg-emerald-600/45 disabled:bg-gray-700/30 disabled:text-gray-500 text-emerald-300 rounded-lg text-xs font-medium transition-colors">
+                            📣 Post Announcement
+                        </button>
+                    </form>
+                </div>
             </div>
         </div>
 

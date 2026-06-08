@@ -3523,7 +3523,18 @@ def create_app(db: Database, bot=None) -> Quart:
                                 )
                                 if result.get("ok"):
                                     log_event(
-                                        f"Scheduler: started with {result.get('song_count')} song(s).",
+                                        f"Scheduler: start accepted with {result.get('song_count')} song(s); waiting for FFmpeg to go live.",
+                                        prefix="[exp-schedule]",
+                                    )
+                                    live_ok = await exp_stream_manager.wait_until_live(timeout=900)
+                                    if not live_ok:
+                                        log_event(
+                                            "Scheduler: stream did not become live within 15 minutes — skipping Discord announcement.",
+                                            level="error", prefix="[exp-schedule]",
+                                        )
+                                        continue
+                                    log_event(
+                                        "Scheduler: stream is live; posting Discord announcement.",
                                         prefix="[exp-schedule]",
                                     )
                                     # Auto-post stream URL to configured
@@ -3984,6 +3995,8 @@ def create_app(db: Database, bot=None) -> Quart:
                 ch1 = form.get("exp_post_channel_1_id", "").strip()
                 ch2 = form.get("exp_post_channel_2_id", "").strip()
                 expiry_ch = form.get("exp_expiry_channel_id", "").strip()
+                announcement_ch = form.get("exp_announcement_channel_id", "").strip()
+                announcement_msg = (form.get("exp_announcement_message") or "").strip()
                 stream_url_v = form.get("exp_stream_url", "").strip()
                 moderation_en = "on" if form.get("exp_moderation_enabled") else "off"
                 loop_mode_v = form.get("exp_loop_mode", "reshuffle").strip()
@@ -4003,6 +4016,8 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.set_setting("exp_radio_post_channel_1_id", ch1)
                 await db.set_setting("exp_radio_post_channel_2_id", ch2)
                 await db.set_setting("exp_radio_expiry_channel_id", expiry_ch)
+                await db.set_setting("exp_radio_announcement_channel_id", announcement_ch)
+                await db.set_setting("exp_radio_announcement_message", announcement_msg)
                 progress_overlay_en = "on" if form.get("exp_progress_overlay") else "off"
                 try:
                     max_per_user_v = max(1, min(20, int(form.get("exp_max_per_user", "4") or "4")))
@@ -4060,6 +4075,31 @@ def create_app(db: Database, bot=None) -> Quart:
                         await flash(f"Stream link posted to #{name_or_err}.", "success")
                     else:
                         await flash(f"Could not post: {name_or_err}", "danger")
+
+            elif action == "post_exp_announcement":
+                ch_id = await db.get_setting("exp_radio_announcement_channel_id") or ""
+                message_text = (await db.get_setting("exp_radio_announcement_message") or "").strip()
+                if not ch_id:
+                    await flash("No announcement channel configured. Open Settings to add one.", "danger")
+                elif not message_text:
+                    await flash("No announcement message configured. Open Settings to add one.", "danger")
+                else:
+                    guild = get_guild()
+                    channel = None
+                    if guild:
+                        try:
+                            ch_int = int(ch_id)
+                            channel = guild.get_channel(ch_int) or guild.get_thread(ch_int)
+                        except Exception:
+                            channel = None
+                    if not channel:
+                        await flash("Announcement channel not found.", "danger")
+                    else:
+                        try:
+                            await channel.send(message_text)
+                            await flash(f"Announcement posted to #{channel.name}.", "success")
+                        except Exception as e:
+                            await flash(f"Could not post announcement: {e}", "danger")
 
             elif action == "upload_background":
                 bg_file = files.get("bg_file")
@@ -4175,6 +4215,8 @@ def create_app(db: Database, bot=None) -> Quart:
         exp_post_channel_1_id = await db.get_setting("exp_radio_post_channel_1_id") or ""
         exp_post_channel_2_id = await db.get_setting("exp_radio_post_channel_2_id") or ""
         exp_expiry_channel_id = await db.get_setting("exp_radio_expiry_channel_id") or ""
+        exp_announcement_channel_id = await db.get_setting("exp_radio_announcement_channel_id") or ""
+        exp_announcement_message = await db.get_setting("exp_radio_announcement_message") or ""
         exp_twitch_chat_enabled = await db.get_setting("exp_radio_twitch_chat_enabled") or "off"
         exp_moderation_enabled  = await db.get_setting("exp_radio_moderation_enabled") or "off"
         exp_loop_mode           = await db.get_setting("exp_radio_loop_mode") or "reshuffle"
@@ -4245,6 +4287,8 @@ def create_app(db: Database, bot=None) -> Quart:
             exp_post_channel_1_id=exp_post_channel_1_id,
             exp_post_channel_2_id=exp_post_channel_2_id,
             exp_expiry_channel_id=exp_expiry_channel_id,
+            exp_announcement_channel_id=exp_announcement_channel_id,
+            exp_announcement_message=exp_announcement_message,
             exp_twitch_chat_enabled=exp_twitch_chat_enabled,
             exp_moderation_enabled=exp_moderation_enabled,
             exp_loop_mode=exp_loop_mode,

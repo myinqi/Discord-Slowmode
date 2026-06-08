@@ -163,6 +163,9 @@ class ExpStreamManager:
         # Outro: song to play once at the very end before the stream stops.
         self._outro_song: dict | None = None
         self._outro_played: bool = False
+        # Set when the first FFmpeg process exists. start() returns earlier,
+        # while media is still being prepared.
+        self._stream_ready_event = asyncio.Event()
         # Live log: each entry is (unix_ts: float, level: str, line: str).
         # The actual buffer is module-level (see _LOG_BUFFER below) so that
         # background workers and web actions which don't have a reference to
@@ -259,6 +262,7 @@ class ExpStreamManager:
         self._twitch_key = twitch_key
         random.shuffle(ready)
         self.playlist    = ready
+        self._stream_ready_event.clear()
         # Connect to Twitch chat if enabled and credentials exist
         chat_enabled = await self.db.get_setting("exp_radio_twitch_chat_enabled") or "off"
         client_id    = await self.db.get_setting("exp_radio_twitch_client_id")
@@ -279,10 +283,19 @@ class ExpStreamManager:
         self._log(f"Started with {len(ready)} songs.")
         return {"ok": True, "song_count": len(ready)}
 
+    async def wait_until_live(self, timeout: float = 900.0) -> bool:
+        """Wait until FFmpeg has actually started after start()."""
+        try:
+            await asyncio.wait_for(self._stream_ready_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return False
+        return bool(self.is_running and self._process and self._process.returncode is None)
+
     async def stop(self) -> dict:
         self.is_running = False
         global stream_is_live
         stream_is_live = False
+        self._stream_ready_event.clear()
         if self._process and self._process.returncode is None:
             try:
                 self._process.terminate()
@@ -511,6 +524,8 @@ class ExpStreamManager:
             stderr=asyncio.subprocess.PIPE,
             limit=1024 * 1024,
         )
+        self._stream_ready_event.set()
+        self._log("FFmpeg process started; stream is live.")
         chat_task   = asyncio.create_task(self._post_now_playing_loop(songs))
         stderr_task = asyncio.create_task(self._pipe_ffmpeg_stderr(self._process))
         announce_task = asyncio.create_task(self._announce_rotation_end(total_dur))
