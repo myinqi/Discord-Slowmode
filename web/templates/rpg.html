@@ -1,0 +1,766 @@
+{% extends "base.html" %}
+{% block title %}RPG{% endblock %}
+{% block content %}
+<h2 class="text-2xl font-bold text-white mb-6">🎲 RPG Adventures</h2>
+
+{# --- Tab bar --- #}
+{% set tabs = [
+    ('adventures', '📖 Adventures'),
+    ('scenes', '🎭 Scenes'),
+    ('classes', '🛡️ Classes'),
+    ('enemies', '👹 Enemies'),
+    ('items', '🎒 Items'),
+    ('characters', '👤 Characters'),
+    ('parties', '🤝 Parties'),
+    ('settings', '⚙️ Settings'),
+] %}
+<div class="flex flex-wrap gap-2 mb-6 border-b border-gray-700/50 pb-2">
+    {% for key, label in tabs %}
+    <a href="{{ url_for('rpg_admin', tab=key) }}"
+       class="px-3 py-1.5 rounded-lg text-sm transition-colors
+              {% if tab == key %}bg-discord-blurple/30 text-white border border-discord-blurple/50
+              {% else %}text-gray-300 hover:bg-discord-light{% endif %}">
+        {{ label }}
+    </a>
+    {% endfor %}
+</div>
+
+{# ===================== ADVENTURES ===================== #}
+{% if tab == 'adventures' %}
+<div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">
+                {% if selected_adv %}Edit Adventure #{{ selected_adv.id }}{% else %}Create Adventure{% endif %}
+            </h3>
+        </div>
+        <form method="POST" class="p-5 space-y-3">
+            <input type="hidden" name="action" value="{% if selected_adv %}adv_update{% else %}adv_create{% endif %}">
+            {% if selected_adv %}
+            <input type="hidden" name="adventure_id" value="{{ selected_adv.id }}">
+            {% endif %}
+
+            <div>
+                <label class="block text-gray-400 text-xs mb-1">Name</label>
+                <input type="text" name="name" required
+                       value="{{ selected_adv.name if selected_adv else '' }}"
+                       class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+            </div>
+            <div>
+                <label class="block text-gray-400 text-xs mb-1">Description</label>
+                <textarea name="description" rows="2"
+                          class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">{{ selected_adv.description if selected_adv else '' }}</textarea>
+            </div>
+            <div>
+                <label class="block text-gray-400 text-xs mb-1">Intro text (shown when party starts)</label>
+                <textarea name="intro_text" rows="3"
+                          class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">{{ selected_adv.intro_text if selected_adv else '' }}</textarea>
+            </div>
+            <div>
+                <label class="block text-gray-400 text-xs mb-1">LLM system prompt (free-text GM persona)</label>
+                <textarea name="llm_system_prompt" rows="4"
+                          placeholder="Tone, world-building rules, what the GM should never do…"
+                          class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">{{ selected_adv.llm_system_prompt if selected_adv else '' }}</textarea>
+            </div>
+            <div>
+                <label class="block text-gray-400 text-xs mb-1">Start scene key</label>
+                <input type="text" name="start_scene_key"
+                       value="{{ selected_adv.start_scene_key or '' if selected_adv else '' }}"
+                       placeholder="e.g. intro"
+                       class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+            </div>
+            {% if selected_adv %}
+            <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                <input type="checkbox" name="is_active" {% if selected_adv.is_active %}checked{% endif %}
+                       class="w-4 h-4 accent-discord-blurple">
+                Active (available for new parties)
+            </label>
+            {% endif %}
+            <div class="flex gap-2 pt-2">
+                <button type="submit"
+                        class="flex-1 px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg text-sm font-medium transition-colors">
+                    {% if selected_adv %}Save Changes{% else %}Create Adventure{% endif %}
+                </button>
+                {% if selected_adv %}
+                <a href="{{ url_for('rpg_admin', tab='adventures') }}"
+                   class="px-4 py-2 bg-gray-600/30 hover:bg-gray-600/50 text-gray-300 rounded-lg text-sm font-medium transition-colors">
+                    New
+                </a>
+                {% endif %}
+            </div>
+        </form>
+    </div>
+
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">All Adventures</h3>
+        </div>
+        <div class="divide-y divide-gray-700/50">
+            {% if adventures %}
+            {% for adv in adventures %}
+            <div class="p-4 flex items-center justify-between gap-4 hover:bg-discord-darker/50">
+                <div class="min-w-0">
+                    <div class="flex items-center gap-2 mb-1">
+                        <span class="text-white font-medium">{{ adv.name }}</span>
+                        <span class="text-gray-600 text-xs">#{{ adv.id }}</span>
+                        {% if not adv.is_active %}<span class="px-2 py-0.5 rounded bg-discord-red/20 text-red-300 text-[10px]">inactive</span>{% endif %}
+                    </div>
+                    <p class="text-gray-500 text-xs line-clamp-2">{{ adv.description or '(no description)' }}</p>
+                </div>
+                <div class="flex items-center gap-2 flex-shrink-0">
+                    <a href="{{ url_for('rpg_admin', tab='adventures', adventure_id=adv.id) }}"
+                       class="px-3 py-1.5 bg-discord-blurple/20 hover:bg-discord-blurple/40 text-discord-blurple rounded-lg text-xs">Edit</a>
+                    <a href="{{ url_for('rpg_admin', tab='scenes', adventure_id=adv.id) }}"
+                       class="px-3 py-1.5 bg-gray-600/30 hover:bg-gray-600/50 text-gray-200 rounded-lg text-xs">Scenes</a>
+                    <form method="POST" onsubmit="return confirm('Delete adventure and all its scenes?');" class="inline">
+                        <input type="hidden" name="action" value="adv_delete">
+                        <input type="hidden" name="adventure_id" value="{{ adv.id }}">
+                        <button type="submit" class="px-3 py-1.5 bg-discord-red/20 hover:bg-discord-red/40 text-red-300 rounded-lg text-xs">Delete</button>
+                    </form>
+                </div>
+            </div>
+            {% endfor %}
+            {% else %}
+            <p class="p-6 text-gray-500 text-sm text-center">No adventures yet.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+{# ===================== SCENES ===================== #}
+{% elif tab == 'scenes' %}
+<div class="bg-discord-dark rounded-xl border border-gray-700/50 mb-6 p-4 flex flex-wrap items-center gap-3">
+    <label class="text-gray-400 text-xs">Adventure</label>
+    <select id="adv-select" onchange="window.location.href=this.value"
+            class="bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+        {% for adv in adventures %}
+        <option value="{{ url_for('rpg_admin', tab='scenes', adventure_id=adv.id) }}"
+                {% if selected_adv and adv.id == selected_adv.id %}selected{% endif %}>
+            {{ adv.name }} (#{{ adv.id }})
+        </option>
+        {% else %}
+        <option>(no adventures — create one first)</option>
+        {% endfor %}
+    </select>
+    {% if selected_adv %}
+    <span class="text-gray-500 text-xs ml-auto">
+        Start scene: <code class="text-gray-300">{{ selected_adv.start_scene_key or '(none)' }}</code>
+    </span>
+    {% endif %}
+</div>
+
+{% if selected_adv %}
+<div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold" id="scene-form-title">Add Scene</h3>
+        </div>
+        <form method="POST" class="p-5 space-y-3" id="scene-form">
+            <input type="hidden" name="action" id="scene-action" value="scene_create">
+            <input type="hidden" name="adventure_id" value="{{ selected_adv.id }}">
+            <input type="hidden" name="scene_id" id="scene-id" value="">
+
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-gray-400 text-xs mb-1">Scene key (unique)</label>
+                    <input type="text" name="scene_key" id="scene-key" required
+                           placeholder="e.g. forest_clearing"
+                           class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                </div>
+                <div>
+                    <label class="block text-gray-400 text-xs mb-1">Type</label>
+                    <select name="scene_type" id="scene-type"
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                        <option value="story">Story / Narrative</option>
+                        <option value="choice">Choice</option>
+                        <option value="combat">Combat</option>
+                        <option value="skill_check">Skill Check</option>
+                        <option value="end">End</option>
+                    </select>
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-gray-400 text-xs mb-1">Title</label>
+                <input type="text" name="title" id="scene-title"
+                       class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+            </div>
+            <div>
+                <label class="block text-gray-400 text-xs mb-1">Narration (shown to players)</label>
+                <textarea name="narration" id="scene-narration" rows="4"
+                          class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none"></textarea>
+            </div>
+            <div>
+                <label class="block text-gray-400 text-xs mb-1">
+                    Data JSON
+                    <span class="text-gray-600 ml-1">
+                        — choice: <code>{"choices":[{"label":"…","next":"scene_key"}]}</code> ·
+                        combat: <code>{"enemies":["goblin","goblin"],"next":"scene_key"}</code>
+                    </span>
+                </label>
+                <textarea name="data_json" id="scene-data" rows="5"
+                          class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-xs font-mono focus:border-discord-blurple focus:outline-none">{}</textarea>
+            </div>
+
+            <div class="flex gap-2">
+                <button type="submit" id="scene-submit"
+                        class="flex-1 px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg text-sm font-medium transition-colors">
+                    Add Scene
+                </button>
+                <button type="button" id="scene-cancel" onclick="resetSceneForm()"
+                        class="hidden px-4 py-2 bg-gray-600/30 hover:bg-gray-600/50 text-gray-300 rounded-lg text-sm font-medium transition-colors">
+                    Cancel
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">Scenes ({{ scenes|length }})</h3>
+        </div>
+        <div class="divide-y divide-gray-700/50 max-h-[700px] overflow-y-auto">
+            {% if scenes %}
+            {% for s in scenes %}
+            <div class="p-4">
+                <div class="flex items-start justify-between gap-3 mb-1">
+                    <div class="min-w-0">
+                        <div class="flex items-center gap-2">
+                            <code class="text-discord-blurple text-sm">{{ s.scene_key }}</code>
+                            <span class="px-2 py-0.5 rounded bg-gray-700/40 text-gray-300 text-[10px]">{{ s.scene_type }}</span>
+                        </div>
+                        <p class="text-white text-sm mt-1">{{ s.title or '(no title)' }}</p>
+                        <p class="text-gray-500 text-xs mt-1 line-clamp-2">{{ s.narration }}</p>
+                    </div>
+                    <div class="flex flex-col gap-1 flex-shrink-0">
+                        <button type="button"
+                                onclick='editScene({{ s.id }}, {{ s.scene_key|tojson }}, {{ s.title|tojson }}, {{ s.narration|tojson }}, {{ s.scene_type|tojson }}, {{ s.data_json|tojson }})'
+                                class="px-3 py-1 bg-discord-blurple/20 hover:bg-discord-blurple/40 text-discord-blurple rounded-lg text-xs">Edit</button>
+                        <form method="POST" onsubmit="return confirm('Delete scene?');">
+                            <input type="hidden" name="action" value="scene_delete">
+                            <input type="hidden" name="adventure_id" value="{{ selected_adv.id }}">
+                            <input type="hidden" name="scene_id" value="{{ s.id }}">
+                            <button type="submit" class="px-3 py-1 bg-discord-red/20 hover:bg-discord-red/40 text-red-300 rounded-lg text-xs">Delete</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+            {% else %}
+            <p class="p-6 text-gray-500 text-sm text-center">No scenes for this adventure yet.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<script>
+function editScene(id, key, title, narration, type, dataJson) {
+    document.getElementById('scene-form-title').textContent = 'Edit Scene #' + id;
+    document.getElementById('scene-action').value = 'scene_update';
+    document.getElementById('scene-id').value = id;
+    document.getElementById('scene-key').value = key || '';
+    document.getElementById('scene-title').value = title || '';
+    document.getElementById('scene-narration').value = narration || '';
+    document.getElementById('scene-type').value = type || 'story';
+    try {
+        document.getElementById('scene-data').value = JSON.stringify(JSON.parse(dataJson || '{}'), null, 2);
+    } catch (e) {
+        document.getElementById('scene-data').value = dataJson || '{}';
+    }
+    document.getElementById('scene-submit').textContent = 'Save Changes';
+    document.getElementById('scene-cancel').classList.remove('hidden');
+    document.getElementById('scene-form-title').scrollIntoView({behavior: 'smooth'});
+}
+function resetSceneForm() {
+    document.getElementById('scene-form-title').textContent = 'Add Scene';
+    document.getElementById('scene-action').value = 'scene_create';
+    document.getElementById('scene-id').value = '';
+    document.getElementById('scene-key').value = '';
+    document.getElementById('scene-title').value = '';
+    document.getElementById('scene-narration').value = '';
+    document.getElementById('scene-type').value = 'story';
+    document.getElementById('scene-data').value = '{}';
+    document.getElementById('scene-submit').textContent = 'Add Scene';
+    document.getElementById('scene-cancel').classList.add('hidden');
+}
+</script>
+{% else %}
+<div class="bg-discord-dark rounded-xl border border-gray-700/50 p-8 text-center text-gray-500 text-sm">
+    Create an adventure first.
+</div>
+{% endif %}
+
+{# ===================== CLASSES ===================== #}
+{% elif tab == 'classes' %}
+<div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold" id="class-form-title">Add / Upsert Class</h3>
+        </div>
+        <form method="POST" class="p-5 space-y-3">
+            <input type="hidden" name="action" value="class_upsert">
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-gray-400 text-xs mb-1">Class key</label>
+                    <input type="text" name="class_key" id="class-key" required
+                           placeholder="e.g. ranger"
+                           class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                </div>
+                <div>
+                    <label class="block text-gray-400 text-xs mb-1">Display name</label>
+                    <input type="text" name="name" id="class-name" required
+                           class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                </div>
+            </div>
+            <div>
+                <label class="block text-gray-400 text-xs mb-1">Description</label>
+                <textarea name="description" id="class-desc" rows="2"
+                          class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none"></textarea>
+            </div>
+            <div class="grid grid-cols-5 gap-2">
+                {% for field, label, default in [
+                    ('base_hp', 'HP', 20),
+                    ('base_attack', 'ATK', 5),
+                    ('base_defense', 'DEF', 5),
+                    ('base_agility', 'AGI', 5),
+                    ('base_mana', 'MP', 10),
+                ] %}
+                <div>
+                    <label class="block text-gray-400 text-[10px] mb-1">{{ label }}</label>
+                    <input type="number" name="{{ field }}" id="class-{{ field }}" value="{{ default }}" min="1"
+                           class="w-full bg-discord-darker border border-gray-600 rounded-lg px-2 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                </div>
+                {% endfor %}
+            </div>
+            <div>
+                <label class="block text-gray-400 text-xs mb-1">Abilities JSON</label>
+                <textarea name="abilities_json" id="class-abilities" rows="6"
+                          class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-xs font-mono focus:border-discord-blurple focus:outline-none">[]</textarea>
+            </div>
+            <button type="submit"
+                    class="w-full px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg text-sm font-medium transition-colors">
+                Save Class
+            </button>
+        </form>
+    </div>
+
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">Classes ({{ classes|length }})</h3>
+        </div>
+        <div class="divide-y divide-gray-700/50 max-h-[700px] overflow-y-auto">
+            {% for c in classes %}
+            <div class="p-4">
+                <div class="flex items-start justify-between gap-3 mb-2">
+                    <div>
+                        <p class="text-white font-medium">{{ c.name }} <code class="text-gray-500 text-xs ml-1">{{ c.class_key }}</code></p>
+                        <p class="text-gray-500 text-xs">{{ c.description }}</p>
+                    </div>
+                    <div class="flex gap-1">
+                        <button type="button"
+                                onclick='editClass({{ c.class_key|tojson }}, {{ c.name|tojson }}, {{ c.description|tojson }}, {{ c.base_hp }}, {{ c.base_attack }}, {{ c.base_defense }}, {{ c.base_agility }}, {{ c.base_mana }}, {{ c.abilities_json|tojson }})'
+                                class="px-2 py-1 bg-discord-blurple/20 hover:bg-discord-blurple/40 text-discord-blurple rounded-lg text-xs">Edit</button>
+                        <form method="POST" onsubmit="return confirm('Delete class?');" class="inline">
+                            <input type="hidden" name="action" value="class_delete">
+                            <input type="hidden" name="class_key" value="{{ c.class_key }}">
+                            <button type="submit" class="px-2 py-1 bg-discord-red/20 hover:bg-discord-red/40 text-red-300 rounded-lg text-xs">×</button>
+                        </form>
+                    </div>
+                </div>
+                <div class="text-xs text-gray-400 grid grid-cols-5 gap-1">
+                    <span>HP {{ c.base_hp }}</span>
+                    <span>ATK {{ c.base_attack }}</span>
+                    <span>DEF {{ c.base_defense }}</span>
+                    <span>AGI {{ c.base_agility }}</span>
+                    <span>MP {{ c.base_mana }}</span>
+                </div>
+            </div>
+            {% else %}
+            <p class="p-6 text-gray-500 text-sm text-center">No classes.</p>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+<script>
+function editClass(key, name, desc, hp, atk, df, agi, mp, abilities) {
+    document.getElementById('class-form-title').textContent = 'Edit Class: ' + key;
+    document.getElementById('class-key').value = key;
+    document.getElementById('class-name').value = name;
+    document.getElementById('class-desc').value = desc || '';
+    document.getElementById('class-base_hp').value = hp;
+    document.getElementById('class-base_attack').value = atk;
+    document.getElementById('class-base_defense').value = df;
+    document.getElementById('class-base_agility').value = agi;
+    document.getElementById('class-base_mana').value = mp;
+    try {
+        document.getElementById('class-abilities').value = JSON.stringify(JSON.parse(abilities || '[]'), null, 2);
+    } catch (e) {
+        document.getElementById('class-abilities').value = abilities || '[]';
+    }
+    document.getElementById('class-form-title').scrollIntoView({behavior:'smooth'});
+}
+</script>
+
+{# ===================== ENEMIES ===================== #}
+{% elif tab == 'enemies' %}
+<div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold" id="enemy-form-title">Add / Upsert Enemy</h3>
+        </div>
+        <form method="POST" class="p-5 space-y-3">
+            <input type="hidden" name="action" value="enemy_upsert">
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-gray-400 text-xs mb-1">Enemy key</label>
+                    <input type="text" name="enemy_key" id="enemy-key" required
+                           class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                </div>
+                <div>
+                    <label class="block text-gray-400 text-xs mb-1">Display name</label>
+                    <input type="text" name="name" id="enemy-name" required
+                           class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                </div>
+            </div>
+            <div>
+                <label class="block text-gray-400 text-xs mb-1">Description</label>
+                <textarea name="description" id="enemy-desc" rows="2"
+                          class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none"></textarea>
+            </div>
+            <div class="grid grid-cols-5 gap-2">
+                {% for field, label, default in [
+                    ('hp', 'HP', 15),
+                    ('attack', 'ATK', 4),
+                    ('defense', 'DEF', 3),
+                    ('agility', 'AGI', 4),
+                    ('xp_reward', 'XP', 10),
+                ] %}
+                <div>
+                    <label class="block text-gray-400 text-[10px] mb-1">{{ label }}</label>
+                    <input type="number" name="{{ field }}" id="enemy-{{ field }}" value="{{ default }}" min="0"
+                           class="w-full bg-discord-darker border border-gray-600 rounded-lg px-2 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                </div>
+                {% endfor %}
+            </div>
+            <div>
+                <label class="block text-gray-400 text-xs mb-1">Abilities JSON</label>
+                <textarea name="abilities_json" id="enemy-abilities" rows="3"
+                          class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-xs font-mono focus:border-discord-blurple focus:outline-none">[]</textarea>
+            </div>
+            <div>
+                <label class="block text-gray-400 text-xs mb-1">Loot JSON
+                    <span class="text-gray-600">e.g. <code>[{"item_key":"gold","amount":5,"chance":1.0}]</code></span>
+                </label>
+                <textarea name="loot_json" id="enemy-loot" rows="3"
+                          class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-xs font-mono focus:border-discord-blurple focus:outline-none">[]</textarea>
+            </div>
+            <button type="submit"
+                    class="w-full px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg text-sm font-medium transition-colors">
+                Save Enemy
+            </button>
+        </form>
+    </div>
+
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">Enemies ({{ enemies|length }})</h3>
+        </div>
+        <div class="divide-y divide-gray-700/50 max-h-[700px] overflow-y-auto">
+            {% for e in enemies %}
+            <div class="p-4">
+                <div class="flex items-start justify-between gap-3 mb-2">
+                    <div>
+                        <p class="text-white font-medium">{{ e.name }} <code class="text-gray-500 text-xs ml-1">{{ e.enemy_key }}</code></p>
+                        <p class="text-gray-500 text-xs">{{ e.description }}</p>
+                    </div>
+                    <div class="flex gap-1">
+                        <button type="button"
+                                onclick='editEnemy({{ e.enemy_key|tojson }}, {{ e.name|tojson }}, {{ e.description|tojson }}, {{ e.hp }}, {{ e.attack }}, {{ e.defense }}, {{ e.agility }}, {{ e.xp_reward }}, {{ e.abilities_json|tojson }}, {{ e.loot_json|tojson }})'
+                                class="px-2 py-1 bg-discord-blurple/20 hover:bg-discord-blurple/40 text-discord-blurple rounded-lg text-xs">Edit</button>
+                        <form method="POST" onsubmit="return confirm('Delete enemy?');" class="inline">
+                            <input type="hidden" name="action" value="enemy_delete">
+                            <input type="hidden" name="enemy_key" value="{{ e.enemy_key }}">
+                            <button type="submit" class="px-2 py-1 bg-discord-red/20 hover:bg-discord-red/40 text-red-300 rounded-lg text-xs">×</button>
+                        </form>
+                    </div>
+                </div>
+                <div class="text-xs text-gray-400 grid grid-cols-5 gap-1">
+                    <span>HP {{ e.hp }}</span>
+                    <span>ATK {{ e.attack }}</span>
+                    <span>DEF {{ e.defense }}</span>
+                    <span>AGI {{ e.agility }}</span>
+                    <span>XP {{ e.xp_reward }}</span>
+                </div>
+            </div>
+            {% else %}
+            <p class="p-6 text-gray-500 text-sm text-center">No enemies.</p>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+<script>
+function editEnemy(key, name, desc, hp, atk, df, agi, xp, abilities, loot) {
+    document.getElementById('enemy-form-title').textContent = 'Edit Enemy: ' + key;
+    document.getElementById('enemy-key').value = key;
+    document.getElementById('enemy-name').value = name;
+    document.getElementById('enemy-desc').value = desc || '';
+    document.getElementById('enemy-hp').value = hp;
+    document.getElementById('enemy-attack').value = atk;
+    document.getElementById('enemy-defense').value = df;
+    document.getElementById('enemy-agility').value = agi;
+    document.getElementById('enemy-xp_reward').value = xp;
+    try {
+        document.getElementById('enemy-abilities').value = JSON.stringify(JSON.parse(abilities || '[]'), null, 2);
+        document.getElementById('enemy-loot').value = JSON.stringify(JSON.parse(loot || '[]'), null, 2);
+    } catch (e2) {
+        document.getElementById('enemy-abilities').value = abilities || '[]';
+        document.getElementById('enemy-loot').value = loot || '[]';
+    }
+    document.getElementById('enemy-form-title').scrollIntoView({behavior:'smooth'});
+}
+</script>
+
+{# ===================== ITEMS ===================== #}
+{% elif tab == 'items' %}
+<div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold" id="item-form-title">Add / Upsert Item</h3>
+        </div>
+        <form method="POST" class="p-5 space-y-3">
+            <input type="hidden" name="action" value="item_upsert">
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-gray-400 text-xs mb-1">Item key</label>
+                    <input type="text" name="item_key" id="item-key" required
+                           class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                </div>
+                <div>
+                    <label class="block text-gray-400 text-xs mb-1">Type</label>
+                    <select name="item_type" id="item-type"
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                        <option value="consumable">Consumable</option>
+                        <option value="weapon">Weapon</option>
+                        <option value="armor">Armor</option>
+                        <option value="key">Key / Quest</option>
+                        <option value="currency">Currency</option>
+                        <option value="misc">Misc</option>
+                    </select>
+                </div>
+            </div>
+            <div>
+                <label class="block text-gray-400 text-xs mb-1">Display name</label>
+                <input type="text" name="name" id="item-name" required
+                       class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+            </div>
+            <div>
+                <label class="block text-gray-400 text-xs mb-1">Description</label>
+                <textarea name="description" id="item-desc" rows="2"
+                          class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none"></textarea>
+            </div>
+            <div>
+                <label class="block text-gray-400 text-xs mb-1">Effect JSON</label>
+                <textarea name="effect_json" id="item-effect" rows="3"
+                          class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-xs font-mono focus:border-discord-blurple focus:outline-none">{}</textarea>
+            </div>
+            <button type="submit"
+                    class="w-full px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg text-sm font-medium transition-colors">
+                Save Item
+            </button>
+        </form>
+    </div>
+
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">Items ({{ items|length }})</h3>
+        </div>
+        <div class="divide-y divide-gray-700/50 max-h-[700px] overflow-y-auto">
+            {% for it in items %}
+            <div class="p-4 flex items-start justify-between gap-3">
+                <div>
+                    <p class="text-white font-medium">{{ it.name }}
+                        <code class="text-gray-500 text-xs ml-1">{{ it.item_key }}</code>
+                        <span class="px-2 py-0.5 rounded bg-gray-700/40 text-gray-300 text-[10px] ml-1">{{ it.item_type }}</span>
+                    </p>
+                    <p class="text-gray-500 text-xs">{{ it.description }}</p>
+                </div>
+                <div class="flex gap-1 flex-shrink-0">
+                    <button type="button"
+                            onclick='editItem({{ it.item_key|tojson }}, {{ it.name|tojson }}, {{ it.description|tojson }}, {{ it.item_type|tojson }}, {{ it.effect_json|tojson }})'
+                            class="px-2 py-1 bg-discord-blurple/20 hover:bg-discord-blurple/40 text-discord-blurple rounded-lg text-xs">Edit</button>
+                    <form method="POST" onsubmit="return confirm('Delete item?');" class="inline">
+                        <input type="hidden" name="action" value="item_delete">
+                        <input type="hidden" name="item_key" value="{{ it.item_key }}">
+                        <button type="submit" class="px-2 py-1 bg-discord-red/20 hover:bg-discord-red/40 text-red-300 rounded-lg text-xs">×</button>
+                    </form>
+                </div>
+            </div>
+            {% else %}
+            <p class="p-6 text-gray-500 text-sm text-center">No items.</p>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+<script>
+function editItem(key, name, desc, type, effect) {
+    document.getElementById('item-form-title').textContent = 'Edit Item: ' + key;
+    document.getElementById('item-key').value = key;
+    document.getElementById('item-name').value = name;
+    document.getElementById('item-desc').value = desc || '';
+    document.getElementById('item-type').value = type || 'misc';
+    try {
+        document.getElementById('item-effect').value = JSON.stringify(JSON.parse(effect || '{}'), null, 2);
+    } catch (e) {
+        document.getElementById('item-effect').value = effect || '{}';
+    }
+    document.getElementById('item-form-title').scrollIntoView({behavior:'smooth'});
+}
+</script>
+
+{# ===================== CHARACTERS ===================== #}
+{% elif tab == 'characters' %}
+<div class="bg-discord-dark rounded-xl border border-gray-700/50">
+    <div class="px-5 py-4 border-b border-gray-700/50">
+        <h3 class="text-white font-semibold">Characters ({{ characters|length }})</h3>
+        <p class="text-gray-500 text-xs mt-1">Characters are created by players through Discord slash commands. Admins can only delete them here.</p>
+    </div>
+    <div class="divide-y divide-gray-700/50">
+        {% for ch in characters %}
+        <div class="p-4 flex items-center justify-between gap-3">
+            <div class="min-w-0">
+                <p class="text-white font-medium">
+                    {{ ch.name }}
+                    <span class="text-gray-500 text-xs ml-2">({{ ch.class_key }} · Lv {{ ch.level }})</span>
+                </p>
+                <p class="text-gray-500 text-xs mt-1">
+                    Player: {{ ch.user_name }} (uid {{ ch.user_id }}) •
+                    HP {{ ch.hp }}/{{ ch.max_hp }} • MP {{ ch.mana }}/{{ ch.max_mana }} •
+                    ATK {{ ch.attack }} • DEF {{ ch.defense }} • AGI {{ ch.agility }} •
+                    XP {{ ch.xp }}
+                    {% if ch.party_id %} • Party #{{ ch.party_id }}{% endif %}
+                </p>
+            </div>
+            <form method="POST" onsubmit="return confirm('Delete character?');">
+                <input type="hidden" name="action" value="char_delete">
+                <input type="hidden" name="character_id" value="{{ ch.id }}">
+                <button type="submit" class="px-3 py-1.5 bg-discord-red/20 hover:bg-discord-red/40 text-red-300 rounded-lg text-xs">Delete</button>
+            </form>
+        </div>
+        {% else %}
+        <p class="p-6 text-gray-500 text-sm text-center">No characters yet.</p>
+        {% endfor %}
+    </div>
+</div>
+
+{# ===================== PARTIES ===================== #}
+{% elif tab == 'parties' %}
+<div class="bg-discord-dark rounded-xl border border-gray-700/50">
+    <div class="px-5 py-4 border-b border-gray-700/50">
+        <h3 class="text-white font-semibold">Parties ({{ parties|length }})</h3>
+    </div>
+    <div class="divide-y divide-gray-700/50">
+        {% for p in parties %}
+        <div class="p-4 flex items-center justify-between gap-3">
+            <div class="min-w-0">
+                <p class="text-white font-medium">{{ p.name }} <span class="text-gray-600 text-xs">#{{ p.id }}</span></p>
+                <p class="text-gray-500 text-xs mt-1">
+                    Leader uid {{ p.leader_user_id }} •
+                    State: <span class="text-gray-300">{{ p.state }}</span>
+                    {% if p.adventure_id %} • Adventure #{{ p.adventure_id }}{% endif %}
+                    {% if p.current_scene_key %} • Scene: <code class="text-discord-blurple">{{ p.current_scene_key }}</code>{% endif %}
+                </p>
+            </div>
+            <form method="POST" onsubmit="return confirm('Disband party and reset its members?');">
+                <input type="hidden" name="action" value="party_delete">
+                <input type="hidden" name="party_id" value="{{ p.id }}">
+                <button type="submit" class="px-3 py-1.5 bg-discord-red/20 hover:bg-discord-red/40 text-red-300 rounded-lg text-xs">Disband</button>
+            </form>
+        </div>
+        {% else %}
+        <p class="p-6 text-gray-500 text-sm text-center">No parties yet.</p>
+        {% endfor %}
+    </div>
+</div>
+
+{# ===================== SETTINGS ===================== #}
+{% elif tab == 'settings' %}
+<div class="bg-discord-dark rounded-xl border border-gray-700/50 max-w-2xl">
+    <div class="px-5 py-4 border-b border-gray-700/50">
+        <h3 class="text-white font-semibold">RPG Settings</h3>
+    </div>
+
+    {# Live status banner #}
+    <div class="px-5 pt-5">
+        {% set effectively_blocked = (not rpg_enabled) or (rpg_block_during_stream and stream_is_live) %}
+        {% if effectively_blocked %}
+        <div class="px-4 py-3 rounded-lg text-sm bg-discord-red/20 text-red-300 border border-discord-red/30">
+            🔴 <strong>RPG is currently disabled.</strong>
+            {% if not rpg_enabled %}Master toggle is off.
+            {% elif rpg_block_during_stream and stream_is_live %}
+                The experimental Twitch stream is live and auto-blocking is enabled.
+            {% endif %}
+            Player slash commands will be refused.
+        </div>
+        {% else %}
+        <div class="px-4 py-3 rounded-lg text-sm bg-discord-green/20 text-green-300 border border-discord-green/30">
+            🟢 <strong>RPG is active.</strong>
+            {% if rpg_block_during_stream %}
+                Will auto-pause when the Exp. Radio stream goes live
+                (currently: {{ 'LIVE' if stream_is_live else 'offline' }}).
+            {% else %}
+                Auto-pause during stream is disabled.
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+
+    <form method="POST" class="p-5 space-y-4">
+        <input type="hidden" name="action" value="save_settings">
+
+        <label class="flex items-start gap-3 bg-discord-darker rounded-lg p-3 cursor-pointer hover:bg-gray-700/30 transition-colors">
+            <input type="checkbox" name="rpg_enabled" {% if rpg_enabled %}checked{% endif %}
+                   class="w-5 h-5 accent-discord-blurple mt-0.5">
+            <div>
+                <p class="text-white text-sm font-medium">Enable the RPG system</p>
+                <p class="text-gray-500 text-xs mt-1">
+                    Master switch. When off, all <code>/rpg</code> player commands
+                    are refused (admin UI remains accessible).
+                </p>
+            </div>
+        </label>
+
+        <label class="flex items-start gap-3 bg-discord-darker rounded-lg p-3 cursor-pointer hover:bg-gray-700/30 transition-colors">
+            <input type="checkbox" name="rpg_block_during_stream" {% if rpg_block_during_stream %}checked{% endif %}
+                   class="w-5 h-5 accent-discord-blurple mt-0.5">
+            <div>
+                <p class="text-white text-sm font-medium">Auto-pause while the Exp. Radio stream is live</p>
+                <p class="text-gray-500 text-xs mt-1">
+                    Recommended. Prevents LLM contention and unexpected load
+                    that could destabilise the FFmpeg stream. Player commands
+                    will be refused with a friendly message until the stream stops.
+                </p>
+            </div>
+        </label>
+
+        <div>
+            <label class="block text-gray-400 text-xs mb-1">Default RPG channel
+                <span class="text-gray-600">(used for party-wide announcements when no channel is bound to a party)</span>
+            </label>
+            <select name="rpg_channel_id"
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                <option value="">None</option>
+                {% for ch in text_channels %}
+                <option value="{{ ch.id }}" {% if ch.id|string == rpg_channel_id %}selected{% endif %}>#{{ ch.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <button type="submit"
+                class="px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg text-sm font-medium transition-colors">
+            Save Settings
+        </button>
+    </form>
+</div>
+{% endif %}
+
+{% endblock %}

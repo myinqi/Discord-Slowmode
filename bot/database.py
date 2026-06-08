@@ -3125,3 +3125,672 @@ class Database:
 
     async def relic_set_setting(self, key: str, value: str) -> None:
         await self.set_setting(f"relic_{key}", value)
+
+    # =======================================================================
+    # RPG — table creation + seed defaults
+    # =======================================================================
+    async def ensure_rpg_tables(self) -> None:
+        """Create all RPG tables if they don't exist yet and seed defaults."""
+        await self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS rpg_adventures (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                intro_text TEXT DEFAULT '',
+                llm_system_prompt TEXT DEFAULT '',
+                start_scene_key TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at REAL DEFAULT (unixepoch())
+            );
+
+            CREATE TABLE IF NOT EXISTS rpg_scenes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                adventure_id INTEGER NOT NULL,
+                scene_key TEXT NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                narration TEXT NOT NULL DEFAULT '',
+                scene_type TEXT NOT NULL DEFAULT 'story',
+                data_json TEXT NOT NULL DEFAULT '{}',
+                UNIQUE (adventure_id, scene_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_rpg_scenes_adv ON rpg_scenes(adventure_id);
+
+            CREATE TABLE IF NOT EXISTS rpg_classes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                class_key TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                base_hp INTEGER NOT NULL DEFAULT 20,
+                base_attack INTEGER NOT NULL DEFAULT 5,
+                base_defense INTEGER NOT NULL DEFAULT 5,
+                base_agility INTEGER NOT NULL DEFAULT 5,
+                base_mana INTEGER NOT NULL DEFAULT 10,
+                abilities_json TEXT NOT NULL DEFAULT '[]'
+            );
+
+            CREATE TABLE IF NOT EXISTS rpg_enemies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                enemy_key TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                hp INTEGER NOT NULL DEFAULT 15,
+                attack INTEGER NOT NULL DEFAULT 4,
+                defense INTEGER NOT NULL DEFAULT 3,
+                agility INTEGER NOT NULL DEFAULT 4,
+                abilities_json TEXT NOT NULL DEFAULT '[]',
+                loot_json TEXT NOT NULL DEFAULT '[]',
+                xp_reward INTEGER NOT NULL DEFAULT 10
+            );
+
+            CREATE TABLE IF NOT EXISTS rpg_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                item_key TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                item_type TEXT NOT NULL DEFAULT 'misc',
+                effect_json TEXT NOT NULL DEFAULT '{}'
+            );
+
+            CREATE TABLE IF NOT EXISTS rpg_characters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL UNIQUE,
+                user_name TEXT NOT NULL,
+                name TEXT NOT NULL,
+                class_key TEXT NOT NULL,
+                level INTEGER NOT NULL DEFAULT 1,
+                xp INTEGER NOT NULL DEFAULT 0,
+                hp INTEGER NOT NULL,
+                max_hp INTEGER NOT NULL,
+                mana INTEGER NOT NULL DEFAULT 0,
+                max_mana INTEGER NOT NULL DEFAULT 0,
+                attack INTEGER NOT NULL,
+                defense INTEGER NOT NULL,
+                agility INTEGER NOT NULL,
+                stats_json TEXT NOT NULL DEFAULT '{}',
+                inventory_json TEXT NOT NULL DEFAULT '[]',
+                status_json TEXT NOT NULL DEFAULT '[]',
+                cooldowns_json TEXT NOT NULL DEFAULT '{}',
+                party_id INTEGER,
+                created_at REAL DEFAULT (unixepoch()),
+                updated_at REAL DEFAULT (unixepoch())
+            );
+            CREATE INDEX IF NOT EXISTS idx_rpg_char_party ON rpg_characters(party_id);
+
+            CREATE TABLE IF NOT EXISTS rpg_parties (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                leader_user_id INTEGER NOT NULL,
+                channel_id INTEGER,
+                adventure_id INTEGER,
+                current_scene_key TEXT,
+                state TEXT NOT NULL DEFAULT 'idle',
+                state_json TEXT NOT NULL DEFAULT '{}',
+                created_at REAL DEFAULT (unixepoch()),
+                updated_at REAL DEFAULT (unixepoch())
+            );
+
+            CREATE TABLE IF NOT EXISTS rpg_combat_state (
+                party_id INTEGER PRIMARY KEY,
+                round INTEGER NOT NULL DEFAULT 1,
+                turn_index INTEGER NOT NULL DEFAULT 0,
+                initiative_json TEXT NOT NULL DEFAULT '[]',
+                enemies_json TEXT NOT NULL DEFAULT '[]',
+                scene_key TEXT,
+                next_scene_key TEXT,
+                updated_at REAL DEFAULT (unixepoch())
+            );
+
+            CREATE TABLE IF NOT EXISTS rpg_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                party_id INTEGER NOT NULL,
+                ts REAL DEFAULT (unixepoch()),
+                kind TEXT NOT NULL,
+                content TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_rpg_log_party ON rpg_log(party_id, ts);
+        """)
+        await self.db.commit()
+        await self._seed_rpg_defaults()
+
+    async def _seed_rpg_defaults(self) -> None:
+        """Seed the four starter classes if the classes table is empty."""
+        import json as _json
+        async with self.db.execute("SELECT COUNT(*) FROM rpg_classes") as cur:
+            count = (await cur.fetchone())[0]
+        if count == 0:
+            classes = [
+                {
+                    "class_key": "warrior",
+                    "name": "Warrior",
+                    "description": "Stalwart melee fighter with heavy armor and brute force.",
+                    "base_hp": 30, "base_attack": 7, "base_defense": 6,
+                    "base_agility": 4, "base_mana": 6,
+                    "abilities": [
+                        {"key": "power_strike", "name": "Power Strike",
+                         "description": "A devastating overhead blow.",
+                         "mana_cost": 2, "cooldown": 0, "target": "enemy",
+                         "effect": {"type": "damage", "bonus_dice": "2d6", "stat": "attack"}},
+                        {"key": "shield_wall", "name": "Shield Wall",
+                         "description": "Brace for incoming attacks, +5 defense for 2 rounds.",
+                         "mana_cost": 3, "cooldown": 3, "target": "self",
+                         "effect": {"type": "buff", "stat": "defense", "amount": 5, "duration": 2}},
+                        {"key": "cleave", "name": "Cleave",
+                         "description": "Sweep your blade through up to two enemies.",
+                         "mana_cost": 4, "cooldown": 2, "target": "all_enemies",
+                         "effect": {"type": "damage", "bonus_dice": "1d8", "stat": "attack", "max_targets": 2}},
+                    ],
+                },
+                {
+                    "class_key": "mage",
+                    "name": "Mage",
+                    "description": "Arcane scholar wielding elemental magic.",
+                    "base_hp": 18, "base_attack": 4, "base_defense": 3,
+                    "base_agility": 5, "base_mana": 20,
+                    "abilities": [
+                        {"key": "fireball", "name": "Fireball",
+                         "description": "Hurl a roaring ball of flame.",
+                         "mana_cost": 5, "cooldown": 0, "target": "enemy",
+                         "effect": {"type": "damage", "bonus_dice": "3d6"}},
+                        {"key": "frost_nova", "name": "Frost Nova",
+                         "description": "Burst of ice; chance to stun all enemies for 1 round.",
+                         "mana_cost": 7, "cooldown": 3, "target": "all_enemies",
+                         "effect": {"type": "damage", "bonus_dice": "1d8",
+                                    "status": {"name": "stun", "chance": 0.5, "duration": 1}}},
+                        {"key": "arcane_shield", "name": "Arcane Shield",
+                         "description": "A shimmering ward absorbs the next 8 damage.",
+                         "mana_cost": 4, "cooldown": 3, "target": "self",
+                         "effect": {"type": "shield", "amount": 8, "duration": 3}},
+                    ],
+                },
+                {
+                    "class_key": "rogue",
+                    "name": "Rogue",
+                    "description": "Swift duelist who strikes from the shadows.",
+                    "base_hp": 22, "base_attack": 6, "base_defense": 4,
+                    "base_agility": 9, "base_mana": 8,
+                    "abilities": [
+                        {"key": "backstab", "name": "Backstab",
+                         "description": "A precise strike for massive damage.",
+                         "mana_cost": 3, "cooldown": 1, "target": "enemy",
+                         "effect": {"type": "damage", "bonus_dice": "3d6", "stat": "attack", "crit_bonus": 0.2}},
+                        {"key": "poison_strike", "name": "Poison Strike",
+                         "description": "Coats blade with venom; poisons target for 3 rounds.",
+                         "mana_cost": 2, "cooldown": 0, "target": "enemy",
+                         "effect": {"type": "damage", "bonus_dice": "1d4", "stat": "attack",
+                                    "status": {"name": "poison", "chance": 1.0, "duration": 3, "damage": 3}}},
+                        {"key": "smoke_bomb", "name": "Smoke Bomb",
+                         "description": "Party gains +3 evade (defense) for 2 rounds.",
+                         "mana_cost": 4, "cooldown": 3, "target": "party",
+                         "effect": {"type": "buff", "stat": "defense", "amount": 3, "duration": 2}},
+                    ],
+                },
+                {
+                    "class_key": "cleric",
+                    "name": "Cleric",
+                    "description": "Devout healer channeling divine power.",
+                    "base_hp": 24, "base_attack": 5, "base_defense": 6,
+                    "base_agility": 4, "base_mana": 15,
+                    "abilities": [
+                        {"key": "heal", "name": "Heal",
+                         "description": "Restore 2d6 HP to an ally (or self).",
+                         "mana_cost": 4, "cooldown": 0, "target": "ally",
+                         "effect": {"type": "heal", "dice": "2d6"}},
+                        {"key": "bless", "name": "Bless",
+                         "description": "Grant the party +2 attack for 2 rounds.",
+                         "mana_cost": 3, "cooldown": 3, "target": "party",
+                         "effect": {"type": "buff", "stat": "attack", "amount": 2, "duration": 2}},
+                        {"key": "smite", "name": "Smite",
+                         "description": "Channel holy fury to deal 2d8 radiant damage.",
+                         "mana_cost": 5, "cooldown": 1, "target": "enemy",
+                         "effect": {"type": "damage", "bonus_dice": "2d8"}},
+                    ],
+                },
+            ]
+            for c in classes:
+                await self.db.execute(
+                    """INSERT INTO rpg_classes
+                       (class_key, name, description, base_hp, base_attack,
+                        base_defense, base_agility, base_mana, abilities_json)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (c["class_key"], c["name"], c["description"], c["base_hp"],
+                     c["base_attack"], c["base_defense"], c["base_agility"],
+                     c["base_mana"], _json.dumps(c["abilities"])),
+                )
+
+        async with self.db.execute("SELECT COUNT(*) FROM rpg_enemies") as cur:
+            ecount = (await cur.fetchone())[0]
+        if ecount == 0:
+            enemies = [
+                ("goblin", "Goblin Scout", "A wiry green raider with a rusty dagger.",
+                 14, 4, 3, 6, [], [{"item_key": "gold", "amount": 5, "chance": 1.0}], 8),
+                ("wolf", "Dire Wolf", "A massive wolf with bloody fangs.",
+                 18, 5, 3, 7, [], [], 10),
+                ("skeleton", "Skeleton Warrior", "Rattling bones held together by dark magic.",
+                 16, 5, 4, 4, [], [{"item_key": "gold", "amount": 8, "chance": 1.0}], 12),
+                ("bandit", "Highway Bandit", "A cutthroat looking for easy coin.",
+                 20, 6, 4, 5, [], [{"item_key": "gold", "amount": 12, "chance": 1.0}], 14),
+                ("ogre", "Hill Ogre", "Hulking brute with a tree-trunk club.",
+                 40, 8, 5, 3, [], [{"item_key": "gold", "amount": 25, "chance": 1.0}], 30),
+            ]
+            for k, n, d, hp, atk, df, ag, ab, lo, xp in enemies:
+                await self.db.execute(
+                    """INSERT INTO rpg_enemies (enemy_key, name, description, hp, attack,
+                       defense, agility, abilities_json, loot_json, xp_reward)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (k, n, d, hp, atk, df, ag, _json.dumps(ab), _json.dumps(lo), xp),
+                )
+
+        async with self.db.execute("SELECT COUNT(*) FROM rpg_items") as cur:
+            icount = (await cur.fetchone())[0]
+        if icount == 0:
+            items = [
+                ("gold", "Gold Coins", "Shiny currency.", "currency", {}),
+                ("potion_heal_small", "Small Healing Potion",
+                 "Restores 2d6 HP when consumed.", "consumable",
+                 {"type": "heal", "dice": "2d6"}),
+                ("potion_mana_small", "Small Mana Potion",
+                 "Restores 2d6 mana when consumed.", "consumable",
+                 {"type": "restore_mana", "dice": "2d6"}),
+                ("antidote", "Antidote", "Cures poison.", "consumable",
+                 {"type": "cure", "status": "poison"}),
+            ]
+            for k, n, d, t, ef in items:
+                await self.db.execute(
+                    """INSERT INTO rpg_items (item_key, name, description, item_type, effect_json)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (k, n, d, t, _json.dumps(ef)),
+                )
+        await self.db.commit()
+
+    # =======================================================================
+    # RPG — Adventures
+    # =======================================================================
+    async def rpg_list_adventures(self) -> list[dict]:
+        async with self.db.execute(
+            "SELECT * FROM rpg_adventures ORDER BY created_at DESC"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def rpg_get_adventure(self, adventure_id: int) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM rpg_adventures WHERE id = ?", (adventure_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def rpg_create_adventure(self, name: str, description: str,
+                                   intro_text: str, llm_system_prompt: str,
+                                   start_scene_key: str = "") -> int:
+        cur = await self.db.execute(
+            """INSERT INTO rpg_adventures
+               (name, description, intro_text, llm_system_prompt, start_scene_key)
+               VALUES (?, ?, ?, ?, ?)""",
+            (name, description, intro_text, llm_system_prompt, start_scene_key or None),
+        )
+        await self.db.commit()
+        return cur.lastrowid
+
+    async def rpg_update_adventure(self, adventure_id: int, *, name: str,
+                                   description: str, intro_text: str,
+                                   llm_system_prompt: str, start_scene_key: str,
+                                   is_active: int) -> None:
+        await self.db.execute(
+            """UPDATE rpg_adventures
+               SET name = ?, description = ?, intro_text = ?,
+                   llm_system_prompt = ?, start_scene_key = ?, is_active = ?
+               WHERE id = ?""",
+            (name, description, intro_text, llm_system_prompt,
+             start_scene_key or None, is_active, adventure_id),
+        )
+        await self.db.commit()
+
+    async def rpg_delete_adventure(self, adventure_id: int) -> None:
+        await self.db.execute("DELETE FROM rpg_scenes WHERE adventure_id = ?", (adventure_id,))
+        await self.db.execute("DELETE FROM rpg_adventures WHERE id = ?", (adventure_id,))
+        await self.db.commit()
+
+    # =======================================================================
+    # RPG — Scenes
+    # =======================================================================
+    async def rpg_list_scenes(self, adventure_id: int) -> list[dict]:
+        async with self.db.execute(
+            "SELECT * FROM rpg_scenes WHERE adventure_id = ? ORDER BY scene_key",
+            (adventure_id,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def rpg_get_scene(self, scene_id: int) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM rpg_scenes WHERE id = ?", (scene_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def rpg_get_scene_by_key(self, adventure_id: int,
+                                   scene_key: str) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM rpg_scenes WHERE adventure_id = ? AND scene_key = ?",
+            (adventure_id, scene_key),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def rpg_create_scene(self, adventure_id: int, scene_key: str, title: str,
+                               narration: str, scene_type: str, data_json: str) -> int:
+        cur = await self.db.execute(
+            """INSERT INTO rpg_scenes
+               (adventure_id, scene_key, title, narration, scene_type, data_json)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (adventure_id, scene_key, title, narration, scene_type, data_json),
+        )
+        await self.db.commit()
+        return cur.lastrowid
+
+    async def rpg_update_scene(self, scene_id: int, *, scene_key: str, title: str,
+                               narration: str, scene_type: str, data_json: str) -> None:
+        await self.db.execute(
+            """UPDATE rpg_scenes
+               SET scene_key = ?, title = ?, narration = ?,
+                   scene_type = ?, data_json = ?
+               WHERE id = ?""",
+            (scene_key, title, narration, scene_type, data_json, scene_id),
+        )
+        await self.db.commit()
+
+    async def rpg_delete_scene(self, scene_id: int) -> None:
+        await self.db.execute("DELETE FROM rpg_scenes WHERE id = ?", (scene_id,))
+        await self.db.commit()
+
+    # =======================================================================
+    # RPG — Classes
+    # =======================================================================
+    async def rpg_list_classes(self) -> list[dict]:
+        async with self.db.execute(
+            "SELECT * FROM rpg_classes ORDER BY name"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def rpg_get_class(self, class_key: str) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM rpg_classes WHERE class_key = ?", (class_key,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def rpg_upsert_class(self, *, class_key: str, name: str, description: str,
+                               base_hp: int, base_attack: int, base_defense: int,
+                               base_agility: int, base_mana: int,
+                               abilities_json: str) -> None:
+        await self.db.execute(
+            """INSERT INTO rpg_classes
+               (class_key, name, description, base_hp, base_attack,
+                base_defense, base_agility, base_mana, abilities_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(class_key) DO UPDATE SET
+                 name = excluded.name,
+                 description = excluded.description,
+                 base_hp = excluded.base_hp,
+                 base_attack = excluded.base_attack,
+                 base_defense = excluded.base_defense,
+                 base_agility = excluded.base_agility,
+                 base_mana = excluded.base_mana,
+                 abilities_json = excluded.abilities_json""",
+            (class_key, name, description, base_hp, base_attack,
+             base_defense, base_agility, base_mana, abilities_json),
+        )
+        await self.db.commit()
+
+    async def rpg_delete_class(self, class_key: str) -> None:
+        await self.db.execute(
+            "DELETE FROM rpg_classes WHERE class_key = ?", (class_key,)
+        )
+        await self.db.commit()
+
+    # =======================================================================
+    # RPG — Enemies
+    # =======================================================================
+    async def rpg_list_enemies(self) -> list[dict]:
+        async with self.db.execute(
+            "SELECT * FROM rpg_enemies ORDER BY name"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def rpg_get_enemy(self, enemy_key: str) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM rpg_enemies WHERE enemy_key = ?", (enemy_key,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def rpg_upsert_enemy(self, *, enemy_key: str, name: str, description: str,
+                               hp: int, attack: int, defense: int, agility: int,
+                               abilities_json: str, loot_json: str,
+                               xp_reward: int) -> None:
+        await self.db.execute(
+            """INSERT INTO rpg_enemies
+               (enemy_key, name, description, hp, attack, defense, agility,
+                abilities_json, loot_json, xp_reward)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(enemy_key) DO UPDATE SET
+                 name = excluded.name,
+                 description = excluded.description,
+                 hp = excluded.hp,
+                 attack = excluded.attack,
+                 defense = excluded.defense,
+                 agility = excluded.agility,
+                 abilities_json = excluded.abilities_json,
+                 loot_json = excluded.loot_json,
+                 xp_reward = excluded.xp_reward""",
+            (enemy_key, name, description, hp, attack, defense, agility,
+             abilities_json, loot_json, xp_reward),
+        )
+        await self.db.commit()
+
+    async def rpg_delete_enemy(self, enemy_key: str) -> None:
+        await self.db.execute(
+            "DELETE FROM rpg_enemies WHERE enemy_key = ?", (enemy_key,)
+        )
+        await self.db.commit()
+
+    # =======================================================================
+    # RPG — Items
+    # =======================================================================
+    async def rpg_list_items(self) -> list[dict]:
+        async with self.db.execute(
+            "SELECT * FROM rpg_items ORDER BY name"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def rpg_get_item(self, item_key: str) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM rpg_items WHERE item_key = ?", (item_key,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def rpg_upsert_item(self, *, item_key: str, name: str, description: str,
+                              item_type: str, effect_json: str) -> None:
+        await self.db.execute(
+            """INSERT INTO rpg_items (item_key, name, description, item_type, effect_json)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(item_key) DO UPDATE SET
+                 name = excluded.name,
+                 description = excluded.description,
+                 item_type = excluded.item_type,
+                 effect_json = excluded.effect_json""",
+            (item_key, name, description, item_type, effect_json),
+        )
+        await self.db.commit()
+
+    async def rpg_delete_item(self, item_key: str) -> None:
+        await self.db.execute(
+            "DELETE FROM rpg_items WHERE item_key = ?", (item_key,)
+        )
+        await self.db.commit()
+
+    # =======================================================================
+    # RPG — Characters
+    # =======================================================================
+    async def rpg_get_character_by_user(self, user_id: int) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM rpg_characters WHERE user_id = ?", (user_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def rpg_get_character(self, character_id: int) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM rpg_characters WHERE id = ?", (character_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def rpg_list_characters(self) -> list[dict]:
+        async with self.db.execute(
+            "SELECT * FROM rpg_characters ORDER BY level DESC, name"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def rpg_create_character(self, *, user_id: int, user_name: str, name: str,
+                                   class_key: str, max_hp: int, max_mana: int,
+                                   attack: int, defense: int, agility: int) -> int:
+        cur = await self.db.execute(
+            """INSERT INTO rpg_characters
+               (user_id, user_name, name, class_key, level, xp,
+                hp, max_hp, mana, max_mana,
+                attack, defense, agility)
+               VALUES (?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, user_name, name, class_key, max_hp, max_hp,
+             max_mana, max_mana, attack, defense, agility),
+        )
+        await self.db.commit()
+        return cur.lastrowid
+
+    async def rpg_update_character(self, character_id: int, **fields) -> None:
+        if not fields:
+            return
+        cols = ", ".join(f"{k} = ?" for k in fields)
+        vals = list(fields.values()) + [time.time(), character_id]
+        await self.db.execute(
+            f"UPDATE rpg_characters SET {cols}, updated_at = ? WHERE id = ?",
+            vals,
+        )
+        await self.db.commit()
+
+    async def rpg_delete_character(self, character_id: int) -> None:
+        await self.db.execute(
+            "DELETE FROM rpg_characters WHERE id = ?", (character_id,)
+        )
+        await self.db.commit()
+
+    async def rpg_get_party_members(self, party_id: int) -> list[dict]:
+        async with self.db.execute(
+            "SELECT * FROM rpg_characters WHERE party_id = ? ORDER BY id",
+            (party_id,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    # =======================================================================
+    # RPG — Parties
+    # =======================================================================
+    async def rpg_list_parties(self) -> list[dict]:
+        async with self.db.execute(
+            "SELECT * FROM rpg_parties ORDER BY created_at DESC"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def rpg_get_party(self, party_id: int) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM rpg_parties WHERE id = ?", (party_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def rpg_create_party(self, *, name: str, leader_user_id: int,
+                               channel_id: Optional[int] = None) -> int:
+        cur = await self.db.execute(
+            """INSERT INTO rpg_parties (name, leader_user_id, channel_id)
+               VALUES (?, ?, ?)""",
+            (name, leader_user_id, channel_id),
+        )
+        await self.db.commit()
+        return cur.lastrowid
+
+    async def rpg_update_party(self, party_id: int, **fields) -> None:
+        if not fields:
+            return
+        cols = ", ".join(f"{k} = ?" for k in fields)
+        vals = list(fields.values()) + [time.time(), party_id]
+        await self.db.execute(
+            f"UPDATE rpg_parties SET {cols}, updated_at = ? WHERE id = ?",
+            vals,
+        )
+        await self.db.commit()
+
+    async def rpg_delete_party(self, party_id: int) -> None:
+        await self.db.execute(
+            "UPDATE rpg_characters SET party_id = NULL WHERE party_id = ?",
+            (party_id,),
+        )
+        await self.db.execute(
+            "DELETE FROM rpg_combat_state WHERE party_id = ?", (party_id,)
+        )
+        await self.db.execute("DELETE FROM rpg_parties WHERE id = ?", (party_id,))
+        await self.db.commit()
+
+    # =======================================================================
+    # RPG — Combat state
+    # =======================================================================
+    async def rpg_get_combat(self, party_id: int) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM rpg_combat_state WHERE party_id = ?", (party_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def rpg_set_combat(self, party_id: int, *, round: int, turn_index: int,
+                             initiative_json: str, enemies_json: str,
+                             scene_key: Optional[str] = None,
+                             next_scene_key: Optional[str] = None) -> None:
+        await self.db.execute(
+            """INSERT INTO rpg_combat_state
+               (party_id, round, turn_index, initiative_json, enemies_json,
+                scene_key, next_scene_key, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(party_id) DO UPDATE SET
+                 round = excluded.round,
+                 turn_index = excluded.turn_index,
+                 initiative_json = excluded.initiative_json,
+                 enemies_json = excluded.enemies_json,
+                 scene_key = excluded.scene_key,
+                 next_scene_key = excluded.next_scene_key,
+                 updated_at = excluded.updated_at""",
+            (party_id, round, turn_index, initiative_json, enemies_json,
+             scene_key, next_scene_key, time.time()),
+        )
+        await self.db.commit()
+
+    async def rpg_clear_combat(self, party_id: int) -> None:
+        await self.db.execute(
+            "DELETE FROM rpg_combat_state WHERE party_id = ?", (party_id,)
+        )
+        await self.db.commit()
+
+    # =======================================================================
+    # RPG — Log
+    # =======================================================================
+    async def rpg_log_event(self, party_id: int, kind: str, content: str) -> None:
+        await self.db.execute(
+            "INSERT INTO rpg_log (party_id, kind, content) VALUES (?, ?, ?)",
+            (party_id, kind, content),
+        )
+        await self.db.commit()
+
+    async def rpg_recent_log(self, party_id: int, limit: int = 20) -> list[dict]:
+        async with self.db.execute(
+            "SELECT * FROM rpg_log WHERE party_id = ? ORDER BY id DESC LIMIT ?",
+            (party_id, limit),
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+        rows.reverse()
+        return rows

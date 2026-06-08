@@ -85,6 +85,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('settings', 'Settings'),
         ('llm', 'Corax Chat (LLM)'),
         ('relic_hunt', "Raven's Nest"),
+        ('rpg', 'RPG Adventures'),
     ]
 
     def admin_required(f):
@@ -6325,6 +6326,296 @@ def create_app(db: Database, bot=None) -> Quart:
             skip_close=skip_close,
             llm_model=_Cfg.LLM_MODEL,
             text_channels=text_channels,
+        )
+
+    # --- RPG Admin ---
+
+    @app.route("/rpg", methods=["GET", "POST"])
+    @permission_required('rpg')
+    async def rpg_admin():
+        import json as _json
+        await db.ensure_rpg_tables()
+
+        tab = request.args.get("tab", "adventures")
+        adventure_id_arg = request.args.get("adventure_id", type=int)
+
+        if request.method == "POST":
+            form = await request.form
+            action = form.get("action", "")
+
+            # --- Adventures ---
+            if action == "adv_create":
+                name = (form.get("name") or "").strip()
+                if not name:
+                    await flash("Adventure name is required.", "error")
+                else:
+                    new_id = await db.rpg_create_adventure(
+                        name=name,
+                        description=(form.get("description") or "").strip(),
+                        intro_text=(form.get("intro_text") or "").strip(),
+                        llm_system_prompt=(form.get("llm_system_prompt") or "").strip(),
+                        start_scene_key=(form.get("start_scene_key") or "").strip(),
+                    )
+                    await flash(f"Adventure '{name}' created.", "success")
+                    return redirect(url_for("rpg_admin", tab="adventures",
+                                            adventure_id=new_id))
+
+            elif action == "adv_update":
+                aid = int(form.get("adventure_id") or 0)
+                if aid:
+                    await db.rpg_update_adventure(
+                        aid,
+                        name=(form.get("name") or "").strip(),
+                        description=(form.get("description") or "").strip(),
+                        intro_text=(form.get("intro_text") or "").strip(),
+                        llm_system_prompt=(form.get("llm_system_prompt") or "").strip(),
+                        start_scene_key=(form.get("start_scene_key") or "").strip(),
+                        is_active=1 if form.get("is_active") else 0,
+                    )
+                    await flash("Adventure updated.", "success")
+                return redirect(url_for("rpg_admin", tab="adventures",
+                                        adventure_id=aid))
+
+            elif action == "adv_delete":
+                aid = int(form.get("adventure_id") or 0)
+                if aid:
+                    await db.rpg_delete_adventure(aid)
+                    await flash("Adventure deleted.", "success")
+                return redirect(url_for("rpg_admin", tab="adventures"))
+
+            # --- Scenes ---
+            elif action == "scene_create":
+                aid = int(form.get("adventure_id") or 0)
+                key = (form.get("scene_key") or "").strip()
+                if not aid or not key:
+                    await flash("Adventure and scene key are required.", "error")
+                else:
+                    data_raw = (form.get("data_json") or "{}").strip() or "{}"
+                    try:
+                        _json.loads(data_raw)
+                    except _json.JSONDecodeError as e:
+                        await flash(f"Invalid scene JSON: {e.msg}", "error")
+                        return redirect(url_for("rpg_admin", tab="scenes",
+                                                adventure_id=aid))
+                    await db.rpg_create_scene(
+                        aid, key,
+                        (form.get("title") or "").strip(),
+                        (form.get("narration") or "").strip(),
+                        (form.get("scene_type") or "story").strip(),
+                        data_raw,
+                    )
+                    await flash(f"Scene '{key}' created.", "success")
+                return redirect(url_for("rpg_admin", tab="scenes",
+                                        adventure_id=aid))
+
+            elif action == "scene_update":
+                sid = int(form.get("scene_id") or 0)
+                aid = int(form.get("adventure_id") or 0)
+                if sid:
+                    data_raw = (form.get("data_json") or "{}").strip() or "{}"
+                    try:
+                        _json.loads(data_raw)
+                    except _json.JSONDecodeError as e:
+                        await flash(f"Invalid scene JSON: {e.msg}", "error")
+                        return redirect(url_for("rpg_admin", tab="scenes",
+                                                adventure_id=aid))
+                    await db.rpg_update_scene(
+                        sid,
+                        scene_key=(form.get("scene_key") or "").strip(),
+                        title=(form.get("title") or "").strip(),
+                        narration=(form.get("narration") or "").strip(),
+                        scene_type=(form.get("scene_type") or "story").strip(),
+                        data_json=data_raw,
+                    )
+                    await flash("Scene updated.", "success")
+                return redirect(url_for("rpg_admin", tab="scenes",
+                                        adventure_id=aid))
+
+            elif action == "scene_delete":
+                sid = int(form.get("scene_id") or 0)
+                aid = int(form.get("adventure_id") or 0)
+                if sid:
+                    await db.rpg_delete_scene(sid)
+                    await flash("Scene deleted.", "success")
+                return redirect(url_for("rpg_admin", tab="scenes",
+                                        adventure_id=aid))
+
+            # --- Classes ---
+            elif action == "class_upsert":
+                abilities_raw = (form.get("abilities_json") or "[]").strip() or "[]"
+                try:
+                    _json.loads(abilities_raw)
+                except _json.JSONDecodeError as e:
+                    await flash(f"Invalid abilities JSON: {e.msg}", "error")
+                    return redirect(url_for("rpg_admin", tab="classes"))
+                await db.rpg_upsert_class(
+                    class_key=(form.get("class_key") or "").strip(),
+                    name=(form.get("name") or "").strip(),
+                    description=(form.get("description") or "").strip(),
+                    base_hp=int(form.get("base_hp") or 20),
+                    base_attack=int(form.get("base_attack") or 5),
+                    base_defense=int(form.get("base_defense") or 5),
+                    base_agility=int(form.get("base_agility") or 5),
+                    base_mana=int(form.get("base_mana") or 10),
+                    abilities_json=abilities_raw,
+                )
+                await flash("Class saved.", "success")
+                return redirect(url_for("rpg_admin", tab="classes"))
+
+            elif action == "class_delete":
+                key = (form.get("class_key") or "").strip()
+                if key:
+                    await db.rpg_delete_class(key)
+                    await flash("Class deleted.", "success")
+                return redirect(url_for("rpg_admin", tab="classes"))
+
+            # --- Enemies ---
+            elif action == "enemy_upsert":
+                abilities_raw = (form.get("abilities_json") or "[]").strip() or "[]"
+                loot_raw = (form.get("loot_json") or "[]").strip() or "[]"
+                try:
+                    _json.loads(abilities_raw)
+                    _json.loads(loot_raw)
+                except _json.JSONDecodeError as e:
+                    await flash(f"Invalid JSON: {e.msg}", "error")
+                    return redirect(url_for("rpg_admin", tab="enemies"))
+                await db.rpg_upsert_enemy(
+                    enemy_key=(form.get("enemy_key") or "").strip(),
+                    name=(form.get("name") or "").strip(),
+                    description=(form.get("description") or "").strip(),
+                    hp=int(form.get("hp") or 15),
+                    attack=int(form.get("attack") or 4),
+                    defense=int(form.get("defense") or 3),
+                    agility=int(form.get("agility") or 4),
+                    abilities_json=abilities_raw,
+                    loot_json=loot_raw,
+                    xp_reward=int(form.get("xp_reward") or 10),
+                )
+                await flash("Enemy saved.", "success")
+                return redirect(url_for("rpg_admin", tab="enemies"))
+
+            elif action == "enemy_delete":
+                key = (form.get("enemy_key") or "").strip()
+                if key:
+                    await db.rpg_delete_enemy(key)
+                    await flash("Enemy deleted.", "success")
+                return redirect(url_for("rpg_admin", tab="enemies"))
+
+            # --- Items ---
+            elif action == "item_upsert":
+                effect_raw = (form.get("effect_json") or "{}").strip() or "{}"
+                try:
+                    _json.loads(effect_raw)
+                except _json.JSONDecodeError as e:
+                    await flash(f"Invalid effect JSON: {e.msg}", "error")
+                    return redirect(url_for("rpg_admin", tab="items"))
+                await db.rpg_upsert_item(
+                    item_key=(form.get("item_key") or "").strip(),
+                    name=(form.get("name") or "").strip(),
+                    description=(form.get("description") or "").strip(),
+                    item_type=(form.get("item_type") or "misc").strip(),
+                    effect_json=effect_raw,
+                )
+                await flash("Item saved.", "success")
+                return redirect(url_for("rpg_admin", tab="items"))
+
+            elif action == "item_delete":
+                key = (form.get("item_key") or "").strip()
+                if key:
+                    await db.rpg_delete_item(key)
+                    await flash("Item deleted.", "success")
+                return redirect(url_for("rpg_admin", tab="items"))
+
+            # --- Characters / Parties (admin override) ---
+            elif action == "char_delete":
+                cid = int(form.get("character_id") or 0)
+                if cid:
+                    await db.rpg_delete_character(cid)
+                    await flash("Character deleted.", "success")
+                return redirect(url_for("rpg_admin", tab="characters"))
+
+            elif action == "party_delete":
+                pid = int(form.get("party_id") or 0)
+                if pid:
+                    await db.rpg_delete_party(pid)
+                    await flash("Party deleted.", "success")
+                return redirect(url_for("rpg_admin", tab="parties"))
+
+            elif action == "save_settings":
+                await db.set_setting(
+                    "rpg_channel_id",
+                    (form.get("rpg_channel_id") or "").strip(),
+                )
+                await db.set_setting(
+                    "rpg_enabled",
+                    "true" if form.get("rpg_enabled") else "false",
+                )
+                await db.set_setting(
+                    "rpg_block_during_stream",
+                    "true" if form.get("rpg_block_during_stream") else "false",
+                )
+                await flash("RPG settings saved.", "success")
+                return redirect(url_for("rpg_admin", tab="settings"))
+
+            return redirect(url_for("rpg_admin", tab=tab))
+
+        # GET
+        adventures = await db.rpg_list_adventures()
+        selected_adv = None
+        scenes = []
+        if adventure_id_arg:
+            selected_adv = await db.rpg_get_adventure(adventure_id_arg)
+            if selected_adv:
+                scenes = await db.rpg_list_scenes(adventure_id_arg)
+        elif adventures and tab == "scenes":
+            selected_adv = adventures[0]
+            scenes = await db.rpg_list_scenes(selected_adv["id"])
+
+        classes_ = await db.rpg_list_classes()
+        enemies = await db.rpg_list_enemies()
+        items = await db.rpg_list_items()
+        characters = await db.rpg_list_characters()
+        parties = await db.rpg_list_parties()
+
+        guild = None
+        try:
+            if app.bot and getattr(app.bot, "guilds", None):
+                guild = next(iter(app.bot.guilds), None)
+        except Exception:
+            guild = None
+        text_channels = []
+        if guild is not None:
+            for ch in sorted(guild.text_channels, key=lambda c: c.position):
+                text_channels.append({"id": ch.id, "name": ch.name})
+
+        rpg_channel_id = await db.get_setting("rpg_channel_id") or ""
+        rpg_enabled = (await db.get_setting("rpg_enabled")) != "false"
+        rpg_block_during_stream = (
+            (await db.get_setting("rpg_block_during_stream")) != "false"
+        )
+        stream_is_live = False
+        try:
+            from bot.exp_stream_manager import stream_is_live as _live
+            stream_is_live = bool(_live)
+        except Exception:
+            stream_is_live = False
+
+        return await render_template(
+            "rpg.html",
+            tab=tab,
+            adventures=adventures,
+            selected_adv=selected_adv,
+            scenes=scenes,
+            classes=classes_,
+            enemies=enemies,
+            items=items,
+            characters=characters,
+            parties=parties,
+            text_channels=text_channels,
+            rpg_channel_id=rpg_channel_id,
+            rpg_enabled=rpg_enabled,
+            rpg_block_during_stream=rpg_block_during_stream,
+            stream_is_live=stream_is_live,
         )
 
     return app
