@@ -2697,12 +2697,7 @@ class Database:
         return cursor.lastrowid
 
     async def add_intro_outro_song(self, suno_url: str, suno_uuid: str, source: str) -> int:
-        """Insert an intro or outro song, replacing any existing active one for that slot.
-        source must be 'intro' or 'outro'. Returns the new song ID."""
-        await self.db.execute(
-            "UPDATE exp_radio_songs SET active = 0 WHERE playlist_source = ? AND active = 1",
-            (source,),
-        )
+        """Insert an intro or outro song. source must be 'intro' or 'outro'."""
         cursor = await self.db.execute(
             """
             INSERT INTO exp_radio_songs

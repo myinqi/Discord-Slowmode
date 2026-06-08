@@ -240,14 +240,31 @@ class ExpStreamManager:
         def _special_ready(s: dict) -> bool:
             return s.get("analysis_status") == "done" and bool(s.get("mp3_filename"))
 
+        def _pick_special_song(songs: list[dict], selection: str) -> dict | None:
+            ready_songs = [s for s in songs if _special_ready(s)]
+            if not ready_songs:
+                return None
+            if selection and selection != "random":
+                try:
+                    selected_id = int(selection)
+                    for song in ready_songs:
+                        if int(song.get("id") or 0) == selected_id:
+                            return song
+                except (TypeError, ValueError):
+                    pass
+            return random.choice(ready_songs)
+
+        random.shuffle(ready)
+
         # Prepend intro song if enabled
         intro_enabled = (await self.db.get_setting("exp_radio_intro_enabled")) or "off"
         if intro_enabled == "on":
             intro_songs = await self.db.get_all_exp_radio_songs(active_only=True, source="intro")
-            intro_ready = [s for s in intro_songs if _special_ready(s)]
-            if intro_ready:
-                ready = intro_ready[:1] + ready
-                self._log(f"Intro song: {intro_ready[0].get('title', '?')}")
+            intro_selection = await self.db.get_setting("exp_radio_intro_selection") or "random"
+            intro_song = _pick_special_song(intro_songs, intro_selection)
+            if intro_song:
+                ready = [intro_song] + ready
+                self._log(f"Intro song: {intro_song.get('title', '?')}")
 
         # Store outro for end-of-stream injection
         self._outro_song = None
@@ -255,12 +272,11 @@ class ExpStreamManager:
         outro_enabled = (await self.db.get_setting("exp_radio_outro_enabled")) or "off"
         if outro_enabled == "on":
             outro_songs = await self.db.get_all_exp_radio_songs(active_only=True, source="outro")
-            outro_ready = [s for s in outro_songs if _special_ready(s)]
-            if outro_ready:
-                self._outro_song = outro_ready[0]
-                self._log(f"Outro song configured: {outro_ready[0].get('title', '?')}")
+            outro_selection = await self.db.get_setting("exp_radio_outro_selection") or "random"
+            self._outro_song = _pick_special_song(outro_songs, outro_selection)
+            if self._outro_song:
+                self._log(f"Outro song configured: {self._outro_song.get('title', '?')}")
         self._twitch_key = twitch_key
-        random.shuffle(ready)
         self.playlist    = ready
         self._stream_ready_event.clear()
         # Connect to Twitch chat if enabled and credentials exist

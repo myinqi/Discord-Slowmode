@@ -883,8 +883,7 @@ async def process_admin_song(db, suno_url: str, exp_radio_dir: str) -> tuple[boo
 async def process_intro_outro_song(
     db, suno_url: str, source: str, exp_radio_dir: str
 ) -> tuple[bool, str]:
-    """Download + process a Suno URL for the intro or outro slot.
-    source must be 'intro' or 'outro'. Replaces any existing song in that slot."""
+    """Download + process a Suno URL for the intro or outro pool."""
     from bot.channel_moderation import extract_suno_uuid
     from bot.exp_stream_manager import log_event
     ensure_exp_dirs(exp_radio_dir)

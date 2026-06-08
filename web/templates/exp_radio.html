@@ -204,6 +204,32 @@
                         class="w-4 h-4 accent-discord-blurple">
                     <span class="text-gray-300 text-sm">Play <span class="text-white">Outro</span> song before stream ends</span>
                 </label>
+                <div class="grid grid-cols-1 gap-3 pt-1">
+                    <div class="space-y-1.5">
+                        <label class="block text-gray-400 text-xs">Intro selection</label>
+                        <select name="exp_intro_selection"
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                            <option value="random" {% if exp_intro_selection == 'random' %}selected{% endif %}>Random ready intro</option>
+                            {% for song in active_intro_songs %}
+                            <option value="{{ song.id }}" {% if exp_intro_selection == song.id|string %}selected{% endif %}>
+                                {{ song.title or song.suno_url }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="space-y-1.5">
+                        <label class="block text-gray-400 text-xs">Outro selection</label>
+                        <select name="exp_outro_selection"
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                            <option value="random" {% if exp_outro_selection == 'random' %}selected{% endif %}>Random ready outro</option>
+                            {% for song in active_outro_songs %}
+                            <option value="{{ song.id }}" {% if exp_outro_selection == song.id|string %}selected{% endif %}>
+                                {{ song.title or song.suno_url }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
                 <p class="text-gray-500 text-xs">Configure the songs themselves below the Admin Playlist.</p>
             </div>
             <div class="pt-2 border-t border-gray-700/50 space-y-2">
@@ -876,7 +902,14 @@
                             <span class="text-white text-sm font-medium truncate">{{ song.title or '⏳ Processing…' }}</span>
                             {% if song.artist %}<span class="text-gray-400 text-xs truncate">— {{ song.artist }}</span>{% endif %}
                         </div>
-                        <div class="text-gray-500 text-xs mt-0.5 truncate">{{ song.suno_url }}</div>
+                        <div class="flex items-center gap-3 mt-0.5 flex-wrap">
+                            <span class="text-gray-600 text-xs">#{{ song.id }}</span>
+                            {% if song.duration %}
+                            <span class="text-gray-600 text-xs">{{ '%.1f'|format(song.duration / 60) }} min</span>
+                            {% endif %}
+                            <a href="{{ song.suno_url }}" target="_blank"
+                                class="text-discord-blurple hover:text-blue-400 text-xs transition-colors">Suno ↗</a>
+                        </div>
                     </div>
                     <div class="flex items-center gap-1.5 flex-shrink-0">
                         {% if song.analysis_status != 'done' and not status.running %}
@@ -932,13 +965,13 @@
                         class="w-64 bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm placeholder-gray-500 focus:border-discord-blurple focus:outline-none">
                     <button type="submit"
                         class="px-3 py-1.5 bg-discord-blurple hover:bg-indigo-500 text-white text-sm rounded-lg transition-colors whitespace-nowrap">
-                        Set Song
+                        Add Song
                     </button>
                 </form>
             </div>
             {% set active_slot = songs_list|selectattr('active')|list %}
             {% if active_slot %}
-            {% set song = active_slot[0] %}
+            {% for song in active_slot %}
             <div class="px-5 py-3 flex items-center gap-3">
                 <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2">
@@ -953,7 +986,14 @@
                         {% if song.artist %}<span class="text-gray-400 text-xs truncate">— {{ song.artist }}</span>{% endif %}
                         {% if song.duration %}<span class="text-gray-500 text-xs">({{ (song.duration / 60)|round(1) }} min)</span>{% endif %}
                     </div>
-                    <div class="text-gray-500 text-xs mt-0.5 truncate">{{ song.suno_url }}</div>
+                    <div class="flex items-center gap-3 mt-0.5 flex-wrap">
+                        <span class="text-gray-600 text-xs">#{{ song.id }}</span>
+                        {% if song.duration %}
+                        <span class="text-gray-600 text-xs">{{ '%.1f'|format(song.duration / 60) }} min</span>
+                        {% endif %}
+                        <a href="{{ song.suno_url }}" target="_blank"
+                            class="text-discord-blurple hover:text-blue-400 text-xs transition-colors">Suno ↗</a>
+                    </div>
                 </div>
                 <div class="flex items-center gap-1.5 flex-shrink-0">
                     {% if song.analysis_status != 'done' and not status.running %}
@@ -972,9 +1012,10 @@
                     </form>
                 </div>
             </div>
+            {% endfor %}
             {% else %}
             <div class="px-5 py-6 text-center text-gray-500">
-                <p class="text-sm">No song set yet. Paste a Suno URL above.</p>
+                <p class="text-sm">No songs set yet. Paste a Suno URL above.</p>
             </div>
             {% endif %}
         </div>

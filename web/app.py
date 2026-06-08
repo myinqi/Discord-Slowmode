@@ -4036,8 +4036,12 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.set_setting("exp_radio_active_playlist", active_pl_v)
                 intro_en = "on" if form.get("exp_intro_enabled") else "off"
                 outro_en = "on" if form.get("exp_outro_enabled") else "off"
+                intro_selection = (form.get("exp_intro_selection") or "random").strip()
+                outro_selection = (form.get("exp_outro_selection") or "random").strip()
                 await db.set_setting("exp_radio_intro_enabled", intro_en)
                 await db.set_setting("exp_radio_outro_enabled", outro_en)
+                await db.set_setting("exp_radio_intro_selection", intro_selection)
+                await db.set_setting("exp_radio_outro_selection", outro_selection)
                 if stream_url_v:
                     await db.set_setting("exp_radio_stream_url", stream_url_v)
                 await flash("Settings saved.", "success")
@@ -4229,6 +4233,8 @@ def create_app(db: Database, bot=None) -> Quart:
         exp_active_playlist     = await db.get_setting("exp_radio_active_playlist") or "submission"
         exp_intro_enabled       = await db.get_setting("exp_radio_intro_enabled") or "off"
         exp_outro_enabled       = await db.get_setting("exp_radio_outro_enabled") or "off"
+        exp_intro_selection     = await db.get_setting("exp_radio_intro_selection") or "random"
+        exp_outro_selection     = await db.get_setting("exp_radio_outro_selection") or "random"
         exp_tw_client_id = await db.get_setting("exp_radio_twitch_client_id") or ""
         _exp_tw_secret   = await db.get_setting("exp_radio_twitch_client_secret") or ""
         _exp_tw_refresh  = await db.get_setting("exp_radio_twitch_refresh_token") or ""
@@ -4271,6 +4277,8 @@ def create_app(db: Database, bot=None) -> Quart:
         admin_songs = await db.get_all_exp_radio_songs(active_only=False, source="admin")
         intro_songs = await db.get_all_exp_radio_songs(active_only=False, source="intro")
         outro_songs = await db.get_all_exp_radio_songs(active_only=False, source="outro")
+        active_intro_songs = [s for s in intro_songs if s.get("active") and s.get("analysis_status") == "done" and s.get("mp3_filename")]
+        active_outro_songs = [s for s in outro_songs if s.get("active") and s.get("analysis_status") == "done" and s.get("mp3_filename")]
         return await render_template(
             "exp_radio.html",
             songs=songs, status=status,
@@ -4280,6 +4288,10 @@ def create_app(db: Database, bot=None) -> Quart:
             exp_active_playlist=exp_active_playlist,
             exp_intro_enabled=exp_intro_enabled,
             exp_outro_enabled=exp_outro_enabled,
+            exp_intro_selection=exp_intro_selection,
+            exp_outro_selection=exp_outro_selection,
+            active_intro_songs=active_intro_songs,
+            active_outro_songs=active_outro_songs,
             masked_key=masked_key,
             bg_filename=bg_filename,
             loop_videos=loop_videos, loop_selection=loop_selection,
