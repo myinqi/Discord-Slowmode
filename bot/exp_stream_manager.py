@@ -163,6 +163,9 @@ class ExpStreamManager:
         # Outro: song to play once at the very end before the stream stops.
         self._outro_song: dict | None = None
         self._outro_played: bool = False
+        self._outro_in_playlist: bool = False
+        self._outro_counts_in_progress: bool = False
+        self._progress_total_count: int = 0
         # Set when the first FFmpeg process exists. start() returns earlier,
         # while media is still being prepared.
         self._stream_ready_event = asyncio.Event()
@@ -276,6 +279,12 @@ class ExpStreamManager:
             self._outro_song = _pick_special_song(outro_songs, outro_selection)
             if self._outro_song:
                 self._log(f"Outro song configured: {self._outro_song.get('title', '?')}")
+        loop_mode = (await self.db.get_setting("exp_radio_loop_mode")) or "reshuffle"
+        self._outro_in_playlist = bool(self._outro_song and loop_mode == "stop")
+        if self._outro_in_playlist:
+            ready = ready + [self._outro_song]
+        self._outro_counts_in_progress = False
+        self._progress_total_count = len(ready)
         self._twitch_key = twitch_key
         self.playlist    = ready
         self._stream_ready_event.clear()
@@ -323,6 +332,9 @@ class ExpStreamManager:
                     pass
         self._process = None
         self._safe_stop_requested = False
+        self._outro_in_playlist = False
+        self._outro_counts_in_progress = False
+        self._progress_total_count = 0
         if self._task:
             self._task.cancel()
             self._task = None
@@ -362,6 +374,13 @@ class ExpStreamManager:
             await asyncio.sleep(remaining + 1.0)   # +1s buffer
         if not self._safe_stop_requested or not self.is_running:
             return
+        if (
+            self._outro_in_playlist
+            and self._outro_song
+            and self.current_song
+            and self.current_song.get("id") == self._outro_song.get("id")
+        ):
+            self._outro_played = True
         if self._outro_song and not self._outro_played:
             self._outro_played = True
             self._safe_stop_requested = False
@@ -398,7 +417,7 @@ class ExpStreamManager:
                 "artist":   self.current_song.get("artist")   if self.current_song else None,
                 "suno_url": self.current_song.get("suno_url") if self.current_song else None,
             } if self.current_song else None,
-            "playlist_length": len(self.playlist),
+            "playlist_length": self._progress_total_count or len(self.playlist),
         }
 
     # ── Stream loop (one FFmpeg per full playlist rotation) ────────────────────
@@ -424,7 +443,9 @@ class ExpStreamManager:
             mode = (await self.db.get_setting("exp_radio_loop_mode")) or "reshuffle"
             if mode == "stop":
                 self._log("Loop mode 'stop' — playlist finished.")
-                if self._outro_song and not self._outro_played:
+                if self._outro_in_playlist:
+                    self._outro_played = True
+                elif self._outro_song and not self._outro_played:
                     self._outro_played = True
                     self._log(f"Playing outro: {self._outro_song.get('title', '?')}")
                     self.playlist = [self._outro_song]
@@ -503,7 +524,22 @@ class ExpStreamManager:
 
         # Build combined ASS (subtitles + NowPlaying title cards)
         show_progress = (await self.db.get_setting("exp_radio_progress_overlay") or "off") == "on"
-        combined_ass = self._build_combined_ass(songs, show_progress=show_progress)
+        progress_total_count = len(songs)
+        progress_index_offset = 0
+        progress_extra_duration = 0.0
+        if self._outro_song and self._outro_counts_in_progress and not self._outro_played:
+            progress_total_count = max(self._progress_total_count, len(songs) + 1)
+            progress_extra_duration = self._outro_song.get("duration") or 300
+        elif self._outro_song and self._outro_counts_in_progress and self._outro_played and len(songs) == 1:
+            progress_total_count = max(self._progress_total_count, 1)
+            progress_index_offset = max(progress_total_count - 1, 0)
+        combined_ass = self._build_combined_ass(
+            songs,
+            show_progress=show_progress,
+            progress_total_count=progress_total_count,
+            progress_index_offset=progress_index_offset,
+            progress_extra_duration=progress_extra_duration,
+        )
 
         # Build audio concat file
         concat_txt = os.path.join(self.exp_radio_dir, "_audio_concat.txt")
@@ -950,7 +986,14 @@ class ExpStreamManager:
 
     # ── Combined ASS builder ───────────────────────────────────────────────────
 
-    def _build_combined_ass(self, songs: list, show_progress: bool = False) -> str | None:
+    def _build_combined_ass(
+        self,
+        songs: list,
+        show_progress: bool = False,
+        progress_total_count: int | None = None,
+        progress_index_offset: int = 0,
+        progress_extra_duration: float = 0.0,
+    ) -> str | None:
         """Merge all per-song ASS files into one with time offsets.
         Adds a NowPlaying title card at the start of each song.
         When show_progress=True also adds a bottom-right card with
@@ -981,7 +1024,7 @@ class ExpStreamManager:
         events = []
         offset_cs = 0
         has_any = False
-        n_songs = len(songs)
+        n_songs = progress_total_count or len(songs)
 
         for song_idx, song in enumerate(songs):
             dur = song.get("duration") or 300
@@ -1003,7 +1046,10 @@ class ExpStreamManager:
                 dur_mins = int(dur) // 60
                 dur_secs = int(dur) % 60
                 dur_str  = f"{dur_mins}:{dur_secs:02d}"
-                remaining_secs = int(sum(s.get("duration") or 300 for s in songs[song_idx:]))
+                remaining_secs = int(
+                    sum(s.get("duration") or 300 for s in songs[song_idx:])
+                    + progress_extra_duration
+                )
                 if remaining_secs >= 3600:
                     r_h = remaining_secs // 3600
                     r_m = (remaining_secs % 3600) // 60
@@ -1012,7 +1058,7 @@ class ExpStreamManager:
                     rem_str = f"~{remaining_secs // 60}m left"
                 else:
                     rem_str = f"~{remaining_secs}s left"
-                info = f"{dur_str}  \u00b7  Song {song_idx + 1}/{n_songs}  \u00b7  {rem_str}"
+                info = f"{dur_str}  \u00b7  Song {progress_index_offset + song_idx + 1}/{n_songs}  \u00b7  {rem_str}"
                 events.append(
                     f"Dialogue: 1,{t_start},{t_end},Progress,,0,0,0,,"
                     f"{{\\fad(400,400)}}{info}"
