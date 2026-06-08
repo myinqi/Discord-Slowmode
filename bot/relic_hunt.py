@@ -231,6 +231,9 @@ class RelicHunt:
     async def _tick_auto_event(self) -> None:
         if (await self.db.relic_get_setting("auto_event_enabled")) != "true":
             return
+        from bot.exp_stream_manager import stream_is_live
+        if not stream_is_live:
+            return
         if await self.db.relic_get_active_events():
             return
         now = time.time()
