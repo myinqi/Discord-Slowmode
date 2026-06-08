@@ -3624,6 +3624,32 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.delete_exp_radio_song(song_id)
                 await flash("Song removed.", "success")
 
+            elif action == "add_intro_song":
+                suno_url = (form.get("suno_url") or "").strip()
+                if not suno_url:
+                    await flash("Please enter a Suno URL.", "error")
+                else:
+                    from bot.exp_radio_worker import process_intro_outro_song
+                    async def _bg_intro(url=suno_url):
+                        ok, msg = await process_intro_outro_song(db, url, "intro", EXP_RADIO_DIR)
+                        from bot.exp_stream_manager import log_event
+                        log_event(msg, "info" if ok else "error", "[intro]")
+                    asyncio.create_task(_bg_intro())
+                    await flash("Intro song queued for download and Whisper analysis.", "success")
+
+            elif action == "add_outro_song":
+                suno_url = (form.get("suno_url") or "").strip()
+                if not suno_url:
+                    await flash("Please enter a Suno URL.", "error")
+                else:
+                    from bot.exp_radio_worker import process_intro_outro_song
+                    async def _bg_outro(url=suno_url):
+                        ok, msg = await process_intro_outro_song(db, url, "outro", EXP_RADIO_DIR)
+                        from bot.exp_stream_manager import log_event
+                        log_event(msg, "info" if ok else "error", "[outro]")
+                    asyncio.create_task(_bg_outro())
+                    await flash("Outro song queued for download and Whisper analysis.", "success")
+
             elif action == "add_admin_song":
                 suno_url = (form.get("suno_url") or "").strip()
                 if not suno_url:
@@ -3993,6 +4019,10 @@ def create_app(db: Database, bot=None) -> Quart:
                 if active_pl_v not in ("submission", "admin", "both"):
                     active_pl_v = "submission"
                 await db.set_setting("exp_radio_active_playlist", active_pl_v)
+                intro_en = "on" if form.get("exp_intro_enabled") else "off"
+                outro_en = "on" if form.get("exp_outro_enabled") else "off"
+                await db.set_setting("exp_radio_intro_enabled", intro_en)
+                await db.set_setting("exp_radio_outro_enabled", outro_en)
                 if stream_url_v:
                     await db.set_setting("exp_radio_stream_url", stream_url_v)
                 await flash("Settings saved.", "success")
@@ -4155,6 +4185,8 @@ def create_app(db: Database, bot=None) -> Quart:
         exp_schedule_time       = await db.get_setting("exp_radio_schedule_time") or ""
         exp_schedule_days_set   = set(d for d in exp_schedule_days.split(",") if d)
         exp_active_playlist     = await db.get_setting("exp_radio_active_playlist") or "submission"
+        exp_intro_enabled       = await db.get_setting("exp_radio_intro_enabled") or "off"
+        exp_outro_enabled       = await db.get_setting("exp_radio_outro_enabled") or "off"
         exp_tw_client_id = await db.get_setting("exp_radio_twitch_client_id") or ""
         _exp_tw_secret   = await db.get_setting("exp_radio_twitch_client_secret") or ""
         _exp_tw_refresh  = await db.get_setting("exp_radio_twitch_refresh_token") or ""
@@ -4195,11 +4227,17 @@ def create_app(db: Database, bot=None) -> Quart:
             for _ch in sorted(exp_guild.text_channels, key=lambda c: c.position):
                 exp_text_channels.append({"id": _ch.id, "name": _ch.name})
         admin_songs = await db.get_all_exp_radio_songs(active_only=False, source="admin")
+        intro_songs = await db.get_all_exp_radio_songs(active_only=False, source="intro")
+        outro_songs = await db.get_all_exp_radio_songs(active_only=False, source="outro")
         return await render_template(
             "exp_radio.html",
             songs=songs, status=status,
             admin_songs=admin_songs,
+            intro_songs=intro_songs,
+            outro_songs=outro_songs,
             exp_active_playlist=exp_active_playlist,
+            exp_intro_enabled=exp_intro_enabled,
+            exp_outro_enabled=exp_outro_enabled,
             masked_key=masked_key,
             bg_filename=bg_filename,
             loop_videos=loop_videos, loop_selection=loop_selection,

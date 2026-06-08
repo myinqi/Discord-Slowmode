@@ -2696,6 +2696,26 @@ class Database:
         await self.db.commit()
         return cursor.lastrowid
 
+    async def add_intro_outro_song(self, suno_url: str, suno_uuid: str, source: str) -> int:
+        """Insert an intro or outro song, replacing any existing active one for that slot.
+        source must be 'intro' or 'outro'. Returns the new song ID."""
+        await self.db.execute(
+            "UPDATE exp_radio_songs SET active = 0 WHERE playlist_source = ? AND active = 1",
+            (source,),
+        )
+        cursor = await self.db.execute(
+            """
+            INSERT INTO exp_radio_songs
+               (user_id, user_name, suno_url, suno_uuid,
+                rights_declaration, rights_hash, rights_agreed_at,
+                expires_at, playlist_source)
+            VALUES (0, 'admin', ?, ?, '', '', unixepoch(), 9999999999, ?)
+            """,
+            (suno_url, suno_uuid, source),
+        )
+        await self.db.commit()
+        return cursor.lastrowid
+
     async def delete_exp_radio_song(self, song_id: int) -> Optional[dict]:
         """Soft-delete by setting active=0. Returns song data for file cleanup."""
         async with self.db.execute(

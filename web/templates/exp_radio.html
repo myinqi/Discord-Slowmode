@@ -171,6 +171,22 @@
                            class="px-2 py-1 bg-gray-800 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-discord-blurple">
                 </div>
             </div>
+            <div class="pt-2 border-t border-gray-700/50 space-y-3">
+                <p class="text-white text-sm font-medium">▶️ / ⏹ Intro &amp; Outro</p>
+                <label class="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" name="exp_intro_enabled"
+                        {% if exp_intro_enabled == 'on' %}checked{% endif %}
+                        class="w-4 h-4 accent-discord-blurple">
+                    <span class="text-gray-300 text-sm">Play <span class="text-white">Intro</span> song at stream start</span>
+                </label>
+                <label class="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" name="exp_outro_enabled"
+                        {% if exp_outro_enabled == 'on' %}checked{% endif %}
+                        class="w-4 h-4 accent-discord-blurple">
+                    <span class="text-gray-300 text-sm">Play <span class="text-white">Outro</span> song before stream ends</span>
+                </label>
+                <p class="text-gray-500 text-xs">Configure the songs themselves below the Admin Playlist.</p>
+            </div>
             <div class="pt-2 border-t border-gray-700/50 space-y-2">
                 <p class="text-white text-sm font-medium">🎵 Active Playlist</p>
                 <p class="text-gray-500 text-xs">Which playlist the stream will use when started. Switch here before starting a planned stream.</p>
@@ -861,6 +877,74 @@
             </div>
             {% endif %}
         </div>
+
+        <!-- ── Intro Song ── -->
+        {% macro _special_song_card(title, action_name, songs_list, enabled_val, enable_key) %}
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between flex-wrap gap-3">
+                <h3 class="text-white font-semibold">
+                    {{ title }}
+                    <span class="ml-1 text-xs {% if enabled_val == 'on' %}text-green-400{% else %}text-gray-500{% endif %}">
+                        ({% if enabled_val == 'on' %}enabled{% else %}disabled in settings{% endif %})
+                    </span>
+                </h3>
+                <form method="POST" class="flex items-center gap-2">
+                    <input type="hidden" name="action" value="{{ action_name }}">
+                    <input type="url" name="suno_url" required
+                        placeholder="https://suno.com/s/..."
+                        class="w-64 bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm placeholder-gray-500 focus:border-discord-blurple focus:outline-none">
+                    <button type="submit"
+                        class="px-3 py-1.5 bg-discord-blurple hover:bg-indigo-500 text-white text-sm rounded-lg transition-colors whitespace-nowrap">
+                        Set Song
+                    </button>
+                </form>
+            </div>
+            {% set active_slot = songs_list|selectattr('active')|list %}
+            {% if active_slot %}
+            {% set song = active_slot[0] %}
+            <div class="px-5 py-3 flex items-center gap-3">
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2">
+                        {% if song.analysis_status == 'done' %}
+                        <span class="w-2 h-2 rounded-full bg-green-500 flex-shrink-0"></span>
+                        {% elif song.analysis_status in ('processing', 'pending') %}
+                        <span class="w-2 h-2 rounded-full bg-yellow-500 flex-shrink-0"></span>
+                        {% else %}
+                        <span class="w-2 h-2 rounded-full bg-red-500 flex-shrink-0"></span>
+                        {% endif %}
+                        <span class="text-white text-sm font-medium truncate">{{ song.title or '⏳ Processing…' }}</span>
+                        {% if song.artist %}<span class="text-gray-400 text-xs truncate">— {{ song.artist }}</span>{% endif %}
+                        {% if song.duration %}<span class="text-gray-500 text-xs">({{ (song.duration / 60)|round(1) }} min)</span>{% endif %}
+                    </div>
+                    <div class="text-gray-500 text-xs mt-0.5 truncate">{{ song.suno_url }}</div>
+                </div>
+                <div class="flex items-center gap-1.5 flex-shrink-0">
+                    {% if song.analysis_status != 'done' and not status.running %}
+                    <form method="POST" class="inline">
+                        <input type="hidden" name="action" value="reanalyze_whisper_one">
+                        <input type="hidden" name="song_id" value="{{ song.id }}">
+                        <button type="submit" title="Re-run Whisper"
+                            class="px-2.5 py-1.5 bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 rounded-lg text-xs transition-colors">🔁</button>
+                    </form>
+                    {% endif %}
+                    <form method="POST" onsubmit="return confirm('Remove this song?')">
+                        <input type="hidden" name="action" value="delete_song">
+                        <input type="hidden" name="song_id" value="{{ song.id }}">
+                        <button type="submit" title="Remove"
+                            class="px-2.5 py-1.5 bg-red-900/30 hover:bg-red-900/60 text-red-400 rounded-lg text-xs transition-colors">🗑</button>
+                    </form>
+                </div>
+            </div>
+            {% else %}
+            <div class="px-5 py-6 text-center text-gray-500">
+                <p class="text-sm">No song set yet. Paste a Suno URL above.</p>
+            </div>
+            {% endif %}
+        </div>
+        {% endmacro %}
+
+        {{ _special_song_card('▶️ Intro Song', 'add_intro_song', intro_songs, exp_intro_enabled, 'exp_intro_enabled') }}
+        {{ _special_song_card('⏹ Outro Song', 'add_outro_song', outro_songs, exp_outro_enabled, 'exp_outro_enabled') }}
     </div>
 </div>
 

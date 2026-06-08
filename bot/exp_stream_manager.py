@@ -160,6 +160,9 @@ class ExpStreamManager:
         # Safe-stop: when set, the stream stops after the current song ends.
         self._safe_stop_requested: bool = False
         self._current_song_end_time: float = 0.0   # monotonic
+        # Outro: song to play once at the very end before the stream stops.
+        self._outro_song: dict | None = None
+        self._outro_played: bool = False
         # Live log: each entry is (unix_ts: float, level: str, line: str).
         # The actual buffer is module-level (see _LOG_BUFFER below) so that
         # background workers and web actions which don't have a reference to
@@ -230,6 +233,29 @@ class ExpStreamManager:
         if not ready:
             pl_label = {"submission": "submission", "admin": "admin", "both": "either"}.get(active_pl, active_pl)
             return {"ok": False, "error": f"No ready songs in the {pl_label} playlist."}
+
+        def _special_ready(s: dict) -> bool:
+            return s.get("analysis_status") == "done" and bool(s.get("mp3_filename"))
+
+        # Prepend intro song if enabled
+        intro_enabled = (await self.db.get_setting("exp_radio_intro_enabled")) or "off"
+        if intro_enabled == "on":
+            intro_songs = await self.db.get_all_exp_radio_songs(active_only=True, source="intro")
+            intro_ready = [s for s in intro_songs if _special_ready(s)]
+            if intro_ready:
+                ready = intro_ready[:1] + ready
+                self._log(f"Intro song: {intro_ready[0].get('title', '?')}")
+
+        # Store outro for end-of-stream injection
+        self._outro_song = None
+        self._outro_played = False
+        outro_enabled = (await self.db.get_setting("exp_radio_outro_enabled")) or "off"
+        if outro_enabled == "on":
+            outro_songs = await self.db.get_all_exp_radio_songs(active_only=True, source="outro")
+            outro_ready = [s for s in outro_songs if _special_ready(s)]
+            if outro_ready:
+                self._outro_song = outro_ready[0]
+                self._log(f"Outro song configured: {outro_ready[0].get('title', '?')}")
         self._twitch_key = twitch_key
         random.shuffle(ready)
         self.playlist    = ready
@@ -305,9 +331,34 @@ class ExpStreamManager:
         remaining = end_t - time.monotonic()
         if remaining > 0:
             await asyncio.sleep(remaining + 1.0)   # +1s buffer
-        if self._safe_stop_requested and self.is_running:
-            self._log("Safe stop: current song ended — stopping stream.")
-            await self.stop()
+        if not self._safe_stop_requested or not self.is_running:
+            return
+        if self._outro_song and not self._outro_played:
+            self._outro_played = True
+            self._safe_stop_requested = False
+            self._log(f"Safe stop: playing outro '{self._outro_song.get('title', '?')}' before stopping…")
+            # Cancel stream_loop (stops current FFmpeg cleanly)
+            if self._task:
+                self._task.cancel()
+                try:
+                    await asyncio.wait_for(asyncio.shield(self._task), timeout=5)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
+                self._task = None
+            if self._process and self._process.returncode is None:
+                try:
+                    self._process.terminate()
+                    await asyncio.wait_for(self._process.wait(), timeout=5)
+                except Exception:
+                    try: self._process.kill()
+                    except Exception: pass
+            self._process = None
+            try:
+                await self._play_playlist([self._outro_song])
+            except Exception as e:
+                self._log(f"Outro playback error: {e}", "error")
+        self._log("Safe stop: stopping stream.")
+        await self.stop()
 
     async def get_status(self) -> dict:
         return {
@@ -343,10 +394,12 @@ class ExpStreamManager:
                 break
             mode = (await self.db.get_setting("exp_radio_loop_mode")) or "reshuffle"
             if mode == "stop":
-                self._log("Loop mode 'stop' — playlist finished, ending stream.")
-                # Trigger normal stop() cleanup (sets is_running=False, closes
-                # Twitch chat, clears current_song). We schedule it instead of
-                # awaiting because stop() will cancel this very task.
+                self._log("Loop mode 'stop' — playlist finished.")
+                if self._outro_song and not self._outro_played:
+                    self._outro_played = True
+                    self._log(f"Playing outro: {self._outro_song.get('title', '?')}")
+                    self.playlist = [self._outro_song]
+                    continue  # plays outro; next iteration: outro done → stop
                 asyncio.create_task(self.stop())
                 break
             # mode == "reshuffle": reload eligible songs from DB so newly

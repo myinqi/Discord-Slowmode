@@ -880,6 +880,58 @@ async def process_admin_song(db, suno_url: str, exp_radio_dir: str) -> tuple[boo
     return True, f"Song #{song_id} added and queued for Whisper analysis."
 
 
+async def process_intro_outro_song(
+    db, suno_url: str, source: str, exp_radio_dir: str
+) -> tuple[bool, str]:
+    """Download + process a Suno URL for the intro or outro slot.
+    source must be 'intro' or 'outro'. Replaces any existing song in that slot."""
+    from bot.channel_moderation import extract_suno_uuid
+    from bot.exp_stream_manager import log_event
+    ensure_exp_dirs(exp_radio_dir)
+    mp3_dir = os.path.join(exp_radio_dir, "mp3")
+
+    uuid = extract_suno_uuid(suno_url)
+    if not uuid:
+        return False, f"Could not extract Suno UUID from URL: {suno_url}"
+
+    song_id = await db.add_intro_outro_song(suno_url, uuid, source)
+    log_event(
+        f"{source.capitalize()} song #{song_id} added (uuid={uuid}), scraping metadata…",
+        prefix=f"[{source}]",
+    )
+
+    meta = await scrape_suno(uuid)
+    real_uuid = meta.get("real_uuid") or uuid
+    if real_uuid != uuid:
+        log_event(f"{source.capitalize()} song #{song_id}: resolved real UUID {real_uuid}", prefix=f"[{source}]")
+        await db.db.execute(
+            "UPDATE exp_radio_songs SET suno_uuid = ? WHERE id = ?", (real_uuid, song_id)
+        )
+        await db.db.commit()
+
+    log_event(f"{source.capitalize()} song #{song_id} downloading MP3 (uuid={real_uuid})…", prefix=f"[{source}]")
+    mp3_path = await download_mp3(real_uuid, mp3_dir)
+    if not mp3_path:
+        await db.update_exp_radio_song(song_id, analysis_status="failed")
+        return False, f"MP3 download failed for {real_uuid}."
+
+    mp3_filename = os.path.basename(mp3_path)
+    await db.update_exp_radio_song(
+        song_id,
+        mp3_filename=mp3_filename,
+        title=meta.get("title") or None,
+        artist=meta.get("artist") or None,
+        cover_url=meta.get("cover_url") or None,
+        video_url=meta.get("video_url") or None,
+    )
+
+    await process_exp_song(
+        db, song_id, exp_radio_dir,
+        bot=None, skip_moderation=True, max_duration=None,
+    )
+    return True, f"{source.capitalize()} song #{song_id} queued for Whisper analysis."
+
+
 async def process_exp_song(db, song_id: int, exp_radio_dir: str, bot=None,
                            skip_moderation: bool = False,
                            max_duration: int | None = MAX_DURATION_SECS):
