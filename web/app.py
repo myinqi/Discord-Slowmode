@@ -16,6 +16,122 @@ YOUTUBE_URL_RE   = re.compile(
 )
 
 
+async def _rpg_import_enemies(db, raw_json: str, _json) -> tuple[int, list[str]]:
+    """Validate + bulk-upsert enemies from a JSON payload.
+
+    Accepts either a JSON list or an object with `{"enemies":[...]}`.
+    Returns (count_imported, errors).
+    """
+    errors: list[str] = []
+    if not raw_json:
+        return 0, ["JSON input is required."]
+    try:
+        payload = _json.loads(raw_json)
+    except _json.JSONDecodeError as exc:
+        return 0, [f"Invalid JSON: {exc.msg} at line {exc.lineno}."]
+    if isinstance(payload, dict) and "enemies" in payload:
+        items = payload["enemies"]
+    elif isinstance(payload, list):
+        items = payload
+    elif isinstance(payload, dict) and "enemy_key" in payload:
+        items = [payload]
+    else:
+        return 0, ["JSON must be a list, an enemy object, or {\"enemies\":[...]}."]
+
+    count = 0
+    for idx, raw in enumerate(items, start=1):
+        if not isinstance(raw, dict):
+            errors.append(f"Enemy {idx}: must be an object.")
+            continue
+        key = str(raw.get("enemy_key") or "").strip()
+        name = str(raw.get("name") or "").strip()
+        if not key or not name:
+            errors.append(f"Enemy {idx}: 'enemy_key' and 'name' are required.")
+            continue
+        ab_raw = raw.get("abilities", raw.get("abilities_json", []))
+        loot_raw = raw.get("loot", raw.get("loot_json", []))
+        try:
+            abilities_json = (ab_raw if isinstance(ab_raw, str)
+                              else _json.dumps(ab_raw))
+            loot_json = (loot_raw if isinstance(loot_raw, str)
+                         else _json.dumps(loot_raw))
+            _json.loads(abilities_json)
+            _json.loads(loot_json)
+        except (TypeError, ValueError, _json.JSONDecodeError) as exc:
+            errors.append(f"Enemy {idx} ({key}): invalid abilities/loot JSON ({exc}).")
+            continue
+        try:
+            await db.rpg_upsert_enemy(
+                enemy_key=key,
+                name=name,
+                description=str(raw.get("description") or ""),
+                hp=int(raw.get("hp", 15)),
+                attack=int(raw.get("attack", 4)),
+                defense=int(raw.get("defense", 3)),
+                agility=int(raw.get("agility", 4)),
+                abilities_json=abilities_json,
+                loot_json=loot_json,
+                xp_reward=int(raw.get("xp_reward", 10)),
+            )
+            count += 1
+        except Exception as exc:
+            errors.append(f"Enemy {idx} ({key}): DB error — {exc}")
+    return count, errors
+
+
+async def _rpg_import_items(db, raw_json: str, _json) -> tuple[int, list[str]]:
+    """Validate + bulk-upsert items from a JSON payload.
+
+    Accepts either a JSON list or an object with `{"items":[...]}`.
+    """
+    errors: list[str] = []
+    if not raw_json:
+        return 0, ["JSON input is required."]
+    try:
+        payload = _json.loads(raw_json)
+    except _json.JSONDecodeError as exc:
+        return 0, [f"Invalid JSON: {exc.msg} at line {exc.lineno}."]
+    if isinstance(payload, dict) and "items" in payload:
+        items = payload["items"]
+    elif isinstance(payload, list):
+        items = payload
+    elif isinstance(payload, dict) and "item_key" in payload:
+        items = [payload]
+    else:
+        return 0, ["JSON must be a list, an item object, or {\"items\":[...]}."]
+
+    count = 0
+    for idx, raw in enumerate(items, start=1):
+        if not isinstance(raw, dict):
+            errors.append(f"Item {idx}: must be an object.")
+            continue
+        key = str(raw.get("item_key") or "").strip()
+        name = str(raw.get("name") or "").strip()
+        if not key or not name:
+            errors.append(f"Item {idx}: 'item_key' and 'name' are required.")
+            continue
+        eff_raw = raw.get("effect", raw.get("effect_json", {}))
+        try:
+            effect_json = (eff_raw if isinstance(eff_raw, str)
+                           else _json.dumps(eff_raw))
+            _json.loads(effect_json)
+        except (TypeError, ValueError, _json.JSONDecodeError) as exc:
+            errors.append(f"Item {idx} ({key}): invalid effect JSON ({exc}).")
+            continue
+        try:
+            await db.rpg_upsert_item(
+                item_key=key,
+                name=name,
+                description=str(raw.get("description") or ""),
+                item_type=str(raw.get("item_type") or "misc"),
+                effect_json=effect_json,
+            )
+            count += 1
+        except Exception as exc:
+            errors.append(f"Item {idx} ({key}): DB error — {exc}")
+    return count, errors
+
+
 def create_app(db: Database, bot=None) -> Quart:
     app = Quart(
         __name__,
@@ -6383,6 +6499,180 @@ def create_app(db: Database, bot=None) -> Quart:
                     await flash("Adventure deleted.", "success")
                 return redirect(url_for("rpg_admin", tab="adventures"))
 
+            elif action == "adv_import":
+                raw_json = (form.get("adventures_json") or "").strip()
+                if not raw_json:
+                    await flash("JSON input is required.", "error")
+                    return redirect(url_for("rpg_admin", tab="adventures"))
+                try:
+                    payload = _json.loads(raw_json)
+                except _json.JSONDecodeError as exc:
+                    await flash(
+                        f"Invalid JSON: {exc.msg} at line {exc.lineno}.", "error"
+                    )
+                    return redirect(url_for("rpg_admin", tab="adventures"))
+
+                if isinstance(payload, dict) and "adventures" in payload:
+                    items = payload["adventures"]
+                elif isinstance(payload, dict) and "name" in payload:
+                    items = [payload]
+                elif isinstance(payload, list):
+                    items = payload
+                else:
+                    await flash(
+                        "JSON must be an adventure object, a list of "
+                        "adventures, or {\"adventures\":[...]}.", "error",
+                    )
+                    return redirect(url_for("rpg_admin", tab="adventures"))
+
+                imported = 0
+                errors: list[str] = []
+                last_id = None
+                for idx, raw_adv in enumerate(items, start=1):
+                    if not isinstance(raw_adv, dict):
+                        errors.append(f"Adventure {idx}: expected an object.")
+                        continue
+                    name = str(raw_adv.get("name") or "").strip()
+                    if not name:
+                        errors.append(f"Adventure {idx}: 'name' is required.")
+                        continue
+                    raw_scenes = raw_adv.get("scenes") or []
+                    if not isinstance(raw_scenes, list):
+                        errors.append(
+                            f"Adventure {idx} ({name}): 'scenes' must be an array."
+                        )
+                        continue
+                    prepared_scenes: list[dict] = []
+                    keys_seen: set[str] = set()
+                    bad = False
+                    for sidx, raw_scene in enumerate(raw_scenes, start=1):
+                        if not isinstance(raw_scene, dict):
+                            errors.append(
+                                f"Adventure {idx} scene {sidx}: must be an object."
+                            )
+                            bad = True
+                            break
+                        skey = str(raw_scene.get("scene_key") or "").strip()
+                        if not skey:
+                            errors.append(
+                                f"Adventure {idx} scene {sidx}: 'scene_key' required."
+                            )
+                            bad = True
+                            break
+                        if skey in keys_seen:
+                            errors.append(
+                                f"Adventure {idx}: duplicate scene_key '{skey}'."
+                            )
+                            bad = True
+                            break
+                        keys_seen.add(skey)
+                        # Accept either inline object under "data" or string "data_json"
+                        if "data_json" in raw_scene:
+                            data_str = raw_scene["data_json"]
+                            if not isinstance(data_str, str):
+                                data_str = _json.dumps(data_str)
+                            try:
+                                _json.loads(data_str or "{}")
+                            except _json.JSONDecodeError as exc:
+                                errors.append(
+                                    f"Adventure {idx} scene '{skey}': "
+                                    f"invalid data_json ({exc.msg})."
+                                )
+                                bad = True
+                                break
+                        else:
+                            data_obj = raw_scene.get("data") or {}
+                            if not isinstance(data_obj, (dict, list)):
+                                errors.append(
+                                    f"Adventure {idx} scene '{skey}': "
+                                    "'data' must be an object or array."
+                                )
+                                bad = True
+                                break
+                            data_str = _json.dumps(data_obj)
+                        prepared_scenes.append({
+                            "scene_key": skey,
+                            "title": str(raw_scene.get("title") or ""),
+                            "narration": str(raw_scene.get("narration") or ""),
+                            "scene_type": str(raw_scene.get("scene_type") or "story"),
+                            "data_json": data_str or "{}",
+                        })
+                    if bad:
+                        continue
+                    # Validate start_scene_key references an actual scene if given
+                    start_key = str(raw_adv.get("start_scene_key") or "").strip()
+                    if start_key and start_key not in keys_seen:
+                        errors.append(
+                            f"Adventure {idx} ({name}): start_scene_key "
+                            f"'{start_key}' not found among the imported scenes."
+                        )
+                        continue
+                    # Validate that every choice/next/after_combat reference exists
+                    ref_errors: list[str] = []
+                    for ps in prepared_scenes:
+                        try:
+                            data_obj = _json.loads(ps["data_json"])
+                        except _json.JSONDecodeError:
+                            continue
+                        if not isinstance(data_obj, dict):
+                            continue
+                        for choice in (data_obj.get("choices") or []):
+                            nxt = choice.get("next") if isinstance(choice, dict) else None
+                            if nxt and nxt not in keys_seen:
+                                ref_errors.append(
+                                    f"scene '{ps['scene_key']}' choice -> '{nxt}' missing"
+                                )
+                        for ref_key in ("next", "after_combat"):
+                            ref = data_obj.get(ref_key)
+                            if ref and ref not in keys_seen:
+                                ref_errors.append(
+                                    f"scene '{ps['scene_key']}' {ref_key} -> '{ref}' missing"
+                                )
+                    if ref_errors:
+                        errors.append(
+                            f"Adventure {idx} ({name}): unresolved scene refs — "
+                            + "; ".join(ref_errors[:5])
+                            + (" …" if len(ref_errors) > 5 else "")
+                        )
+                        continue
+                    try:
+                        last_id = await db.rpg_import_adventure(
+                            {
+                                "name": name,
+                                "description": str(raw_adv.get("description") or ""),
+                                "intro_text": str(raw_adv.get("intro_text") or ""),
+                                "llm_system_prompt": str(
+                                    raw_adv.get("llm_system_prompt") or ""
+                                ),
+                                "start_scene_key": start_key,
+                                "is_active": bool(raw_adv.get("is_active", True)),
+                            },
+                            prepared_scenes,
+                        )
+                        imported += 1
+                    except Exception as e:
+                        errors.append(f"Adventure {idx} ({name}): DB error — {e}")
+
+                if errors:
+                    preview = " · ".join(errors[:5])
+                    if len(errors) > 5:
+                        preview += f" (+{len(errors) - 5} more)"
+                    if imported:
+                        await flash(
+                            f"Imported {imported} adventure(s) with errors: {preview}",
+                            "error",
+                        )
+                    else:
+                        await flash(f"Import failed: {preview}", "error")
+                else:
+                    await flash(
+                        f"Imported {imported} adventure(s) successfully.", "success"
+                    )
+                if imported == 1 and last_id:
+                    return redirect(url_for("rpg_admin", tab="adventures",
+                                            adventure_id=last_id))
+                return redirect(url_for("rpg_admin", tab="adventures"))
+
             # --- Scenes ---
             elif action == "scene_create":
                 aid = int(form.get("adventure_id") or 0)
@@ -6501,6 +6791,27 @@ def create_app(db: Database, bot=None) -> Quart:
                     await flash("Enemy deleted.", "success")
                 return redirect(url_for("rpg_admin", tab="enemies"))
 
+            elif action == "enemy_import":
+                count, errors = await _rpg_import_enemies(
+                    db, (form.get("enemies_json") or "").strip(), _json
+                )
+                if errors:
+                    preview = " · ".join(errors[:5])
+                    if len(errors) > 5:
+                        preview += f" (+{len(errors) - 5} more)"
+                    if count:
+                        await flash(
+                            f"Imported {count} enemy/enemies with errors: {preview}",
+                            "error",
+                        )
+                    else:
+                        await flash(f"Import failed: {preview}", "error")
+                else:
+                    await flash(
+                        f"Imported {count} enemy/enemies successfully.", "success"
+                    )
+                return redirect(url_for("rpg_admin", tab="enemies"))
+
             # --- Items ---
             elif action == "item_upsert":
                 effect_raw = (form.get("effect_json") or "{}").strip() or "{}"
@@ -6524,6 +6835,25 @@ def create_app(db: Database, bot=None) -> Quart:
                 if key:
                     await db.rpg_delete_item(key)
                     await flash("Item deleted.", "success")
+                return redirect(url_for("rpg_admin", tab="items"))
+
+            elif action == "item_import":
+                count, errors = await _rpg_import_items(
+                    db, (form.get("items_json") or "").strip(), _json
+                )
+                if errors:
+                    preview = " · ".join(errors[:5])
+                    if len(errors) > 5:
+                        preview += f" (+{len(errors) - 5} more)"
+                    if count:
+                        await flash(
+                            f"Imported {count} item(s) with errors: {preview}",
+                            "error",
+                        )
+                    else:
+                        await flash(f"Import failed: {preview}", "error")
+                else:
+                    await flash(f"Imported {count} item(s) successfully.", "success")
                 return redirect(url_for("rpg_admin", tab="items"))
 
             # --- Characters / Parties (admin override) ---

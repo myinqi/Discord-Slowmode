@@ -3449,6 +3449,47 @@ class Database:
         await self.db.execute("DELETE FROM rpg_adventures WHERE id = ?", (adventure_id,))
         await self.db.commit()
 
+    async def rpg_import_adventure(self, adv: dict, scenes: list[dict]) -> int:
+        """Atomically create an adventure plus all its scenes.
+
+        On any error the transaction is rolled back. Returns the new adventure id.
+        """
+        try:
+            cur = await self.db.execute(
+                """INSERT INTO rpg_adventures
+                   (name, description, intro_text, llm_system_prompt,
+                    start_scene_key, is_active)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    adv["name"],
+                    adv.get("description", ""),
+                    adv.get("intro_text", ""),
+                    adv.get("llm_system_prompt", ""),
+                    adv.get("start_scene_key") or None,
+                    1 if adv.get("is_active", True) else 0,
+                ),
+            )
+            adv_id = cur.lastrowid
+            for s in scenes:
+                await self.db.execute(
+                    """INSERT INTO rpg_scenes
+                       (adventure_id, scene_key, title, narration, scene_type, data_json)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        adv_id,
+                        s["scene_key"],
+                        s.get("title", ""),
+                        s.get("narration", ""),
+                        s.get("scene_type", "story"),
+                        s.get("data_json", "{}"),
+                    ),
+                )
+            await self.db.commit()
+            return adv_id
+        except Exception:
+            await self.db.rollback()
+            raise
+
     # =======================================================================
     # RPG — Scenes
     # =======================================================================
