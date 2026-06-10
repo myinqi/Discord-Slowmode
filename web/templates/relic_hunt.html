@@ -72,9 +72,9 @@
 
   <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
     {# Top Hunters #}
-    <div class="bg-discord-dark rounded-xl border border-gray-700/50 overflow-hidden">
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50 overflow-hidden flex flex-col">
       <div class="px-4 py-3 border-b border-gray-700/50 text-white font-semibold text-sm">🏆 Top Hunters</div>
-      <div class="divide-y divide-gray-700/30 max-h-[34rem] overflow-y-auto">
+      <div class="divide-y divide-gray-700/30 flex-1 min-h-0 overflow-y-auto">
         {% for u in users %}
         {% set level = u.level or 1 %}
         {% set rank = namespace(name='Nestling', icon='🐣') %}
