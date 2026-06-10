@@ -74,8 +74,8 @@
     {# Top Hunters #}
     <div class="bg-discord-dark rounded-xl border border-gray-700/50 overflow-hidden">
       <div class="px-4 py-3 border-b border-gray-700/50 text-white font-semibold text-sm">🏆 Top Hunters</div>
-      <div class="divide-y divide-gray-700/30">
-        {% for u in users[:10] %}
+      <div class="divide-y divide-gray-700/30 max-h-[34rem] overflow-y-auto">
+        {% for u in users %}
         {% set level = u.level or 1 %}
         {% set rank = namespace(name='Nestling', icon='🐣') %}
         {% for r in ranks %}{% if level >= r.required_level %}{% set rank.name = r.name %}{% set rank.icon = r.icon %}{% endif %}{% endfor %}
