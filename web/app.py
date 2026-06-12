@@ -4960,6 +4960,39 @@ def create_app(db: Database, bot=None) -> Quart:
                     await db.relic_upsert_item(row)
                 await flash(f"Default item library restored ({len(DEFAULT_ITEMS)} items).", "success")
 
+            elif action == "upsert_rank":
+                rank_id = form.get("rank_id", "").strip().replace(" ", "_").lower()
+                if not rank_id:
+                    await flash("Rank ID is required.", "error")
+                elif not form.get("name", "").strip():
+                    await flash("Rank name is required.", "error")
+                else:
+                    await db.relic_upsert_rank({
+                        "id": rank_id,
+                        "name": form.get("name", "").strip(),
+                        "icon": form.get("icon", "").strip(),
+                        "min_points": max(0, int(form.get("min_points") or 0)),
+                        "enabled": 1 if form.get("enabled") else 0,
+                    })
+                    await flash("Rank saved.", "success")
+
+            elif action == "toggle_rank":
+                rank_id = form.get("rank_id", "")
+                rank = await db.relic_get_rank(rank_id)
+                if rank:
+                    rank["enabled"] = 0 if rank["enabled"] else 1
+                    await db.relic_upsert_rank(rank)
+
+            elif action == "delete_rank":
+                await db.relic_delete_rank(form.get("rank_id", ""))
+                await flash("Rank deleted.", "success")
+
+            elif action == "reset_ranks":
+                from bot.relic_hunt import DEFAULT_RANKS
+                for rank in DEFAULT_RANKS:
+                    await db.relic_upsert_rank({**rank, "enabled": 1})
+                await flash(f"Default ranks restored ({len(DEFAULT_RANKS)} ranks).", "success")
+
             elif action == "edit_user_points":
                 uid = form.get("twitch_user_id", "")
                 user = await db.relic_get_user(uid)
@@ -5054,6 +5087,12 @@ def create_app(db: Database, bot=None) -> Quart:
 
         # GET
         await db.ensure_relic_tables()
+        from bot.relic_hunt import DEFAULT_RANKS
+        ranks = await db.relic_get_all_ranks()
+        if not ranks:
+            for rank in DEFAULT_RANKS:
+                await db.relic_upsert_rank({**rank, "enabled": 1})
+            ranks = await db.relic_get_all_ranks()
         items   = await db.relic_get_all_items()
         users   = await db.relic_get_all_users()
         events  = await db.relic_get_all_events()
@@ -5094,7 +5133,6 @@ def create_app(db: Database, bot=None) -> Quart:
         total_legendary = sum(u.get("legendary_finds", 0) for u in users)
         total_mythic = sum(u.get("mythic_finds", 0) for u in users)
 
-        from bot.relic_hunt import DEFAULT_RANKS
         return await render_template(
             "relic_hunt.html",
             items=items, users=users[:50],
@@ -5105,7 +5143,7 @@ def create_app(db: Database, bot=None) -> Quart:
             total_hunts=total_hunts,
             total_legendary=total_legendary,
             total_mythic=total_mythic,
-            ranks=DEFAULT_RANKS,
+            ranks=ranks,
             active_event_ids=active_event_ids,
         )
 

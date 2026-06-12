@@ -2845,7 +2845,60 @@ class Database:
                 goal INTEGER NOT NULL DEFAULT 500,
                 updated_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS relic_ranks (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                icon TEXT,
+                min_points INTEGER NOT NULL DEFAULT 0,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
         """)
+        await self.db.commit()
+
+    # -----------------------------------------------------------------------
+    # Relic Hunt — ranks
+    # -----------------------------------------------------------------------
+    async def relic_get_all_ranks(self, active_only: bool = False) -> list[dict]:
+        where = "WHERE enabled = 1" if active_only else ""
+        async with self.db.execute(
+            f"SELECT * FROM relic_ranks {where} ORDER BY min_points ASC, name ASC"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def relic_get_rank(self, rank_id: str) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM relic_ranks WHERE id = ?", (rank_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def relic_upsert_rank(self, rank: dict) -> None:
+        now = time.time()
+        await self.db.execute("""
+            INSERT INTO relic_ranks
+              (id, name, icon, min_points, enabled, created_at, updated_at)
+            VALUES
+              (:id,:name,:icon,:min_points,:enabled,:now,:now)
+            ON CONFLICT(id) DO UPDATE SET
+              name=excluded.name,
+              icon=excluded.icon,
+              min_points=excluded.min_points,
+              enabled=excluded.enabled,
+              updated_at=excluded.updated_at
+        """, {
+            "id": rank["id"],
+            "name": rank["name"],
+            "icon": rank.get("icon", ""),
+            "min_points": int(rank.get("min_points") or 0),
+            "enabled": 1 if rank.get("enabled", 1) else 0,
+            "now": now,
+        })
+        await self.db.commit()
+
+    async def relic_delete_rank(self, rank_id: str) -> None:
+        await self.db.execute("DELETE FROM relic_ranks WHERE id = ?", (rank_id,))
         await self.db.commit()
 
     # -----------------------------------------------------------------------

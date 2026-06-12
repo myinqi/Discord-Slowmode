@@ -27,17 +27,17 @@ def _xp_for_next(level: int) -> int:
 RARITY_ORDER = ["common", "uncommon", "rare", "epic", "legendary", "mythic"]
 
 DEFAULT_RANKS = [
-    {"id": "nestling",            "name": "Nestling",            "required_level": 1,  "icon": "🐣"},
-    {"id": "feather_finder",      "name": "Feather Finder",      "required_level": 2,  "icon": "🪶"},
-    {"id": "raven_watcher",       "name": "Raven Watcher",       "required_level": 4,  "icon": "👁️"},
-    {"id": "rune_collector",      "name": "Rune Collector",      "required_level": 6,  "icon": "ᚱ"},
-    {"id": "blackroot_scout",     "name": "Blackroot Scout",     "required_level": 8,  "icon": "🌲"},
-    {"id": "hollow_walker",       "name": "Hollow Walker",       "required_level": 10, "icon": "🌫️"},
-    {"id": "storm_caller",        "name": "Storm Caller",        "required_level": 14, "icon": "⛈️"},
-    {"id": "raven_seer",          "name": "Raven Seer",          "required_level": 18, "icon": "🔮"},
-    {"id": "nest_guardian",       "name": "Nest Guardian",       "required_level": 24, "icon": "🛡️"},
-    {"id": "raven_lord",          "name": "Raven Lord",          "required_level": 32, "icon": "👑"},
-    {"id": "blackwing_ascendant", "name": "Blackwing Ascendant", "required_level": 45, "icon": "🌑"},
+    {"id": "nestling",            "name": "Nestling",            "min_points": 0,     "icon": "🐣"},
+    {"id": "feather_finder",      "name": "Feather Finder",      "min_points": 250,   "icon": "🪶"},
+    {"id": "raven_watcher",       "name": "Raven Watcher",       "min_points": 1200,  "icon": "👁️"},
+    {"id": "rune_collector",      "name": "Rune Collector",      "min_points": 2500,  "icon": "ᚱ"},
+    {"id": "blackroot_scout",     "name": "Blackroot Scout",     "min_points": 6000,  "icon": "🌲"},
+    {"id": "hollow_walker",       "name": "Hollow Walker",       "min_points": 10000, "icon": "🌫️"},
+    {"id": "storm_caller",        "name": "Storm Caller",        "min_points": 15000, "icon": "⛈️"},
+    {"id": "raven_seer",          "name": "Raven Seer",          "min_points": 22000, "icon": "🔮"},
+    {"id": "nest_guardian",       "name": "Nest Guardian",       "min_points": 32000, "icon": "🛡️"},
+    {"id": "raven_lord",          "name": "Raven Lord",          "min_points": 45000, "icon": "👑"},
+    {"id": "blackwing_ascendant", "name": "Blackwing Ascendant", "min_points": 65000, "icon": "🌑"},
 ]
 
 DEFAULT_ITEMS = [
@@ -102,19 +102,23 @@ DEFAULT_EVENTS = [
 ]
 
 
-def _get_rank(level: int, ranks: Optional[list] = None) -> dict:
-    r = ranks or DEFAULT_RANKS
+def _rank_min_points(rank: dict) -> int:
+    return int(rank.get("min_points", rank.get("required_level", 0)) or 0)
+
+
+def _get_rank(points: int, ranks: Optional[list] = None) -> dict:
+    r = sorted(ranks or DEFAULT_RANKS, key=_rank_min_points)
     current = r[0]
     for rank in r:
-        if level >= rank["required_level"]:
+        if points >= _rank_min_points(rank):
             current = rank
     return current
 
 
-def _get_next_rank(level: int, ranks: Optional[list] = None) -> Optional[dict]:
-    r = ranks or DEFAULT_RANKS
+def _get_next_rank(points: int, ranks: Optional[list] = None) -> Optional[dict]:
+    r = sorted(ranks or DEFAULT_RANKS, key=_rank_min_points)
     for rank in r:
-        if rank["required_level"] > level:
+        if _rank_min_points(rank) > points:
             return rank
     return None
 
@@ -307,6 +311,12 @@ class RelicHunt:
                 await self.db.relic_upsert_event(ev)
             _rlog(f"Seeded {len(DEFAULT_EVENTS)} default events")
 
+        ranks = await self.db.relic_get_all_ranks()
+        if not ranks:
+            for rank in DEFAULT_RANKS:
+                await self.db.relic_upsert_rank(rank)
+            _rlog(f"Seeded {len(DEFAULT_RANKS)} default ranks")
+
     # ------------------------------------------------------------------ #
     # Helpers                                                              #
     # ------------------------------------------------------------------ #
@@ -329,16 +339,21 @@ class RelicHunt:
                 await self.db.relic_upsert_user(user)
         return user
 
-    async def _apply_xp(self, user: dict, xp_gain: int) -> tuple[dict, int, Optional[dict]]:
+    async def _get_ranks(self) -> list[dict]:
+        ranks = await self.db.relic_get_all_ranks(active_only=True)
+        return ranks or DEFAULT_RANKS
+
+    async def _apply_xp(self, user: dict, xp_gain: int, old_points: Optional[int] = None) -> tuple[dict, int, Optional[dict]]:
         """Apply XP and level-ups. Returns (updated_user, level_ups, new_rank_or_None)."""
-        old_rank = _get_rank(user["level"])
+        ranks = await self._get_ranks()
+        old_rank = _get_rank(user["points"] if old_points is None else old_points, ranks)
         user["xp"] += xp_gain
         level_ups = 0
         while user["xp"] >= _xp_for_next(user["level"]):
             user["xp"] -= _xp_for_next(user["level"])
             user["level"] += 1
             level_ups += 1
-        new_rank = _get_rank(user["level"])
+        new_rank = _get_rank(user["points"], ranks)
         rank_changed = new_rank["id"] != old_rank["id"]
         return user, level_ups, (new_rank if rank_changed else None)
 
@@ -412,6 +427,7 @@ class RelicHunt:
         xp  = int(random.randint(item["min_xp"],     item["max_xp"])     * xp_mult)
 
         # Update user
+        old_points = user["points"]
         user["points"]         += pts
         user["last_raven_at"]   = time.time()
         user["commands_used"]  += 1
@@ -421,7 +437,7 @@ class RelicHunt:
         elif rarity == "mythic":
             user["mythic_finds"] += 1
 
-        user, level_ups, new_rank = await self._apply_xp(user, xp)
+        user, level_ups, new_rank = await self._apply_xp(user, xp, old_points)
         await self.db.relic_upsert_user(user)
         await self.db.relic_add_item_to_user(uid, item["id"])
 
@@ -446,9 +462,12 @@ class RelicHunt:
 
         # Level-up / rank announcement
         announce_lvl = (await self.db.relic_get_setting("announce_level_ups")) == "true"
+        announce_rank = (await self.db.relic_get_setting("announce_rank_ups")) == "true"
         if level_ups and announce_lvl:
-            rank_str = f" and became a {new_rank['icon']} {new_rank['name']}!" if new_rank else "!"
+            rank_str = f" and became a {new_rank['icon']} {new_rank['name']}!" if new_rank and announce_rank else "!"
             await self._send(f"⬆️ @{name} reached level {user['level']}{rank_str}")
+        elif new_rank and announce_rank:
+            await self._send(f"⬆️ @{name} became a {new_rank['icon']} {new_rank['name']}!")
 
         # Log
         await self.db.relic_log_hunt({
@@ -464,8 +483,9 @@ class RelicHunt:
         uid  = ctx["user_id"]
         name = ctx["username"]
         user = await self._get_or_create_user(uid, name)
-        rank = _get_rank(user["level"])
-        next_rank = _get_next_rank(user["level"])
+        ranks = await self._get_ranks()
+        rank = _get_rank(user["points"], ranks)
+        next_rank = _get_next_rank(user["points"], ranks)
         inv  = await self.db.relic_get_inventory(uid)
         total_items = sum(i["amount"] for i in inv)
         rarest = max(inv, key=lambda i: RARITY_ORDER.index(
@@ -473,7 +493,7 @@ class RelicHunt:
         ), default=None)
         rarest_str = f" | Rarest: {rarest['icon'] or ''} {rarest['name']}" if rarest else ""
         next_xp = _xp_for_next(user["level"])
-        next_str = f" | Next rank: {next_rank['name']} at level {next_rank['required_level']}" if next_rank else " | Max rank reached"
+        next_str = f" | Next rank: {next_rank['name']} at {next_rank['min_points']} pts" if next_rank else " | Max rank reached"
         await self._send(
             f"@{name}'s Nest | Rank: {rank['name']} | Level: {user['level']} | "
             f"XP: {user['xp']}/{next_xp} | Points: {user['points']} | "
@@ -514,13 +534,14 @@ class RelicHunt:
         uid  = ctx["user_id"]
         name = ctx["username"]
         user = await self._get_or_create_user(uid, name)
-        rank = _get_rank(user["level"])
-        next_rank = _get_next_rank(user["level"])
+        ranks = await self._get_ranks()
+        rank = _get_rank(user["points"], ranks)
+        next_rank = _get_next_rank(user["points"], ranks)
         next_xp   = _xp_for_next(user["level"])
-        next_str  = f" | Next rank: {next_rank['name']} at level {next_rank['required_level']}." if next_rank else " | Max rank reached."
+        next_str  = f" | Next rank: {next_rank['name']} at {next_rank['min_points']} pts." if next_rank else " | Max rank reached."
         await self._send(
             f"@{name} Rank: {rank['name']} | Level: {user['level']} | "
-            f"XP: {user['xp']}/{next_xp}{next_str}"
+            f"XP: {user['xp']}/{next_xp} | Points: {user['points']}{next_str}"
         )
 
     async def _cmd_daily(self, ctx: dict) -> None:
@@ -548,9 +569,10 @@ class RelicHunt:
         # Daily reward: fixed points + XP + item drop
         pts = 75
         xp  = 40
+        old_points = user["points"]
         user["points"] += pts
         user["last_daily_at"] = time.time()
-        user, level_ups, new_rank = await self._apply_xp(user, xp)
+        user, level_ups, new_rank = await self._apply_xp(user, xp, old_points)
 
         # Give a random common/uncommon item
         all_items = await self.db.relic_get_all_items()

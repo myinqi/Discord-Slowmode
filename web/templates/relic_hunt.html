@@ -48,7 +48,7 @@
 {# ── Tabs ────────────────────────────────────────────────────────────────── #}
 <div class="border-b border-gray-700/50 mb-6">
   <nav class="flex gap-1" id="rh-tabs">
-    {% for tab_id, tab_label in [('dashboard','Dashboard'),('items','Items'),('users','Users'),('ritual','Ritual'),('events','Events'),('settings','Settings')] %}
+    {% for tab_id, tab_label in [('dashboard','Dashboard'),('items','Items'),('ranks','Ranks'),('users','Users'),('ritual','Ritual'),('events','Events'),('settings','Settings')] %}
     <button onclick="switchTab('{{ tab_id }}')" id="tab-{{ tab_id }}"
       class="rh-tab px-4 py-2 text-sm rounded-t-lg border-b-2 transition-colors {% if loop.first %}border-discord-blurple text-white{% else %}border-transparent text-gray-400 hover:text-gray-200{% endif %}">
       {{ tab_label }}
@@ -76,9 +76,8 @@
       <div class="px-4 py-3 border-b border-gray-700/50 text-white font-semibold text-sm">🏆 Top Hunters</div>
       <div class="divide-y divide-gray-700/30 flex-1 min-h-0 overflow-y-auto">
         {% for u in users %}
-        {% set level = u.level or 1 %}
         {% set rank = namespace(name='Nestling', icon='🐣') %}
-        {% for r in ranks %}{% if level >= r.required_level %}{% set rank.name = r.name %}{% set rank.icon = r.icon %}{% endif %}{% endfor %}
+        {% for r in ranks %}{% if r.enabled and u.points >= r.min_points %}{% set rank.name = r.name %}{% set rank.icon = r.icon %}{% endif %}{% endfor %}
         <div class="flex items-center gap-3 px-4 py-2.5">
           <span class="text-gray-500 text-xs w-4">{{ loop.index }}</span>
           <span class="flex-1 text-white text-sm">{{ u.username }}</span>
@@ -213,6 +212,68 @@
 </div>
 
 {# ══════════════════════════════════════════════════════════════════════════
+   TAB: Ranks
+══════════════════════════════════════════════════════════════════════════ #}
+<div id="pane-ranks" class="rh-pane hidden">
+  <div class="flex justify-end mb-4 gap-2">
+    <form method="POST" onsubmit="return confirm('Restore default ranks? Existing default IDs will be overwritten.')">
+      <input type="hidden" name="action" value="reset_ranks">
+      <button class="px-3 py-1.5 rounded-lg text-sm bg-yellow-800/50 hover:bg-yellow-800 text-yellow-200 transition-colors">↺ Restore Defaults</button>
+    </form>
+    <button onclick="openRankModal()"
+      class="px-3 py-1.5 rounded-lg text-sm bg-discord-blurple hover:bg-indigo-500 text-white transition-colors">+ New Rank</button>
+  </div>
+
+  <div class="bg-discord-dark rounded-xl border border-gray-700/50 overflow-hidden">
+    <table class="w-full text-sm">
+      <thead class="border-b border-gray-700/50">
+        <tr class="text-left text-gray-400 text-xs">
+          <th class="px-3 py-2">On</th>
+          <th class="px-3 py-2">Icon</th>
+          <th class="px-3 py-2">Name</th>
+          <th class="px-3 py-2">Minimum Points</th>
+          <th class="px-3 py-2">Rank ID</th>
+          <th class="px-3 py-2">Actions</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-700/30">
+        {% for rank in ranks %}
+        <tr class="hover:bg-discord-lighter/30 transition-colors">
+          <td class="px-3 py-2">
+            <form method="POST" class="inline">
+              <input type="hidden" name="action" value="toggle_rank">
+              <input type="hidden" name="rank_id" value="{{ rank.id }}">
+              <button type="submit" class="w-4 h-4 rounded border transition-colors
+                {% if rank.enabled %}bg-discord-blurple border-discord-blurple{% else %}border-gray-600{% endif %}">
+              </button>
+            </form>
+          </td>
+          <td class="px-3 py-2 text-lg">{{ rank.icon or '' }}</td>
+          <td class="px-3 py-2 text-white">{{ rank.name }}</td>
+          <td class="px-3 py-2 text-yellow-400 font-mono">{{ rank.min_points }}</td>
+          <td class="px-3 py-2 text-gray-500 font-mono text-xs">{{ rank.id }}</td>
+          <td class="px-3 py-2">
+            <div class="flex gap-1">
+              <button onclick='openRankModal({{ rank|tojson }})'
+                class="px-2 py-1 rounded text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">Edit</button>
+              <form method="POST" onsubmit="return confirm('Delete this rank?')" class="inline">
+                <input type="hidden" name="action" value="delete_rank">
+                <input type="hidden" name="rank_id" value="{{ rank.id }}">
+                <button class="px-2 py-1 rounded text-xs bg-red-900/50 hover:bg-red-900 text-red-300 transition-colors">✕</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if not ranks %}
+    <div class="px-4 py-8 text-center text-gray-500">No ranks yet. Click "Restore Defaults" to seed the rank list.</div>
+    {% endif %}
+  </div>
+</div>
+
+{# ══════════════════════════════════════════════════════════════════════════
    TAB: Users
 ══════════════════════════════════════════════════════════════════════════ #}
 <div id="pane-users" class="rh-pane hidden">
@@ -232,9 +293,8 @@
       </thead>
       <tbody class="divide-y divide-gray-700/30">
         {% for u in users %}
-        {% set level = u.level or 1 %}
         {% set rank = namespace(name='Nestling', icon='🐣') %}
-        {% for r in ranks %}{% if level >= r.required_level %}{% set rank.name = r.name %}{% set rank.icon = r.icon %}{% endif %}{% endfor %}
+        {% for r in ranks %}{% if r.enabled and u.points >= r.min_points %}{% set rank.name = r.name %}{% set rank.icon = r.icon %}{% endif %}{% endfor %}
         <tr class="hover:bg-discord-lighter/30 transition-colors">
           <td class="px-3 py-2 text-white">{{ u.username }}</td>
           <td class="px-3 py-2 text-yellow-400 font-mono">{{ u.points }}</td>
@@ -516,6 +576,39 @@
   </div>
 </div>
 
+{# Rank modal #}
+<div id="rank-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+  onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="bg-discord-dark rounded-xl border border-gray-700/50 shadow-2xl w-full max-w-md">
+    <div class="px-5 py-4 border-b border-gray-700/50 flex justify-between items-center">
+      <h3 id="rank-modal-title" class="text-white font-semibold">New Rank</h3>
+      <button onclick="document.getElementById('rank-modal').classList.add('hidden')" class="text-gray-400 hover:text-white text-lg">✕</button>
+    </div>
+    <form method="POST" class="p-5 space-y-3">
+      <input type="hidden" name="action" value="upsert_rank">
+      <div><label class="text-gray-400 text-xs block mb-1">Rank ID *</label>
+        <input type="text" name="rank_id" id="rmod-id" required
+          class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+      <div><label class="text-gray-400 text-xs block mb-1">Display Name *</label>
+        <input type="text" name="name" id="rmod-name" required
+          class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="text-gray-400 text-xs block mb-1">Icon / Emoji</label>
+          <input type="text" name="icon" id="rmod-icon"
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+        <div><label class="text-gray-400 text-xs block mb-1">Minimum Points</label>
+          <input type="number" name="min_points" id="rmod-minp" value="0" min="0"
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+      </div>
+      <label class="flex items-center gap-2 cursor-pointer">
+        <input type="checkbox" name="enabled" id="rmod-en" value="1" checked class="w-4 h-4 accent-discord-blurple">
+        <span class="text-white text-sm">Enabled</span>
+      </label>
+      <button class="w-full mt-2 px-4 py-2 rounded-lg bg-discord-blurple hover:bg-indigo-500 text-white text-sm transition-colors">Save Rank</button>
+    </form>
+  </div>
+</div>
+
 {# User edit modal #}
 <div id="user-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
   onclick="if(event.target===this)this.classList.add('hidden')">
@@ -668,6 +761,16 @@ function openItemModal(item, duplicate) {
   document.getElementById('imod-rit').checked   = item ? !!item.can_be_used_in_ritual : false;
   document.getElementById('imod-ann').checked   = item ? !!item.announce_globally : false;
   m.classList.remove('hidden');
+}
+
+function openRankModal(rank) {
+  document.getElementById('rank-modal-title').textContent = rank ? 'Edit Rank' : 'New Rank';
+  document.getElementById('rmod-id').value    = rank ? (rank.id||'') : '';
+  document.getElementById('rmod-name').value  = rank ? (rank.name||'') : '';
+  document.getElementById('rmod-icon').value  = rank ? (rank.icon||'') : '';
+  document.getElementById('rmod-minp').value  = rank ? (rank.min_points||0) : 0;
+  document.getElementById('rmod-en').checked  = !rank || !!rank.enabled;
+  document.getElementById('rank-modal').classList.remove('hidden');
 }
 
 function openUserModal(u) {
