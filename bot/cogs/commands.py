@@ -4,6 +4,7 @@ import math
 import random
 import asyncio
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import aiohttp
 import discord
 from discord import app_commands
@@ -18,6 +19,8 @@ SUNO_PLAYLIST_PATTERN = re.compile(r'https://suno\.com/playlist/[\w-]+')
 SPOTIFY_ALBUM_PATTERN = re.compile(r'https://open\.spotify\.com/album/[\w?=&-]+')
 
 DEFAULT_REACTION_EMOJIS = ["👍", "❤️", "🔥", "🎵"]
+BERLIN_TZ = ZoneInfo("Europe/Berlin")
+MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 
 class NewSongCarouselView(discord.ui.View):
@@ -571,11 +574,17 @@ class CommandsCog(commands.Cog):
                 secs = math.ceil(remaining)
                 time_str = f"{secs}s"
 
+            ends_at = datetime.fromtimestamp(
+                record["timestamp"] + (cooldown_minutes * 60),
+                tz=BERLIN_TZ,
+            )
+            ends_at_str = f"{ends_at.day}. {MONTH_ABBR[ends_at.month - 1]} {ends_at:%H:%M}"
+
             # Resolve channel name
             guild_ch = interaction.guild.get_channel(ch["channel_id"]) if interaction.guild else None
             ch_name = f"#{guild_ch.name}" if guild_ch else f"#channel-{ch['channel_id']}"
 
-            active_timers.append(f"**{ch_name}** — {time_str} remaining")
+            active_timers.append(f"**{ch_name}** — {time_str} remaining · ends {ends_at_str}")
 
         if active_timers:
             bot_name = await self.bot.db.get_setting("bot_name") or "Slowmode Bot"
