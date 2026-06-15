@@ -165,6 +165,22 @@ def _fmt_cooldown(seconds: float) -> str:
     return f"{m}m {s}s" if s else f"{m}m"
 
 
+def _phrase_progress(phrase: str, revealed_mask: str) -> str:
+    if not phrase:
+        return ""
+    if len(revealed_mask) != len(phrase):
+        revealed_mask = "".join("0" if char.isalpha() else "1" for char in phrase)
+    parts = []
+    for index, char in enumerate(phrase):
+        if char.isspace():
+            parts.append("/")
+        elif char.isalpha():
+            parts.append(char.upper() if revealed_mask[index] == "1" else "_")
+        else:
+            parts.append(char)
+    return " ".join(parts)
+
+
 def _apply_event_multipliers(items: list, active_events: list) -> list:
     result = []
     for item in items:
@@ -224,6 +240,8 @@ class RelicHunt:
             (f"{p}daily",      self._cmd_daily),
             (f"{p}ritual",     self._cmd_ritual),
             (f"{p}combine",    self._cmd_combine),
+            (f"{p}phrase",     self._cmd_phrase),
+            (f"{p}solve",      self._cmd_solve),
             (f"{p}relichelp",  self._cmd_help),
             (f"{p}relic",      self._cmd_admin),
         ]:
@@ -535,6 +553,23 @@ class RelicHunt:
             "result_type": "found", "message": msg, "created_at": time.time(),
         })
 
+        puzzle = await self.db.relic_get_phrase_puzzle()
+        if (
+            puzzle.get("enabled")
+            and not puzzle.get("solved_at")
+            and random.random() < float(puzzle.get("letter_find_chance") or 0)
+        ):
+            revealed = await self.db.relic_reveal_random_phrase_letter()
+            if revealed:
+                progress = _phrase_progress(
+                    revealed["phrase"], revealed["revealed_mask"]
+                )
+                await self._send(
+                    f"🔤 @{name}'s raven found the letter "
+                    f"{revealed['revealed_letter'].upper()} for the hidden phrase! "
+                    f"{progress}"
+                )
+
     async def _cmd_nest(self, ctx: dict) -> None:
         if not await self._is_game_enabled():
             return
@@ -790,8 +825,93 @@ class RelicHunt:
                     f"⬆️ @{name} became a {new_rank['icon']} {new_rank['name']}!"
                 )
 
+    async def _cmd_phrase(self, ctx: dict) -> None:
+        if not await self._is_game_enabled():
+            return
+        puzzle = await self.db.relic_get_phrase_puzzle()
+        if not puzzle.get("phrase"):
+            await self._send("There is no hidden phrase yet.")
+            return
+        if puzzle.get("solved_at"):
+            await self._send(
+                f"🧩 The phrase was solved by "
+                f"@{puzzle.get('solved_by_username') or 'an unknown hunter'}: "
+                f"{puzzle['phrase']}"
+            )
+            return
+        if not puzzle.get("enabled"):
+            await self._send("The hidden phrase puzzle is currently disabled.")
+            return
+        progress = _phrase_progress(
+            puzzle["phrase"], puzzle.get("revealed_mask", "")
+        )
+        found = sum(
+            1 for index, char in enumerate(puzzle["phrase"])
+            if char.isalpha()
+            and index < len(puzzle.get("revealed_mask", ""))
+            and puzzle["revealed_mask"][index] == "1"
+        )
+        total = sum(char.isalpha() for char in puzzle["phrase"])
+        await self._send(
+            f"🧩 Hidden phrase: {progress} | Letters found: {found}/{total}"
+        )
+
+    async def _cmd_solve(self, ctx: dict) -> None:
+        if not await self._is_game_enabled():
+            return
+        uid = ctx["user_id"]
+        name = ctx["username"]
+        guess = (ctx.get("args") or "").strip()
+        if not guess:
+            await self._send(f"@{name} Use !solve followed by your answer.")
+            return
+
+        result = await self.db.relic_try_solve_phrase(
+            uid,
+            name,
+            " ".join(guess.casefold().split()),
+            cooldown_seconds=3600,
+        )
+        status = result["status"]
+        if status == "inactive":
+            await self._send("The hidden phrase puzzle is currently inactive.")
+            return
+        if status == "solved":
+            puzzle = result.get("puzzle") or {}
+            await self._send(
+                f"The phrase has already been solved by "
+                f"@{puzzle.get('solved_by_username') or 'another hunter'}."
+            )
+            return
+        if status == "cooldown":
+            await self._send(
+                f"@{name} You can try another solution in "
+                f"{_fmt_cooldown(result['remaining'])}."
+            )
+            return
+        if status == "wrong":
+            await self._send(
+                f"@{name} That is not the hidden phrase. "
+                f"You can try again in 60 minutes."
+            )
+            return
+
+        puzzle = result["puzzle"]
+        reward_xp = int(puzzle.get("winner_xp_reward") or 0)
+        user = await self._get_or_create_user(uid, name)
+        user, level_ups, _ = await self._apply_xp(user, reward_xp)
+        await self.db.relic_upsert_user(user)
+        await self._send(
+            f"🎉 @{name} solved the hidden phrase: {puzzle['phrase']} "
+            f"and wins +{reward_xp} XP!"
+        )
+        if level_ups and (
+            await self.db.relic_get_setting("announce_level_ups")
+        ) == "true":
+            await self._send(f"⬆️ @{name} reached level {user['level']}!")
+
     async def _cmd_help(self, ctx: dict) -> None:
-        await self._send("Raven's Nest commands: !raven, !nest, !items, !top, !rank, !daily, !ritual, !combine, !relichelp")
+        await self._send("Raven's Nest commands: !raven, !nest, !items, !top, !rank, !daily, !ritual, !combine, !phrase, !solve, !relichelp")
 
     async def _cmd_admin(self, ctx: dict) -> None:
         """Minimal admin commands for broadcaster/mods in chat."""

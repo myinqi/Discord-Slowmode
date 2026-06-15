@@ -5045,6 +5045,44 @@ def create_app(db: Database, bot=None) -> Quart:
                     "success",
                 )
 
+            elif action == "save_phrase_puzzle":
+                phrase = form.get("phrase", "").strip()
+                enabled = bool(form.get("phrase_enabled"))
+                try:
+                    chance_percent = float(
+                        form.get("letter_find_chance_percent") or 5
+                    )
+                    reward_xp = max(
+                        0, int(form.get("winner_xp_reward") or 500)
+                    )
+                except ValueError:
+                    await flash("Chance and XP reward must be valid numbers.", "error")
+                else:
+                    if enabled and not any(char.isalpha() for char in phrase):
+                        await flash(
+                            "An enabled phrase must contain at least one letter.",
+                            "error",
+                        )
+                    else:
+                        changed = await db.relic_save_phrase_puzzle(
+                            phrase=phrase,
+                            enabled=enabled,
+                            letter_find_chance=min(
+                                100.0, max(0.0, chance_percent)
+                            ) / 100.0,
+                            winner_xp_reward=reward_xp,
+                        )
+                        message = (
+                            "Phrase puzzle saved and progress reset."
+                            if changed
+                            else "Phrase puzzle settings saved."
+                        )
+                        await flash(message, "success")
+
+            elif action == "reset_phrase_progress":
+                await db.relic_reset_phrase_progress()
+                await flash("Phrase puzzle progress reset.", "success")
+
             elif action == "edit_user_points":
                 uid = form.get("twitch_user_id", "")
                 user = await db.relic_get_user(uid)
@@ -5175,6 +5213,22 @@ def create_app(db: Database, bot=None) -> Quart:
         active_events = await db.relic_get_active_events()
         active_event_ids = {ae["event_id"] for ae in active_events}
         ritual  = await db.relic_get_ritual()
+        phrase_puzzle = await db.relic_get_phrase_puzzle()
+        from bot.relic_hunt import _phrase_progress
+        phrase_progress = _phrase_progress(
+            phrase_puzzle.get("phrase", ""),
+            phrase_puzzle.get("revealed_mask", ""),
+        )
+        phrase_total_letters = sum(
+            char.isalpha() for char in phrase_puzzle.get("phrase", "")
+        )
+        phrase_found_letters = sum(
+            1
+            for index, char in enumerate(phrase_puzzle.get("phrase", ""))
+            if char.isalpha()
+            and index < len(phrase_puzzle.get("revealed_mask", ""))
+            and phrase_puzzle["revealed_mask"][index] == "1"
+        )
         log     = await db.relic_get_recent_log(30)
         game_enabled = (await db.relic_get_setting("enabled")) != "false"
         listener_running = relic_hunt._running
@@ -5221,6 +5275,10 @@ def create_app(db: Database, bot=None) -> Quart:
             total_mythic=total_mythic,
             ranks=ranks,
             recipes=recipes,
+            phrase_puzzle=phrase_puzzle,
+            phrase_progress=phrase_progress,
+            phrase_found_letters=phrase_found_letters,
+            phrase_total_letters=phrase_total_letters,
             active_event_ids=active_event_ids,
         )
 

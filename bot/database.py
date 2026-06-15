@@ -1,5 +1,6 @@
 import aiosqlite
 import os
+import random
 import time
 from typing import Optional
 
@@ -2865,6 +2866,24 @@ class Database:
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS relic_phrase_puzzle (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                phrase TEXT NOT NULL DEFAULT '',
+                revealed_mask TEXT NOT NULL DEFAULT '',
+                enabled INTEGER NOT NULL DEFAULT 0,
+                letter_find_chance REAL NOT NULL DEFAULT 0.05,
+                winner_xp_reward INTEGER NOT NULL DEFAULT 500,
+                solved_by_user_id TEXT,
+                solved_by_username TEXT,
+                solved_at REAL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS relic_phrase_guesses (
+                twitch_user_id TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                last_guess_at REAL NOT NULL
+            );
         """)
         await self.db.commit()
 
@@ -3067,6 +3086,218 @@ class Database:
             ))
             await self.db.commit()
             return True
+        except Exception:
+            await self.db.rollback()
+            raise
+
+    # -----------------------------------------------------------------------
+    # Relic Hunt — phrase puzzle
+    # -----------------------------------------------------------------------
+    async def relic_get_phrase_puzzle(self) -> dict:
+        async with self.db.execute(
+            "SELECT * FROM relic_phrase_puzzle WHERE id = 1"
+        ) as cur:
+            row = await cur.fetchone()
+            if row:
+                return dict(row)
+        return {
+            "id": 1,
+            "phrase": "",
+            "revealed_mask": "",
+            "enabled": 0,
+            "letter_find_chance": 0.05,
+            "winner_xp_reward": 500,
+            "solved_by_user_id": None,
+            "solved_by_username": None,
+            "solved_at": None,
+            "created_at": time.time(),
+            "updated_at": time.time(),
+        }
+
+    async def relic_save_phrase_puzzle(
+        self,
+        phrase: str,
+        enabled: bool,
+        letter_find_chance: float,
+        winner_xp_reward: int,
+    ) -> bool:
+        """Save puzzle settings. Returns True when a new phrase reset progress."""
+        now = time.time()
+        current = await self.relic_get_phrase_puzzle()
+        phrase_changed = phrase != current.get("phrase", "")
+        if phrase_changed:
+            revealed_mask = "".join("0" if char.isalpha() else "1" for char in phrase)
+            solved_by_user_id = None
+            solved_by_username = None
+            solved_at = None
+        else:
+            revealed_mask = current.get("revealed_mask", "")
+            solved_by_user_id = current.get("solved_by_user_id")
+            solved_by_username = current.get("solved_by_username")
+            solved_at = current.get("solved_at")
+
+        await self.db.execute("""
+            INSERT INTO relic_phrase_puzzle
+              (id, phrase, revealed_mask, enabled, letter_find_chance,
+               winner_xp_reward, solved_by_user_id, solved_by_username,
+               solved_at, created_at, updated_at)
+            VALUES
+              (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              phrase=excluded.phrase,
+              revealed_mask=excluded.revealed_mask,
+              enabled=excluded.enabled,
+              letter_find_chance=excluded.letter_find_chance,
+              winner_xp_reward=excluded.winner_xp_reward,
+              solved_by_user_id=excluded.solved_by_user_id,
+              solved_by_username=excluded.solved_by_username,
+              solved_at=excluded.solved_at,
+              updated_at=excluded.updated_at
+        """, (
+            phrase,
+            revealed_mask,
+            1 if enabled else 0,
+            min(1.0, max(0.0, float(letter_find_chance))),
+            max(0, int(winner_xp_reward)),
+            solved_by_user_id,
+            solved_by_username,
+            solved_at,
+            current.get("created_at") or now,
+            now,
+        ))
+        if phrase_changed:
+            await self.db.execute("DELETE FROM relic_phrase_guesses")
+        await self.db.commit()
+        return phrase_changed
+
+    async def relic_reset_phrase_progress(self) -> None:
+        puzzle = await self.relic_get_phrase_puzzle()
+        phrase = puzzle.get("phrase", "")
+        mask = "".join("0" if char.isalpha() else "1" for char in phrase)
+        await self.db.execute("""
+            UPDATE relic_phrase_puzzle
+            SET revealed_mask = ?, solved_by_user_id = NULL,
+                solved_by_username = NULL, solved_at = NULL, updated_at = ?
+            WHERE id = 1
+        """, (mask, time.time()))
+        await self.db.execute("DELETE FROM relic_phrase_guesses")
+        await self.db.commit()
+
+    async def relic_reveal_random_phrase_letter(self) -> Optional[dict]:
+        """Reveal one still-hidden letter occurrence and return its new state."""
+        await self.db.execute("BEGIN IMMEDIATE")
+        try:
+            async with self.db.execute(
+                "SELECT * FROM relic_phrase_puzzle WHERE id = 1"
+            ) as cur:
+                row = await cur.fetchone()
+            if not row:
+                await self.db.rollback()
+                return None
+
+            puzzle = dict(row)
+            phrase = puzzle.get("phrase", "")
+            mask = list(puzzle.get("revealed_mask", ""))
+            if (
+                not puzzle.get("enabled")
+                or puzzle.get("solved_at")
+                or not phrase
+                or len(mask) != len(phrase)
+            ):
+                await self.db.rollback()
+                return None
+
+            hidden = [
+                index for index, char in enumerate(phrase)
+                if char.isalpha() and mask[index] != "1"
+            ]
+            if not hidden:
+                await self.db.rollback()
+                return None
+
+            index = random.choice(hidden)
+            mask[index] = "1"
+            revealed_mask = "".join(mask)
+            await self.db.execute("""
+                UPDATE relic_phrase_puzzle
+                SET revealed_mask = ?, updated_at = ?
+                WHERE id = 1
+            """, (revealed_mask, time.time()))
+            await self.db.commit()
+            return {
+                **puzzle,
+                "revealed_mask": revealed_mask,
+                "revealed_index": index,
+                "revealed_letter": phrase[index],
+            }
+        except Exception:
+            await self.db.rollback()
+            raise
+
+    async def relic_try_solve_phrase(
+        self,
+        twitch_user_id: str,
+        username: str,
+        normalized_guess: str,
+        cooldown_seconds: int = 3600,
+    ) -> dict:
+        """Atomically check a solution and enforce the per-user cooldown."""
+        now = time.time()
+        await self.db.execute("BEGIN IMMEDIATE")
+        try:
+            async with self.db.execute(
+                "SELECT * FROM relic_phrase_puzzle WHERE id = 1"
+            ) as cur:
+                row = await cur.fetchone()
+            if not row:
+                await self.db.rollback()
+                return {"status": "inactive"}
+            puzzle = dict(row)
+            if puzzle.get("solved_at"):
+                await self.db.rollback()
+                return {"status": "solved", "puzzle": puzzle}
+            if not puzzle.get("enabled") or not puzzle.get("phrase"):
+                await self.db.rollback()
+                return {"status": "inactive"}
+
+            async with self.db.execute("""
+                SELECT last_guess_at FROM relic_phrase_guesses
+                WHERE twitch_user_id = ?
+            """, (twitch_user_id,)) as cur:
+                guess_row = await cur.fetchone()
+            if guess_row:
+                remaining = cooldown_seconds - (now - guess_row["last_guess_at"])
+                if remaining > 0:
+                    await self.db.rollback()
+                    return {"status": "cooldown", "remaining": remaining}
+
+            normalized_phrase = " ".join(
+                puzzle["phrase"].casefold().split()
+            )
+            if normalized_guess != normalized_phrase:
+                await self.db.execute("""
+                    INSERT INTO relic_phrase_guesses
+                      (twitch_user_id, username, last_guess_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(twitch_user_id) DO UPDATE SET
+                      username=excluded.username,
+                      last_guess_at=excluded.last_guess_at
+                """, (twitch_user_id, username, now))
+                await self.db.commit()
+                return {"status": "wrong"}
+
+            solved_mask = "1" * len(puzzle["phrase"])
+            cursor = await self.db.execute("""
+                UPDATE relic_phrase_puzzle
+                SET solved_by_user_id = ?, solved_by_username = ?,
+                    solved_at = ?, enabled = 0, revealed_mask = ?, updated_at = ?
+                WHERE id = 1 AND solved_at IS NULL
+            """, (twitch_user_id, username, now, solved_mask, now))
+            if cursor.rowcount <= 0:
+                await self.db.rollback()
+                return {"status": "solved", "puzzle": puzzle}
+            await self.db.commit()
+            return {"status": "correct", "puzzle": puzzle}
         except Exception:
             await self.db.rollback()
             raise
