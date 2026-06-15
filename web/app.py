@@ -5146,9 +5146,14 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.relic_upsert_rank({**rank, "enabled": 1})
             ranks = await db.relic_get_all_ranks()
         items   = await db.relic_get_all_items()
-        from bot.relic_hunt import DEFAULT_COMBINE_RECIPES
-        recipes = await db.relic_get_all_combine_recipes()
-        if not recipes:
+        from bot.relic_hunt import (
+            DEFAULT_COMBINE_RECIPES,
+            DEFAULT_COMBINE_RECIPES_VERSION,
+        )
+        recipe_version = int(
+            (await db.relic_get_setting("combine_recipes_version")) or 0
+        )
+        if recipe_version < DEFAULT_COMBINE_RECIPES_VERSION:
             item_ids = {item["id"] for item in items}
             for recipe in DEFAULT_COMBINE_RECIPES:
                 recipe_items = {
@@ -5157,8 +5162,14 @@ def create_app(db: Database, bot=None) -> Quart:
                     recipe["result_item_id"],
                 }
                 if recipe_items.issubset(item_ids):
-                    await db.relic_upsert_combine_recipe({**recipe, "enabled": 1})
-            recipes = await db.relic_get_all_combine_recipes()
+                    await db.relic_insert_combine_recipe_if_missing(
+                        {**recipe, "enabled": 1}
+                    )
+            await db.relic_set_setting(
+                "combine_recipes_version",
+                str(DEFAULT_COMBINE_RECIPES_VERSION),
+            )
+        recipes = await db.relic_get_all_combine_recipes()
         users   = await db.relic_get_all_users()
         events  = await db.relic_get_all_events()
         active_events = await db.relic_get_active_events()

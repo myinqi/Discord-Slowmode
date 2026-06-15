@@ -2970,6 +2970,29 @@ class Database:
         })
         await self.db.commit()
 
+    async def relic_insert_combine_recipe_if_missing(self, recipe: dict) -> bool:
+        """Insert a default recipe without overwriting an existing admin version."""
+        now = time.time()
+        cursor = await self.db.execute("""
+            INSERT OR IGNORE INTO relic_combine_recipes
+              (id, ingredient_a_id, ingredient_b_id, result_item_id,
+               bonus_points, priority, enabled, created_at, updated_at)
+            VALUES
+              (:id,:ingredient_a_id,:ingredient_b_id,:result_item_id,
+               :bonus_points,:priority,:enabled,:now,:now)
+        """, {
+            "id": recipe["id"],
+            "ingredient_a_id": recipe["ingredient_a_id"],
+            "ingredient_b_id": recipe["ingredient_b_id"],
+            "result_item_id": recipe["result_item_id"],
+            "bonus_points": max(0, int(recipe.get("bonus_points") or 0)),
+            "priority": max(0, int(recipe.get("priority") or 100)),
+            "enabled": 1 if recipe.get("enabled", 1) else 0,
+            "now": now,
+        })
+        await self.db.commit()
+        return cursor.rowcount > 0
+
     async def relic_delete_combine_recipe(self, recipe_id: str) -> None:
         await self.db.execute(
             "DELETE FROM relic_combine_recipes WHERE id = ?", (recipe_id,)

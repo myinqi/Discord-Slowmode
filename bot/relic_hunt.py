@@ -133,6 +133,7 @@ DEFAULT_COMBINE_RECIPES = [
     {"id":"voidfeather_codex","ingredient_a_id":"black_feather_quill","ingredient_b_id":"bloodmoon_rune","result_item_id":"voidfeather_codex","bonus_points":1000,"priority":290},
     {"id":"the_unblinking_raven_idol","ingredient_a_id":"silver_raven_mask","ingredient_b_id":"raven_eye_gem","result_item_id":"the_unblinking_raven_idol","bonus_points":1000,"priority":300},
 ]
+DEFAULT_COMBINE_RECIPES_VERSION = 2
 
 
 def _rank_min_points(rank: dict) -> int:
@@ -351,8 +352,10 @@ class RelicHunt:
                 await self.db.relic_upsert_rank(rank)
             _rlog(f"Seeded {len(DEFAULT_RANKS)} default ranks")
 
-        recipes = await self.db.relic_get_all_combine_recipes()
-        if not recipes:
+        recipe_version = int(
+            (await self.db.relic_get_setting("combine_recipes_version")) or 0
+        )
+        if recipe_version < DEFAULT_COMBINE_RECIPES_VERSION:
             item_ids = {item["id"] for item in await self.db.relic_get_all_items()}
             seeded = 0
             for recipe in DEFAULT_COMBINE_RECIPES:
@@ -362,10 +365,15 @@ class RelicHunt:
                     recipe["result_item_id"],
                 }
                 if recipe_items.issubset(item_ids):
-                    await self.db.relic_upsert_combine_recipe(recipe)
-                    seeded += 1
-            if seeded:
-                _rlog(f"Seeded {seeded} default combine recipes")
+                    inserted = await self.db.relic_insert_combine_recipe_if_missing(
+                        recipe
+                    )
+                    seeded += int(inserted)
+            await self.db.relic_set_setting(
+                "combine_recipes_version",
+                str(DEFAULT_COMBINE_RECIPES_VERSION),
+            )
+            _rlog(f"Added {seeded} missing default combine recipes")
 
     # ------------------------------------------------------------------ #
     # Helpers                                                              #
