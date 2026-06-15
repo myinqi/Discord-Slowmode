@@ -13,22 +13,19 @@
                 <input type="hidden" name="action" value="save_settings">
 
                 <div class="space-y-2">
-                    <label class="block text-gray-400 text-xs font-medium">Mode</label>
-                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <label class="block text-gray-400 text-xs font-medium">Quiz category</label>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {% for category in categories %}
                         <label class="flex items-center gap-2 cursor-pointer select-none bg-discord-darker rounded-lg px-3 py-2 hover:bg-gray-700/50 transition-colors">
-                            <input type="radio" name="quiz_mode" value="film" {% if quiz_mode == 'film' %}checked{% endif %}
+                            <input type="radio" name="quiz_mode" value="{{ category.key }}" {% if quiz_mode == category.key %}checked{% endif %}
                                 class="w-4 h-4 accent-discord-blurple">
-                            <span class="text-sm text-gray-300">Film Quiz</span>
+                            <span class="text-sm text-gray-300">{{ category.name }}</span>
                         </label>
-                        <label class="flex items-center gap-2 cursor-pointer select-none bg-discord-darker rounded-lg px-3 py-2 hover:bg-gray-700/50 transition-colors">
-                            <input type="radio" name="quiz_mode" value="music" {% if quiz_mode == 'music' %}checked{% endif %}
-                                class="w-4 h-4 accent-discord-blurple">
-                            <span class="text-sm text-gray-300">Music Quiz</span>
-                        </label>
+                        {% endfor %}
                         <label class="flex items-center gap-2 cursor-pointer select-none bg-discord-darker rounded-lg px-3 py-2 hover:bg-gray-700/50 transition-colors">
                             <input type="radio" name="quiz_mode" value="mixed" {% if quiz_mode == 'mixed' %}checked{% endif %}
                                 class="w-4 h-4 accent-discord-blurple">
-                            <span class="text-sm text-gray-300">Mixed Quiz</span>
+                            <span class="text-sm text-gray-300">All Categories</span>
                         </label>
                     </div>
                 </div>
@@ -53,6 +50,50 @@
 
         <div class="bg-discord-dark rounded-xl border border-gray-700/50">
             <div class="px-5 py-4 border-b border-gray-700/50">
+                <h3 class="text-white font-semibold">Categories</h3>
+            </div>
+            <div class="p-5 space-y-4">
+                <form method="POST" class="space-y-3">
+                    <input type="hidden" name="action" value="add_category">
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">Category Name</label>
+                        <input type="text" name="category_name" required placeholder="History"
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">JSON Key</label>
+                        <input type="text" name="category_key" placeholder="history"
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                        <p class="text-gray-500 text-xs mt-1">Generated from the name when left empty.</p>
+                    </div>
+                    <button type="submit"
+                        class="w-full px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg text-sm font-medium transition-colors">
+                        Add Category
+                    </button>
+                </form>
+                <div class="divide-y divide-gray-700/40 border-t border-gray-700/50">
+                    {% for category in categories %}
+                    <div class="flex items-center gap-3 py-2.5">
+                        <div class="min-w-0 flex-1">
+                            <div class="text-sm text-white">{{ category.name }}</div>
+                            <div class="text-xs text-gray-500 font-mono">{{ category.key }}</div>
+                        </div>
+                        <form method="POST" onsubmit="return confirm('Delete this category?')">
+                            <input type="hidden" name="action" value="delete_category">
+                            <input type="hidden" name="category_key" value="{{ category.key }}">
+                            <button type="submit" title="Delete category"
+                                class="w-8 h-8 bg-discord-red/20 hover:bg-discord-red/40 text-red-300 rounded flex items-center justify-center transition-colors">
+                                ✕
+                            </button>
+                        </form>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            <div class="px-5 py-4 border-b border-gray-700/50">
                 <h3 class="text-white font-semibold" id="form-title">Add Question</h3>
             </div>
             <form method="POST" class="p-5 space-y-4" id="quiz-form">
@@ -60,11 +101,12 @@
                 <input type="hidden" name="question_id" value="" id="form-question-id">
 
                 <div>
-                    <label class="block text-gray-400 text-xs mb-1">Mode</label>
+                    <label class="block text-gray-400 text-xs mb-1">Category</label>
                     <select name="mode" id="form-mode"
                         class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
-                        <option value="film">Film Quiz</option>
-                        <option value="music">Music Quiz</option>
+                        {% for category in categories %}
+                        <option value="{{ category.key }}">{{ category.name }}</option>
+                        {% endfor %}
                     </select>
                 </div>
 
@@ -116,7 +158,7 @@
                         class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-xs font-mono focus:border-discord-blurple focus:outline-none resize-y"
                         placeholder='[
   {
-    "mode": "film",
+    "category": "film",
     "question": "Which movie features the line \"I am your father\"?",
     "answers": ["Star Wars", "Alien", "Blade Runner", "Dune", "The Matrix"],
     "correct_answer": "Star Wars"
@@ -124,9 +166,10 @@
 ]'></textarea>
                     <p class="text-gray-500 text-xs mt-2">
                         Use an array or an object with a <code class="text-gray-300">questions</code> array.
-                        Each item needs <code class="text-gray-300">mode</code>, <code class="text-gray-300">question</code>,
+                        Each item needs a configured <code class="text-gray-300">category</code>, a <code class="text-gray-300">question</code>,
                         five <code class="text-gray-300">answers</code>, and either <code class="text-gray-300">correct_answer</code>
                         or <code class="text-gray-300">correct_index</code> from 1 to 5.
+                        The legacy <code class="text-gray-300">mode</code> field is also accepted.
                     </p>
                 </div>
                 <button type="submit" onclick="return confirm('Import these quiz questions?')"
@@ -146,7 +189,7 @@
                     <div class="min-w-0 flex-1">
                         <div class="flex items-center gap-2 mb-2">
                             <span class="px-2 py-0.5 rounded bg-discord-blurple/20 text-discord-blurple text-xs font-medium">
-                                {% if item.mode == 'film' %}Film Quiz{% else %}Music Quiz{% endif %}
+                                {{ item.category_name }}
                             </span>
                             <span class="text-gray-600 text-xs">#{{ item.id }}</span>
                         </div>
@@ -206,7 +249,7 @@ function resetQuizForm() {
     document.getElementById('form-title').textContent = 'Add Question';
     document.getElementById('form-action').value = 'create';
     document.getElementById('form-question-id').value = '';
-    document.getElementById('form-mode').value = 'film';
+    document.getElementById('form-mode').selectedIndex = 0;
     document.getElementById('form-question').value = '';
     for (var i = 1; i <= 5; i++) {
         document.getElementById('form-answer-' + i).value = '';

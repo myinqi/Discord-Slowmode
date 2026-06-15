@@ -877,10 +877,15 @@ def create_app(db: Database, bot=None) -> Quart:
     @app.route("/quiz", methods=["GET", "POST"])
     @permission_required('quiz')
     async def quiz_admin():
+        def _category_key(value):
+            value = re.sub(r"[^a-z0-9]+", "_", (value or "").strip().lower())
+            return value.strip("_")
+
+        categories = await db.get_quiz_categories()
+        category_keys = {category["key"] for category in categories}
+
         def _clean_quiz_form(form):
-            mode = (form.get("mode") or "film").strip().lower()
-            if mode not in ("film", "music"):
-                mode = "film"
+            mode = (form.get("mode") or "").strip().lower()
             question = (form.get("question") or "").strip()
             answers = [
                 (form.get(f"answer_{idx}") or "").strip()
@@ -893,10 +898,43 @@ def create_app(db: Database, bot=None) -> Quart:
             form = await request.form
             action = form.get("action", "")
 
+            if action == "add_category":
+                name = (form.get("category_name") or "").strip()
+                key = _category_key(form.get("category_key") or name)
+                if not name or not key:
+                    await flash("Category name is required.", "error")
+                elif key == "mixed":
+                    await flash("'mixed' is reserved for all categories.", "error")
+                elif key in category_keys:
+                    await flash("A category with this key already exists.", "error")
+                else:
+                    try:
+                        await db.create_quiz_category(key, name)
+                        await flash(f"Category '{name}' created.", "success")
+                    except Exception:
+                        await flash("Category name or key already exists.", "error")
+                return redirect(url_for("quiz_admin"))
+
+            if action == "delete_category":
+                key = (form.get("category_key") or "").strip().lower()
+                category = await db.get_quiz_category(key)
+                if not category:
+                    await flash("Category not found.", "error")
+                elif not await db.delete_quiz_category(key):
+                    await flash(
+                        "This category still contains questions and cannot be deleted.",
+                        "error",
+                    )
+                else:
+                    if (await db.get_setting("quiz_mode") or "") == key:
+                        await db.set_setting("quiz_mode", "mixed")
+                    await flash(f"Category '{category['name']}' deleted.", "success")
+                return redirect(url_for("quiz_admin"))
+
             if action == "save_settings":
-                mode = (form.get("quiz_mode") or "film").strip().lower()
-                if mode not in ("film", "music", "mixed"):
-                    mode = "film"
+                mode = (form.get("quiz_mode") or "mixed").strip().lower()
+                if mode != "mixed" and mode not in category_keys:
+                    mode = "mixed"
                 channel_id = (form.get("quiz_channel_id") or "").strip()
                 await db.set_setting("quiz_mode", mode)
                 await db.set_setting("quiz_channel_id", channel_id)
@@ -905,6 +943,9 @@ def create_app(db: Database, bot=None) -> Quart:
 
             if action in ("create", "edit"):
                 mode, question, answers, correct_answer = _clean_quiz_form(form)
+                if mode not in category_keys:
+                    await flash("Please select a valid quiz category.", "error")
+                    return redirect(url_for("quiz_admin"))
                 if not question:
                     await flash("Question is required.", "error")
                     return redirect(url_for("quiz_admin"))
@@ -961,9 +1002,13 @@ def create_app(db: Database, bot=None) -> Quart:
                     if not isinstance(item, dict):
                         errors.append(f"Item {idx}: expected an object.")
                         continue
-                    mode = str(item.get("mode") or "").strip().lower()
-                    if mode not in ("film", "music"):
-                        errors.append(f"Item {idx}: mode must be film or music.")
+                    mode = str(
+                        item.get("category") or item.get("mode") or ""
+                    ).strip().lower()
+                    if mode not in category_keys:
+                        errors.append(
+                            f"Item {idx}: unknown category '{mode or '(empty)'}'."
+                        )
                         continue
                     question = str(item.get("question") or "").strip()
                     answers = item.get("answers")
@@ -1031,9 +1076,14 @@ def create_app(db: Database, bot=None) -> Quart:
                 await flash("Quiz question deleted.", "success")
                 return redirect(url_for("quiz_admin"))
 
-        quiz_mode = await db.get_setting("quiz_mode") or "film"
-        if quiz_mode not in ("film", "music", "mixed"):
-            quiz_mode = "film"
+        categories = await db.get_quiz_categories()
+        category_keys = {category["key"] for category in categories}
+        category_names = {
+            category["key"]: category["name"] for category in categories
+        }
+        quiz_mode = await db.get_setting("quiz_mode") or "mixed"
+        if quiz_mode != "mixed" and quiz_mode not in category_keys:
+            quiz_mode = "mixed"
         quiz_channel_id = await db.get_setting("quiz_channel_id") or ""
         questions = await db.get_quiz_questions()
         for question in questions:
@@ -1044,6 +1094,9 @@ def create_app(db: Database, bot=None) -> Quart:
                 question["answer_4"],
                 question["answer_5"],
             ]
+            question["category_name"] = category_names.get(
+                question["mode"], question["mode"]
+            )
 
         guild = get_guild()
         text_channels = []
@@ -1056,6 +1109,7 @@ def create_app(db: Database, bot=None) -> Quart:
             quiz_mode=quiz_mode,
             quiz_channel_id=quiz_channel_id,
             questions=questions,
+            categories=categories,
             text_channels=text_channels,
         )
 

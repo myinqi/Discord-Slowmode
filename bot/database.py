@@ -199,7 +199,7 @@ class Database:
 
             CREATE TABLE IF NOT EXISTS quiz_questions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                mode TEXT NOT NULL CHECK (mode IN ('film', 'music')),
+                mode TEXT NOT NULL,
                 question TEXT NOT NULL,
                 answer_1 TEXT NOT NULL,
                 answer_2 TEXT NOT NULL,
@@ -213,6 +213,12 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_quiz_questions_mode
                 ON quiz_questions(mode);
 
+            CREATE TABLE IF NOT EXISTS quiz_categories (
+                key TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                created_at REAL DEFAULT (unixepoch())
+            );
+
             CREATE TABLE IF NOT EXISTS quiz_scores (
                 user_id INTEGER PRIMARY KEY,
                 user_name TEXT NOT NULL,
@@ -223,6 +229,63 @@ class Database:
                 ON quiz_scores(points DESC, last_solved_at ASC);
         """)
         await self.db.commit()
+
+        # Older databases restricted quiz modes to film/music with a CHECK.
+        async with self.db.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'quiz_questions'"
+        ) as cursor:
+            quiz_table = await cursor.fetchone()
+        quiz_sql = (quiz_table["sql"] if quiz_table else "") or ""
+        if "CHECK" in quiz_sql.upper() and "MODE" in quiz_sql.upper():
+            await self.db.executescript("""
+                ALTER TABLE quiz_questions RENAME TO quiz_questions_legacy;
+                CREATE TABLE quiz_questions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    mode TEXT NOT NULL,
+                    question TEXT NOT NULL,
+                    answer_1 TEXT NOT NULL,
+                    answer_2 TEXT NOT NULL,
+                    answer_3 TEXT NOT NULL,
+                    answer_4 TEXT NOT NULL,
+                    answer_5 TEXT NOT NULL,
+                    correct_answer TEXT NOT NULL,
+                    created_at REAL DEFAULT (unixepoch()),
+                    updated_at REAL DEFAULT (unixepoch())
+                );
+                INSERT INTO quiz_questions
+                  (id, mode, question, answer_1, answer_2, answer_3,
+                   answer_4, answer_5, correct_answer, created_at, updated_at)
+                SELECT id, mode, question, answer_1, answer_2, answer_3,
+                       answer_4, answer_5, correct_answer, created_at, updated_at
+                FROM quiz_questions_legacy;
+                DROP TABLE quiz_questions_legacy;
+                CREATE INDEX IF NOT EXISTS idx_quiz_questions_mode
+                    ON quiz_questions(mode);
+            """)
+            await self.db.commit()
+
+        async with self.db.execute(
+            "SELECT value FROM settings WHERE key = 'quiz_categories_seeded'"
+        ) as cursor:
+            categories_seeded = await cursor.fetchone()
+        if not categories_seeded:
+            await self.db.execute(
+                "INSERT OR IGNORE INTO quiz_categories (key, name) VALUES ('film', 'Film')"
+            )
+            await self.db.execute(
+                "INSERT OR IGNORE INTO quiz_categories (key, name) VALUES ('music', 'Music')"
+            )
+            await self.db.execute("""
+                INSERT OR IGNORE INTO quiz_categories (key, name)
+                SELECT DISTINCT mode,
+                       UPPER(SUBSTR(mode, 1, 1)) || SUBSTR(mode, 2)
+                FROM quiz_questions
+                WHERE TRIM(mode) != ''
+            """)
+            await self.db.execute(
+                "INSERT INTO settings (key, value) VALUES ('quiz_categories_seeded', '1')"
+            )
+            await self.db.commit()
 
         # Add creator_id column to polls if missing
         async with self.db.execute("PRAGMA table_info(polls)") as cursor:
@@ -1853,6 +1916,39 @@ class Database:
 
     # --- Quiz ---
 
+    async def get_quiz_categories(self) -> list[dict]:
+        async with self.db.execute(
+            "SELECT key, name, created_at FROM quiz_categories ORDER BY name COLLATE NOCASE"
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def get_quiz_category(self, key: str) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT key, name, created_at FROM quiz_categories WHERE key = ?",
+            (key,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def create_quiz_category(self, key: str, name: str) -> None:
+        await self.db.execute(
+            "INSERT INTO quiz_categories (key, name) VALUES (?, ?)",
+            (key, name),
+        )
+        await self.db.commit()
+
+    async def delete_quiz_category(self, key: str) -> bool:
+        async with self.db.execute(
+            "SELECT COUNT(*) AS count FROM quiz_questions WHERE mode = ?",
+            (key,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row and row["count"]:
+            return False
+        await self.db.execute("DELETE FROM quiz_categories WHERE key = ?", (key,))
+        await self.db.commit()
+        return True
+
     async def create_quiz_question(
         self,
         mode: str,
@@ -1903,7 +1999,7 @@ class Database:
             return [dict(row) for row in await cursor.fetchall()]
 
     async def get_random_quiz_question(self, mode: str | None = None) -> Optional[dict]:
-        if mode in ("film", "music"):
+        if mode and mode != "mixed":
             sql = "SELECT * FROM quiz_questions WHERE mode = ? ORDER BY RANDOM() LIMIT 1"
             args = (mode,)
         else:

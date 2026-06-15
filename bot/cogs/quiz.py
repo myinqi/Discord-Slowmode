@@ -35,9 +35,13 @@ class QuizCog(commands.Cog):
             await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
             return
 
-        mode = (await self.bot.db.get_setting("quiz_mode") or "film").strip().lower()
-        if mode not in ("film", "music", "mixed"):
-            mode = "film"
+        categories = await self.bot.db.get_quiz_categories()
+        category_names = {
+            category["key"]: category["name"] for category in categories
+        }
+        mode = (await self.bot.db.get_setting("quiz_mode") or "mixed").strip().lower()
+        if mode != "mixed" and mode not in category_names:
+            mode = "mixed"
 
         channel_id_str = (await self.bot.db.get_setting("quiz_channel_id") or "").strip()
         if not channel_id_str.isdigit():
@@ -57,7 +61,10 @@ class QuizCog(commands.Cog):
 
         question = await self.bot.db.get_random_quiz_question(mode)
         if not question:
-            mode_name = "any" if mode == "mixed" else mode
+            mode_name = (
+                "any" if mode == "mixed"
+                else category_names.get(mode, mode)
+            )
             await interaction.response.send_message(
                 f"No {mode_name} quiz questions are configured yet.",
                 ephemeral=True,
@@ -66,11 +73,11 @@ class QuizCog(commands.Cog):
 
         answers = _answers_from_question(question)
         random.shuffle(answers)
-        mode_label = "Film Quiz" if question["mode"] == "film" else "Music Quiz"
+        mode_label = category_names.get(question["mode"], question["mode"].title())
         options_text = "\n".join(f"**{idx}.** {answer}" for idx, answer in enumerate(answers, start=1))
 
         embed = discord.Embed(
-            title=f"{mode_label} Question",
+            title=f"{mode_label} Quiz Question",
             description=f"**{question['question']}**\n\n{options_text}",
             color=discord.Color.blurple(),
         )
