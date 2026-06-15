@@ -2854,6 +2854,17 @@ class Database:
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS relic_combine_recipes (
+                id TEXT PRIMARY KEY,
+                ingredient_a_id TEXT NOT NULL,
+                ingredient_b_id TEXT NOT NULL,
+                result_item_id TEXT NOT NULL,
+                bonus_points INTEGER NOT NULL DEFAULT 0,
+                priority INTEGER NOT NULL DEFAULT 100,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
         """)
         await self.db.commit()
 
@@ -2900,6 +2911,142 @@ class Database:
     async def relic_delete_rank(self, rank_id: str) -> None:
         await self.db.execute("DELETE FROM relic_ranks WHERE id = ?", (rank_id,))
         await self.db.commit()
+
+    # -----------------------------------------------------------------------
+    # Relic Hunt — combine recipes
+    # -----------------------------------------------------------------------
+    async def relic_get_all_combine_recipes(self, active_only: bool = False) -> list[dict]:
+        where = "WHERE r.enabled = 1" if active_only else ""
+        async with self.db.execute(f"""
+            SELECT r.*,
+                   a.name AS ingredient_a_name, a.icon AS ingredient_a_icon,
+                   a.rarity AS ingredient_a_rarity,
+                   b.name AS ingredient_b_name, b.icon AS ingredient_b_icon,
+                   b.rarity AS ingredient_b_rarity,
+                   result.name AS result_item_name, result.icon AS result_item_icon,
+                   result.rarity AS result_item_rarity
+            FROM relic_combine_recipes r
+            LEFT JOIN relic_items a ON a.id = r.ingredient_a_id
+            LEFT JOIN relic_items b ON b.id = r.ingredient_b_id
+            LEFT JOIN relic_items result ON result.id = r.result_item_id
+            {where}
+            ORDER BY r.priority ASC, r.id ASC
+        """) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def relic_get_combine_recipe(self, recipe_id: str) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM relic_combine_recipes WHERE id = ?", (recipe_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def relic_upsert_combine_recipe(self, recipe: dict) -> None:
+        now = time.time()
+        await self.db.execute("""
+            INSERT INTO relic_combine_recipes
+              (id, ingredient_a_id, ingredient_b_id, result_item_id,
+               bonus_points, priority, enabled, created_at, updated_at)
+            VALUES
+              (:id,:ingredient_a_id,:ingredient_b_id,:result_item_id,
+               :bonus_points,:priority,:enabled,:now,:now)
+            ON CONFLICT(id) DO UPDATE SET
+              ingredient_a_id=excluded.ingredient_a_id,
+              ingredient_b_id=excluded.ingredient_b_id,
+              result_item_id=excluded.result_item_id,
+              bonus_points=excluded.bonus_points,
+              priority=excluded.priority,
+              enabled=excluded.enabled,
+              updated_at=excluded.updated_at
+        """, {
+            "id": recipe["id"],
+            "ingredient_a_id": recipe["ingredient_a_id"],
+            "ingredient_b_id": recipe["ingredient_b_id"],
+            "result_item_id": recipe["result_item_id"],
+            "bonus_points": max(0, int(recipe.get("bonus_points") or 0)),
+            "priority": max(0, int(recipe.get("priority") or 100)),
+            "enabled": 1 if recipe.get("enabled", 1) else 0,
+            "now": now,
+        })
+        await self.db.commit()
+
+    async def relic_delete_combine_recipe(self, recipe_id: str) -> None:
+        await self.db.execute(
+            "DELETE FROM relic_combine_recipes WHERE id = ?", (recipe_id,)
+        )
+        await self.db.commit()
+
+    async def relic_apply_combine_recipe(
+        self,
+        twitch_user_id: str,
+        username: str,
+        recipe: dict,
+        message: str,
+    ) -> bool:
+        """Atomically consume two ingredients, grant the result and log it."""
+        ingredient_a = recipe["ingredient_a_id"]
+        ingredient_b = recipe["ingredient_b_id"]
+        result_item = recipe["result_item_id"]
+        required_a = 2 if ingredient_a == ingredient_b else 1
+        required_b = 0 if ingredient_a == ingredient_b else 1
+        now = time.time()
+
+        await self.db.execute("BEGIN IMMEDIATE")
+        try:
+            async with self.db.execute("""
+                SELECT item_id, amount FROM relic_user_items
+                WHERE twitch_user_id = ? AND item_id IN (?, ?)
+            """, (twitch_user_id, ingredient_a, ingredient_b)) as cur:
+                amounts = {row["item_id"]: row["amount"] for row in await cur.fetchall()}
+
+            if amounts.get(ingredient_a, 0) < required_a:
+                await self.db.rollback()
+                return False
+            if required_b and amounts.get(ingredient_b, 0) < required_b:
+                await self.db.rollback()
+                return False
+
+            await self.db.execute("""
+                UPDATE relic_user_items SET amount = amount - ?
+                WHERE twitch_user_id = ? AND item_id = ?
+            """, (required_a, twitch_user_id, ingredient_a))
+            if required_b:
+                await self.db.execute("""
+                    UPDATE relic_user_items SET amount = amount - 1
+                    WHERE twitch_user_id = ? AND item_id = ?
+                """, (twitch_user_id, ingredient_b))
+
+            await self.db.execute("""
+                INSERT INTO relic_user_items
+                  (twitch_user_id, item_id, amount, first_found_at, last_found_at)
+                VALUES (?, ?, 1, ?, ?)
+                ON CONFLICT(twitch_user_id, item_id) DO UPDATE SET
+                  amount = amount + 1, last_found_at = excluded.last_found_at
+            """, (twitch_user_id, result_item, now, now))
+            await self.db.execute("""
+                UPDATE relic_users SET points = points + ?, updated_at = ?
+                WHERE twitch_user_id = ?
+            """, (recipe["bonus_points"], now, twitch_user_id))
+            await self.db.execute("""
+                INSERT INTO relic_hunt_log
+                  (twitch_user_id, username, item_id, item_name, rarity,
+                   points_awarded, xp_awarded, result_type, message, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, 0, 'combine', ?, ?)
+            """, (
+                twitch_user_id,
+                username,
+                result_item,
+                recipe["activity_text"],
+                recipe.get("result_item_rarity") or "common",
+                recipe["bonus_points"],
+                message,
+                now,
+            ))
+            await self.db.commit()
+            return True
+        except Exception:
+            await self.db.rollback()
+            raise
 
     # -----------------------------------------------------------------------
     # Relic Hunt — items

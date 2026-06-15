@@ -101,6 +101,17 @@ DEFAULT_EVENTS = [
     {"id":"blackroot_bell","name":"Blackroot Bell","enabled":True,"config_json":json.dumps({"durationMinutes":5,"rareDropMultiplier":1.25,"epicDropMultiplier":1.25,"pointsMultiplier":1.0,"xpMultiplier":1.0,"ritualEnergyMultiplier":2.0,"startMessage":"🔔 The Blackroot Bell rings! Ritual offerings count double.","endMessage":"The bell becomes silent again."})},
 ]
 
+DEFAULT_COMBINE_RECIPES = [
+    {"id":"raven_nest_twig","ingredient_a_id":"broken_twig","ingredient_b_id":"black_thread_knot","result_item_id":"raven_nest_twig","bonus_points":25,"priority":10},
+    {"id":"black_feather_quill","ingredient_a_id":"black_feather","ingredient_b_id":"wax_sealed_note","result_item_id":"black_feather_quill","bonus_points":75,"priority":20},
+    {"id":"blue_candle_tear","ingredient_a_id":"candle_wax","ingredient_b_id":"blue_lantern_glass","result_item_id":"blue_candle_tear","bonus_points":25,"priority":30},
+    {"id":"ravenbone_charm","ingredient_a_id":"small_bone","ingredient_b_id":"little_bone_whistle","result_item_id":"ravenbone_charm","bonus_points":25,"priority":40},
+    {"id":"echoing_bell_core","ingredient_a_id":"old_bell_clapper","ingredient_b_id":"bell_fragment","result_item_id":"echoing_bell_core","bonus_points":200,"priority":50},
+    {"id":"moth_eaten_prayer_shawl","ingredient_a_id":"moon_thread","ingredient_b_id":"silvered_bone_needle","result_item_id":"moth_eaten_prayer_shawl","bonus_points":75,"priority":60},
+    {"id":"gilded_cheese_grater","ingredient_a_id":"cheese_grater","ingredient_b_id":"purple_wax_seal","result_item_id":"gilded_cheese_grater","bonus_points":75,"priority":70},
+    {"id":"rune_carved_cheese_grater","ingredient_a_id":"gilded_cheese_grater","ingredient_b_id":"half_melted_rune_wax","result_item_id":"rune_carved_cheese_grater","bonus_points":200,"priority":80},
+]
+
 
 def _rank_min_points(rank: dict) -> int:
     return int(rank.get("min_points", rank.get("required_level", 0)) or 0)
@@ -189,6 +200,7 @@ class RelicHunt:
             (f"{p}rank",       self._cmd_rank),
             (f"{p}daily",      self._cmd_daily),
             (f"{p}ritual",     self._cmd_ritual),
+            (f"{p}combine",    self._cmd_combine),
             (f"{p}relichelp",  self._cmd_help),
             (f"{p}relic",      self._cmd_admin),
         ]:
@@ -316,6 +328,22 @@ class RelicHunt:
             for rank in DEFAULT_RANKS:
                 await self.db.relic_upsert_rank(rank)
             _rlog(f"Seeded {len(DEFAULT_RANKS)} default ranks")
+
+        recipes = await self.db.relic_get_all_combine_recipes()
+        if not recipes:
+            item_ids = {item["id"] for item in await self.db.relic_get_all_items()}
+            seeded = 0
+            for recipe in DEFAULT_COMBINE_RECIPES:
+                recipe_items = {
+                    recipe["ingredient_a_id"],
+                    recipe["ingredient_b_id"],
+                    recipe["result_item_id"],
+                }
+                if recipe_items.issubset(item_ids):
+                    await self.db.relic_upsert_combine_recipe(recipe)
+                    seeded += 1
+            if seeded:
+                _rlog(f"Seeded {seeded} default combine recipes")
 
     # ------------------------------------------------------------------ #
     # Helpers                                                              #
@@ -658,8 +686,82 @@ class RelicHunt:
             await self._send(f"@{name} adds {item_icon} {item_name} to the ritual circle. Ritual energy: {new_energy}/{goal}.")
             _rlog(f"Ritual +{add_energy} energy by {name} via {item_name} ({new_energy}/{goal})")
 
+    async def _cmd_combine(self, ctx: dict) -> None:
+        if not await self._is_game_enabled():
+            return
+        uid = ctx["user_id"]
+        name = ctx["username"]
+        user = await self._get_or_create_user(uid, name)
+        inventory = {
+            item["item_id"]: item
+            for item in await self.db.relic_get_inventory(uid)
+        }
+        recipes = await self.db.relic_get_all_combine_recipes(active_only=True)
+
+        selected = None
+        for recipe in recipes:
+            if not all((
+                recipe.get("ingredient_a_name"),
+                recipe.get("ingredient_b_name"),
+                recipe.get("result_item_name"),
+            )):
+                continue
+            if recipe.get("ingredient_a_rarity") in ("legendary", "mythic"):
+                continue
+            if recipe.get("ingredient_b_rarity") in ("legendary", "mythic"):
+                continue
+            amount_a = inventory.get(recipe["ingredient_a_id"], {}).get("amount", 0)
+            amount_b = inventory.get(recipe["ingredient_b_id"], {}).get("amount", 0)
+            if recipe["ingredient_a_id"] == recipe["ingredient_b_id"]:
+                if amount_a >= 2:
+                    selected = recipe
+                    break
+            elif amount_a >= 1 and amount_b >= 1:
+                selected = recipe
+                break
+
+        if not selected:
+            await self._send(f"@{name}'s raven cannot combine anything in the nest yet.")
+            return
+
+        icon = selected.get("result_item_icon") or ""
+        result_name = selected["result_item_name"]
+        ingredient_a = selected["ingredient_a_name"]
+        ingredient_b = selected["ingredient_b_name"]
+        bonus = int(selected.get("bonus_points") or 0)
+        bonus_text = f" +{bonus} bonus points." if bonus else ""
+        msg = (
+            f"🔮 @{name} combines {ingredient_a} and {ingredient_b}... "
+            f"{icon} {result_name} created!{bonus_text}"
+        )
+        selected["activity_text"] = (
+            f"{ingredient_a} + {ingredient_b} → {result_name}"
+        )
+        old_points = user["points"]
+        success = await self.db.relic_apply_combine_recipe(
+            uid, name, selected, msg
+        )
+        if not success:
+            await self._send(f"@{name}'s raven lost track of the ingredients. Try again.")
+            return
+
+        await self._send(msg)
+        _rlog(
+            f"{name} combined {ingredient_a} + {ingredient_b} into "
+            f"{result_name} | +{bonus}pts"
+        )
+
+        if bonus and (await self.db.relic_get_setting("announce_rank_ups")) == "true":
+            ranks = await self._get_ranks()
+            old_rank = _get_rank(old_points, ranks)
+            new_rank = _get_rank(old_points + bonus, ranks)
+            if new_rank["id"] != old_rank["id"]:
+                await self._send(
+                    f"⬆️ @{name} became a {new_rank['icon']} {new_rank['name']}!"
+                )
+
     async def _cmd_help(self, ctx: dict) -> None:
-        await self._send("Raven's Nest commands: !raven, !nest, !items, !top, !rank, !daily, !ritual, !relichelp")
+        await self._send("Raven's Nest commands: !raven, !nest, !items, !top, !rank, !daily, !ritual, !combine, !relichelp")
 
     async def _cmd_admin(self, ctx: dict) -> None:
         """Minimal admin commands for broadcaster/mods in chat."""

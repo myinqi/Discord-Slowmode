@@ -4993,6 +4993,58 @@ def create_app(db: Database, bot=None) -> Quart:
                     await db.relic_upsert_rank({**rank, "enabled": 1})
                 await flash(f"Default ranks restored ({len(DEFAULT_RANKS)} ranks).", "success")
 
+            elif action == "upsert_combine_recipe":
+                recipe_id = form.get("recipe_id", "").strip().replace(" ", "_").lower()
+                ingredient_a_id = form.get("ingredient_a_id", "")
+                ingredient_b_id = form.get("ingredient_b_id", "")
+                result_item_id = form.get("result_item_id", "")
+                item_ids = {item["id"] for item in await db.relic_get_all_items()}
+                if not recipe_id:
+                    await flash("Recipe ID is required.", "error")
+                elif not all((ingredient_a_id, ingredient_b_id, result_item_id)):
+                    await flash("Both ingredients and a result item are required.", "error")
+                elif not {ingredient_a_id, ingredient_b_id, result_item_id}.issubset(item_ids):
+                    await flash("Every recipe item must exist in the item library.", "error")
+                else:
+                    await db.relic_upsert_combine_recipe({
+                        "id": recipe_id,
+                        "ingredient_a_id": ingredient_a_id,
+                        "ingredient_b_id": ingredient_b_id,
+                        "result_item_id": result_item_id,
+                        "bonus_points": max(0, int(form.get("bonus_points") or 0)),
+                        "priority": max(0, int(form.get("priority") or 100)),
+                        "enabled": 1 if form.get("enabled") else 0,
+                    })
+                    await flash("Combine recipe saved.", "success")
+
+            elif action == "toggle_combine_recipe":
+                recipe = await db.relic_get_combine_recipe(form.get("recipe_id", ""))
+                if recipe:
+                    recipe["enabled"] = 0 if recipe["enabled"] else 1
+                    await db.relic_upsert_combine_recipe(recipe)
+
+            elif action == "delete_combine_recipe":
+                await db.relic_delete_combine_recipe(form.get("recipe_id", ""))
+                await flash("Combine recipe deleted.", "success")
+
+            elif action == "reset_combine_recipes":
+                from bot.relic_hunt import DEFAULT_COMBINE_RECIPES
+                item_ids = {item["id"] for item in await db.relic_get_all_items()}
+                restored = 0
+                for recipe in DEFAULT_COMBINE_RECIPES:
+                    recipe_items = {
+                        recipe["ingredient_a_id"],
+                        recipe["ingredient_b_id"],
+                        recipe["result_item_id"],
+                    }
+                    if recipe_items.issubset(item_ids):
+                        await db.relic_upsert_combine_recipe({**recipe, "enabled": 1})
+                        restored += 1
+                await flash(
+                    f"Default combine recipes restored ({restored} recipes).",
+                    "success",
+                )
+
             elif action == "edit_user_points":
                 uid = form.get("twitch_user_id", "")
                 user = await db.relic_get_user(uid)
@@ -5094,6 +5146,19 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.relic_upsert_rank({**rank, "enabled": 1})
             ranks = await db.relic_get_all_ranks()
         items   = await db.relic_get_all_items()
+        from bot.relic_hunt import DEFAULT_COMBINE_RECIPES
+        recipes = await db.relic_get_all_combine_recipes()
+        if not recipes:
+            item_ids = {item["id"] for item in items}
+            for recipe in DEFAULT_COMBINE_RECIPES:
+                recipe_items = {
+                    recipe["ingredient_a_id"],
+                    recipe["ingredient_b_id"],
+                    recipe["result_item_id"],
+                }
+                if recipe_items.issubset(item_ids):
+                    await db.relic_upsert_combine_recipe({**recipe, "enabled": 1})
+            recipes = await db.relic_get_all_combine_recipes()
         users   = await db.relic_get_all_users()
         events  = await db.relic_get_all_events()
         active_events = await db.relic_get_active_events()
@@ -5144,6 +5209,7 @@ def create_app(db: Database, bot=None) -> Quart:
             total_legendary=total_legendary,
             total_mythic=total_mythic,
             ranks=ranks,
+            recipes=recipes,
             active_event_ids=active_event_ids,
         )
 
