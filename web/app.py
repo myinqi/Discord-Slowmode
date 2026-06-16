@@ -4621,11 +4621,11 @@ def create_app(db: Database, bot=None) -> Quart:
     @permission_required('exp_radio')
     async def exp_radio_stream_action(action):
         from quart import jsonify
-        if action == "start":
+        if action in ("start", "start_legacy"):
             twitch_key = await db.get_setting("exp_radio_twitch_key") or ""
             if not twitch_key:
                 return jsonify({"ok": False, "error": "No Twitch stream key configured."}), 400
-            result = await exp_stream_manager.start(twitch_key)
+            result = await exp_stream_manager.start(twitch_key, legacy_pipeline=(action == "start_legacy"))
         elif action == "stop":
             result = await exp_stream_manager.stop()
         elif action == "safe_stop":

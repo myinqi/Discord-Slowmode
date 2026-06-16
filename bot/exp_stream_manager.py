@@ -2,7 +2,7 @@
 
 Pipeline per full playlist rotation (no gap between songs):
   One FFmpeg job covers all songs using concat:
-    - Audio:     FFmpeg concat demuxer (concat.txt listing all MP3s)
+    - Audio:     per-song MP3 inputs concat'd in filtergraph
     - Covers:    each song's image/video as a trimmed input, concat'd in filtergraph
     - Background + loop overlay: loop for total duration
     - ASS:       all subtitle files merged with time offsets + NowPlaying title cards
@@ -20,6 +20,7 @@ from collections import deque
 from bot.twitch_bot import TwitchBot
 
 _RTMP_BASE  = "rtmps://live.twitch.tv:443/app/"
+_LEGACY_RTMP_BASE = "rtmp://live.twitch.tv/app/"
 _FPS        = 30
 _W, _H      = 1920, 1080
 _INSET_W    = 360   # portrait inset width  (9:16 ≈ 360×640, doubled from 180×320)
@@ -172,6 +173,7 @@ class ExpStreamManager:
         self._outro_counts_in_progress: bool = False
         self._progress_total_count: int = 0
         self._current_song_index: int = 0
+        self._legacy_pipeline: bool = False
         # Set when the first FFmpeg process exists. start() returns earlier,
         # while media is still being prepared.
         self._stream_ready_event = asyncio.Event()
@@ -278,9 +280,10 @@ class ExpStreamManager:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    async def start(self, twitch_key: str, fresh_cache: bool = False) -> dict:
+    async def start(self, twitch_key: str, fresh_cache: bool = False, legacy_pipeline: bool = False) -> dict:
         if self.is_running:
             return {"ok": False, "error": "Stream already running."}
+        self._legacy_pipeline = legacy_pipeline
         if fresh_cache:
             # Scheduled / forced fresh starts: wipe the per-stream cache so
             # covers are re-downloaded (any cover_url changes upstream are
@@ -320,6 +323,7 @@ class ExpStreamManager:
             and _mod_ok(s)
         ]
         if not ready:
+            self._legacy_pipeline = False
             pl_label = {"submission": "submission", "admin": "admin", "both": "either"}.get(active_pl, active_pl)
             return {"ok": False, "error": f"No ready songs in the {pl_label} playlist."}
 
@@ -389,7 +393,8 @@ class ExpStreamManager:
         global stream_is_live
         stream_is_live = True
         self._task = asyncio.create_task(self._stream_loop())
-        self._log(f"Started with {len(ready)} songs.")
+        mode = "legacy FFmpeg pipeline" if self._legacy_pipeline else "current FFmpeg pipeline"
+        self._log(f"Started with {len(ready)} songs ({mode}).")
         return {"ok": True, "song_count": len(ready)}
 
     async def wait_until_live(self, timeout: float = 900.0) -> bool:
@@ -421,6 +426,7 @@ class ExpStreamManager:
         self._outro_counts_in_progress = False
         self._progress_total_count = 0
         self._current_song_index = 0
+        self._legacy_pipeline = False
         if self._task:
             self._task.cancel()
             self._task = None
@@ -505,6 +511,7 @@ class ExpStreamManager:
             } if self.current_song else None,
             "song_index": self._current_song_index,
             "playlist_length": self._progress_total_count or len(self.playlist),
+            "legacy_pipeline": self._legacy_pipeline,
             "ffmpeg": self._get_ffmpeg_health(),
         }
 
@@ -631,6 +638,13 @@ class ExpStreamManager:
         )
 
         total_dur = sum(s.get("duration") or 300 for s in songs)
+        audio_concat_file = None
+        if self._legacy_pipeline:
+            audio_concat_file = os.path.join(self.exp_radio_dir, "_audio_concat.txt")
+            with open(audio_concat_file, "w", encoding="utf-8") as f:
+                for song in songs:
+                    mp3 = os.path.join(self.exp_radio_dir, "mp3", song["mp3_filename"])
+                    f.write(f"file '{mp3}'\n")
 
         cmd = self._build_playlist_cmd(
             songs=songs,
@@ -641,6 +655,8 @@ class ExpStreamManager:
             ass_path=combined_ass if combined_ass and os.path.exists(combined_ass) else None,
             twitch_key=self._twitch_key,
             total_dur=total_dur,
+            legacy_pipeline=self._legacy_pipeline,
+            audio_concat_file=audio_concat_file,
         )
 
         titles = " → ".join(s.get("title") or "?" for s in songs)
@@ -1198,6 +1214,8 @@ class ExpStreamManager:
         ass_path: str | None,
         twitch_key: str,
         total_dur: float,
+        legacy_pipeline: bool = False,
+        audio_concat_file: str | None = None,
     ) -> list:
         """Build ONE FFmpeg command for the full playlist.
 
@@ -1208,10 +1226,12 @@ class ExpStreamManager:
           3: Combined ASS subtitles (lyrics + NowPlaying title cards)
         """
         W, H = _W, _H
-        cmd  = ["ffmpeg", "-y", "-nostats", "-progress", "pipe:2"]
+        cmd = ["ffmpeg", "-y"]
+        if not legacy_pipeline:
+            cmd += ["-nostats", "-progress", "pipe:2"]
 
         input_idx = 0
-        bg_input = lv_input = None
+        bg_input = lv_input = audio_input = None
 
         # Background
         if bg_path:
@@ -1239,15 +1259,22 @@ class ExpStreamManager:
                         "-i", f"color=size={_INSET_W}x{_INSET_H}:color=black:rate={_FPS}"]
             media_inputs.append(input_idx); input_idx += 1
 
-        # Per-song audio inputs. Keeping audio in the same filtergraph as the
-        # cover concat gives every song boundary a fresh timestamp origin,
-        # avoiding MP3 concat-demuxer timestamp jumps in Twitch's live player.
         audio_inputs = []
-        for song in songs:
-            dur = song.get("duration") or 300
-            mp3 = os.path.join(self.exp_radio_dir, "mp3", song["mp3_filename"])
-            cmd += ["-t", str(dur + 0.5), "-i", mp3]
-            audio_inputs.append(input_idx); input_idx += 1
+        if legacy_pipeline:
+            if not audio_concat_file:
+                raise ValueError("audio_concat_file is required for legacy stream mode")
+            cmd += ["-f", "concat", "-safe", "0", "-i", audio_concat_file]
+            audio_input = input_idx; input_idx += 1
+        else:
+            # Per-song audio inputs. Keeping audio in the same filtergraph as
+            # the cover concat gives every song boundary a fresh timestamp
+            # origin, avoiding MP3 concat-demuxer timestamp jumps in Twitch's
+            # live player.
+            for song in songs:
+                dur = song.get("duration") or 300
+                mp3 = os.path.join(self.exp_radio_dir, "mp3", song["mp3_filename"])
+                cmd += ["-t", str(dur + 0.5), "-i", mp3]
+                audio_inputs.append(input_idx); input_idx += 1
 
         # ── Filtergraph ────────────────────────────────────────────────────────
         filters = []
@@ -1285,15 +1312,16 @@ class ExpStreamManager:
         concat_in = "".join(f"[cv{i}]" for i in range(n))
         filters.append(f"{concat_in}concat=n={n}:v=1:a=0[covers]")
 
-        audio_concat_in = []
-        for i, (song, aid) in enumerate(zip(songs, audio_inputs)):
-            dur = song.get("duration") or 300
-            filters.append(
-                f"[{aid}:a]atrim=0:{dur},asetpts=PTS-STARTPTS,"
-                f"aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}]"
-            )
-            audio_concat_in.append(f"[a{i}]")
-        filters.append(f"{''.join(audio_concat_in)}concat=n={n}:v=0:a=1[aout]")
+        if not legacy_pipeline:
+            audio_concat_in = []
+            for i, (song, aid) in enumerate(zip(songs, audio_inputs)):
+                dur = song.get("duration") or 300
+                filters.append(
+                    f"[{aid}:a]atrim=0:{dur},asetpts=PTS-STARTPTS,"
+                    f"aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}]"
+                )
+                audio_concat_in.append(f"[a{i}]")
+            filters.append(f"{''.join(audio_concat_in)}concat=n={n}:v=0:a=1[aout]")
         filters.append(
             f"{last}[covers]overlay=x=20:y={H}-{_INSET_H}-20:shortest=0[after_cv]"
         )
@@ -1307,10 +1335,22 @@ class ExpStreamManager:
             filters.append(f"{last}copy[vout]")
 
         cmd += ["-filter_complex", ";".join(filters)]
-        cmd += ["-map", "[vout]", "-map", "[aout]"]
+        if legacy_pipeline:
+            cmd += ["-map", "[vout]", "-map", f"{audio_input}:a"]
+        else:
+            cmd += ["-map", "[vout]", "-map", "[aout]"]
         cmd += ["-t", str(total_dur + 2)]
 
         # ── Encode ─────────────────────────────────────────────────────────────
+        if legacy_pipeline:
+            cmd += [
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
+                "-pix_fmt", "yuv420p", "-g", str(_FPS * 2), "-keyint_min", str(_FPS),
+                "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
+                "-f", "flv", f"{_LEGACY_RTMP_BASE}{twitch_key}",
+            ]
+            return cmd
+
         # Twitch is much happier with predictable H.264 than CRF-only output,
         # especially around playlist source changes. Keep keyframes exactly
         # 2s apart and avoid FLV duration/file-size metadata on live RTMP.

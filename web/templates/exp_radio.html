@@ -540,6 +540,13 @@
                         ⏹ Stop
                     </button>
                 </div>
+                <div class="flex gap-2 mt-2">
+                    <button onclick="expStreamAction('start_legacy')" id="exp-btn-start-legacy"
+                        class="flex-1 px-3 py-2 bg-blue-600/25 hover:bg-blue-600/40 text-blue-300 rounded-lg text-sm font-medium transition-colors"
+                        title="Start with the older RTMP/CRF FFmpeg pipeline for testing">
+                        ◀ Legacy Start
+                    </button>
+                </div>
                 <p class="text-gray-600 text-xs mt-3">Playlist is randomised at stream start. Only songs with status <span class="text-green-500">Done</span> are included.</p>
             </div>
         </div>
@@ -1031,10 +1038,13 @@
 let _expPollTimer = null;
 
 async function expStreamAction(action) {
-    const startBtn    = document.getElementById('exp-btn-start');
-    const stopBtn     = document.getElementById('exp-btn-stop');
-    const safeStopBtn = document.getElementById('exp-btn-safe-stop');
-    startBtn.disabled = stopBtn.disabled = safeStopBtn.disabled = true;
+    const buttons = [
+        document.getElementById('exp-btn-start'),
+        document.getElementById('exp-btn-start-legacy'),
+        document.getElementById('exp-btn-stop'),
+        document.getElementById('exp-btn-safe-stop'),
+    ].filter(Boolean);
+    buttons.forEach(btn => { btn.disabled = true; });
     try {
         const r = await fetch(`/exp-radio/stream/${action}`, { method: 'POST' });
         const d = await r.json();
@@ -1044,7 +1054,7 @@ async function expStreamAction(action) {
     } catch (e) {
         alert('Request failed: ' + e.message);
     } finally {
-        startBtn.disabled = stopBtn.disabled = safeStopBtn.disabled = false;
+        buttons.forEach(btn => { btn.disabled = false; });
         await updateExpStatus();
     }
 }
@@ -1100,7 +1110,11 @@ async function updateExpStatus() {
         const safeStopBtn = document.getElementById('exp-btn-safe-stop');
         if (d.running) {
             dot.className  = 'inline-block w-2.5 h-2.5 rounded-full bg-green-500';
-            text.textContent = d.safe_stop_pending ? 'Live — stopping after current song…' : 'Live';
+            if (d.safe_stop_pending) {
+                text.textContent = 'Live — stopping after current song…';
+            } else {
+                text.textContent = d.legacy_pipeline ? 'Live — legacy pipeline' : 'Live';
+            }
             if (safeStopBtn) {
                 safeStopBtn.disabled = d.safe_stop_pending;
                 safeStopBtn.textContent = d.safe_stop_pending ? '🌙 Stopping…' : '🌙 Safe Stop';
