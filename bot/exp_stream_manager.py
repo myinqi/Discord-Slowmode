@@ -19,7 +19,7 @@ from collections import deque
 
 from bot.twitch_bot import TwitchBot
 
-_RTMP_BASE  = "rtmp://live.twitch.tv/app/"
+_RTMP_BASE  = "rtmps://live.twitch.tv:443/app/"
 _FPS        = 30
 _W, _H      = 1920, 1080
 _INSET_W    = 360   # portrait inset width  (9:16 ≈ 360×640, doubled from 180×320)
@@ -1321,6 +1321,7 @@ class ExpStreamManager:
             "-pix_fmt", "yuv420p", "-r", str(_FPS),
             "-g", str(_FPS * 2), "-keyint_min", str(_FPS * 2), "-sc_threshold", "0",
             "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
+            "-rtmp_live", "live",
             "-flvflags", "no_duration_filesize",
             "-f", "flv", f"{_RTMP_BASE}{twitch_key}",
         ]

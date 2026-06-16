@@ -433,6 +433,25 @@ class RelicHunt:
         rank_changed = new_rank["id"] != old_rank["id"]
         return user, level_ups, (new_rank if rank_changed else None)
 
+    async def _send_progress_announcement(
+        self,
+        name: str,
+        user: dict,
+        level_ups: int,
+        new_rank: Optional[dict],
+    ) -> None:
+        announce_lvl = (await self.db.relic_get_setting("announce_level_ups")) == "true"
+        announce_rank = (await self.db.relic_get_setting("announce_rank_ups")) == "true"
+        if level_ups and announce_lvl:
+            rank_str = (
+                f" and became a {new_rank['icon']} {new_rank['name']}!"
+                if new_rank and announce_rank
+                else "!"
+            )
+            await self._send(f"⬆️ @{name} reached level {user['level']}{rank_str}")
+        elif new_rank and announce_rank:
+            await self._send(f"⬆️ @{name} became a {new_rank['icon']} {new_rank['name']}!")
+
     async def _is_game_enabled(self) -> bool:
         val = await self.db.relic_get_setting("enabled")
         return val != "false"  # default ON unless explicitly disabled
@@ -536,14 +555,7 @@ class RelicHunt:
         await self._send(msg)
         _rlog(f"{name} found {iname} ({rarity}) | +{pts}pts +{xp}xp")
 
-        # Level-up / rank announcement
-        announce_lvl = (await self.db.relic_get_setting("announce_level_ups")) == "true"
-        announce_rank = (await self.db.relic_get_setting("announce_rank_ups")) == "true"
-        if level_ups and announce_lvl:
-            rank_str = f" and became a {new_rank['icon']} {new_rank['name']}!" if new_rank and announce_rank else "!"
-            await self._send(f"⬆️ @{name} reached level {user['level']}{rank_str}")
-        elif new_rank and announce_rank:
-            await self._send(f"⬆️ @{name} became a {new_rank['icon']} {new_rank['name']}!")
+        await self._send_progress_announcement(name, user, level_ups, new_rank)
 
         # Log
         await self.db.relic_log_hunt({
@@ -678,6 +690,7 @@ class RelicHunt:
 
         await self.db.relic_upsert_user(user)
         await self._send(f"@{name} claims the daily raven tribute: +{pts} points, +{xp} XP{gift_name}.")
+        await self._send_progress_announcement(name, user, level_ups, new_rank)
 
     async def _cmd_ritual(self, ctx: dict) -> None:
         if not await self._is_game_enabled():
@@ -732,8 +745,9 @@ class RelicHunt:
             cutoff = time.time() - window
             active_users = [u for u in all_users if (u.get("last_raven_at") or 0) >= cutoff]
             for u in active_users:
+                old_points = u["points"]
                 u["points"] += reward_pts
-                u, _, _ = await self._apply_xp(u, reward_xp)
+                u, _, _ = await self._apply_xp(u, reward_xp, old_points)
                 await self.db.relic_upsert_user(u)
 
             # Lucky legendary drop
