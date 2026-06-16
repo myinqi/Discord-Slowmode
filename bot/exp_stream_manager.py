@@ -68,10 +68,15 @@ def _shift_ass_dialogue(content: str, offset_cs: int) -> list:
 
 
 # FFmpeg progress lines ("frame=  123 fps= 30 q=28 ... time=00:00:04.10 ...")
-# emit roughly once per second and would flood the log buffer. We drop them
-# entirely — anything else (warnings, errors, our own [exp-stream] messages)
-# is interesting and goes through.
+# emit roughly once per second and would flood the log buffer. We parse them
+# for the dashboard health line and drop them from the live log.
 _FFMPEG_PROGRESS_RE = re.compile(r"^frame=\s*\d+.*time=")
+_FFMPEG_STALL_SECONDS = 30.0
+_FFMPEG_PROGRESS_KEYS = {
+    "frame", "fps", "stream_0_0_q", "bitrate", "total_size", "out_time_us",
+    "out_time_ms", "out_time", "dup_frames", "drop_frames", "speed",
+    "progress",
+}
 
 # Emoji codepoints have no glyph in any font we ship in the container, so
 # libass spams `fontselect: failed to find any fallback with glyph 0xXXXX`
@@ -174,6 +179,10 @@ class ExpStreamManager:
         # background workers and web actions which don't have a reference to
         # the manager instance can still publish into the same live log.
         self._log_buffer = _LOG_BUFFER
+        self._ffmpeg_progress: dict = {}
+        self._ffmpeg_progress_pending: dict = {}
+        self._ffmpeg_last_progress_at: float = 0.0
+        self._ffmpeg_health_state: str = "offline"
 
     # ── Live log buffer ──────────────────────────────────────────────────────────────────────
 
@@ -192,6 +201,79 @@ class ExpStreamManager:
             for (ts, level, line) in self._log_buffer
             if ts > cutoff
         ]
+
+    # ── FFmpeg health tracking ───────────────────────────────────────────────
+
+    def _reset_ffmpeg_health(self, state: str = "offline") -> None:
+        self._ffmpeg_progress = {}
+        self._ffmpeg_progress_pending = {}
+        self._ffmpeg_last_progress_at = 0.0
+        self._ffmpeg_health_state = state
+
+    def _set_ffmpeg_health_state(self, state: str, age: float | None = None) -> None:
+        old_state = self._ffmpeg_health_state
+        if state == old_state:
+            return
+        self._ffmpeg_health_state = state
+        if state == "healthy" and old_state == "stalled":
+            self._log("FFmpeg health: recovered.")
+        elif state == "healthy" and old_state in ("starting", "unknown"):
+            self._log("FFmpeg health: healthy.")
+        elif state == "stalled":
+            age_label = f"{int(age)}s" if age is not None else "unknown"
+            self._log(f"FFmpeg health: stalled, no progress for {age_label}.", "error")
+
+    def _record_ffmpeg_progress(self, progress: dict) -> None:
+        if not progress:
+            return
+        self._ffmpeg_progress.update(progress)
+        self._ffmpeg_last_progress_at = time.time()
+        self._set_ffmpeg_health_state("healthy", 0.0)
+
+    def _record_ffmpeg_progress_line(self, line: str) -> None:
+        progress = {}
+        patterns = {
+            "frame": r"frame=\s*([0-9]+)",
+            "fps": r"fps=\s*([0-9.]+)",
+            "bitrate": r"bitrate=\s*([^\s]+)",
+            "out_time": r"time=\s*([0-9:.]+)",
+            "speed": r"speed=\s*([^\s]+)",
+        }
+        for key, pattern in patterns.items():
+            match = re.search(pattern, line)
+            if match:
+                progress[key] = match.group(1)
+        self._record_ffmpeg_progress(progress)
+
+    def _get_ffmpeg_health(self) -> dict:
+        if not self.is_running:
+            self._set_ffmpeg_health_state("offline")
+            return {"state": "offline", "healthy": False}
+
+        proc_alive = bool(self._process and self._process.returncode is None)
+        if not proc_alive:
+            self._set_ffmpeg_health_state("starting")
+            return {"state": "starting", "healthy": False}
+
+        if not self._ffmpeg_last_progress_at:
+            self._set_ffmpeg_health_state("starting")
+            return {"state": "starting", "healthy": None}
+
+        age = max(0.0, time.time() - self._ffmpeg_last_progress_at)
+        state = "healthy" if age <= _FFMPEG_STALL_SECONDS else "stalled"
+        self._set_ffmpeg_health_state(state, age)
+        progress = dict(self._ffmpeg_progress)
+        return {
+            "state": state,
+            "healthy": state == "healthy",
+            "last_progress_age": round(age, 1),
+            "stall_after_seconds": _FFMPEG_STALL_SECONDS,
+            "frame": progress.get("frame"),
+            "fps": progress.get("fps"),
+            "bitrate": progress.get("bitrate"),
+            "speed": progress.get("speed"),
+            "out_time": progress.get("out_time") or progress.get("time"),
+        }
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -288,6 +370,7 @@ class ExpStreamManager:
         self._twitch_key = twitch_key
         self.playlist    = ready
         self._stream_ready_event.clear()
+        self._reset_ffmpeg_health("offline")
         # Connect to Twitch chat if enabled and credentials exist
         chat_enabled = await self.db.get_setting("exp_radio_twitch_chat_enabled") or "off"
         client_id    = await self.db.get_setting("exp_radio_twitch_client_id")
@@ -331,6 +414,7 @@ class ExpStreamManager:
                 except Exception:
                     pass
         self._process = None
+        self._reset_ffmpeg_health("offline")
         self._safe_stop_requested = False
         self._outro_in_playlist = False
         self._outro_counts_in_progress = False
@@ -418,6 +502,7 @@ class ExpStreamManager:
                 "suno_url": self.current_song.get("suno_url") if self.current_song else None,
             } if self.current_song else None,
             "playlist_length": self._progress_total_count or len(self.playlist),
+            "ffmpeg": self._get_ffmpeg_health(),
         }
 
     # ── Stream loop (one FFmpeg per full playlist rotation) ────────────────────
@@ -564,6 +649,7 @@ class ExpStreamManager:
 
         titles = " → ".join(s.get("title") or "?" for s in songs)
         self._log(f"FFmpeg playlist: {titles}")
+        self._reset_ffmpeg_health("starting")
 
         # limit=1 MiB: FFmpeg can occasionally emit very long progress/banner
         # lines without an embedded \n (e.g. when a filter logs a giant
@@ -600,6 +686,8 @@ class ExpStreamManager:
         rc = self._process.returncode
         if rc and rc != 0 and self.is_running:
             self._log(f"FFmpeg exited {rc}.", "error")
+        elif self.is_running:
+            self._set_ffmpeg_health_state("starting")
 
     async def _pipe_ffmpeg_stderr(self, proc) -> None:
         """Read FFmpeg stderr line by line and feed it into the live log.
@@ -641,7 +729,19 @@ class ExpStreamManager:
             if not raw:
                 return
             line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
-            if not line or _FFMPEG_PROGRESS_RE.match(line):
+            if not line:
+                continue
+            if "=" in line:
+                key, value = line.split("=", 1)
+                if key in _FFMPEG_PROGRESS_KEYS:
+                    if key == "progress":
+                        self._record_ffmpeg_progress(self._ffmpeg_progress_pending)
+                        self._ffmpeg_progress_pending = {}
+                    else:
+                        self._ffmpeg_progress_pending[key] = value.strip()
+                    continue
+            if _FFMPEG_PROGRESS_RE.match(line):
+                self._record_ffmpeg_progress_line(line)
                 continue
             # Heuristic: anything containing 'error' or starting with
             # '[<x>] @ ...' suggests a problem worth flagging.
@@ -1112,7 +1212,7 @@ class ExpStreamManager:
           3: Combined ASS subtitles (lyrics + NowPlaying title cards)
         """
         W, H = _W, _H
-        cmd  = ["ffmpeg", "-y"]
+        cmd  = ["ffmpeg", "-y", "-nostats", "-progress", "pipe:2"]
 
         input_idx = 0
         bg_input = lv_input = None

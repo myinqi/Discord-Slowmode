@@ -523,6 +523,7 @@
                         <span class="text-gray-400 text-sm font-medium" id="exp-status-text">Offline</span>
                     </div>
                     <p class="text-gray-500 text-xs truncate" id="exp-now-playing">—</p>
+                    <p class="text-gray-600 text-xs mt-1 truncate" id="exp-ffmpeg-health">FFmpeg offline</p>
                 </div>
                 <div class="flex gap-2">
                     <button onclick="expStreamAction('start')" id="exp-btn-start"
@@ -1048,6 +1049,47 @@ async function expStreamAction(action) {
     }
 }
 
+function formatExpHealthAge(age) {
+    if (age === null || age === undefined || Number.isNaN(Number(age))) return '?';
+    const seconds = Math.max(0, Math.round(Number(age)));
+    if (seconds < 60) return `${seconds}s`;
+    return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+function renderExpFfmpegHealth(data, running) {
+    const healthEl = document.getElementById('exp-ffmpeg-health');
+    if (!healthEl) return;
+    const ffmpeg = data.ffmpeg || {};
+    const state = running ? (ffmpeg.state || 'unknown') : 'offline';
+    healthEl.className = 'text-gray-600 text-xs mt-1 truncate';
+
+    if (!running || state === 'offline') {
+        healthEl.textContent = 'FFmpeg offline';
+        return;
+    }
+    if (state === 'stalled') {
+        healthEl.className = 'text-red-400 text-xs mt-1 truncate';
+        healthEl.textContent = `FFmpeg stalled · no progress for ${formatExpHealthAge(ffmpeg.last_progress_age)}`;
+        return;
+    }
+    if (state === 'starting') {
+        healthEl.className = 'text-yellow-400 text-xs mt-1 truncate';
+        healthEl.textContent = 'FFmpeg starting · waiting for progress';
+        return;
+    }
+
+    const parts = [`FFmpeg ${state}`];
+    if (ffmpeg.last_progress_age !== undefined) parts.push(`${formatExpHealthAge(ffmpeg.last_progress_age)} ago`);
+    if (ffmpeg.out_time) parts.push(ffmpeg.out_time);
+    if (ffmpeg.bitrate) parts.push(ffmpeg.bitrate);
+    if (ffmpeg.speed) parts.push(`speed ${ffmpeg.speed}`);
+    if (ffmpeg.frame) parts.push(`frame ${ffmpeg.frame}`);
+    healthEl.className = state === 'healthy'
+        ? 'text-green-400 text-xs mt-1 truncate'
+        : 'text-gray-500 text-xs mt-1 truncate';
+    healthEl.textContent = parts.join(' · ');
+}
+
 async function updateExpStatus() {
     try {
         const r = await fetch('/exp-radio/stream/status');
@@ -1066,11 +1108,13 @@ async function updateExpStatus() {
             if (d.song) {
                 np.textContent = `${d.song.title || '?'} — ${d.song.artist || ''}  (${d.song_index || 0}/${d.playlist_length || 0})`;
             }
+            renderExpFfmpegHealth(d, true);
         } else {
             dot.className  = 'inline-block w-2.5 h-2.5 rounded-full bg-gray-500';
             text.textContent = 'Offline';
             np.textContent   = '—';
             if (safeStopBtn) { safeStopBtn.disabled = false; safeStopBtn.textContent = '🌙 Safe Stop'; }
+            renderExpFfmpegHealth(d, false);
         }
     } catch (_) {}
 }
