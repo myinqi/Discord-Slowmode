@@ -171,6 +171,7 @@ class ExpStreamManager:
         self._outro_in_playlist: bool = False
         self._outro_counts_in_progress: bool = False
         self._progress_total_count: int = 0
+        self._current_song_index: int = 0
         # Set when the first FFmpeg process exists. start() returns earlier,
         # while media is still being prepared.
         self._stream_ready_event = asyncio.Event()
@@ -419,6 +420,7 @@ class ExpStreamManager:
         self._outro_in_playlist = False
         self._outro_counts_in_progress = False
         self._progress_total_count = 0
+        self._current_song_index = 0
         if self._task:
             self._task.cancel()
             self._task = None
@@ -501,6 +503,7 @@ class ExpStreamManager:
                 "artist":   self.current_song.get("artist")   if self.current_song else None,
                 "suno_url": self.current_song.get("suno_url") if self.current_song else None,
             } if self.current_song else None,
+            "song_index": self._current_song_index,
             "playlist_length": self._progress_total_count or len(self.playlist),
             "ffmpeg": self._get_ffmpeg_health(),
         }
@@ -512,6 +515,7 @@ class ExpStreamManager:
             # Set current_song to first track so status shows something immediately
             if self.playlist:
                 self.current_song = self.playlist[0]
+                self._current_song_index = 1
             try:
                 await self._play_playlist(self.playlist)
             except asyncio.CancelledError:
@@ -784,10 +788,11 @@ class ExpStreamManager:
         """Post ♪ Now Playing to Twitch chat at each song boundary.
         Also updates current_song and _current_song_end_time for safe_stop."""
         _POST_DELAY = 10  # seconds after song start before posting
-        for song in songs:
+        for song_idx, song in enumerate(songs, start=1):
             dur = song.get("duration") or 300
             # Update current song tracking for safe-stop
             self.current_song = song
+            self._current_song_index = song_idx
             self._current_song_end_time = time.monotonic() + dur
             # Cancel safe-stop for this song if it was requested mid-prev-song
             if self._safe_stop_requested:
@@ -1299,10 +1304,17 @@ class ExpStreamManager:
         cmd += ["-t", str(total_dur + 2)]
 
         # ── Encode ─────────────────────────────────────────────────────────────
+        # Twitch is much happier with predictable CBR-ish H.264 than CRF-only
+        # output, especially around playlist source changes. Keep keyframes
+        # exactly 2s apart and avoid FLV duration/file-size metadata on live RTMP.
         cmd += [
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
-            "-pix_fmt", "yuv420p", "-g", str(_FPS * 2), "-keyint_min", str(_FPS),
+            "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
+            "-b:v", "4500k", "-maxrate", "4500k", "-bufsize", "9000k",
+            "-x264-params", "nal-hrd=cbr:force-cfr=1",
+            "-pix_fmt", "yuv420p", "-r", str(_FPS),
+            "-g", str(_FPS * 2), "-keyint_min", str(_FPS * 2), "-sc_threshold", "0",
             "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
+            "-flvflags", "no_duration_filesize",
             "-f", "flv", f"{_RTMP_BASE}{twitch_key}",
         ]
         return cmd
