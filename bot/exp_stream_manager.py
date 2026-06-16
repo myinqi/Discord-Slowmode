@@ -630,13 +630,6 @@ class ExpStreamManager:
             progress_extra_duration=progress_extra_duration,
         )
 
-        # Build audio concat file
-        concat_txt = os.path.join(self.exp_radio_dir, "_audio_concat.txt")
-        with open(concat_txt, "w", encoding="utf-8") as f:
-            for song in songs:
-                mp3 = os.path.join(self.exp_radio_dir, "mp3", song["mp3_filename"])
-                f.write(f"file '{mp3}'\n")
-
         total_dur = sum(s.get("duration") or 300 for s in songs)
 
         cmd = self._build_playlist_cmd(
@@ -646,7 +639,6 @@ class ExpStreamManager:
             bg_type=bg_type,
             loop_path=loop_path if loop_path and os.path.exists(loop_path) else None,
             ass_path=combined_ass if combined_ass and os.path.exists(combined_ass) else None,
-            audio_concat_file=concat_txt,
             twitch_key=self._twitch_key,
             total_dur=total_dur,
         )
@@ -1204,7 +1196,6 @@ class ExpStreamManager:
         bg_type: str,
         loop_path: str | None,
         ass_path: str | None,
-        audio_concat_file: str,
         twitch_key: str,
         total_dur: float,
     ) -> list:
@@ -1248,9 +1239,15 @@ class ExpStreamManager:
                         "-i", f"color=size={_INSET_W}x{_INSET_H}:color=black:rate={_FPS}"]
             media_inputs.append(input_idx); input_idx += 1
 
-        # Audio (concat demuxer)
-        cmd += ["-f", "concat", "-safe", "0", "-i", audio_concat_file]
-        audio_input = input_idx; input_idx += 1
+        # Per-song audio inputs. Keeping audio in the same filtergraph as the
+        # cover concat gives every song boundary a fresh timestamp origin,
+        # avoiding MP3 concat-demuxer timestamp jumps in Twitch's live player.
+        audio_inputs = []
+        for song in songs:
+            dur = song.get("duration") or 300
+            mp3 = os.path.join(self.exp_radio_dir, "mp3", song["mp3_filename"])
+            cmd += ["-t", str(dur + 0.5), "-i", mp3]
+            audio_inputs.append(input_idx); input_idx += 1
 
         # ── Filtergraph ────────────────────────────────────────────────────────
         filters = []
@@ -1287,6 +1284,16 @@ class ExpStreamManager:
             )
         concat_in = "".join(f"[cv{i}]" for i in range(n))
         filters.append(f"{concat_in}concat=n={n}:v=1:a=0[covers]")
+
+        audio_concat_in = []
+        for i, (song, aid) in enumerate(zip(songs, audio_inputs)):
+            dur = song.get("duration") or 300
+            filters.append(
+                f"[{aid}:a]atrim=0:{dur},asetpts=PTS-STARTPTS,"
+                f"aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}]"
+            )
+            audio_concat_in.append(f"[a{i}]")
+        filters.append(f"{''.join(audio_concat_in)}concat=n={n}:v=0:a=1[aout]")
         filters.append(
             f"{last}[covers]overlay=x=20:y={H}-{_INSET_H}-20:shortest=0[after_cv]"
         )
@@ -1300,7 +1307,7 @@ class ExpStreamManager:
             filters.append(f"{last}copy[vout]")
 
         cmd += ["-filter_complex", ";".join(filters)]
-        cmd += ["-map", "[vout]", "-map", f"{audio_input}:a"]
+        cmd += ["-map", "[vout]", "-map", "[aout]"]
         cmd += ["-t", str(total_dur + 2)]
 
         # ── Encode ─────────────────────────────────────────────────────────────
