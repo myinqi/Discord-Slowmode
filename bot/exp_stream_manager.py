@@ -1311,12 +1311,12 @@ class ExpStreamManager:
         cmd += ["-t", str(total_dur + 2)]
 
         # ── Encode ─────────────────────────────────────────────────────────────
-        # Twitch is much happier with predictable CBR-ish H.264 than CRF-only
-        # output, especially around playlist source changes. Keep keyframes
-        # exactly 2s apart and avoid FLV duration/file-size metadata on live RTMP.
+        # Twitch is much happier with predictable H.264 than CRF-only output,
+        # especially around playlist source changes. Keep keyframes exactly
+        # 2s apart and avoid FLV duration/file-size metadata on live RTMP.
         cmd += [
             "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
-            "-b:v", "4500k", "-maxrate", "4500k", "-bufsize", "9000k",
+            "-b:v", "2500k", "-maxrate", "2500k", "-bufsize", "5000k",
             "-x264-params", "nal-hrd=cbr:force-cfr=1",
             "-pix_fmt", "yuv420p", "-r", str(_FPS),
             "-g", str(_FPS * 2), "-keyint_min", str(_FPS * 2), "-sc_threshold", "0",
