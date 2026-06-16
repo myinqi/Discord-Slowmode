@@ -1048,7 +1048,21 @@ class ExpStreamManager:
         out_path = os.path.join(assets, "_concat_all.mp4")
         hash_file = os.path.join(assets, "_concat_all.hash")
 
-        vid_sig  = ",".join(sorted(v["filename"] for v in loop_vids))
+        paths = [os.path.join(assets, v["filename"]) for v in loop_vids]
+        missing = [p for p in paths if not os.path.exists(p)]
+        if missing:
+            self._log(f"Concat-all: missing files: {missing}", "error")
+            return None
+
+        builder_version = "concat_all_filter_v3_720p_cfr30"
+        file_sig_parts = []
+        for p in paths:
+            try:
+                st = os.stat(p)
+                file_sig_parts.append(f"{os.path.basename(p)}:{st.st_size}:{int(st.st_mtime)}")
+            except OSError:
+                file_sig_parts.append(os.path.basename(p))
+        vid_sig  = "|".join(sorted(file_sig_parts))
         ffmpeg_sig = "ffmpeg:unknown"
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -1060,7 +1074,7 @@ class ExpStreamManager:
             ffmpeg_sig = (out.decode("utf-8", errors="replace").splitlines() or [ffmpeg_sig])[0]
         except Exception:
             pass
-        cur_hash = hashlib.md5(f"{vid_sig}|{ffmpeg_sig}".encode()).hexdigest()
+        cur_hash = hashlib.md5(f"{builder_version}|{vid_sig}|{ffmpeg_sig}".encode()).hexdigest()
 
         # Cache hit?
         if os.path.exists(out_path) and os.path.exists(hash_file):
@@ -1072,28 +1086,34 @@ class ExpStreamManager:
             except Exception:
                 pass
 
-        paths = [os.path.join(assets, v["filename"]) for v in loop_vids]
-        missing = [p for p in paths if not os.path.exists(p)]
-        if missing:
-            self._log(f"Concat-all: missing files: {missing}", "error")
-            return None
+        self._log(f"Building concat-all loop video ({len(paths)} clips, 720p CFR 30)…")
+        cmd = ["ffmpeg", "-y"]
+        for p in paths:
+            cmd += ["-fflags", "+genpts", "-i", p]
 
-        concat_list = os.path.join(assets, "_concat_all_list.txt")
-        with open(concat_list, "w", encoding="utf-8") as fh:
-            for p in paths:
-                fh.write(f"file '{p}'\n")
+        filters = []
+        concat_in = []
+        for i in range(len(paths)):
+            filters.append(
+                f"[{i}:v]scale=1280:720:force_original_aspect_ratio=decrease,"
+                f"pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=black,"
+                f"fps=30,setsar=1,setpts=PTS-STARTPTS[v{i}]"
+            )
+            concat_in.append(f"[v{i}]")
+        filters.append(f"{''.join(concat_in)}concat=n={len(paths)}:v=1:a=0[vout]")
 
-        self._log(f"Building concat-all loop video ({len(paths)} clips)…")
-        cmd = [
-            "ffmpeg", "-y",
-            "-f", "concat", "-safe", "0", "-i", concat_list,
-            "-vf", "scale=720:720:force_original_aspect_ratio=decrease:force_divisible_by=2,fps=24",
+        tmp_out = out_path + ".tmp.mp4"
+        cmd += [
+            "-filter_complex", ";".join(filters),
+            "-map", "[vout]",
+            "-an",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "24",
             "-pix_fmt", "yuv420p",
-            "-g", "24", "-keyint_min", "24",
+            "-r", "30",
+            "-g", "60", "-keyint_min", "60", "-sc_threshold", "0",
+            "-video_track_timescale", "30000",
             "-movflags", "+faststart",
-            "-an",
-            out_path,
+            tmp_out,
         ]
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
@@ -1102,11 +1122,20 @@ class ExpStreamManager:
         if proc.returncode != 0:
             err_tail = (err or b"")[-400:].decode("utf-8", errors="replace")
             self._log(f"Concat-all build failed: {err_tail}", "error")
+            try: os.remove(tmp_out)
+            except Exception: pass
+            return None
+        try:
+            os.replace(tmp_out, out_path)
+        except Exception as e:
+            self._log(f"Concat-all replace failed: {e}", "error")
+            try: os.remove(tmp_out)
+            except Exception: pass
             return None
 
         with open(hash_file, "w") as fh:
             fh.write(cur_hash)
-        self._log(f"Concat-all loop video ready ({len(paths)} clips combined).")
+        self._log(f"Concat-all loop video ready ({len(paths)} clips combined, 720p CFR 30).")
         return out_path
 
     # ── Combined ASS builder ───────────────────────────────────────────────────
