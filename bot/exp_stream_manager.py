@@ -1040,15 +1040,27 @@ class ExpStreamManager:
         """Concatenate every uploaded loop video into one MP4.
 
         The result is cached in assets/_concat_all.mp4. A sidecar hash file
-        (_concat_all.hash) records the sorted filename list so the file is
-        rebuilt automatically whenever videos are added or removed."""
+        (_concat_all.hash) records the sorted filename list and FFmpeg runtime
+        so the file is rebuilt automatically whenever videos are added/removed
+        or the container's FFmpeg version changes."""
         import hashlib
         assets   = os.path.join(self.exp_radio_dir, "assets")
         out_path = os.path.join(assets, "_concat_all.mp4")
         hash_file = os.path.join(assets, "_concat_all.hash")
 
         vid_sig  = ",".join(sorted(v["filename"] for v in loop_vids))
-        cur_hash = hashlib.md5(vid_sig.encode()).hexdigest()
+        ffmpeg_sig = "ffmpeg:unknown"
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-version",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            out, _ = await proc.communicate()
+            ffmpeg_sig = (out.decode("utf-8", errors="replace").splitlines() or [ffmpeg_sig])[0]
+        except Exception:
+            pass
+        cur_hash = hashlib.md5(f"{vid_sig}|{ffmpeg_sig}".encode()).hexdigest()
 
         # Cache hit?
         if os.path.exists(out_path) and os.path.exists(hash_file):
