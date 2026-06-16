@@ -1,4 +1,6 @@
-FROM python:3.12-slim
+# Keep the runtime stable. The floating python:3.12-slim tag moved to Debian
+# 13 / FFmpeg 7.x and correlated with Twitch playback drops after ~8 minutes.
+FROM python:3.12-slim-bookworm
 
 WORKDIR /app
 
