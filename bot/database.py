@@ -2967,6 +2967,8 @@ class Database:
                 phrase TEXT NOT NULL DEFAULT '',
                 revealed_mask TEXT NOT NULL DEFAULT '',
                 enabled INTEGER NOT NULL DEFAULT 0,
+                loop_queue INTEGER NOT NULL DEFAULT 0,
+                current_phrase_id INTEGER,
                 letter_find_chance REAL NOT NULL DEFAULT 0.05,
                 winner_xp_reward INTEGER NOT NULL DEFAULT 500,
                 solved_by_user_id TEXT,
@@ -2980,8 +2982,34 @@ class Database:
                 username TEXT NOT NULL,
                 last_guess_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS relic_phrase_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                phrase TEXT NOT NULL,
+                position INTEGER NOT NULL DEFAULT 0,
+                active INTEGER NOT NULL DEFAULT 1,
+                used_at REAL,
+                solved_by_user_id TEXT,
+                solved_by_username TEXT,
+                solved_at REAL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
         """)
         await self.db.commit()
+
+        async with self.db.execute("PRAGMA table_info(relic_phrase_puzzle)") as cur:
+            phrase_columns = [row["name"] for row in await cur.fetchall()]
+        if "loop_queue" not in phrase_columns:
+            await self.db.execute(
+                "ALTER TABLE relic_phrase_puzzle ADD COLUMN loop_queue INTEGER NOT NULL DEFAULT 0"
+            )
+        if "current_phrase_id" not in phrase_columns:
+            await self.db.execute(
+                "ALTER TABLE relic_phrase_puzzle ADD COLUMN current_phrase_id INTEGER"
+            )
+        await self.db.commit()
+
+        await self._migrate_phrase_to_queue()
 
     # -----------------------------------------------------------------------
     # Relic Hunt — ranks
@@ -3189,6 +3217,40 @@ class Database:
     # -----------------------------------------------------------------------
     # Relic Hunt — phrase puzzle
     # -----------------------------------------------------------------------
+    async def _phrase_mask(self, phrase: str) -> str:
+        return "".join("0" if char.isalpha() else "1" for char in phrase)
+
+    async def _migrate_phrase_to_queue(self) -> None:
+        puzzle = await self.relic_get_phrase_puzzle()
+        if not puzzle.get("phrase"):
+            return
+        async with self.db.execute(
+            "SELECT COUNT(*) AS count FROM relic_phrase_queue"
+        ) as cur:
+            row = await cur.fetchone()
+        if row and row["count"]:
+            return
+        now = time.time()
+        cursor = await self.db.execute("""
+            INSERT INTO relic_phrase_queue
+              (phrase, position, active, used_at, solved_by_user_id,
+               solved_by_username, solved_at, created_at, updated_at)
+            VALUES (?, 1, 1, ?, ?, ?, ?, ?, ?)
+        """, (
+            puzzle["phrase"],
+            now if puzzle.get("phrase") else None,
+            puzzle.get("solved_by_user_id"),
+            puzzle.get("solved_by_username"),
+            puzzle.get("solved_at"),
+            now,
+            now,
+        ))
+        await self.db.execute(
+            "UPDATE relic_phrase_puzzle SET current_phrase_id = ? WHERE id = 1",
+            (cursor.lastrowid,),
+        )
+        await self.db.commit()
+
     async def relic_get_phrase_puzzle(self) -> dict:
         async with self.db.execute(
             "SELECT * FROM relic_phrase_puzzle WHERE id = 1"
@@ -3203,6 +3265,8 @@ class Database:
             "enabled": 0,
             "letter_find_chance": 0.05,
             "winner_xp_reward": 500,
+            "loop_queue": 0,
+            "current_phrase_id": None,
             "solved_by_user_id": None,
             "solved_by_username": None,
             "solved_at": None,
@@ -3212,64 +3276,48 @@ class Database:
 
     async def relic_save_phrase_puzzle(
         self,
-        phrase: str,
         enabled: bool,
+        loop_queue: bool,
         letter_find_chance: float,
         winner_xp_reward: int,
-    ) -> bool:
-        """Save puzzle settings. Returns True when a new phrase reset progress."""
+    ) -> None:
+        """Save puzzle settings without changing phrase progress."""
         now = time.time()
         current = await self.relic_get_phrase_puzzle()
-        phrase_changed = phrase != current.get("phrase", "")
-        if phrase_changed:
-            revealed_mask = "".join("0" if char.isalpha() else "1" for char in phrase)
-            solved_by_user_id = None
-            solved_by_username = None
-            solved_at = None
-        else:
-            revealed_mask = current.get("revealed_mask", "")
-            solved_by_user_id = current.get("solved_by_user_id")
-            solved_by_username = current.get("solved_by_username")
-            solved_at = current.get("solved_at")
-
         await self.db.execute("""
             INSERT INTO relic_phrase_puzzle
-              (id, phrase, revealed_mask, enabled, letter_find_chance,
+              (id, phrase, revealed_mask, enabled, loop_queue,
+               current_phrase_id, letter_find_chance,
                winner_xp_reward, solved_by_user_id, solved_by_username,
                solved_at, created_at, updated_at)
             VALUES
-              (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
-              phrase=excluded.phrase,
-              revealed_mask=excluded.revealed_mask,
               enabled=excluded.enabled,
+              loop_queue=excluded.loop_queue,
               letter_find_chance=excluded.letter_find_chance,
               winner_xp_reward=excluded.winner_xp_reward,
-              solved_by_user_id=excluded.solved_by_user_id,
-              solved_by_username=excluded.solved_by_username,
-              solved_at=excluded.solved_at,
               updated_at=excluded.updated_at
         """, (
-            phrase,
-            revealed_mask,
+            current.get("phrase", ""),
+            current.get("revealed_mask", ""),
             1 if enabled else 0,
+            1 if loop_queue else 0,
+            current.get("current_phrase_id"),
             min(1.0, max(0.0, float(letter_find_chance))),
             max(0, int(winner_xp_reward)),
-            solved_by_user_id,
-            solved_by_username,
-            solved_at,
+            current.get("solved_by_user_id"),
+            current.get("solved_by_username"),
+            current.get("solved_at"),
             current.get("created_at") or now,
             now,
         ))
-        if phrase_changed:
-            await self.db.execute("DELETE FROM relic_phrase_guesses")
         await self.db.commit()
-        return phrase_changed
 
     async def relic_reset_phrase_progress(self) -> None:
         puzzle = await self.relic_get_phrase_puzzle()
         phrase = puzzle.get("phrase", "")
-        mask = "".join("0" if char.isalpha() else "1" for char in phrase)
+        mask = await self._phrase_mask(phrase)
         await self.db.execute("""
             UPDATE relic_phrase_puzzle
             SET revealed_mask = ?, solved_by_user_id = NULL,
@@ -3277,6 +3325,162 @@ class Database:
             WHERE id = 1
         """, (mask, time.time()))
         await self.db.execute("DELETE FROM relic_phrase_guesses")
+        await self.db.commit()
+
+    async def relic_get_phrase_queue(self) -> list[dict]:
+        async with self.db.execute("""
+            SELECT * FROM relic_phrase_queue
+            ORDER BY active DESC, position ASC, id ASC
+        """) as cur:
+            return [dict(row) for row in await cur.fetchall()]
+
+    async def relic_add_phrase_to_queue(self, phrase: str) -> int:
+        async with self.db.execute(
+            "SELECT COALESCE(MAX(position), 0) AS max_position FROM relic_phrase_queue"
+        ) as cur:
+            row = await cur.fetchone()
+        now = time.time()
+        cursor = await self.db.execute("""
+            INSERT INTO relic_phrase_queue
+              (phrase, position, active, created_at, updated_at)
+            VALUES (?, ?, 1, ?, ?)
+        """, (phrase, int(row["max_position"] or 0) + 1, now, now))
+        await self.db.commit()
+        puzzle = await self.relic_get_phrase_puzzle()
+        if not puzzle.get("phrase") and not puzzle.get("current_phrase_id"):
+            await self.relic_activate_phrase(cursor.lastrowid, preserve_enabled=True)
+        return cursor.lastrowid
+
+    async def relic_delete_phrase_from_queue(self, phrase_id: int) -> None:
+        puzzle = await self.relic_get_phrase_puzzle()
+        await self.db.execute("DELETE FROM relic_phrase_queue WHERE id = ?", (phrase_id,))
+        await self.db.commit()
+        if puzzle.get("current_phrase_id") == phrase_id:
+            await self.relic_activate_next_phrase()
+
+    async def relic_activate_phrase(
+        self,
+        phrase_id: int,
+        preserve_enabled: bool = True,
+    ) -> bool:
+        async with self.db.execute(
+            "SELECT * FROM relic_phrase_queue WHERE id = ? AND active = 1",
+            (phrase_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return False
+        entry = dict(row)
+        puzzle = await self.relic_get_phrase_puzzle()
+        now = time.time()
+        await self.db.execute("""
+            INSERT INTO relic_phrase_puzzle
+              (id, phrase, revealed_mask, enabled, loop_queue,
+               current_phrase_id, letter_find_chance, winner_xp_reward,
+               solved_by_user_id, solved_by_username, solved_at,
+               created_at, updated_at)
+            VALUES
+              (1, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              phrase=excluded.phrase,
+              revealed_mask=excluded.revealed_mask,
+              current_phrase_id=excluded.current_phrase_id,
+              enabled=excluded.enabled,
+              solved_by_user_id=NULL,
+              solved_by_username=NULL,
+              solved_at=NULL,
+              updated_at=excluded.updated_at
+        """, (
+            entry["phrase"],
+            await self._phrase_mask(entry["phrase"]),
+            puzzle.get("enabled", 0) if preserve_enabled else 1,
+            puzzle.get("loop_queue", 0),
+            phrase_id,
+            puzzle.get("letter_find_chance", 0.05),
+            puzzle.get("winner_xp_reward", 500),
+            puzzle.get("created_at") or now,
+            now,
+        ))
+        await self.db.execute("""
+            UPDATE relic_phrase_queue
+            SET used_at = COALESCE(used_at, ?),
+                solved_by_user_id = NULL,
+                solved_by_username = NULL,
+                solved_at = NULL,
+                updated_at = ?
+            WHERE id = ?
+        """, (now, now, phrase_id))
+        await self.db.execute("DELETE FROM relic_phrase_guesses")
+        await self.db.commit()
+        return True
+
+    async def relic_activate_next_phrase(self) -> Optional[dict]:
+        puzzle = await self.relic_get_phrase_puzzle()
+        current_id = puzzle.get("current_phrase_id") or 0
+        async with self.db.execute("""
+            SELECT * FROM relic_phrase_queue
+            WHERE active = 1
+              AND solved_at IS NULL
+              AND id != ?
+            ORDER BY
+              CASE WHEN used_at IS NULL THEN 0 ELSE 1 END,
+              position ASC,
+              id ASC
+            LIMIT 1
+        """, (current_id,)) as cur:
+            row = await cur.fetchone()
+        if not row and puzzle.get("loop_queue"):
+            async with self.db.execute("""
+                SELECT * FROM relic_phrase_queue
+                WHERE active = 1 AND id != ?
+                ORDER BY position ASC, id ASC
+                LIMIT 1
+            """, (current_id,)) as cur:
+                row = await cur.fetchone()
+        if not row and puzzle.get("loop_queue"):
+            async with self.db.execute("""
+                SELECT * FROM relic_phrase_queue
+                WHERE active = 1
+                ORDER BY position ASC, id ASC
+                LIMIT 1
+            """) as cur:
+                row = await cur.fetchone()
+        if not row:
+            await self.db.execute("""
+                UPDATE relic_phrase_puzzle
+                SET phrase = '', revealed_mask = '', current_phrase_id = NULL,
+                    enabled = 0, solved_by_user_id = NULL,
+                    solved_by_username = NULL, solved_at = NULL, updated_at = ?
+                WHERE id = 1
+            """, (time.time(),))
+            await self.db.execute("DELETE FROM relic_phrase_guesses")
+            await self.db.commit()
+            return None
+        entry = dict(row)
+        await self.relic_activate_phrase(entry["id"], preserve_enabled=True)
+        return entry
+
+    async def relic_mark_current_phrase_solved(
+        self,
+        twitch_user_id: str,
+        username: str,
+        solved_at: float,
+    ) -> None:
+        puzzle = await self.relic_get_phrase_puzzle()
+        if not puzzle.get("current_phrase_id"):
+            return
+        await self.db.execute("""
+            UPDATE relic_phrase_queue
+            SET solved_by_user_id = ?, solved_by_username = ?,
+                solved_at = ?, updated_at = ?
+            WHERE id = ?
+        """, (
+            twitch_user_id,
+            username,
+            solved_at,
+            solved_at,
+            puzzle["current_phrase_id"],
+        ))
         await self.db.commit()
 
     async def relic_reveal_random_phrase_letter(self) -> Optional[dict]:
@@ -3386,7 +3590,7 @@ class Database:
             cursor = await self.db.execute("""
                 UPDATE relic_phrase_puzzle
                 SET solved_by_user_id = ?, solved_by_username = ?,
-                    solved_at = ?, enabled = 0, revealed_mask = ?, updated_at = ?
+                    solved_at = ?, revealed_mask = ?, updated_at = ?
                 WHERE id = 1 AND solved_at IS NULL
             """, (twitch_user_id, username, now, solved_mask, now))
             if cursor.rowcount <= 0:

@@ -5100,8 +5100,8 @@ def create_app(db: Database, bot=None) -> Quart:
                 )
 
             elif action == "save_phrase_puzzle":
-                phrase = form.get("phrase", "").strip()
                 enabled = bool(form.get("phrase_enabled"))
+                loop_queue = bool(form.get("phrase_loop_queue"))
                 try:
                     chance_percent = float(
                         form.get("letter_find_chance_percent") or 5
@@ -5112,26 +5112,48 @@ def create_app(db: Database, bot=None) -> Quart:
                 except ValueError:
                     await flash("Chance and XP reward must be valid numbers.", "error")
                 else:
-                    if enabled and not any(char.isalpha() for char in phrase):
-                        await flash(
-                            "An enabled phrase must contain at least one letter.",
-                            "error",
-                        )
-                    else:
-                        changed = await db.relic_save_phrase_puzzle(
-                            phrase=phrase,
-                            enabled=enabled,
-                            letter_find_chance=min(
-                                100.0, max(0.0, chance_percent)
-                            ) / 100.0,
-                            winner_xp_reward=reward_xp,
-                        )
-                        message = (
-                            "Phrase puzzle saved and progress reset."
-                            if changed
-                            else "Phrase puzzle settings saved."
-                        )
-                        await flash(message, "success")
+                    await db.relic_save_phrase_puzzle(
+                        enabled=enabled,
+                        loop_queue=loop_queue,
+                        letter_find_chance=min(
+                            100.0, max(0.0, chance_percent)
+                        ) / 100.0,
+                        winner_xp_reward=reward_xp,
+                    )
+                    await flash("Phrase puzzle settings saved.", "success")
+
+            elif action == "add_phrase_to_queue":
+                phrase = form.get("phrase", "").strip()
+                if not any(char.isalpha() for char in phrase):
+                    await flash(
+                        "A queued phrase must contain at least one letter.",
+                        "error",
+                    )
+                else:
+                    await db.relic_add_phrase_to_queue(phrase)
+                    await flash("Phrase added to the queue.", "success")
+
+            elif action == "start_phrase":
+                phrase_id = int(form.get("phrase_id") or 0)
+                if await db.relic_activate_phrase(phrase_id):
+                    await flash("Phrase started.", "success")
+                else:
+                    await flash("Phrase not found.", "error")
+
+            elif action == "delete_phrase":
+                phrase_id = int(form.get("phrase_id") or 0)
+                await db.relic_delete_phrase_from_queue(phrase_id)
+                await flash("Phrase removed from the queue.", "success")
+
+            elif action == "skip_phrase":
+                next_phrase = await db.relic_activate_next_phrase()
+                if next_phrase:
+                    await flash("Skipped to the next queued phrase.", "success")
+                else:
+                    await flash(
+                        "No queued phrase remains. Phrase Puzzle disabled.",
+                        "success",
+                    )
 
             elif action == "reset_phrase_progress":
                 await db.relic_reset_phrase_progress()
@@ -5268,6 +5290,7 @@ def create_app(db: Database, bot=None) -> Quart:
         active_event_ids = {ae["event_id"] for ae in active_events}
         ritual  = await db.relic_get_ritual()
         phrase_puzzle = await db.relic_get_phrase_puzzle()
+        phrase_queue = await db.relic_get_phrase_queue()
         from bot.relic_hunt import _phrase_progress
         phrase_progress = _phrase_progress(
             phrase_puzzle.get("phrase", ""),
@@ -5330,6 +5353,7 @@ def create_app(db: Database, bot=None) -> Quart:
             ranks=ranks,
             recipes=recipes,
             phrase_puzzle=phrase_puzzle,
+            phrase_queue=phrase_queue,
             phrase_progress=phrase_progress,
             phrase_found_letters=phrase_found_letters,
             phrase_total_letters=phrase_total_letters,

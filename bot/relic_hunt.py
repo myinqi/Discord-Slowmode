@@ -901,10 +901,18 @@ class RelicHunt:
         user = await self._get_or_create_user(uid, name)
         user, level_ups, _ = await self._apply_xp(user, reward_xp)
         await self.db.relic_upsert_user(user)
+        await self.db.relic_mark_current_phrase_solved(
+            uid, name, time.time()
+        )
+        next_phrase = await self.db.relic_activate_next_phrase()
         await self._send(
             f"🎉 @{name} solved the hidden phrase: {puzzle['phrase']} "
             f"and wins +{reward_xp} XP!"
         )
+        if next_phrase:
+            await self._send("🧩 A new hidden phrase has begun.")
+        else:
+            await self._send("🧩 No queued phrases remain. Phrase Puzzle is now disabled.")
         if level_ups and (
             await self.db.relic_get_setting("announce_level_ups")
         ) == "true":
