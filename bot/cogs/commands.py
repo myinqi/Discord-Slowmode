@@ -3,6 +3,7 @@ import time
 import math
 import random
 import asyncio
+import io
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 import aiohttp
@@ -1868,20 +1869,9 @@ class CommandsCog(commands.Cog):
             await interaction.followup.send("No Suno URLs found for the latest Experimental Radio stream.", ephemeral=True)
             return
 
-        chunks = []
-        current = ""
-        for url in urls:
-            line = f"{url}\n"
-            if len(current) + len(line) > 1900:
-                chunks.append(current.rstrip())
-                current = ""
-            current += line
-        if current.strip():
-            chunks.append(current.rstrip())
-
-        await interaction.followup.send(chunks[0], ephemeral=True)
-        for chunk in chunks[1:]:
-            await interaction.followup.send(chunk, ephemeral=True)
+        data = ("\n".join(urls) + "\n").encode("utf-8")
+        file = discord.File(io.BytesIO(data), filename="twitch-to-suno.txt")
+        await interaction.followup.send(file=file, ephemeral=True)
 
 
 _SUNO_SUBMIT_RE = re.compile(r'(?:suno\.com/(?:s|song)/)([A-Za-z0-9_-]{8,})')
