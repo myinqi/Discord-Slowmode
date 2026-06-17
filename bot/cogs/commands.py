@@ -1834,6 +1834,55 @@ class CommandsCog(commands.Cog):
         for chunk in chunks[1:]:
             await interaction.followup.send(chunk, ephemeral=True)
 
+    @app_commands.command(name="twitch-to-suno", description="List only the Suno URLs from the latest Experimental Radio stream")
+    async def twitch_to_suno(self, interaction: discord.Interaction):
+        import json
+
+        await interaction.response.defer(ephemeral=True)
+        urls = []
+
+        manager = getattr(self.bot, "exp_stream_manager", None)
+        if manager and getattr(manager, "is_running", False):
+            for song in getattr(manager, "playlist", []) or []:
+                url = (song.get("suno_url") or "").strip()
+                if url:
+                    urls.append(url)
+
+        if not urls:
+            raw = (
+                await self.bot.db.get_setting("exp_radio_last_scheduled_playlist_snapshot", "")
+                or await self.bot.db.get_setting("exp_radio_last_playlist_snapshot", "")
+            )
+            if raw:
+                try:
+                    snap = json.loads(raw)
+                    urls = [
+                        str(url).strip()
+                        for url in (snap.get("urls") or [])
+                        if str(url).strip()
+                    ]
+                except Exception:
+                    urls = []
+
+        if not urls:
+            await interaction.followup.send("No Suno URLs found for the latest Experimental Radio stream.", ephemeral=True)
+            return
+
+        chunks = []
+        current = ""
+        for url in urls:
+            line = f"{url}\n"
+            if len(current) + len(line) > 1900:
+                chunks.append(current.rstrip())
+                current = ""
+            current += line
+        if current.strip():
+            chunks.append(current.rstrip())
+
+        await interaction.followup.send(chunks[0], ephemeral=True)
+        for chunk in chunks[1:]:
+            await interaction.followup.send(chunk, ephemeral=True)
+
 
 _SUNO_SUBMIT_RE = re.compile(r'(?:suno\.com/(?:s|song)/)([A-Za-z0-9_-]{8,})')
 _EXP_MAX_PER_USER_DEFAULT = 4

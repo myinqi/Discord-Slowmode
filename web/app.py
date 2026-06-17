@@ -3690,7 +3690,7 @@ def create_app(db: Database, bot=None) -> Quart:
                             )
                             try:
                                 result = await exp_stream_manager.start(
-                                    twitch_key, fresh_cache=True,
+                                    twitch_key, fresh_cache=True, scheduled=True,
                                 )
                                 if result.get("ok"):
                                     log_event(
@@ -3758,6 +3758,8 @@ def create_app(db: Database, bot=None) -> Quart:
 
     from bot.exp_stream_manager import ExpStreamManager
     exp_stream_manager = ExpStreamManager(db, EXP_RADIO_DIR)
+    if bot is not None:
+        bot.exp_stream_manager = exp_stream_manager
 
     from bot.relic_hunt import RelicHunt
     from bot.twitch_bot import TwitchBot as _TwitchBot

@@ -11,6 +11,7 @@ The stream only briefly disconnects once per full playlist loop (not between son
 """
 
 import asyncio
+import json
 import os
 import re
 import random
@@ -280,7 +281,13 @@ class ExpStreamManager:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    async def start(self, twitch_key: str, fresh_cache: bool = False, legacy_pipeline: bool = False) -> dict:
+    async def start(
+        self,
+        twitch_key: str,
+        fresh_cache: bool = False,
+        legacy_pipeline: bool = False,
+        scheduled: bool = False,
+    ) -> dict:
         if self.is_running:
             return {"ok": False, "error": "Stream already running."}
         self._legacy_pipeline = legacy_pipeline
@@ -374,6 +381,7 @@ class ExpStreamManager:
         self._progress_total_count = len(ready)
         self._twitch_key = twitch_key
         self.playlist    = ready
+        await self._save_playlist_snapshot(ready, active_pl, scheduled)
         self._stream_ready_event.clear()
         self._reset_ffmpeg_health("offline")
         # Connect to Twitch chat if enabled and credentials exist
@@ -396,6 +404,26 @@ class ExpStreamManager:
         mode = "legacy FFmpeg pipeline" if self._legacy_pipeline else "current FFmpeg pipeline"
         self._log(f"Started with {len(ready)} songs ({mode}).")
         return {"ok": True, "song_count": len(ready)}
+
+    async def _save_playlist_snapshot(self, songs: list[dict], source: str, scheduled: bool) -> None:
+        urls = []
+        for song in songs:
+            url = (song.get("suno_url") or "").strip()
+            if url:
+                urls.append(url)
+        payload = {
+            "created_at": int(time.time()),
+            "source": source,
+            "scheduled": bool(scheduled),
+            "song_count": len(songs),
+            "urls": urls,
+        }
+        try:
+            await self.db.set_setting("exp_radio_last_playlist_snapshot", json.dumps(payload))
+            if scheduled:
+                await self.db.set_setting("exp_radio_last_scheduled_playlist_snapshot", json.dumps(payload))
+        except Exception as e:
+            self._log(f"Playlist snapshot save failed: {e}", "error")
 
     async def wait_until_live(self, timeout: float = 900.0) -> bool:
         """Wait until FFmpeg has actually started after start()."""
@@ -1056,12 +1084,26 @@ class ExpStreamManager:
 
         builder_version = "concat_all_filter_v3_720p_cfr30"
         file_sig_parts = []
+        total_duration = 0.0
         for p in paths:
             try:
                 st = os.stat(p)
                 file_sig_parts.append(f"{os.path.basename(p)}:{st.st_size}:{int(st.st_mtime)}")
             except OSError:
                 file_sig_parts.append(os.path.basename(p))
+            try:
+                probe = await asyncio.create_subprocess_exec(
+                    "ffprobe", "-v", "error",
+                    "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    p,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                out, _ = await probe.communicate()
+                total_duration += max(0.0, float((out.decode().strip() or "0")))
+            except Exception:
+                pass
         vid_sig  = "|".join(sorted(file_sig_parts))
         ffmpeg_sig = "ffmpeg:unknown"
         try:
@@ -1087,7 +1129,7 @@ class ExpStreamManager:
                 pass
 
         self._log(f"Building concat-all loop video ({len(paths)} clips, 720p CFR 30)…")
-        cmd = ["ffmpeg", "-y"]
+        cmd = ["ffmpeg", "-y", "-nostats", "-progress", "pipe:2"]
         for p in paths:
             cmd += ["-fflags", "+genpts", "-i", p]
 
@@ -1118,10 +1160,40 @@ class ExpStreamManager:
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
         )
-        _, err = await proc.communicate()
+        err_tail = deque(maxlen=40)
+        progress_pending = {}
+        last_pct = -1
+        last_progress_log = 0.0
+        while True:
+            raw = await proc.stderr.readline() if proc.stderr else b""
+            if not raw:
+                break
+            line = raw.decode("utf-8", errors="replace").strip()
+            if not line:
+                continue
+            if "=" in line:
+                key, value = line.split("=", 1)
+                if key in _FFMPEG_PROGRESS_KEYS:
+                    if key == "progress":
+                        out_ms = progress_pending.get("out_time_ms")
+                        if out_ms and total_duration > 0:
+                            try:
+                                pct = min(99, int((float(out_ms) / 1_000_000.0) / total_duration * 100))
+                                now = time.time()
+                                if pct >= last_pct + 10 or now - last_progress_log >= 20:
+                                    self._log(f"Concat-all build progress: {pct}%")
+                                    last_pct = pct
+                                    last_progress_log = now
+                            except (TypeError, ValueError):
+                                pass
+                        progress_pending = {}
+                    else:
+                        progress_pending[key] = value.strip()
+                    continue
+            err_tail.append(line)
+        await proc.wait()
         if proc.returncode != 0:
-            err_tail = (err or b"")[-400:].decode("utf-8", errors="replace")
-            self._log(f"Concat-all build failed: {err_tail}", "error")
+            self._log(f"Concat-all build failed: {' | '.join(err_tail)}", "error")
             try: os.remove(tmp_out)
             except Exception: pass
             return None
