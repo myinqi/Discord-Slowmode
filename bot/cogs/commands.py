@@ -22,6 +22,19 @@ SPOTIFY_ALBUM_PATTERN = re.compile(r'https://open\.spotify\.com/album/[\w?=&-]+'
 DEFAULT_REACTION_EMOJIS = ["👍", "❤️", "🔥", "🎵"]
 BERLIN_TZ = ZoneInfo("Europe/Berlin")
 MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+DICE_FACES = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"]
+
+
+def _dice_grid(value: int) -> str:
+    patterns = {
+        1: ["     ", "  ●  ", "     "],
+        2: ["●    ", "     ", "    ●"],
+        3: ["●    ", "  ●  ", "    ●"],
+        4: ["●   ●", "     ", "●   ●"],
+        5: ["●   ●", "  ●  ", "●   ●"],
+        6: ["●   ●", "●   ●", "●   ●"],
+    }
+    return "\n".join(f"│{row}│" for row in patterns[value])
 
 
 class NewSongCarouselView(discord.ui.View):
@@ -1669,6 +1682,34 @@ class CommandsCog(commands.Cog):
         embed.timestamp = discord.utils.utcnow()
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    @app_commands.command(name="dice", description="Roll two D6 dice")
+    async def dice_cmd(self, interaction: discord.Interaction):
+        die_one = random.randint(1, 6)
+        die_two = random.randint(1, 6)
+        total = die_one + die_two
+
+        left_grid = _dice_grid(die_one).splitlines()
+        right_grid = _dice_grid(die_two).splitlines()
+        paired_grid = "\n".join(f"{left} {right}" for left, right in zip(left_grid, right_grid))
+
+        embed = discord.Embed(
+            title="🎲 Würfelwurf",
+            description=(
+                f"**{interaction.user.display_name}** würfelt zwei W6:\n\n"
+                f"# {DICE_FACES[die_one - 1]}  {DICE_FACES[die_two - 1]}\n"
+                "```text\n"
+                "┌─────┐ ┌─────┐\n"
+                f"{paired_grid}\n"
+                "└─────┘ └─────┘\n"
+                "```\n"
+                f"**Ergebnis:** `{die_one}` + `{die_two}` = **{total}**"
+            ),
+            color=discord.Color.gold(),
+        )
+        embed.set_footer(text="Zwei Würfel, jeweils ein W6")
+        embed.timestamp = discord.utils.utcnow()
+        await interaction.response.send_message(embed=embed)
+
     @app_commands.command(name="help", description="Show a list of all available commands")
     async def help_command(self, interaction: discord.Interaction):
         has_admin = await self._has_command_permission(interaction)
@@ -1738,6 +1779,7 @@ class CommandsCog(commands.Cog):
             "**`/talk [translate] <text>`** — Bot speaks your message in channel\n"
             "**`/translate <to> <text>`** — Translate text privately\n"
             "**`/imageposting <category> [title]`** — Post an image from the library\n"
+            "**`/dice`** — Roll two D6 dice\n"
             "**`/poll-create [channel]`** — Create a poll\n"
             "**`/poll-edit`** — Edit your existing polls\n"
             "**`/quiz`** — Post a random quiz question\n"

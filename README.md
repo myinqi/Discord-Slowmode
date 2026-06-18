@@ -231,6 +231,7 @@ Protokoll aller Aktionen: gelöschte Nachrichten, Konfigurationsänderungen, Ben
 | `/find-song [@user] [title]` | Song suchen: mit User+Titel, nur User (zufällig), nur Titel, oder komplett zufällig (nur für dich sichtbar) |
 | `/talk [translate] <text>` | Bot spricht im Kanal: *<username> says: <text>* (optional mit Übersetzung) |
 | `/translate <to> <text>` | Text übersetzen (nur für dich sichtbar) |
+| `/dice` | Zwei W6 würfeln und das Ergebnis optisch ansprechend anzeigen |
 | `/top <period>` | Most Reacted Songs Top 10 mit Titel, Interpret, Reaktionen und Cover (nur für dich sichtbar) |
 | `/new` | Karussell-Modus: Songs der letzten 2 Tage einzeln durchblättern, auf die du noch nicht reagiert hast — mit dynamischen Emoji-Buttons (deine meistgenutzten), Skip, und "Im Kanal öffnen" Jump-Link (nur für dich sichtbar) |
 | `/imageposting <kategorie> [titel]` | Bild aus der Bibliothek im Kanal posten: Kategorie (Pflicht) + Titel (optional, sonst zufällig). Autocomplete für beide Parameter. Postet erst das Bild, dann die Beschreibung (sichtbar für alle) |
