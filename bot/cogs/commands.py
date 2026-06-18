@@ -1693,20 +1693,20 @@ class CommandsCog(commands.Cog):
         paired_grid = "\n".join(f"{left} {right}" for left, right in zip(left_grid, right_grid))
 
         embed = discord.Embed(
-            title="🎲 Würfelwurf",
+            title="🎲 Dice Roll",
             description=(
-                f"**{interaction.user.display_name}** würfelt zwei W6:\n\n"
+                f"**{interaction.user.display_name}** rolls two D6 dice:\n\n"
                 f"# {DICE_FACES[die_one - 1]}  {DICE_FACES[die_two - 1]}\n"
                 "```text\n"
                 "┌─────┐ ┌─────┐\n"
                 f"{paired_grid}\n"
                 "└─────┘ └─────┘\n"
                 "```\n"
-                f"**Ergebnis:** `{die_one}` + `{die_two}` = **{total}**"
+                f"**Result:** `{die_one}` + `{die_two}` = **{total}**"
             ),
             color=discord.Color.gold(),
         )
-        embed.set_footer(text="Zwei Würfel, jeweils ein W6")
+        embed.set_footer(text="Two dice, each one D6")
         embed.timestamp = discord.utils.utcnow()
         await interaction.response.send_message(embed=embed)
 
