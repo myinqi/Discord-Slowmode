@@ -880,7 +880,14 @@ async def process_admin_song(db, suno_url: str, exp_radio_dir: str) -> tuple[boo
     return True, f"Song #{song_id} added and queued for Whisper analysis."
 
 
-async def process_admin_submission_song(db, suno_url: str, exp_radio_dir: str, bot=None) -> tuple[bool, str]:
+async def process_admin_submission_song(
+    db,
+    suno_url: str,
+    exp_radio_dir: str,
+    bot=None,
+    submitter_user_id: int = 0,
+    submitter_user_name: str = "admin-ui",
+) -> tuple[bool, str]:
     """Add a Suno URL to the regular submission playlist from the admin UI.
 
     This intentionally does not bypass moderation, duration checks, or the
@@ -903,17 +910,21 @@ async def process_admin_submission_song(db, suno_url: str, exp_radio_dir: str, b
             return False, f"Song already exists in the submission playlist (id={s['id']})."
 
     rights_hash = hashlib.sha256(
-        f"{EXP_RIGHTS_DECLARATION}|admin-ui|{suno_url}|{uuid}".encode()
+        f"{EXP_RIGHTS_DECLARATION}|admin-ui|{submitter_user_id}|{suno_url}|{uuid}".encode()
     ).hexdigest()
     song_id, _upload_token = await db.add_exp_radio_song(
-        user_id=0,
-        user_name="admin-ui",
+        user_id=submitter_user_id,
+        user_name=submitter_user_name,
         suno_url=suno_url,
         suno_uuid=uuid,
         rights_declaration=EXP_RIGHTS_DECLARATION,
         rights_hash=rights_hash,
     )
-    log_event(f"Submission song #{song_id} added via admin UI (uuid={uuid}), scraping metadata…", prefix="[submit-admin]")
+    log_event(
+        f"Submission song #{song_id} added via admin UI for {submitter_user_name} "
+        f"(user_id={submitter_user_id}, uuid={uuid}), scraping metadata…",
+        prefix="[submit-admin]",
+    )
 
     meta = await scrape_suno(uuid)
     real_uuid = meta.get("real_uuid") or uuid

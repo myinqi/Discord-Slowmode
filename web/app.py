@@ -3852,12 +3852,36 @@ def create_app(db: Database, bot=None) -> Quart:
 
             elif action == "add_submission_song":
                 suno_url = (form.get("suno_url") or "").strip()
+                user_id_raw = (form.get("submission_user_id") or "").strip()
                 if not suno_url:
                     await flash("Please enter a Suno URL.", "error")
                 else:
+                    submitter_user_id = 0
+                    submitter_user_name = "admin-ui"
+                    if user_id_raw:
+                        if not user_id_raw.isdigit():
+                            await flash("Discord User ID must be numeric.", "error")
+                            return redirect(request.url)
+                        submitter_user_id = int(user_id_raw)
+                        submitter_user_name = user_id_raw
+                        if bot is not None:
+                            try:
+                                user = bot.get_user(submitter_user_id) or await bot.fetch_user(submitter_user_id)
+                                if user:
+                                    submitter_user_name = str(user)
+                            except Exception:
+                                pass
                     from bot.exp_radio_worker import process_admin_submission_song
-                    async def _bg_add_submission(url=suno_url):
-                        ok, msg = await process_admin_submission_song(db, url, EXP_RADIO_DIR, bot=bot)
+                    async def _bg_add_submission(
+                        url=suno_url,
+                        uid=submitter_user_id,
+                        uname=submitter_user_name,
+                    ):
+                        ok, msg = await process_admin_submission_song(
+                            db, url, EXP_RADIO_DIR, bot=bot,
+                            submitter_user_id=uid,
+                            submitter_user_name=uname,
+                        )
                         from bot.exp_stream_manager import log_event
                         log_event(msg, "info" if ok else "error", "[submit-admin]")
                     asyncio.create_task(_bg_add_submission())
