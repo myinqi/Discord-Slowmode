@@ -948,10 +948,10 @@ class ExpStreamManager:
 
     async def _obs_overlay_bridge_loop(self, fifo_path: str, stream_key: str, fps: int) -> None:
         frame_size = _LOOP_OVERLAY_W * _LOOP_OVERLAY_H * 4
-        transparent_frame = b"\x00" * frame_size
         frame_interval = 1.0 / fps
         fd = None
         proc = None
+        fallback_proc = None
         reader_task = None
         last_connected = False
 
@@ -985,6 +985,19 @@ class ExpStreamManager:
                 stderr=asyncio.subprocess.DEVNULL,
             )
 
+        async def start_fallback_writer():
+            return await asyncio.create_subprocess_exec(
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-re",
+                "-f", "lavfi",
+                "-i", f"color=color=black@0:size={_LOOP_OVERLAY_W}x{_LOOP_OVERLAY_H}:rate={fps}",
+                "-vf", "format=rgba",
+                "-f", "rawvideo", fifo_path,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+
         async def read_frames(ffmpeg_proc, queue: asyncio.Queue):
             try:
                 while True:
@@ -1000,20 +1013,24 @@ class ExpStreamManager:
 
         try:
             fd = os.open(fifo_path, os.O_RDWR | os.O_NONBLOCK)
+            fallback_proc = await start_fallback_writer()
             proc = await start_listener()
             self._obs_bridge_proc = proc
             frame_queue: asyncio.Queue = asyncio.Queue(maxsize=2)
             reader_task = asyncio.create_task(read_frames(proc, frame_queue))
             self._log("OBS overlay bridge listening on rtmp://0.0.0.0:1936/live/<key>.")
             next_frame_at = time.monotonic()
-            pending_frame = transparent_frame
 
             while True:
+                if fallback_proc and fallback_proc.returncode is not None and not last_connected:
+                    fallback_proc = await start_fallback_writer()
+
                 if proc is None or proc.returncode is not None or (reader_task and reader_task.done() and frame_queue.empty()):
                     if last_connected:
                         self._set_obs_overlay_status(True, "fallback", "OBS RTMP: disconnected · local loop fallback active", "rtmp")
                         self._log("OBS RTMP disconnected; local loop fallback active.")
                         last_connected = False
+                        fallback_proc = await start_fallback_writer()
                     if reader_task:
                         reader_task.cancel()
                         try:
@@ -1026,17 +1043,19 @@ class ExpStreamManager:
                     frame_queue = asyncio.Queue(maxsize=2)
                     reader_task = asyncio.create_task(read_frames(proc, frame_queue))
 
+                pending_frame = None
                 got_frame = False
                 try:
                     while True:
                         pending_frame = frame_queue.get_nowait()
                         got_frame = True
                 except asyncio.QueueEmpty:
-                    if not got_frame and not last_connected:
-                        pending_frame = transparent_frame
+                    pass
 
                 if got_frame:
                     if not last_connected:
+                        await stop_proc(fallback_proc, timeout=1.0)
+                        fallback_proc = None
                         self._set_obs_overlay_status(True, "connected", "OBS RTMP: connected · live overlay active", "rtmp")
                         self._log("OBS RTMP connected; live overlay active.")
                         last_connected = True
@@ -1044,8 +1063,9 @@ class ExpStreamManager:
                 now = time.monotonic()
                 if next_frame_at > now:
                     await asyncio.sleep(next_frame_at - now)
-                if not await self._write_obs_overlay_frame(fd, pending_frame):
-                    await asyncio.sleep(0.05)
+                if got_frame and pending_frame is not None:
+                    if not await self._write_obs_overlay_frame(fd, pending_frame):
+                        await asyncio.sleep(0.05)
                 next_frame_at = max(next_frame_at + frame_interval, time.monotonic())
         except asyncio.CancelledError:
             raise
@@ -1060,6 +1080,7 @@ class ExpStreamManager:
                 except asyncio.CancelledError:
                     pass
             await stop_proc(proc)
+            await stop_proc(fallback_proc)
             if fd is not None:
                 try:
                     os.close(fd)
