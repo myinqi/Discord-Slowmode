@@ -1848,9 +1848,12 @@ class CommandsCog(commands.Cog):
     async def exp_radio_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         max_per_user = int(await self.bot.db.get_setting("exp_radio_max_per_user") or "4")
+        expiry_days = int(await self.bot.db.get_setting("exp_radio_expiry_days") or "14")
+        if expiry_days not in (7, 14):
+            expiry_days = 14
         embed = discord.Embed(
             title="🎙️ Submit to Experimental Radio",
-            description=_exp_terms_display(max_per_user),
+            description=_exp_terms_display(max_per_user, expiry_days),
             color=discord.Color.purple(),
         )
         embed.set_footer(text="Click 'I Agree & Submit' to proceed with your submission.")
@@ -1950,22 +1953,24 @@ _SUNO_SUBMIT_RE = re.compile(r'(?:suno\.com/(?:s|song)/)([A-Za-z0-9_-]{8,})')
 _EXP_MAX_PER_USER_DEFAULT = 4
 
 
-def _exp_terms_display(limit: int) -> str:
+def _exp_rights_declaration(expiry_days: int) -> str:
+    return (
+        "I confirm that I created this song on Suno.ai, hold the necessary rights to stream it, "
+        f"and grant a non-exclusive {expiry_days}-day streaming license for Twitch live streams and VODs. "
+        "I confirm the content complies with the community content guidelines."
+    )
+
+
+def _exp_terms_display(limit: int, expiry_days: int) -> str:
     return (
         "**By submitting you confirm:**\n"
         "• You created this song on Suno.ai and hold the rights to stream it\n"
-        "• You grant a **14-day streaming license** for Twitch live streams & VODs\n"
+        f"• You grant a **{expiry_days}-day streaming license** for Twitch live streams & VODs\n"
         "• The content complies with community guidelines (no hate speech, explicit or illegal content)\n"
-        "• Songs expire and are deleted automatically after **14 days**\n"
+        f"• Songs expire and are deleted automatically after **{expiry_days} days**\n"
         f"• Maximum **{limit} songs** per user\n"
         "• Maximum song length: **6 minutes**"
     )
-
-_EXP_RIGHTS_DECLARATION = (
-    "I confirm that I created this song on Suno.ai, hold the necessary rights to stream it, "
-    "and grant a non-exclusive 14-day streaming license for Twitch live streams and VODs. "
-    "I confirm the content complies with the community content guidelines."
-)
 
 
 class ExpRadioTermsView(discord.ui.View):
@@ -2047,8 +2052,12 @@ class ExpRadioSubmitModal(discord.ui.Modal, title="Submit to Experimental Radio"
             )
             return
 
+        expiry_days = int(await self.bot.db.get_setting("exp_radio_expiry_days") or "14")
+        if expiry_days not in (7, 14):
+            expiry_days = 14
+        rights_declaration = _exp_rights_declaration(expiry_days)
         rights_hash = hashlib.sha256(
-            f"{_EXP_RIGHTS_DECLARATION}|{interaction.user.id}|{raw_url}|{suno_uuid}".encode()
+            f"{rights_declaration}|{interaction.user.id}|{raw_url}|{suno_uuid}".encode()
         ).hexdigest()
 
         song_id, upload_token = await self.bot.db.add_exp_radio_song(
@@ -2056,8 +2065,9 @@ class ExpRadioSubmitModal(discord.ui.Modal, title="Submit to Experimental Radio"
             user_name=str(interaction.user),
             suno_url=raw_url,
             suno_uuid=suno_uuid,
-            rights_declaration=_EXP_RIGHTS_DECLARATION,
+            rights_declaration=rights_declaration,
             rights_hash=rights_hash,
+            expiry_days=expiry_days,
         )
 
         web_url = self.bot.web_url
@@ -2077,7 +2087,7 @@ class ExpRadioSubmitModal(discord.ui.Modal, title="Submit to Experimental Radio"
                 ),
                 color=0xf5a623,
             )
-            embed.set_footer(text=f"Song #{song_id} registered • expires in 14 days")
+            embed.set_footer(text=f"Song #{song_id} registered • expires in {expiry_days} days")
             await interaction.followup.send(
                 "✅ **Song registered!**",
                 embed=embed,

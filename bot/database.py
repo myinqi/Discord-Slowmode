@@ -2700,11 +2700,12 @@ class Database:
 
     async def add_exp_radio_song(
         self, user_id: int, user_name: str, suno_url: str, suno_uuid: str,
-        rights_declaration: str, rights_hash: str,
+        rights_declaration: str, rights_hash: str, expiry_days: int = 14,
     ) -> tuple[int, str]:
         import secrets
         upload_token = secrets.token_urlsafe(32)
-        expires_at = time.time() + 14 * 86400
+        expiry_days = 7 if int(expiry_days or 14) == 7 else 14
+        expires_at = time.time() + expiry_days * 86400
         cursor = await self.db.execute(
             """INSERT INTO exp_radio_songs
                (user_id, user_name, suno_url, suno_uuid,

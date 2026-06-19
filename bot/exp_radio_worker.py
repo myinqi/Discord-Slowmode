@@ -30,22 +30,13 @@ _BROWSER_UA = (
 # long string fields (resolved later from a separate flight chunk).
 _RSC_REF_RE = re.compile(r'^\$[0-9a-f]+$')
 
-EXP_RIGHTS_DECLARATION = (
-    "I confirm that I created this song on Suno.ai, hold the necessary rights to stream it, "
-    "and grant a non-exclusive 14-day streaming license for Twitch live streams and VODs. "
-    "I confirm that the content complies with the community content guidelines "
-    "(no hate speech, harassment, explicit or illegal content)."
-)
-
-EXP_TERMS_SHORT = (
-    "**By submitting you confirm:**\n"
-    "• You created this song on Suno.ai and hold the streaming rights\n"
-    "• You grant a **14-day** streaming license for Twitch live streams & VODs\n"
-    "• The content complies with community guidelines (no hate speech, explicit/illegal content)\n"
-    "• Songs expire and are deleted automatically after 14 days\n"
-    "• Maximum **4 songs** per user"
-)
-
+def exp_rights_declaration(expiry_days: int) -> str:
+    return (
+        "I confirm that I created this song on Suno.ai, hold the necessary rights to stream it, "
+        f"and grant a non-exclusive {expiry_days}-day streaming license for Twitch live streams and VODs. "
+        "I confirm that the content complies with the community content guidelines "
+        "(no hate speech, harassment, explicit or illegal content)."
+    )
 
 MAX_DURATION_SECS = 360  # 6 minutes
 
@@ -909,16 +900,21 @@ async def process_admin_submission_song(
         if s.get("suno_uuid") == uuid and s.get("active"):
             return False, f"Song already exists in the submission playlist (id={s['id']})."
 
+    expiry_days = int(await db.get_setting("exp_radio_expiry_days") or "14")
+    if expiry_days not in (7, 14):
+        expiry_days = 14
+    rights_declaration = exp_rights_declaration(expiry_days)
     rights_hash = hashlib.sha256(
-        f"{EXP_RIGHTS_DECLARATION}|admin-ui|{submitter_user_id}|{suno_url}|{uuid}".encode()
+        f"{rights_declaration}|admin-ui|{submitter_user_id}|{suno_url}|{uuid}".encode()
     ).hexdigest()
     song_id, _upload_token = await db.add_exp_radio_song(
         user_id=submitter_user_id,
         user_name=submitter_user_name,
         suno_url=suno_url,
         suno_uuid=uuid,
-        rights_declaration=EXP_RIGHTS_DECLARATION,
+        rights_declaration=rights_declaration,
         rights_hash=rights_hash,
+        expiry_days=expiry_days,
     )
     log_event(
         f"Submission song #{song_id} added via admin UI for {submitter_user_name} "

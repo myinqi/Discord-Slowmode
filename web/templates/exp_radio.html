@@ -101,6 +101,15 @@
                 </div>
             </div>
             <div class="pt-2 border-t border-gray-700/50 space-y-2">
+                <label class="block text-white text-sm">Submission expiry</label>
+                <select name="exp_expiry_days"
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                    <option value="7" {% if exp_expiry_days == 7 %}selected{% endif %}>Delete submissions after 7 days</option>
+                    <option value="14" {% if exp_expiry_days != 7 %}selected{% endif %}>Delete submissions after 14 days</option>
+                </select>
+                <p class="text-gray-500 text-xs">Applies to newly submitted songs and the /twitch-submit rights text. Existing expiry dates are not changed.</p>
+            </div>
+            <div class="pt-2 border-t border-gray-700/50 space-y-2">
                 <label class="flex items-center gap-2 cursor-pointer select-none">
                     <input type="checkbox" name="exp_moderation_enabled"
                         {% if exp_moderation_enabled == 'on' %}checked{% endif %}

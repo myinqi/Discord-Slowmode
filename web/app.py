@@ -4262,7 +4262,14 @@ def create_app(db: Database, bot=None) -> Quart:
                     max_per_user_v = max(1, min(20, int(form.get("exp_max_per_user", "4") or "4")))
                 except (ValueError, TypeError):
                     max_per_user_v = 4
+                try:
+                    expiry_days_v = int(form.get("exp_expiry_days", "14") or "14")
+                except (ValueError, TypeError):
+                    expiry_days_v = 14
+                if expiry_days_v not in (7, 14):
+                    expiry_days_v = 14
                 await db.set_setting("exp_radio_max_per_user", str(max_per_user_v))
+                await db.set_setting("exp_radio_expiry_days", str(expiry_days_v))
                 await db.set_setting("exp_radio_moderation_enabled", moderation_en)
                 await db.set_setting("exp_radio_loop_mode", loop_mode_v)
                 await db.set_setting("exp_radio_schedule_enabled", sched_en)
@@ -4465,6 +4472,9 @@ def create_app(db: Database, bot=None) -> Quart:
         exp_loop_mode           = await db.get_setting("exp_radio_loop_mode") or "reshuffle"
         exp_progress_overlay    = await db.get_setting("exp_radio_progress_overlay") or "off"
         exp_max_per_user        = int(await db.get_setting("exp_radio_max_per_user") or "4")
+        exp_expiry_days         = int(await db.get_setting("exp_radio_expiry_days") or "14")
+        if exp_expiry_days not in (7, 14):
+            exp_expiry_days = 14
         exp_schedule_enabled    = await db.get_setting("exp_radio_schedule_enabled") or "off"
         exp_schedule_days       = await db.get_setting("exp_radio_schedule_days") or ""
         exp_schedule_time       = await db.get_setting("exp_radio_schedule_time") or ""
@@ -4545,6 +4555,7 @@ def create_app(db: Database, bot=None) -> Quart:
             exp_loop_mode=exp_loop_mode,
             exp_progress_overlay=exp_progress_overlay,
             exp_max_per_user=exp_max_per_user,
+            exp_expiry_days=exp_expiry_days,
             exp_schedule_enabled=exp_schedule_enabled,
             exp_schedule_time=exp_schedule_time,
             exp_schedule_days_set=exp_schedule_days_set,
@@ -4611,7 +4622,12 @@ def create_app(db: Database, bot=None) -> Quart:
         _locked, _lock_reason = await _is_locked(db)
         if _locked:
             return await render_template("exp_radio_upload.html", stream_live=True)
-        return await render_template("exp_radio_upload.html", song=song, token=token)
+        expiry_days = 14
+        try:
+            expiry_days = max(1, round((float(song.get("expires_at") or 0) - time.time()) / 86400))
+        except Exception:
+            pass
+        return await render_template("exp_radio_upload.html", song=song, token=token, expiry_days=expiry_days)
 
     @app.route("/exp-radio/upload/<token>", methods=["POST"])
     async def exp_radio_upload_receive(token: str):
