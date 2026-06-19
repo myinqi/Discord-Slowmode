@@ -1682,31 +1682,61 @@ class CommandsCog(commands.Cog):
         embed.timestamp = discord.utils.utcnow()
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="dice", description="Roll two D6 dice")
-    async def dice_cmd(self, interaction: discord.Interaction):
-        die_one = random.randint(1, 6)
-        die_two = random.randint(1, 6)
-        total = die_one + die_two
+    @app_commands.command(name="dice", description="Roll dice")
+    @app_commands.describe(
+        size="Dice size. Defaults to W6.",
+        count="Number of dice, 1-10. Defaults to 2.",
+    )
+    @app_commands.choices(size=[
+        app_commands.Choice(name="W6", value="w6"),
+        app_commands.Choice(name="W10", value="w10"),
+        app_commands.Choice(name="W20", value="w20"),
+    ])
+    async def dice_cmd(
+        self,
+        interaction: discord.Interaction,
+        size: str | None = None,
+        count: app_commands.Range[int, 1, 10] | None = None,
+    ):
+        sides = {"w6": 6, "w10": 10, "w20": 20}.get((size or "w6").lower(), 6)
+        dice_count = count or 2
+        rolls = [random.randint(1, sides) for _ in range(dice_count)]
+        total = sum(rolls)
+        dice_label = f"W{sides}"
+        dice_word = "die" if dice_count == 1 else "dice"
 
-        left_grid = _dice_grid(die_one).splitlines()
-        right_grid = _dice_grid(die_two).splitlines()
-        paired_grid = "\n".join(f"{left} {right}" for left, right in zip(left_grid, right_grid))
-
-        embed = discord.Embed(
-            title="🎲 Dice Roll",
-            description=(
-                f"**{interaction.user.display_name}** rolls two D6 dice:\n\n"
-                f"# {DICE_FACES[die_one - 1]}  {DICE_FACES[die_two - 1]}\n"
+        if sides == 6 and dice_count == 2:
+            left_grid = _dice_grid(rolls[0]).splitlines()
+            right_grid = _dice_grid(rolls[1]).splitlines()
+            paired_grid = "\n".join(f"{left} {right}" for left, right in zip(left_grid, right_grid))
+            description = (
+                f"**{interaction.user.display_name}** rolls two W6 dice:\n\n"
+                f"# {DICE_FACES[rolls[0] - 1]}  {DICE_FACES[rolls[1] - 1]}\n"
                 "```text\n"
                 "┌─────┐ ┌─────┐\n"
                 f"{paired_grid}\n"
                 "└─────┘ └─────┘\n"
                 "```\n"
-                f"**Result:** `{die_one}` + `{die_two}` = **{total}**"
-            ),
+                f"**Result:** `{rolls[0]}` + `{rolls[1]}` = **{total}**"
+            )
+        else:
+            roll_text = " + ".join(f"`{r}`" for r in rolls)
+            face_text = ""
+            if sides == 6:
+                face_text = "\n" + " ".join(DICE_FACES[r - 1] for r in rolls) + "\n"
+            description = (
+                f"**{interaction.user.display_name}** rolls {dice_count} {dice_label} {dice_word}:\n"
+                f"{face_text}\n"
+                f"**Rolls:** {roll_text}\n"
+                f"**Result:** **{total}**"
+            )
+
+        embed = discord.Embed(
+            title="🎲 Dice Roll",
+            description=description,
             color=discord.Color.gold(),
         )
-        embed.set_footer(text="Two dice, each one D6")
+        embed.set_footer(text=f"{dice_count} × {dice_label}")
         embed.timestamp = discord.utils.utcnow()
         await interaction.response.send_message(embed=embed)
 
@@ -1779,7 +1809,7 @@ class CommandsCog(commands.Cog):
             "**`/talk [translate] <text>`** — Bot speaks your message in channel\n"
             "**`/translate <to> <text>`** — Translate text privately\n"
             "**`/imageposting <category> [title]`** — Post an image from the library\n"
-            "**`/dice`** — Roll two D6 dice\n"
+            "**`/dice [size] [count]`** — Roll 1-10 dice: W6, W10, or W20. Defaults to 2 W6\n"
             "**`/poll-create [channel]`** — Create a poll\n"
             "**`/poll-edit`** — Edit your existing polls\n"
             "**`/quiz`** — Post a random quiz question\n"
