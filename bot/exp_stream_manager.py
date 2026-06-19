@@ -23,6 +23,7 @@ from bot.twitch_bot import TwitchBot
 _RTMP_BASE  = "rtmps://live.twitch.tv:443/app/"
 _LEGACY_RTMP_BASE = "rtmp://live.twitch.tv/app/"
 _FPS        = 30
+_OBS_OVERLAY_FPS = 15
 _W, _H      = 1920, 1080
 _INSET_W    = 360   # portrait inset width  (9:16 ≈ 360×640, doubled from 180×320)
 _INSET_H    = 640   # portrait inset height
@@ -746,7 +747,9 @@ class ExpStreamManager:
         chat_task   = asyncio.create_task(self._post_now_playing_loop(songs))
         stderr_task = asyncio.create_task(self._pipe_ffmpeg_stderr(self._process))
         announce_task = asyncio.create_task(self._announce_rotation_end(total_dur))
-        await self._process.wait()
+        proc = self._process
+        await proc.wait()
+        rc = proc.returncode
         chat_task.cancel()
         announce_task.cancel()
         try:
@@ -763,7 +766,6 @@ class ExpStreamManager:
         except Exception:
             pass
         await self._stop_obs_overlay_bridge()
-        rc = self._process.returncode
         if rc and rc != 0 and self.is_running:
             self._log(f"FFmpeg exited {rc}.", "error")
         elif self.is_running:
@@ -928,7 +930,7 @@ class ExpStreamManager:
     async def _obs_overlay_bridge_loop(self, fifo_path: str, stream_key: str) -> None:
         frame_size = _LOOP_OVERLAY_SIZE * _LOOP_OVERLAY_SIZE * 4
         transparent_frame = b"\x00" * frame_size
-        frame_interval = 1.0 / _FPS
+        frame_interval = 1.0 / _OBS_OVERLAY_FPS
         fd = None
         proc = None
         reader_task = None
@@ -938,8 +940,8 @@ class ExpStreamManager:
             rtmp_url = f"rtmp://0.0.0.0:1936/live/{stream_key}"
             vf = (
                 f"scale={_LOOP_OVERLAY_SIZE}:{_LOOP_OVERLAY_SIZE}:force_original_aspect_ratio=decrease,"
-                f"pad={_LOOP_OVERLAY_SIZE}:{_LOOP_OVERLAY_SIZE}:(ow-iw)/2:(oh-ih)/2:color=black@0,"
-                f"setsar=1,fps={_FPS},format=rgba"
+                f"pad={_LOOP_OVERLAY_SIZE}:{_LOOP_OVERLAY_SIZE}:(ow-iw)/2:0:color=black@0,"
+                f"setsar=1,fps={_OBS_OVERLAY_FPS},format=rgba"
             )
             return await asyncio.create_subprocess_exec(
                 "ffmpeg", "-hide_banner", "-loglevel", "warning",
@@ -977,7 +979,7 @@ class ExpStreamManager:
             pending_frame = transparent_frame
 
             while True:
-                if proc.returncode is not None or (reader_task and reader_task.done() and frame_queue.empty()):
+                if proc is None or proc.returncode is not None or (reader_task and reader_task.done() and frame_queue.empty()):
                     if last_connected:
                         self._set_obs_overlay_status(True, "fallback", "OBS RTMP: disconnected · local loop fallback active", "rtmp")
                         self._log("OBS RTMP disconnected; local loop fallback active.")
@@ -988,7 +990,7 @@ class ExpStreamManager:
                             await reader_task
                         except asyncio.CancelledError:
                             pass
-                    if proc.returncode is None:
+                    if proc and proc.returncode is None:
                         try:
                             proc.terminate()
                             await asyncio.wait_for(proc.wait(), timeout=3)
@@ -1598,7 +1600,7 @@ class ExpStreamManager:
                 "-thread_queue_size", "512",
                 "-f", "rawvideo", "-pix_fmt", "rgba",
                 "-s", f"{_LOOP_OVERLAY_SIZE}x{_LOOP_OVERLAY_SIZE}",
-                "-r", str(_FPS),
+                "-r", str(_OBS_OVERLAY_FPS),
                 "-i", obs_overlay_path,
             ]
             obs_input = input_idx; input_idx += 1
