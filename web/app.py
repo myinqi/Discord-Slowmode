@@ -4393,10 +4393,17 @@ def create_app(db: Database, bot=None) -> Quart:
             elif action == "save_exp_loop_source":
                 obs_overlay_enabled_v = "on" if form.get("exp_obs_overlay_enabled") else "off"
                 loop_rtmp_key_v = (form.get("exp_loop_rtmp_key") or "").strip()
+                try:
+                    obs_overlay_fps_v = int(form.get("exp_obs_overlay_fps", "20") or "20")
+                except (TypeError, ValueError):
+                    obs_overlay_fps_v = 20
+                if obs_overlay_fps_v not in (15, 20, 24):
+                    obs_overlay_fps_v = 20
                 if obs_overlay_enabled_v == "on" and not loop_rtmp_key_v:
                     import secrets as _secrets
                     loop_rtmp_key_v = _secrets.token_urlsafe(18)
                 await db.set_setting("exp_radio_obs_overlay_enabled", obs_overlay_enabled_v)
+                await db.set_setting("exp_radio_obs_overlay_fps", str(obs_overlay_fps_v))
                 await db.set_setting("exp_radio_loop_source", "local")
                 await db.set_setting("exp_radio_loop_rtmp_key", loop_rtmp_key_v)
                 await flash("OBS overlay settings saved.", "success")
@@ -4492,6 +4499,12 @@ def create_app(db: Database, bot=None) -> Quart:
         exp_obs_overlay_enabled = await db.get_setting("exp_radio_obs_overlay_enabled") or "off"
         if exp_loop_source == "rtmp":
             exp_obs_overlay_enabled = "on"
+        try:
+            exp_obs_overlay_fps = int(await db.get_setting("exp_radio_obs_overlay_fps") or "20")
+        except (TypeError, ValueError):
+            exp_obs_overlay_fps = 20
+        if exp_obs_overlay_fps not in (15, 20, 24):
+            exp_obs_overlay_fps = 20
         exp_loop_rtmp_key      = await db.get_setting("exp_radio_loop_rtmp_key") or ""
         exp_schedule_enabled    = await db.get_setting("exp_radio_schedule_enabled") or "off"
         exp_schedule_days       = await db.get_setting("exp_radio_schedule_days") or ""
@@ -4573,6 +4586,7 @@ def create_app(db: Database, bot=None) -> Quart:
             exp_loop_mode=exp_loop_mode,
             exp_loop_source=exp_loop_source,
             exp_obs_overlay_enabled=exp_obs_overlay_enabled,
+            exp_obs_overlay_fps=exp_obs_overlay_fps,
             exp_loop_rtmp_key=exp_loop_rtmp_key,
             exp_progress_overlay=exp_progress_overlay,
             exp_max_per_user=exp_max_per_user,

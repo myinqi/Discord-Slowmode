@@ -436,6 +436,15 @@
                         <p class="text-gray-500 text-xs mt-1">A key will be generated automatically when OBS override is enabled.</p>
                         {% endif %}
                     </div>
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">OBS Overlay FPS</label>
+                        <select name="exp_obs_overlay_fps"
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                            <option value="15" {% if exp_obs_overlay_fps == 15 %}selected{% endif %}>15 FPS - lowest load</option>
+                            <option value="20" {% if exp_obs_overlay_fps == 20 %}selected{% endif %}>20 FPS - balanced</option>
+                            <option value="24" {% if exp_obs_overlay_fps == 24 %}selected{% endif %}>24 FPS - smoother</option>
+                        </select>
+                    </div>
                     <button type="submit"
                         class="w-full px-4 py-2 bg-gray-700/50 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">
                         Save OBS Overlay

@@ -23,7 +23,7 @@ from bot.twitch_bot import TwitchBot
 _RTMP_BASE  = "rtmps://live.twitch.tv:443/app/"
 _LEGACY_RTMP_BASE = "rtmp://live.twitch.tv/app/"
 _FPS        = 30
-_OBS_OVERLAY_FPS = 24
+_DEFAULT_OBS_OVERLAY_FPS = 20
 _W, _H      = 1920, 1080
 _INSET_W    = 360   # portrait inset width  (9:16 ≈ 360×640, doubled from 180×320)
 _INSET_H    = 640   # portrait inset height
@@ -671,8 +671,9 @@ class ExpStreamManager:
         if obs_overlay_enabled:
             obs_rtmp_key = (await self.db.get_setting("exp_radio_loop_rtmp_key") or "").strip()
             if obs_rtmp_key:
-                obs_overlay_path = await self._start_obs_overlay_bridge(obs_rtmp_key)
-                self._log("OBS RTMP override enabled on port 1936.")
+                obs_overlay_fps = await self._get_obs_overlay_fps()
+                obs_overlay_path = await self._start_obs_overlay_bridge(obs_rtmp_key, obs_overlay_fps)
+                self._log(f"OBS RTMP override enabled on port 1936 ({obs_overlay_fps} fps).")
             else:
                 self._set_obs_overlay_status(True, "missing_key", "OBS RTMP: stream key missing", "rtmp")
                 self._log("OBS RTMP override is enabled, but no stream key is configured.", "error")
@@ -863,7 +864,14 @@ class ExpStreamManager:
         except Exception as e:
             self._log(f"_announce_rotation_end error: {e}", "error")
 
-    async def _start_obs_overlay_bridge(self, stream_key: str) -> str | None:
+    async def _get_obs_overlay_fps(self) -> int:
+        try:
+            fps = int(await self.db.get_setting("exp_radio_obs_overlay_fps") or _DEFAULT_OBS_OVERLAY_FPS)
+        except (TypeError, ValueError):
+            fps = _DEFAULT_OBS_OVERLAY_FPS
+        return fps if fps in (15, 20, 24) else _DEFAULT_OBS_OVERLAY_FPS
+
+    async def _start_obs_overlay_bridge(self, stream_key: str, fps: int) -> str | None:
         """Start a small raw-video bridge for the optional OBS RTMP override.
 
         The main stream reads a continuous RGBA rawvideo input from a FIFO.
@@ -884,7 +892,7 @@ class ExpStreamManager:
 
         self._obs_bridge_path = fifo_path
         self._set_obs_overlay_status(True, "waiting", "OBS RTMP: waiting · local loop fallback active", "rtmp")
-        self._obs_bridge_task = asyncio.create_task(self._obs_overlay_bridge_loop(fifo_path, stream_key))
+        self._obs_bridge_task = asyncio.create_task(self._obs_overlay_bridge_loop(fifo_path, stream_key, fps))
         return fifo_path
 
     async def _stop_obs_overlay_bridge(self) -> None:
@@ -928,10 +936,10 @@ class ExpStreamManager:
                 return False
         return True
 
-    async def _obs_overlay_bridge_loop(self, fifo_path: str, stream_key: str) -> None:
+    async def _obs_overlay_bridge_loop(self, fifo_path: str, stream_key: str, fps: int) -> None:
         frame_size = _LOOP_OVERLAY_W * _LOOP_OVERLAY_H * 4
         transparent_frame = b"\x00" * frame_size
-        frame_interval = 1.0 / _OBS_OVERLAY_FPS
+        frame_interval = 1.0 / fps
         fd = None
         proc = None
         reader_task = None
@@ -942,7 +950,7 @@ class ExpStreamManager:
             vf = (
                 f"scale={_LOOP_OVERLAY_W}:{_LOOP_OVERLAY_H}:force_original_aspect_ratio=decrease,"
                 f"pad={_LOOP_OVERLAY_W}:{_LOOP_OVERLAY_H}:(ow-iw)/2:(oh-ih)/2:color=black@0,"
-                f"setsar=1,fps={_OBS_OVERLAY_FPS},format=rgba"
+                f"setsar=1,fps={fps},format=rgba"
             )
             return await asyncio.create_subprocess_exec(
                 "ffmpeg", "-hide_banner", "-loglevel", "warning",
@@ -1664,7 +1672,7 @@ class ExpStreamManager:
                 "-thread_queue_size", "512",
                 "-f", "rawvideo", "-pix_fmt", "rgba",
                 "-s", f"{_LOOP_OVERLAY_W}x{_LOOP_OVERLAY_H}",
-                "-r", str(_OBS_OVERLAY_FPS),
+                "-r", str(fps),
                 "-i", obs_overlay_path,
             ]
             obs_input = input_idx; input_idx += 1
