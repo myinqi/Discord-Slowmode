@@ -724,6 +724,7 @@ class ExpStreamManager:
             loop_path=loop_path if loop_path and os.path.exists(loop_path) else None,
             obs_overlay_path=obs_overlay_path,
             obs_overlay_fps=obs_overlay_fps if obs_overlay_path else _DEFAULT_OBS_OVERLAY_FPS,
+            video_bitrate_kbps=await self._get_video_bitrate_kbps(),
             ass_path=combined_ass if combined_ass and os.path.exists(combined_ass) else None,
             twitch_key=self._twitch_key,
             total_dur=total_dur,
@@ -872,6 +873,13 @@ class ExpStreamManager:
         except (TypeError, ValueError):
             fps = _DEFAULT_OBS_OVERLAY_FPS
         return fps if fps in (15, 20, 24) else _DEFAULT_OBS_OVERLAY_FPS
+
+    async def _get_video_bitrate_kbps(self) -> int:
+        try:
+            bitrate = int(await self.db.get_setting("exp_radio_video_bitrate_kbps") or "2500")
+        except (TypeError, ValueError):
+            bitrate = 2500
+        return bitrate if bitrate in (1800, 2000, 2500) else 2500
 
     async def _start_obs_overlay_bridge(self, stream_key: str, fps: int) -> str | None:
         """Start a small raw-video bridge for the optional OBS RTMP override.
@@ -1632,6 +1640,7 @@ class ExpStreamManager:
         loop_path: str | None,
         obs_overlay_path: str | None,
         obs_overlay_fps: int,
+        video_bitrate_kbps: int,
         ass_path: str | None,
         twitch_key: str,
         total_dur: float,
@@ -1797,9 +1806,11 @@ class ExpStreamManager:
         # Twitch is much happier with predictable H.264 than CRF-only output,
         # especially around playlist source changes. Keep keyframes exactly
         # 2s apart and avoid FLV duration/file-size metadata on live RTMP.
+        video_bitrate = f"{video_bitrate_kbps}k"
+        video_bufsize = f"{video_bitrate_kbps * 2}k"
         cmd += [
             "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
-            "-b:v", "2500k", "-maxrate", "2500k", "-bufsize", "5000k",
+            "-b:v", video_bitrate, "-maxrate", video_bitrate, "-bufsize", video_bufsize,
             "-x264-params", "nal-hrd=cbr:force-cfr=1",
             "-pix_fmt", "yuv420p", "-r", str(_FPS),
             "-g", str(_FPS * 2), "-keyint_min", str(_FPS * 2), "-sc_threshold", "0",
