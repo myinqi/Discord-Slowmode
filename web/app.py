@@ -3852,25 +3852,50 @@ def create_app(db: Database, bot=None) -> Quart:
 
             elif action == "add_submission_song":
                 suno_url = (form.get("suno_url") or "").strip()
-                user_id_raw = (form.get("submission_user_id") or "").strip()
+                user_ref = (form.get("submission_user_ref") or "").strip()
                 if not suno_url:
                     await flash("Please enter a Suno URL.", "error")
                 else:
                     submitter_user_id = 0
                     submitter_user_name = "admin-ui"
-                    if user_id_raw:
-                        if not user_id_raw.isdigit():
-                            await flash("Discord User ID must be numeric.", "error")
-                            return redirect(request.url)
-                        submitter_user_id = int(user_id_raw)
-                        submitter_user_name = user_id_raw
-                        if bot is not None:
+                    if user_ref:
+                        user = None
+                        if user_ref.isdigit() and bot is not None:
+                            submitter_user_id = int(user_ref)
                             try:
                                 user = bot.get_user(submitter_user_id) or await bot.fetch_user(submitter_user_id)
-                                if user:
-                                    submitter_user_name = str(user)
                             except Exception:
-                                pass
+                                user = None
+                        elif bot is not None:
+                            guild = get_guild()
+                            query = user_ref.lower().lstrip("@").strip()
+                            if guild:
+                                members = list(getattr(guild, "members", []) or [])
+                                def _names(member):
+                                    return [
+                                        str(getattr(member, "name", "") or ""),
+                                        str(getattr(member, "display_name", "") or ""),
+                                        str(getattr(member, "global_name", "") or ""),
+                                    ]
+                                exact = [
+                                    m for m in members
+                                    if any(n.lower() == query for n in _names(m) if n)
+                                ]
+                                matches = exact or [
+                                    m for m in members
+                                    if any(query in n.lower() for n in _names(m) if n)
+                                ]
+                                if len(matches) == 1:
+                                    user = matches[0]
+                                elif len(matches) > 1:
+                                    names = ", ".join(str(m) for m in matches[:5])
+                                    await flash(f"Discord user name is ambiguous. Use the numeric user ID. Matches: {names}", "error")
+                                    return redirect(request.url)
+                        if user is None:
+                            await flash("Discord user not found. Use the numeric user ID or leave the field empty.", "error")
+                            return redirect(request.url)
+                        submitter_user_id = int(user.id)
+                        submitter_user_name = str(user)
                     from bot.exp_radio_worker import process_admin_submission_song
                     async def _bg_add_submission(
                         url=suno_url,

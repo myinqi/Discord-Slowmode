@@ -699,8 +699,9 @@
                     <input type="url" name="suno_url" required
                         placeholder="https://suno.com/s/..."
                         class="flex-1 min-w-64 bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm placeholder-gray-500 focus:border-discord-blurple focus:outline-none">
-                    <input type="text" name="submission_user_id" inputmode="numeric" pattern="[0-9]*"
-                        placeholder="Discord user ID (optional)"
+                    <input type="text" name="submission_user_ref"
+                        title="Optional Discord user name or numeric user ID"
+                        placeholder="Discord user or ID (optional)"
                         class="w-52 bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm placeholder-gray-500 focus:border-discord-blurple focus:outline-none">
                     <button type="submit"
                         class="px-3 py-1.5 bg-discord-blurple hover:bg-indigo-500 text-white text-sm rounded-lg transition-colors whitespace-nowrap"
@@ -708,7 +709,7 @@
                         + Add Submission
                     </button>
                 </form>
-                <p class="text-gray-600 text-xs mt-1.5">Bypasses the public submission lock, but uses the normal submission processing pipeline. Leave user ID empty to submit as admin-ui.</p>
+                <p class="text-gray-600 text-xs mt-1.5">Bypasses the public submission lock, but uses the normal submission processing pipeline. Enter a Discord user name or ID, or leave it empty to submit as admin-ui.</p>
             </div>
 
             {% if songs %}
