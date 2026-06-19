@@ -640,7 +640,7 @@
             {% for song in songs %}{% if song.active and song.duration %}{% set _ns.total_sec = _ns.total_sec + song.duration %}{% endif %}{% endfor %}
             {% set _th = (_ns.total_sec // 3600) | int %}
             {% set _tm = ((_ns.total_sec % 3600) // 60) | int %}
-            <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between">
+            <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between flex-wrap gap-3">
                 <h3 class="text-white font-semibold">
                     Song Submissions
                     <span class="ml-2 text-xs text-gray-500 font-normal">
@@ -691,6 +691,21 @@
                     <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-gray-500 inline-block"></span> Pending</span>
                     <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-red-500 inline-block"></span> Failed</span>
                 </div>
+            </div>
+            <div class="px-5 py-3 border-b border-gray-700/30 bg-gray-900/20">
+                <form method="POST" class="flex items-center gap-2 flex-wrap">
+                    <input type="hidden" name="action" value="add_submission_song">
+                    <label class="text-gray-400 text-xs whitespace-nowrap">Admin add to submissions</label>
+                    <input type="url" name="suno_url" required
+                        placeholder="https://suno.com/s/..."
+                        class="flex-1 min-w-64 bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm placeholder-gray-500 focus:border-discord-blurple focus:outline-none">
+                    <button type="submit"
+                        class="px-3 py-1.5 bg-discord-blurple hover:bg-indigo-500 text-white text-sm rounded-lg transition-colors whitespace-nowrap"
+                        title="Adds a song to the regular submission playlist and runs normal Whisper + moderation">
+                        + Add Submission
+                    </button>
+                </form>
+                <p class="text-gray-600 text-xs mt-1.5">Bypasses the public submission lock, but uses the normal submission processing pipeline.</p>
             </div>
 
             {% if songs %}

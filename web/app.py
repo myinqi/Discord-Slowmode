@@ -3850,6 +3850,23 @@ def create_app(db: Database, bot=None) -> Quart:
                         "Check the Live Log for progress.", "success"
                     )
 
+            elif action == "add_submission_song":
+                suno_url = (form.get("suno_url") or "").strip()
+                if not suno_url:
+                    await flash("Please enter a Suno URL.", "error")
+                else:
+                    from bot.exp_radio_worker import process_admin_submission_song
+                    async def _bg_add_submission(url=suno_url):
+                        ok, msg = await process_admin_submission_song(db, url, EXP_RADIO_DIR, bot=bot)
+                        from bot.exp_stream_manager import log_event
+                        log_event(msg, "info" if ok else "error", "[submit-admin]")
+                    asyncio.create_task(_bg_add_submission())
+                    await flash(
+                        "Song queued for the regular submission playlist. "
+                        "It will run through the normal Whisper and moderation pipeline.",
+                        "success",
+                    )
+
             elif action == "delete_all_songs":
                 import bot.exp_stream_manager as _esm
                 if _esm.stream_is_live:

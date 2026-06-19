@@ -880,6 +880,74 @@ async def process_admin_song(db, suno_url: str, exp_radio_dir: str) -> tuple[boo
     return True, f"Song #{song_id} added and queued for Whisper analysis."
 
 
+async def process_admin_submission_song(db, suno_url: str, exp_radio_dir: str, bot=None) -> tuple[bool, str]:
+    """Add a Suno URL to the regular submission playlist from the admin UI.
+
+    This intentionally does not bypass moderation, duration checks, or the
+    normal Whisper pipeline. It only bypasses the public submission lock.
+    """
+    import hashlib
+    from bot.channel_moderation import extract_suno_uuid
+    from bot.exp_stream_manager import log_event
+
+    ensure_exp_dirs(exp_radio_dir)
+    mp3_dir = os.path.join(exp_radio_dir, "mp3")
+
+    uuid = extract_suno_uuid(suno_url)
+    if not uuid:
+        return False, f"Could not extract Suno UUID from URL: {suno_url}"
+
+    songs = await db.get_all_exp_radio_songs(active_only=False, source="submission")
+    for s in songs:
+        if s.get("suno_uuid") == uuid and s.get("active"):
+            return False, f"Song already exists in the submission playlist (id={s['id']})."
+
+    rights_hash = hashlib.sha256(
+        f"{EXP_RIGHTS_DECLARATION}|admin-ui|{suno_url}|{uuid}".encode()
+    ).hexdigest()
+    song_id, _upload_token = await db.add_exp_radio_song(
+        user_id=0,
+        user_name="admin-ui",
+        suno_url=suno_url,
+        suno_uuid=uuid,
+        rights_declaration=EXP_RIGHTS_DECLARATION,
+        rights_hash=rights_hash,
+    )
+    log_event(f"Submission song #{song_id} added via admin UI (uuid={uuid}), scraping metadata…", prefix="[submit-admin]")
+
+    meta = await scrape_suno(uuid)
+    real_uuid = meta.get("real_uuid") or uuid
+    if real_uuid != uuid:
+        songs = await db.get_all_exp_radio_songs(active_only=False, source="submission")
+        for s in songs:
+            if s.get("id") != song_id and s.get("suno_uuid") == real_uuid and s.get("active"):
+                await db.delete_exp_radio_song(song_id)
+                return False, f"Song already exists in the submission playlist (id={s['id']})."
+        log_event(f"Submission song #{song_id}: resolved real UUID {real_uuid}", prefix="[submit-admin]")
+        await db.db.execute(
+            "UPDATE exp_radio_songs SET suno_uuid = ? WHERE id = ?", (real_uuid, song_id)
+        )
+        await db.db.commit()
+
+    log_event(f"Submission song #{song_id} downloading MP3 (uuid={real_uuid})…", prefix="[submit-admin]")
+    mp3_path = await download_mp3(real_uuid, mp3_dir)
+    if not mp3_path:
+        await db.update_exp_radio_song(song_id, analysis_status="failed")
+        return False, f"MP3 download failed for {real_uuid}."
+
+    await db.update_exp_radio_song(
+        song_id,
+        mp3_filename=os.path.basename(mp3_path),
+        title=meta.get("title") or None,
+        artist=meta.get("artist") or None,
+        cover_url=meta.get("cover_url") or None,
+        video_url=meta.get("video_url") or None,
+    )
+
+    await process_exp_song(db, song_id, exp_radio_dir, bot=bot)
+    return True, f"Submission song #{song_id} added and queued for normal processing."
+
+
 async def process_intro_outro_song(
     db, suno_url: str, source: str, exp_radio_dir: str
 ) -> tuple[bool, str]:
