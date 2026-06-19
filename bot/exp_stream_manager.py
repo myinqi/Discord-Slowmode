@@ -187,6 +187,12 @@ class ExpStreamManager:
         self._ffmpeg_progress_pending: dict = {}
         self._ffmpeg_last_progress_at: float = 0.0
         self._ffmpeg_health_state: str = "offline"
+        self._obs_overlay_status: dict = {
+            "enabled": False,
+            "mode": "local",
+            "state": "disabled",
+            "label": "OBS overlay disabled",
+        }
 
     # ── Live log buffer ──────────────────────────────────────────────────────────────────────
 
@@ -213,6 +219,14 @@ class ExpStreamManager:
         self._ffmpeg_progress_pending = {}
         self._ffmpeg_last_progress_at = 0.0
         self._ffmpeg_health_state = state
+
+    def _set_obs_overlay_status(self, enabled: bool, state: str, label: str, mode: str = "local") -> None:
+        self._obs_overlay_status = {
+            "enabled": enabled,
+            "mode": mode,
+            "state": state,
+            "label": label,
+        }
 
     def _set_ffmpeg_health_state(self, state: str, age: float | None = None) -> None:
         old_state = self._ffmpeg_health_state
@@ -384,6 +398,7 @@ class ExpStreamManager:
         await self._save_playlist_snapshot(ready, active_pl, scheduled)
         self._stream_ready_event.clear()
         self._reset_ffmpeg_health("offline")
+        self._set_obs_overlay_status(False, "disabled", "OBS overlay disabled", "local")
         # Connect to Twitch chat if enabled and credentials exist
         chat_enabled = await self.db.get_setting("exp_radio_twitch_chat_enabled") or "off"
         client_id    = await self.db.get_setting("exp_radio_twitch_client_id")
@@ -449,6 +464,7 @@ class ExpStreamManager:
                     pass
         self._process = None
         self._reset_ffmpeg_health("offline")
+        self._set_obs_overlay_status(False, "disabled", "OBS overlay disabled", "local")
         self._safe_stop_requested = False
         self._outro_in_playlist = False
         self._outro_counts_in_progress = False
@@ -541,6 +557,7 @@ class ExpStreamManager:
             "playlist_length": self._progress_total_count or len(self.playlist),
             "legacy_pipeline": self._legacy_pipeline,
             "ffmpeg": self._get_ffmpeg_health(),
+            "obs_overlay": dict(self._obs_overlay_status),
         }
 
     # ── Stream loop (one FFmpeg per full playlist rotation) ────────────────────
@@ -614,10 +631,13 @@ class ExpStreamManager:
         if loop_source == "rtmp":
             loop_rtmp_key = (await self.db.get_setting("exp_radio_loop_rtmp_key") or "").strip()
             if loop_rtmp_key:
+                self._set_obs_overlay_status(True, "waiting", "OBS RTMP: waiting for input", "rtmp")
                 self._log("Loop overlay: waiting for OBS RTMP input on port 1936.")
             else:
+                self._set_obs_overlay_status(True, "missing_key", "OBS RTMP: stream key missing", "rtmp")
                 self._log("Loop overlay source is RTMP, but no stream key is configured.", "error")
         else:
+            self._set_obs_overlay_status(False, "fallback", "OBS overlay off · local loop active", "local")
             loop_raw = await self.db.get_setting("exp_radio_loop_videos") or "[]"
             loop_vids = _json.loads(loop_raw) if loop_raw else []
             if loop_vids:

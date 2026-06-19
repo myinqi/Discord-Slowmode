@@ -560,6 +560,7 @@
                     </div>
                     <p class="text-gray-500 text-xs truncate" id="exp-now-playing">—</p>
                     <p class="text-gray-600 text-xs mt-1 truncate" id="exp-ffmpeg-health">FFmpeg offline</p>
+                    <p class="text-gray-600 text-xs mt-1 truncate" id="exp-obs-overlay-status">OBS overlay disabled</p>
                 </div>
                 <div class="flex gap-2">
                     <button onclick="expStreamAction('start')" id="exp-btn-start"
@@ -1155,6 +1156,25 @@ function renderExpFfmpegHealth(data, running) {
     healthEl.textContent = parts.join(' · ');
 }
 
+function renderExpObsOverlayStatus(data, running) {
+    const obsEl = document.getElementById('exp-obs-overlay-status');
+    if (!obsEl) return;
+    const obs = data.obs_overlay || {};
+    if (!running) {
+        obsEl.className = 'text-gray-600 text-xs mt-1 truncate';
+        obsEl.textContent = 'OBS overlay disabled';
+        return;
+    }
+    if (obs.state === 'waiting') {
+        obsEl.className = 'text-yellow-400 text-xs mt-1 truncate';
+    } else if (obs.state === 'missing_key') {
+        obsEl.className = 'text-red-400 text-xs mt-1 truncate';
+    } else {
+        obsEl.className = 'text-gray-500 text-xs mt-1 truncate';
+    }
+    obsEl.textContent = obs.label || 'OBS overlay disabled';
+}
+
 async function updateExpStatus() {
     try {
         const r = await fetch('/exp-radio/stream/status');
@@ -1178,12 +1198,14 @@ async function updateExpStatus() {
                 np.textContent = `${d.song.title || '?'} — ${d.song.artist || ''}  (${d.song_index || 0}/${d.playlist_length || 0})`;
             }
             renderExpFfmpegHealth(d, true);
+            renderExpObsOverlayStatus(d, true);
         } else {
             dot.className  = 'inline-block w-2.5 h-2.5 rounded-full bg-gray-500';
             text.textContent = 'Offline';
             np.textContent   = '—';
             if (safeStopBtn) { safeStopBtn.disabled = false; safeStopBtn.textContent = '🌙 Safe Stop'; }
             renderExpFfmpegHealth(d, false);
+            renderExpObsOverlayStatus(d, false);
         }
     } catch (_) {}
 }
