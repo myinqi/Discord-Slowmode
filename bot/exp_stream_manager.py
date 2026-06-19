@@ -26,6 +26,7 @@ _FPS        = 30
 _W, _H      = 1920, 1080
 _INSET_W    = 360   # portrait inset width  (9:16 ≈ 360×640, doubled from 180×320)
 _INSET_H    = 640   # portrait inset height
+_LOOP_OVERLAY_SIZE = 650
 _BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -187,6 +188,9 @@ class ExpStreamManager:
         self._ffmpeg_progress_pending: dict = {}
         self._ffmpeg_last_progress_at: float = 0.0
         self._ffmpeg_health_state: str = "offline"
+        self._obs_bridge_task: asyncio.Task | None = None
+        self._obs_bridge_proc = None
+        self._obs_bridge_path: str | None = None
         self._obs_overlay_status: dict = {
             "enabled": False,
             "mode": "local",
@@ -463,6 +467,7 @@ class ExpStreamManager:
                 except Exception:
                     pass
         self._process = None
+        await self._stop_obs_overlay_bridge()
         self._reset_ffmpeg_health("offline")
         self._set_obs_overlay_status(False, "disabled", "OBS overlay disabled", "local")
         self._safe_stop_requested = False
@@ -623,52 +628,54 @@ class ExpStreamManager:
         # Resolve loop video: supports multiple uploads + shuffle / fixed / concat-all.
         loop_fn   = ""
         loop_path = None
-        loop_rtmp_key = None
-        loop_source = ((await self.db.get_setting("exp_radio_loop_source")) or "local").strip().lower()
-        if loop_source not in ("local", "rtmp"):
-            loop_source = "local"
+        obs_overlay_path = None
+        legacy_loop_source = ((await self.db.get_setting("exp_radio_loop_source")) or "local").strip().lower()
+        obs_overlay_enabled = (await self.db.get_setting("exp_radio_obs_overlay_enabled") or "off") == "on"
+        if legacy_loop_source == "rtmp":
+            obs_overlay_enabled = True
         import json as _json
-        if loop_source == "rtmp":
-            loop_rtmp_key = (await self.db.get_setting("exp_radio_loop_rtmp_key") or "").strip()
-            if loop_rtmp_key:
-                self._set_obs_overlay_status(True, "waiting", "OBS RTMP: waiting for input", "rtmp")
-                self._log("Loop overlay: waiting for OBS RTMP input on port 1936.")
-            else:
-                self._set_obs_overlay_status(True, "missing_key", "OBS RTMP: stream key missing", "rtmp")
-                self._log("Loop overlay source is RTMP, but no stream key is configured.", "error")
-        else:
-            self._set_obs_overlay_status(False, "fallback", "OBS overlay off · local loop active", "local")
-            loop_raw = await self.db.get_setting("exp_radio_loop_videos") or "[]"
-            loop_vids = _json.loads(loop_raw) if loop_raw else []
-            if loop_vids:
-                loop_sel = await self.db.get_setting("exp_radio_loop_selection") or "shuffle"
-                if loop_sel == "concat_all":
-                    if len(loop_vids) == 1:
-                        loop_fn = loop_vids[0]["filename"]
-                        self._log(f"Loop video (concat_all single): {loop_fn}")
-                    else:
-                        loop_path = await self._build_concat_all_video(loop_vids)
-                        if not loop_path:
-                            loop_fn = random.choice(loop_vids)["filename"]
-                            self._log(f"Concat-all failed, shuffle fallback: {loop_fn}", "error")
-                elif loop_sel == "shuffle":
-                    loop_fn = random.choice(loop_vids)["filename"]
-                    self._log(f"Loop video (shuffle): {loop_fn}")
+        loop_raw = await self.db.get_setting("exp_radio_loop_videos") or "[]"
+        loop_vids = _json.loads(loop_raw) if loop_raw else []
+        if loop_vids:
+            loop_sel = await self.db.get_setting("exp_radio_loop_selection") or "shuffle"
+            if loop_sel == "concat_all":
+                if len(loop_vids) == 1:
+                    loop_fn = loop_vids[0]["filename"]
+                    self._log(f"Loop video (concat_all single): {loop_fn}")
                 else:
-                    # Fixed selection — verify it still exists in the list
-                    match = [v for v in loop_vids if v["filename"] == loop_sel]
-                    if match:
-                        loop_fn = match[0]["filename"]
-                    else:
-                        loop_fn = loop_vids[0]["filename"]
-                        self._log(f"Selected loop video gone, falling back to {loop_fn}", "error")
-            elif not loop_fn:
-                # Legacy fallback: single-video setting from before the migration
-                loop_fn = await self.db.get_setting("exp_radio_loop_filename") or ""
+                    loop_path = await self._build_concat_all_video(loop_vids)
+                    if not loop_path:
+                        loop_fn = random.choice(loop_vids)["filename"]
+                        self._log(f"Concat-all failed, shuffle fallback: {loop_fn}", "error")
+            elif loop_sel == "shuffle":
+                loop_fn = random.choice(loop_vids)["filename"]
+                self._log(f"Loop video (shuffle): {loop_fn}")
+            else:
+                # Fixed selection — verify it still exists in the list
+                match = [v for v in loop_vids if v["filename"] == loop_sel]
+                if match:
+                    loop_fn = match[0]["filename"]
+                else:
+                    loop_fn = loop_vids[0]["filename"]
+                    self._log(f"Selected loop video gone, falling back to {loop_fn}", "error")
+        elif not loop_fn:
+            # Legacy fallback: single-video setting from before the migration
+            loop_fn = await self.db.get_setting("exp_radio_loop_filename") or ""
 
         bg_path = os.path.join(self.exp_radio_dir, "assets", bg_fn) if bg_fn else None
         if loop_path is None:
             loop_path = os.path.join(self.exp_radio_dir, "assets", loop_fn) if loop_fn else None
+
+        if obs_overlay_enabled:
+            obs_rtmp_key = (await self.db.get_setting("exp_radio_loop_rtmp_key") or "").strip()
+            if obs_rtmp_key:
+                obs_overlay_path = await self._start_obs_overlay_bridge(obs_rtmp_key)
+                self._log("OBS RTMP override enabled on port 1936.")
+            else:
+                self._set_obs_overlay_status(True, "missing_key", "OBS RTMP: stream key missing", "rtmp")
+                self._log("OBS RTMP override is enabled, but no stream key is configured.", "error")
+        else:
+            self._set_obs_overlay_status(False, "fallback", "OBS overlay off · local loop active", "local")
 
         # Prefetch all covers/videos
         media_paths = []
@@ -711,7 +718,7 @@ class ExpStreamManager:
             bg_path=bg_path   if bg_path   and os.path.exists(bg_path)   else None,
             bg_type=bg_type,
             loop_path=loop_path if loop_path and os.path.exists(loop_path) else None,
-            loop_rtmp_key=loop_rtmp_key,
+            obs_overlay_path=obs_overlay_path,
             ass_path=combined_ass if combined_ass and os.path.exists(combined_ass) else None,
             twitch_key=self._twitch_key,
             total_dur=total_dur,
@@ -755,6 +762,7 @@ class ExpStreamManager:
             await stderr_task
         except Exception:
             pass
+        await self._stop_obs_overlay_bridge()
         rc = self._process.returncode
         if rc and rc != 0 and self.is_running:
             self._log(f"FFmpeg exited {rc}.", "error")
@@ -851,6 +859,196 @@ class ExpStreamManager:
             raise
         except Exception as e:
             self._log(f"_announce_rotation_end error: {e}", "error")
+
+    async def _start_obs_overlay_bridge(self, stream_key: str) -> str | None:
+        """Start a small raw-video bridge for the optional OBS RTMP override.
+
+        The main stream reads a continuous RGBA rawvideo input from a FIFO.
+        This bridge keeps that FIFO fed with transparent frames while no OBS
+        client is connected, and swaps in OBS frames as soon as FFmpeg receives
+        them. That keeps the local loop video as the stable fallback.
+        """
+        await self._stop_obs_overlay_bridge()
+        fifo_path = os.path.join(self.exp_radio_dir, "_obs_overlay.rgba")
+        try:
+            if os.path.exists(fifo_path):
+                os.remove(fifo_path)
+            os.mkfifo(fifo_path)
+        except Exception as e:
+            self._set_obs_overlay_status(True, "error", "OBS RTMP: bridge setup failed", "rtmp")
+            self._log(f"OBS overlay bridge setup failed: {e}", "error")
+            return None
+
+        self._obs_bridge_path = fifo_path
+        self._set_obs_overlay_status(True, "waiting", "OBS RTMP: waiting · local loop fallback active", "rtmp")
+        self._obs_bridge_task = asyncio.create_task(self._obs_overlay_bridge_loop(fifo_path, stream_key))
+        return fifo_path
+
+    async def _stop_obs_overlay_bridge(self) -> None:
+        task = self._obs_bridge_task
+        self._obs_bridge_task = None
+        if task:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+        proc = self._obs_bridge_proc
+        self._obs_bridge_proc = None
+        if proc and proc.returncode is None:
+            try:
+                proc.terminate()
+                await asyncio.wait_for(proc.wait(), timeout=3)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        if self._obs_bridge_path and os.path.exists(self._obs_bridge_path):
+            try:
+                os.remove(self._obs_bridge_path)
+            except Exception:
+                pass
+        self._obs_bridge_path = None
+
+    async def _write_obs_overlay_frame(self, fd: int, frame: bytes) -> bool:
+        view = memoryview(frame)
+        written = 0
+        while written < len(view):
+            try:
+                written += os.write(fd, view[written:])
+            except BlockingIOError:
+                await asyncio.sleep(0.005)
+            except BrokenPipeError:
+                return False
+        return True
+
+    async def _obs_overlay_bridge_loop(self, fifo_path: str, stream_key: str) -> None:
+        frame_size = _LOOP_OVERLAY_SIZE * _LOOP_OVERLAY_SIZE * 4
+        transparent_frame = b"\x00" * frame_size
+        frame_interval = 1.0 / _FPS
+        fd = None
+        proc = None
+        reader_task = None
+        last_connected = False
+
+        async def start_listener():
+            rtmp_url = f"rtmp://0.0.0.0:1936/live/{stream_key}"
+            vf = (
+                f"scale={_LOOP_OVERLAY_SIZE}:{_LOOP_OVERLAY_SIZE}:force_original_aspect_ratio=decrease,"
+                f"pad={_LOOP_OVERLAY_SIZE}:{_LOOP_OVERLAY_SIZE}:(ow-iw)/2:(oh-ih)/2:color=black@0,"
+                f"setsar=1,fps={_FPS},format=rgba"
+            )
+            return await asyncio.create_subprocess_exec(
+                "ffmpeg", "-hide_banner", "-loglevel", "warning",
+                "-f", "flv", "-listen", "1",
+                "-rw_timeout", "5000000",
+                "-i", rtmp_url,
+                "-an", "-vf", vf,
+                "-f", "rawvideo", "pipe:1",
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+
+        async def read_frames(ffmpeg_proc, queue: asyncio.Queue):
+            try:
+                while True:
+                    frame = await ffmpeg_proc.stdout.readexactly(frame_size)
+                    if queue.full():
+                        try:
+                            queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            pass
+                    await queue.put(frame)
+            except (asyncio.IncompleteReadError, asyncio.CancelledError):
+                return
+
+        try:
+            fd = os.open(fifo_path, os.O_RDWR | os.O_NONBLOCK)
+            proc = await start_listener()
+            self._obs_bridge_proc = proc
+            frame_queue: asyncio.Queue = asyncio.Queue(maxsize=2)
+            reader_task = asyncio.create_task(read_frames(proc, frame_queue))
+            self._log("OBS overlay bridge listening on rtmp://0.0.0.0:1936/live/<key>.")
+            next_frame_at = time.monotonic()
+            pending_frame = transparent_frame
+
+            while True:
+                if proc.returncode is not None or (reader_task and reader_task.done() and frame_queue.empty()):
+                    if last_connected:
+                        self._set_obs_overlay_status(True, "fallback", "OBS RTMP: disconnected · local loop fallback active", "rtmp")
+                        self._log("OBS RTMP disconnected; local loop fallback active.")
+                        last_connected = False
+                    if reader_task:
+                        reader_task.cancel()
+                        try:
+                            await reader_task
+                        except asyncio.CancelledError:
+                            pass
+                    if proc.returncode is None:
+                        try:
+                            proc.terminate()
+                            await asyncio.wait_for(proc.wait(), timeout=3)
+                        except Exception:
+                            try:
+                                proc.kill()
+                            except Exception:
+                                pass
+                    proc = await start_listener()
+                    self._obs_bridge_proc = proc
+                    frame_queue = asyncio.Queue(maxsize=2)
+                    reader_task = asyncio.create_task(read_frames(proc, frame_queue))
+
+                got_frame = False
+                try:
+                    while True:
+                        pending_frame = frame_queue.get_nowait()
+                        got_frame = True
+                except asyncio.QueueEmpty:
+                    if not got_frame and not last_connected:
+                        pending_frame = transparent_frame
+
+                if got_frame:
+                    if not last_connected:
+                        self._set_obs_overlay_status(True, "connected", "OBS RTMP: connected · live overlay active", "rtmp")
+                        self._log("OBS RTMP connected; live overlay active.")
+                        last_connected = True
+
+                now = time.monotonic()
+                if next_frame_at > now:
+                    await asyncio.sleep(next_frame_at - now)
+                if not await self._write_obs_overlay_frame(fd, pending_frame):
+                    await asyncio.sleep(0.05)
+                next_frame_at = max(next_frame_at + frame_interval, time.monotonic())
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self._set_obs_overlay_status(True, "error", "OBS RTMP: bridge error", "rtmp")
+            self._log(f"OBS overlay bridge error: {e}", "error")
+        finally:
+            if reader_task:
+                reader_task.cancel()
+                try:
+                    await reader_task
+                except asyncio.CancelledError:
+                    pass
+            if proc and proc.returncode is None:
+                try:
+                    proc.terminate()
+                    await asyncio.wait_for(proc.wait(), timeout=3)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except Exception:
+                    pass
 
     async def _post_now_playing_loop(self, songs: list):
         """Post ♪ Now Playing to Twitch chat at each song boundary.
@@ -1356,7 +1554,7 @@ class ExpStreamManager:
         bg_path: str | None,
         bg_type: str,
         loop_path: str | None,
-        loop_rtmp_key: str | None,
+        obs_overlay_path: str | None,
         ass_path: str | None,
         twitch_key: str,
         total_dur: float,
@@ -1367,9 +1565,10 @@ class ExpStreamManager:
 
         Layer stack (bottom → top):
           0: Background (static image or looping video)  1920×1080
-          1: Loop video overlay, 500×500, top-right
-          2: Song media concat (9:16 video or square cover), bottom-left inset
-          3: Combined ASS subtitles (lyrics + NowPlaying title cards)
+          1: Local loop overlay, 650×650, top-right
+          2: Optional OBS RTMP override, 650×650, top-right
+          3: Song media concat (9:16 video or square cover), bottom-left inset
+          4: Combined ASS subtitles (lyrics + NowPlaying title cards)
         """
         W, H = _W, _H
         cmd = ["ffmpeg", "-y"]
@@ -1377,7 +1576,7 @@ class ExpStreamManager:
             cmd += ["-nostats", "-progress", "pipe:2"]
 
         input_idx = 0
-        bg_input = lv_input = audio_input = None
+        bg_input = lv_input = obs_input = audio_input = None
 
         # Background
         if bg_path:
@@ -1387,17 +1586,22 @@ class ExpStreamManager:
                 cmd += ["-loop", "1", "-i", bg_path]
             bg_input = input_idx; input_idx += 1
 
-        # Loop overlay
-        if loop_rtmp_key:
-            cmd += [
-                "-f", "flv", "-listen", "1",
-                "-rw_timeout", "5000000",
-                "-i", f"rtmp://0.0.0.0:1936/live/{loop_rtmp_key}",
-            ]
-            lv_input = input_idx; input_idx += 1
-        elif loop_path:
+        # Local loop overlay
+        if loop_path:
             cmd += ["-stream_loop", "-1", "-re", "-i", loop_path]
             lv_input = input_idx; input_idx += 1
+
+        # Optional OBS override bridge. This is a continuous RGBA stream:
+        # transparent when OBS is absent, live frames when OBS is connected.
+        if obs_overlay_path:
+            cmd += [
+                "-thread_queue_size", "512",
+                "-f", "rawvideo", "-pix_fmt", "rgba",
+                "-s", f"{_LOOP_OVERLAY_SIZE}x{_LOOP_OVERLAY_SIZE}",
+                "-r", str(_FPS),
+                "-i", obs_overlay_path,
+            ]
+            obs_input = input_idx; input_idx += 1
 
         # Per-song media inputs (each trimmed to song duration)
         media_inputs = []
@@ -1445,13 +1649,22 @@ class ExpStreamManager:
         # Loop video overlay – top-right, 650×650 (+30% from 500×500)
         if lv_input is not None:
             filters.append(
-                f"[{lv_input}:v]scale=650:650:force_original_aspect_ratio=decrease,"
+                f"[{lv_input}:v]scale={_LOOP_OVERLAY_SIZE}:{_LOOP_OVERLAY_SIZE}:force_original_aspect_ratio=decrease,"
                 f"fps={_FPS}[lv]"
             )
             filters.append(
-                f"{last}[lv]overlay=x={W}-650-20:y=20:shortest=0:eof_action=pass[after_lv]"
+                f"{last}[lv]overlay=x={W}-{_LOOP_OVERLAY_SIZE}-20:y=20:shortest=0:eof_action=pass[after_lv]"
             )
             last = "[after_lv]"
+
+        # OBS RTMP override. Transparent bridge frames leave the local loop
+        # visible; live OBS frames cover it in the same position.
+        if obs_input is not None:
+            filters.append(f"[{obs_input}:v]format=rgba[obs]")
+            filters.append(
+                f"{last}[obs]overlay=x={W}-{_LOOP_OVERLAY_SIZE}-20:y=20:shortest=0:eof_action=pass[after_obs]"
+            )
+            last = "[after_obs]"
 
         # Scale each media input to portrait inset, then concat
         n = len(songs)

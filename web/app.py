@@ -4391,16 +4391,15 @@ def create_app(db: Database, bot=None) -> Quart:
                         await flash("Only MP4/WebM supported.", "danger")
 
             elif action == "save_exp_loop_source":
-                loop_source_v = (form.get("exp_loop_source") or "local").strip().lower()
-                if loop_source_v not in ("local", "rtmp"):
-                    loop_source_v = "local"
+                obs_overlay_enabled_v = "on" if form.get("exp_obs_overlay_enabled") else "off"
                 loop_rtmp_key_v = (form.get("exp_loop_rtmp_key") or "").strip()
-                if loop_source_v == "rtmp" and not loop_rtmp_key_v:
+                if obs_overlay_enabled_v == "on" and not loop_rtmp_key_v:
                     import secrets as _secrets
                     loop_rtmp_key_v = _secrets.token_urlsafe(18)
-                await db.set_setting("exp_radio_loop_source", loop_source_v)
+                await db.set_setting("exp_radio_obs_overlay_enabled", obs_overlay_enabled_v)
+                await db.set_setting("exp_radio_loop_source", "local")
                 await db.set_setting("exp_radio_loop_rtmp_key", loop_rtmp_key_v)
-                await flash("Loop overlay source saved.", "success")
+                await flash("OBS overlay settings saved.", "success")
 
             elif action == "delete_loop_video":
                 import json as _jl
@@ -4490,6 +4489,9 @@ def create_app(db: Database, bot=None) -> Quart:
         exp_loop_source        = await db.get_setting("exp_radio_loop_source") or "local"
         if exp_loop_source not in ("local", "rtmp"):
             exp_loop_source = "local"
+        exp_obs_overlay_enabled = await db.get_setting("exp_radio_obs_overlay_enabled") or "off"
+        if exp_loop_source == "rtmp":
+            exp_obs_overlay_enabled = "on"
         exp_loop_rtmp_key      = await db.get_setting("exp_radio_loop_rtmp_key") or ""
         exp_schedule_enabled    = await db.get_setting("exp_radio_schedule_enabled") or "off"
         exp_schedule_days       = await db.get_setting("exp_radio_schedule_days") or ""
@@ -4570,6 +4572,7 @@ def create_app(db: Database, bot=None) -> Quart:
             exp_moderation_enabled=exp_moderation_enabled,
             exp_loop_mode=exp_loop_mode,
             exp_loop_source=exp_loop_source,
+            exp_obs_overlay_enabled=exp_obs_overlay_enabled,
             exp_loop_rtmp_key=exp_loop_rtmp_key,
             exp_progress_overlay=exp_progress_overlay,
             exp_max_per_user=exp_max_per_user,

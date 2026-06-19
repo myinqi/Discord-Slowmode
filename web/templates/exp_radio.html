@@ -417,12 +417,13 @@
                 <form method="POST" class="space-y-3 rounded-lg border border-gray-700/40 bg-discord-darker/40 p-3">
                     <input type="hidden" name="action" value="save_exp_loop_source">
                     <div>
-                        <label class="block text-gray-400 text-xs mb-1">Overlay Source</label>
-                        <select name="exp_loop_source"
-                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
-                            <option value="local" {% if exp_loop_source != 'rtmp' %}selected{% endif %}>Local Loop Videos</option>
-                            <option value="rtmp" {% if exp_loop_source == 'rtmp' %}selected{% endif %}>Remote OBS (RTMP)</option>
-                        </select>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" name="exp_obs_overlay_enabled"
+                                {% if exp_obs_overlay_enabled == 'on' %}checked{% endif %}
+                                class="w-4 h-4 accent-discord-blurple">
+                            <span class="text-gray-300 text-sm">Enable OBS RTMP override</span>
+                        </label>
+                        <p class="text-gray-500 text-xs mt-1">Local loop videos stay active as the fallback. OBS takes over only while it is sending.</p>
                     </div>
                     <div>
                         <label class="block text-gray-400 text-xs mb-1">RTMP Stream Key (for OBS)</label>
@@ -432,12 +433,12 @@
                         {% if exp_loop_rtmp_key %}
                         <p class="text-gray-500 text-xs mt-1">OBS URL: <code class="text-gray-400">rtmp://YOUR_SERVER:1936/live/{{ exp_loop_rtmp_key }}</code></p>
                         {% else %}
-                        <p class="text-gray-500 text-xs mt-1">Use this only when the overlay source is set to Remote OBS.</p>
+                        <p class="text-gray-500 text-xs mt-1">A key will be generated automatically when OBS override is enabled.</p>
                         {% endif %}
                     </div>
                     <button type="submit"
                         class="w-full px-4 py-2 bg-gray-700/50 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">
-                        Save Overlay Source
+                        Save OBS Overlay
                     </button>
                 </form>
 
@@ -1167,7 +1168,11 @@ function renderExpObsOverlayStatus(data, running) {
     }
     if (obs.state === 'waiting') {
         obsEl.className = 'text-yellow-400 text-xs mt-1 truncate';
+    } else if (obs.state === 'connected') {
+        obsEl.className = 'text-green-400 text-xs mt-1 truncate';
     } else if (obs.state === 'missing_key') {
+        obsEl.className = 'text-red-400 text-xs mt-1 truncate';
+    } else if (obs.state === 'error') {
         obsEl.className = 'text-red-400 text-xs mt-1 truncate';
     } else {
         obsEl.className = 'text-gray-500 text-xs mt-1 truncate';
