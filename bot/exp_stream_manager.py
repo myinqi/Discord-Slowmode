@@ -631,6 +631,7 @@ class ExpStreamManager:
         loop_fn   = ""
         loop_path = None
         obs_overlay_path = None
+        obs_overlay_fps = _DEFAULT_OBS_OVERLAY_FPS
         legacy_loop_source = ((await self.db.get_setting("exp_radio_loop_source")) or "local").strip().lower()
         obs_overlay_enabled = (await self.db.get_setting("exp_radio_obs_overlay_enabled") or "off") == "on"
         if legacy_loop_source == "rtmp":
@@ -722,6 +723,7 @@ class ExpStreamManager:
             bg_type=bg_type,
             loop_path=loop_path if loop_path and os.path.exists(loop_path) else None,
             obs_overlay_path=obs_overlay_path,
+            obs_overlay_fps=obs_overlay_fps if obs_overlay_path else _DEFAULT_OBS_OVERLAY_FPS,
             ass_path=combined_ass if combined_ass and os.path.exists(combined_ass) else None,
             twitch_key=self._twitch_key,
             total_dur=total_dur,
@@ -1629,6 +1631,7 @@ class ExpStreamManager:
         bg_type: str,
         loop_path: str | None,
         obs_overlay_path: str | None,
+        obs_overlay_fps: int,
         ass_path: str | None,
         twitch_key: str,
         total_dur: float,
@@ -1672,7 +1675,7 @@ class ExpStreamManager:
                 "-thread_queue_size", "512",
                 "-f", "rawvideo", "-pix_fmt", "rgba",
                 "-s", f"{_LOOP_OVERLAY_W}x{_LOOP_OVERLAY_H}",
-                "-r", str(fps),
+                "-r", str(obs_overlay_fps),
                 "-i", obs_overlay_path,
             ]
             obs_input = input_idx; input_idx += 1
