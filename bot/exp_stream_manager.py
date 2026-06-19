@@ -23,7 +23,7 @@ from bot.twitch_bot import TwitchBot
 _RTMP_BASE  = "rtmps://live.twitch.tv:443/app/"
 _LEGACY_RTMP_BASE = "rtmp://live.twitch.tv/app/"
 _FPS        = 30
-_OBS_OVERLAY_FPS = 15
+_OBS_OVERLAY_FPS = 24
 _W, _H      = 1920, 1080
 _INSET_W    = 360   # portrait inset width  (9:16 ≈ 360×640, doubled from 180×320)
 _INSET_H    = 640   # portrait inset height
