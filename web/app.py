@@ -4390,6 +4390,18 @@ def create_app(db: Database, bot=None) -> Quart:
                     else:
                         await flash("Only MP4/WebM supported.", "danger")
 
+            elif action == "save_exp_loop_source":
+                loop_source_v = (form.get("exp_loop_source") or "local").strip().lower()
+                if loop_source_v not in ("local", "rtmp"):
+                    loop_source_v = "local"
+                loop_rtmp_key_v = (form.get("exp_loop_rtmp_key") or "").strip()
+                if loop_source_v == "rtmp" and not loop_rtmp_key_v:
+                    import secrets as _secrets
+                    loop_rtmp_key_v = _secrets.token_urlsafe(18)
+                await db.set_setting("exp_radio_loop_source", loop_source_v)
+                await db.set_setting("exp_radio_loop_rtmp_key", loop_rtmp_key_v)
+                await flash("Loop overlay source saved.", "success")
+
             elif action == "delete_loop_video":
                 import json as _jl
                 del_fn = form.get("loop_filename", "")
@@ -4475,6 +4487,10 @@ def create_app(db: Database, bot=None) -> Quart:
         exp_expiry_days         = int(await db.get_setting("exp_radio_expiry_days") or "14")
         if exp_expiry_days not in (7, 14):
             exp_expiry_days = 14
+        exp_loop_source        = await db.get_setting("exp_radio_loop_source") or "local"
+        if exp_loop_source not in ("local", "rtmp"):
+            exp_loop_source = "local"
+        exp_loop_rtmp_key      = await db.get_setting("exp_radio_loop_rtmp_key") or ""
         exp_schedule_enabled    = await db.get_setting("exp_radio_schedule_enabled") or "off"
         exp_schedule_days       = await db.get_setting("exp_radio_schedule_days") or ""
         exp_schedule_time       = await db.get_setting("exp_radio_schedule_time") or ""
@@ -4553,6 +4569,8 @@ def create_app(db: Database, bot=None) -> Quart:
             exp_twitch_chat_enabled=exp_twitch_chat_enabled,
             exp_moderation_enabled=exp_moderation_enabled,
             exp_loop_mode=exp_loop_mode,
+            exp_loop_source=exp_loop_source,
+            exp_loop_rtmp_key=exp_loop_rtmp_key,
             exp_progress_overlay=exp_progress_overlay,
             exp_max_per_user=exp_max_per_user,
             exp_expiry_days=exp_expiry_days,

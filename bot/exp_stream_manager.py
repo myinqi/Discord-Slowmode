@@ -606,34 +606,45 @@ class ExpStreamManager:
         # Resolve loop video: supports multiple uploads + shuffle / fixed / concat-all.
         loop_fn   = ""
         loop_path = None
+        loop_rtmp_key = None
+        loop_source = ((await self.db.get_setting("exp_radio_loop_source")) or "local").strip().lower()
+        if loop_source not in ("local", "rtmp"):
+            loop_source = "local"
         import json as _json
-        loop_raw = await self.db.get_setting("exp_radio_loop_videos") or "[]"
-        loop_vids = _json.loads(loop_raw) if loop_raw else []
-        if loop_vids:
-            loop_sel = await self.db.get_setting("exp_radio_loop_selection") or "shuffle"
-            if loop_sel == "concat_all":
-                if len(loop_vids) == 1:
-                    loop_fn = loop_vids[0]["filename"]
-                    self._log(f"Loop video (concat_all single): {loop_fn}")
-                else:
-                    loop_path = await self._build_concat_all_video(loop_vids)
-                    if not loop_path:
-                        loop_fn = random.choice(loop_vids)["filename"]
-                        self._log(f"Concat-all failed, shuffle fallback: {loop_fn}", "error")
-            elif loop_sel == "shuffle":
-                loop_fn = random.choice(loop_vids)["filename"]
-                self._log(f"Loop video (shuffle): {loop_fn}")
+        if loop_source == "rtmp":
+            loop_rtmp_key = (await self.db.get_setting("exp_radio_loop_rtmp_key") or "").strip()
+            if loop_rtmp_key:
+                self._log("Loop overlay: waiting for OBS RTMP input on port 1936.")
             else:
-                # Fixed selection — verify it still exists in the list
-                match = [v for v in loop_vids if v["filename"] == loop_sel]
-                if match:
-                    loop_fn = match[0]["filename"]
+                self._log("Loop overlay source is RTMP, but no stream key is configured.", "error")
+        else:
+            loop_raw = await self.db.get_setting("exp_radio_loop_videos") or "[]"
+            loop_vids = _json.loads(loop_raw) if loop_raw else []
+            if loop_vids:
+                loop_sel = await self.db.get_setting("exp_radio_loop_selection") or "shuffle"
+                if loop_sel == "concat_all":
+                    if len(loop_vids) == 1:
+                        loop_fn = loop_vids[0]["filename"]
+                        self._log(f"Loop video (concat_all single): {loop_fn}")
+                    else:
+                        loop_path = await self._build_concat_all_video(loop_vids)
+                        if not loop_path:
+                            loop_fn = random.choice(loop_vids)["filename"]
+                            self._log(f"Concat-all failed, shuffle fallback: {loop_fn}", "error")
+                elif loop_sel == "shuffle":
+                    loop_fn = random.choice(loop_vids)["filename"]
+                    self._log(f"Loop video (shuffle): {loop_fn}")
                 else:
-                    loop_fn = loop_vids[0]["filename"]
-                    self._log(f"Selected loop video gone, falling back to {loop_fn}", "error")
-        elif not loop_fn:
-            # Legacy fallback: single-video setting from before the migration
-            loop_fn = await self.db.get_setting("exp_radio_loop_filename") or ""
+                    # Fixed selection — verify it still exists in the list
+                    match = [v for v in loop_vids if v["filename"] == loop_sel]
+                    if match:
+                        loop_fn = match[0]["filename"]
+                    else:
+                        loop_fn = loop_vids[0]["filename"]
+                        self._log(f"Selected loop video gone, falling back to {loop_fn}", "error")
+            elif not loop_fn:
+                # Legacy fallback: single-video setting from before the migration
+                loop_fn = await self.db.get_setting("exp_radio_loop_filename") or ""
 
         bg_path = os.path.join(self.exp_radio_dir, "assets", bg_fn) if bg_fn else None
         if loop_path is None:
@@ -680,6 +691,7 @@ class ExpStreamManager:
             bg_path=bg_path   if bg_path   and os.path.exists(bg_path)   else None,
             bg_type=bg_type,
             loop_path=loop_path if loop_path and os.path.exists(loop_path) else None,
+            loop_rtmp_key=loop_rtmp_key,
             ass_path=combined_ass if combined_ass and os.path.exists(combined_ass) else None,
             twitch_key=self._twitch_key,
             total_dur=total_dur,
@@ -1324,6 +1336,7 @@ class ExpStreamManager:
         bg_path: str | None,
         bg_type: str,
         loop_path: str | None,
+        loop_rtmp_key: str | None,
         ass_path: str | None,
         twitch_key: str,
         total_dur: float,
@@ -1355,7 +1368,14 @@ class ExpStreamManager:
             bg_input = input_idx; input_idx += 1
 
         # Loop overlay
-        if loop_path:
+        if loop_rtmp_key:
+            cmd += [
+                "-f", "flv", "-listen", "1",
+                "-rw_timeout", "5000000",
+                "-i", f"rtmp://0.0.0.0:1936/live/{loop_rtmp_key}",
+            ]
+            lv_input = input_idx; input_idx += 1
+        elif loop_path:
             cmd += ["-stream_loop", "-1", "-re", "-i", loop_path]
             lv_input = input_idx; input_idx += 1
 
@@ -1409,7 +1429,7 @@ class ExpStreamManager:
                 f"fps={_FPS}[lv]"
             )
             filters.append(
-                f"{last}[lv]overlay=x={W}-650-20:y=20:shortest=0[after_lv]"
+                f"{last}[lv]overlay=x={W}-650-20:y=20:shortest=0:eof_action=pass[after_lv]"
             )
             last = "[after_lv]"
 
