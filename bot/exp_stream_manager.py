@@ -27,7 +27,8 @@ _OBS_OVERLAY_FPS = 15
 _W, _H      = 1920, 1080
 _INSET_W    = 360   # portrait inset width  (9:16 ≈ 360×640, doubled from 180×320)
 _INSET_H    = 640   # portrait inset height
-_LOOP_OVERLAY_SIZE = 650
+_LOOP_OVERLAY_W = 650
+_LOOP_OVERLAY_H = 366
 _BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -928,7 +929,7 @@ class ExpStreamManager:
         return True
 
     async def _obs_overlay_bridge_loop(self, fifo_path: str, stream_key: str) -> None:
-        frame_size = _LOOP_OVERLAY_SIZE * _LOOP_OVERLAY_SIZE * 4
+        frame_size = _LOOP_OVERLAY_W * _LOOP_OVERLAY_H * 4
         transparent_frame = b"\x00" * frame_size
         frame_interval = 1.0 / _OBS_OVERLAY_FPS
         fd = None
@@ -939,8 +940,8 @@ class ExpStreamManager:
         async def start_listener():
             rtmp_url = f"rtmp://0.0.0.0:1936/live/{stream_key}"
             vf = (
-                f"scale={_LOOP_OVERLAY_SIZE}:{_LOOP_OVERLAY_SIZE}:force_original_aspect_ratio=decrease,"
-                f"pad={_LOOP_OVERLAY_SIZE}:{_LOOP_OVERLAY_SIZE}:(ow-iw)/2:0:color=black@0,"
+                f"scale={_LOOP_OVERLAY_W}:{_LOOP_OVERLAY_H}:force_original_aspect_ratio=decrease,"
+                f"pad={_LOOP_OVERLAY_W}:{_LOOP_OVERLAY_H}:(ow-iw)/2:(oh-ih)/2:color=black@0,"
                 f"setsar=1,fps={_OBS_OVERLAY_FPS},format=rgba"
             )
             return await asyncio.create_subprocess_exec(
@@ -1056,27 +1057,90 @@ class ExpStreamManager:
         """Post ♪ Now Playing to Twitch chat at each song boundary.
         Also updates current_song and _current_song_end_time for safe_stop."""
         _POST_DELAY = 10  # seconds after song start before posting
-        for song_idx, song in enumerate(songs, start=1):
-            dur = song.get("duration") or 300
-            # Update current song tracking for safe-stop
-            self.current_song = song
-            self._current_song_index = song_idx
-            self._current_song_end_time = time.monotonic() + dur
-            # Cancel safe-stop for this song if it was requested mid-prev-song
-            if self._safe_stop_requested:
+        if not songs:
+            return
+
+        starts = []
+        cursor = 0.0
+        for song in songs:
+            starts.append(cursor)
+            cursor += float(song.get("duration") or 300)
+        total_duration = cursor
+        posted: set[int] = set()
+        safe_stop_logged: set[int] = set()
+        active_idx = -1
+
+        while self.is_running and self._process and self._process.returncode is None:
+            out_time = self._get_ffmpeg_out_time_seconds()
+            if out_time is None:
+                await asyncio.sleep(0.5)
+                continue
+
+            idx = 0
+            for i, start in enumerate(starts):
+                if out_time + 0.25 >= start:
+                    idx = i
+                else:
+                    break
+
+            if idx != active_idx:
+                active_idx = idx
+                song = songs[idx]
+                dur = float(song.get("duration") or 300)
+                elapsed_in_song = max(0.0, out_time - starts[idx])
+                remaining = max(0.0, dur - elapsed_in_song)
+                self.current_song = song
+                self._current_song_index = idx + 1
+                self._current_song_end_time = time.monotonic() + remaining
+
+            song = songs[idx]
+            dur = float(song.get("duration") or 300)
+            elapsed_in_song = max(0.0, out_time - starts[idx])
+            self._current_song_end_time = time.monotonic() + max(0.0, dur - elapsed_in_song)
+
+            if self._safe_stop_requested and idx not in safe_stop_logged:
+                safe_stop_logged.add(idx)
                 self._log(f"Safe stop: finishing after '{song.get('title','?')}' ({dur}s).")
-            await asyncio.sleep(min(_POST_DELAY, dur))
-            if self._twitch_chat:
-                title    = song.get("title")  or "Unknown"
-                artist   = song.get("artist") or ""
-                suno_url = song.get("suno_url") or ""
-                msg = f"\U0001F3B5 Now Playing: {title}"
-                if artist:
-                    msg += f" - {artist}"
-                if suno_url:
-                    msg += f" | {suno_url}"
-                await self._twitch_chat.send(msg)
-            await asyncio.sleep(max(0, dur - _POST_DELAY))
+
+            post_at = starts[idx] + min(_POST_DELAY, dur)
+            if idx not in posted and out_time + 0.25 >= post_at:
+                posted.add(idx)
+                if self._twitch_chat:
+                    title    = song.get("title")  or "Unknown"
+                    artist   = song.get("artist") or ""
+                    suno_url = song.get("suno_url") or ""
+                    msg = f"\U0001F3B5 Now Playing: {title}"
+                    if artist:
+                        msg += f" - {artist}"
+                    if suno_url:
+                        msg += f" | {suno_url}"
+                    await self._twitch_chat.send(msg)
+
+            if out_time >= total_duration:
+                break
+            await asyncio.sleep(0.5)
+
+    def _get_ffmpeg_out_time_seconds(self) -> float | None:
+        progress = self._ffmpeg_progress or {}
+        raw_us = progress.get("out_time_us") or progress.get("out_time_ms")
+        if raw_us:
+            try:
+                return max(0.0, float(raw_us) / 1_000_000.0)
+            except (TypeError, ValueError):
+                pass
+        raw = progress.get("out_time")
+        if not raw:
+            return None
+        try:
+            parts = str(raw).split(":")
+            if len(parts) != 3:
+                return None
+            hours = float(parts[0])
+            minutes = float(parts[1])
+            seconds = float(parts[2])
+            return max(0.0, hours * 3600 + minutes * 60 + seconds)
+        except (TypeError, ValueError):
+            return None
 
     # ── Media helpers ──────────────────────────────────────────────────────────
 
@@ -1567,8 +1631,8 @@ class ExpStreamManager:
 
         Layer stack (bottom → top):
           0: Background (static image or looping video)  1920×1080
-          1: Local loop overlay, 650×650, top-right
-          2: Optional OBS RTMP override, 650×650, top-right
+          1: Local loop overlay, 650×366, top-right
+          2: Optional OBS RTMP override, 650×366, top-right
           3: Song media concat (9:16 video or square cover), bottom-left inset
           4: Combined ASS subtitles (lyrics + NowPlaying title cards)
         """
@@ -1599,7 +1663,7 @@ class ExpStreamManager:
             cmd += [
                 "-thread_queue_size", "512",
                 "-f", "rawvideo", "-pix_fmt", "rgba",
-                "-s", f"{_LOOP_OVERLAY_SIZE}x{_LOOP_OVERLAY_SIZE}",
+                "-s", f"{_LOOP_OVERLAY_W}x{_LOOP_OVERLAY_H}",
                 "-r", str(_OBS_OVERLAY_FPS),
                 "-i", obs_overlay_path,
             ]
@@ -1648,14 +1712,14 @@ class ExpStreamManager:
             filters.append(f"color=size={W}x{H}:color=0x111111:rate={_FPS}[bg]")
         last = "[bg]"
 
-        # Loop video overlay – top-right, 650×650 (+30% from 500×500)
+        # Loop video overlay – top-right, 650×366 (16:9)
         if lv_input is not None:
             filters.append(
-                f"[{lv_input}:v]scale={_LOOP_OVERLAY_SIZE}:{_LOOP_OVERLAY_SIZE}:force_original_aspect_ratio=decrease,"
+                f"[{lv_input}:v]scale={_LOOP_OVERLAY_W}:{_LOOP_OVERLAY_H}:force_original_aspect_ratio=decrease,"
                 f"fps={_FPS}[lv]"
             )
             filters.append(
-                f"{last}[lv]overlay=x={W}-{_LOOP_OVERLAY_SIZE}-20:y=20:shortest=0:eof_action=pass[after_lv]"
+                f"{last}[lv]overlay=x={W}-{_LOOP_OVERLAY_W}-20:y=20:shortest=0:eof_action=pass[after_lv]"
             )
             last = "[after_lv]"
 
@@ -1664,7 +1728,7 @@ class ExpStreamManager:
         if obs_input is not None:
             filters.append(f"[{obs_input}:v]format=rgba[obs]")
             filters.append(
-                f"{last}[obs]overlay=x={W}-{_LOOP_OVERLAY_SIZE}-20:y=20:shortest=0:eof_action=pass[after_obs]"
+                f"{last}[obs]overlay=x={W}-{_LOOP_OVERLAY_W}-20:y=20:shortest=0:eof_action=pass[after_obs]"
             )
             last = "[after_obs]"
 
