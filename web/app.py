@@ -4268,8 +4268,15 @@ def create_app(db: Database, bot=None) -> Quart:
                     expiry_days_v = 14
                 if expiry_days_v not in (7, 14):
                     expiry_days_v = 14
+                try:
+                    video_bitrate_v = int(form.get("exp_video_bitrate_kbps", "2500") or "2500")
+                except (ValueError, TypeError):
+                    video_bitrate_v = 2500
+                if video_bitrate_v not in (1800, 2000, 2500):
+                    video_bitrate_v = 2500
                 await db.set_setting("exp_radio_max_per_user", str(max_per_user_v))
                 await db.set_setting("exp_radio_expiry_days", str(expiry_days_v))
+                await db.set_setting("exp_radio_video_bitrate_kbps", str(video_bitrate_v))
                 await db.set_setting("exp_radio_moderation_enabled", moderation_en)
                 await db.set_setting("exp_radio_loop_mode", loop_mode_v)
                 await db.set_setting("exp_radio_schedule_enabled", sched_en)
@@ -4493,6 +4500,12 @@ def create_app(db: Database, bot=None) -> Quart:
         exp_expiry_days         = int(await db.get_setting("exp_radio_expiry_days") or "14")
         if exp_expiry_days not in (7, 14):
             exp_expiry_days = 14
+        try:
+            exp_video_bitrate_kbps = int(await db.get_setting("exp_radio_video_bitrate_kbps") or "2500")
+        except (TypeError, ValueError):
+            exp_video_bitrate_kbps = 2500
+        if exp_video_bitrate_kbps not in (1800, 2000, 2500):
+            exp_video_bitrate_kbps = 2500
         exp_loop_source        = await db.get_setting("exp_radio_loop_source") or "local"
         if exp_loop_source not in ("local", "rtmp"):
             exp_loop_source = "local"
@@ -4591,6 +4604,7 @@ def create_app(db: Database, bot=None) -> Quart:
             exp_progress_overlay=exp_progress_overlay,
             exp_max_per_user=exp_max_per_user,
             exp_expiry_days=exp_expiry_days,
+            exp_video_bitrate_kbps=exp_video_bitrate_kbps,
             exp_schedule_enabled=exp_schedule_enabled,
             exp_schedule_time=exp_schedule_time,
             exp_schedule_days_set=exp_schedule_days_set,
