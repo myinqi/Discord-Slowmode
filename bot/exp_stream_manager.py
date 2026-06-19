@@ -524,30 +524,6 @@ class ExpStreamManager:
             and self.current_song.get("id") == self._outro_song.get("id")
         ):
             self._outro_played = True
-        if self._outro_song and not self._outro_played:
-            self._outro_played = True
-            self._safe_stop_requested = False
-            self._log(f"Safe stop: playing outro '{self._outro_song.get('title', '?')}' before stopping…")
-            # Cancel stream_loop (stops current FFmpeg cleanly)
-            if self._task:
-                self._task.cancel()
-                try:
-                    await asyncio.wait_for(asyncio.shield(self._task), timeout=5)
-                except (asyncio.CancelledError, asyncio.TimeoutError):
-                    pass
-                self._task = None
-            if self._process and self._process.returncode is None:
-                try:
-                    self._process.terminate()
-                    await asyncio.wait_for(self._process.wait(), timeout=5)
-                except Exception:
-                    try: self._process.kill()
-                    except Exception: pass
-            self._process = None
-            try:
-                await self._play_playlist([self._outro_song])
-            except Exception as e:
-                self._log(f"Outro playback error: {e}", "error")
         self._log("Safe stop: stopping stream.")
         await self.stop()
 

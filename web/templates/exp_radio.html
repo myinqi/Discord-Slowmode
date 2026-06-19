@@ -455,6 +455,22 @@
                             <option value="24" {% if exp_obs_overlay_fps == 24 %}selected{% endif %}>24 FPS - smoother</option>
                         </select>
                     </div>
+                    <div class="rounded-lg border border-blue-500/20 bg-blue-500/10 p-3 text-xs text-gray-300 space-y-2">
+                        <p class="font-medium text-blue-200">Recommended OBS output</p>
+                        <div class="grid grid-cols-2 gap-x-3 gap-y-1">
+                            <span class="text-gray-500">Output resolution</span>
+                            <span>854x480</span>
+                            <span class="text-gray-500">FPS</span>
+                            <span>20</span>
+                            <span class="text-gray-500">Video bitrate</span>
+                            <span>1000-1500 kbps</span>
+                            <span class="text-gray-500">Keyframe interval</span>
+                            <span>2 seconds</span>
+                            <span class="text-gray-500">Audio</span>
+                            <span>Disabled / not used</span>
+                        </div>
+                        <p class="text-gray-500">Set these values in OBS Studio. The stream manager scales the source into the overlay area.</p>
+                    </div>
                     <button type="submit"
                         class="w-full px-4 py-2 bg-gray-700/50 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">
                         Save OBS Overlay
