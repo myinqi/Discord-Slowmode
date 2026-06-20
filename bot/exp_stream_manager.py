@@ -930,6 +930,7 @@ class ExpStreamManager:
         fallback_proc = None
         reader_task = None
         last_connected = False
+        last_frame = None
 
         async def stop_proc(process, timeout: float = 3.0):
             if process and process.returncode is None:
@@ -1029,6 +1030,7 @@ class ExpStreamManager:
                     pass
 
                 if got_frame:
+                    last_frame = pending_frame
                     if not last_connected:
                         await stop_proc(fallback_proc, timeout=1.0)
                         fallback_proc = None
@@ -1039,8 +1041,11 @@ class ExpStreamManager:
                 now = time.monotonic()
                 if next_frame_at > now:
                     await asyncio.sleep(next_frame_at - now)
-                if got_frame and pending_frame is not None:
-                    if not await self._write_obs_overlay_frame(fd, pending_frame):
+                # Keep the main FFmpeg graph fed even if OBS briefly jitters.
+                # Repeating the last frame is better than blocking Twitch output.
+                frame_to_write = last_frame if last_connected else pending_frame
+                if frame_to_write is not None:
+                    if not await self._write_obs_overlay_frame(fd, frame_to_write):
                         await asyncio.sleep(0.05)
                 next_frame_at = max(next_frame_at + frame_interval, time.monotonic())
         except asyncio.CancelledError:
