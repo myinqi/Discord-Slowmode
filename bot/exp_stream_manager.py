@@ -29,6 +29,8 @@ _INSET_W    = 360   # portrait inset width  (9:16 ≈ 360×640, doubled from 180
 _INSET_H    = 640   # portrait inset height
 _LOOP_OVERLAY_W = 650
 _LOOP_OVERLAY_H = 366
+_OBS_BRIDGE_W = 480
+_OBS_BRIDGE_H = 270
 _BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -923,7 +925,7 @@ class ExpStreamManager:
         return True
 
     async def _obs_overlay_bridge_loop(self, fifo_path: str, stream_key: str, fps: int) -> None:
-        frame_size = _LOOP_OVERLAY_W * _LOOP_OVERLAY_H * 4
+        frame_size = _OBS_BRIDGE_W * _OBS_BRIDGE_H * 4
         frame_interval = 1.0 / fps
         fd = None
         proc = None
@@ -946,8 +948,8 @@ class ExpStreamManager:
         async def start_listener():
             rtmp_url = f"rtmp://0.0.0.0:1936/live/{stream_key}"
             vf = (
-                f"scale={_LOOP_OVERLAY_W}:{_LOOP_OVERLAY_H}:force_original_aspect_ratio=decrease,"
-                f"pad={_LOOP_OVERLAY_W}:{_LOOP_OVERLAY_H}:(ow-iw)/2:(oh-ih)/2:color=black@0,"
+                f"scale={_OBS_BRIDGE_W}:{_OBS_BRIDGE_H}:force_original_aspect_ratio=decrease,"
+                f"pad={_OBS_BRIDGE_W}:{_OBS_BRIDGE_H}:(ow-iw)/2:(oh-ih)/2:color=black@0,"
                 f"setsar=1,fps={fps},format=rgba"
             )
             return await asyncio.create_subprocess_exec(
@@ -967,7 +969,7 @@ class ExpStreamManager:
                 "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                 "-re",
                 "-f", "lavfi",
-                "-i", f"color=color=black:size={_LOOP_OVERLAY_W}x{_LOOP_OVERLAY_H}:rate={fps}",
+                "-i", f"color=color=black:size={_OBS_BRIDGE_W}x{_OBS_BRIDGE_H}:rate={fps}",
                 "-vf", "format=rgba,colorchannelmixer=aa=0",
                 "-f", "rawvideo", fifo_path,
                 stdin=asyncio.subprocess.DEVNULL,
@@ -1680,7 +1682,7 @@ class ExpStreamManager:
             cmd += [
                 "-thread_queue_size", "512",
                 "-f", "rawvideo", "-pix_fmt", "rgba",
-                "-s", f"{_LOOP_OVERLAY_W}x{_LOOP_OVERLAY_H}",
+                "-s", f"{_OBS_BRIDGE_W}x{_OBS_BRIDGE_H}",
                 "-r", str(obs_overlay_fps),
                 "-i", obs_overlay_path,
             ]
@@ -1743,7 +1745,9 @@ class ExpStreamManager:
         # OBS RTMP override. Transparent bridge frames leave the local loop
         # visible; live OBS frames cover it in the same position.
         if obs_input is not None:
-            filters.append(f"[{obs_input}:v]format=rgba[obs]")
+            filters.append(
+                f"[{obs_input}:v]scale={_LOOP_OVERLAY_W}:{_LOOP_OVERLAY_H}:flags=bicubic,format=rgba[obs]"
+            )
             filters.append(
                 f"{last}[obs]overlay=x={W}-{_LOOP_OVERLAY_W}-20:y=20:shortest=0:eof_action=pass[after_obs]"
             )
