@@ -20,6 +20,19 @@ class SlowmodeCog(commands.Cog):
             return
 
         db = self.bot.db
+        try:
+            await db.record_user_activity(
+                user_id=message.author.id,
+                user_name=str(message.author),
+                activity_type="Message",
+                summary=f"Message in #{getattr(message.channel, 'name', 'unknown-channel')}",
+                channel_id=message.channel.id,
+                channel_name=getattr(message.channel, "name", None),
+                timestamp=message.created_at.timestamp(),
+            )
+        except Exception:
+            pass
+
         channel_config = await db.get_monitored_channel(message.channel.id)
 
         if not channel_config:

@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Executioner{% endblock %}
+{% block content %}
+<h2 class="text-2xl font-bold text-white mb-6">Executioner</h2>
+
+<div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+    <div class="xl:col-span-2 bg-discord-dark rounded-xl border border-gray-700/50">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">Kick Member</h3>
+            <p class="text-gray-400 text-xs mt-1">Select a server member, enter a reason, and confirm the kick.</p>
+        </div>
+        <div class="p-5">
+            {% if not bot_connected %}
+            <div class="mb-4 px-4 py-3 rounded-lg bg-discord-red/20 text-red-300 border border-discord-red/30 text-sm">
+                The bot is not connected to the configured server.
+            </div>
+            {% endif %}
+            <form method="POST" onsubmit="return confirmKick()" class="space-y-4">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">User</label>
+                    <select id="user-select" name="user_id" required
+                        class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple"
+                        onchange="updateSelectedUser()">
+                        <option value="">Select a user...</option>
+                        {% for member in members %}
+                        <option value="{{ member.id }}" {% if selected_user_id == member.id %}selected{% endif %}>
+                            {{ member.display_name }}{% if member.name != member.display_name %} (@{{ member.name }}){% endif %}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Reason</label>
+                    <textarea name="reason" required rows="4"
+                        class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-discord-blurple"
+                        placeholder="Why should this user be kicked?"></textarea>
+                </div>
+                <div class="flex items-center justify-end">
+                    <button type="submit"
+                        class="px-5 py-2 bg-discord-red/80 hover:bg-discord-red text-white rounded-lg font-medium transition-colors">
+                        Kick User
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">Latest Known Activity</h3>
+        </div>
+        <div class="p-5">
+            {% if selected_user_id and latest_activity %}
+            <div class="space-y-3">
+                <div>
+                    <p class="text-gray-500 text-xs uppercase tracking-wide">Type</p>
+                    <p class="text-white text-sm">{{ latest_activity.type }}</p>
+                </div>
+                <div>
+                    <p class="text-gray-500 text-xs uppercase tracking-wide">Time</p>
+                    <p class="text-gray-300 text-sm">
+                        <script>document.write(new Date({{ latest_activity.timestamp }} * 1000).toLocaleString())</script>
+                    </p>
+                </div>
+                <div>
+                    <p class="text-gray-500 text-xs uppercase tracking-wide">Summary</p>
+                    <p class="text-gray-300 text-sm">{{ latest_activity.summary }}</p>
+                </div>
+            </div>
+            {% elif selected_user_id %}
+            <p class="text-gray-500 text-sm">No activity is known for this user yet.</p>
+            {% else %}
+            <p class="text-gray-500 text-sm">Select a user to see the latest known activity.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<script>
+function updateSelectedUser() {
+    var select = document.getElementById('user-select');
+    if (!select || !select.value) return;
+    window.location = "{{ url_for('executioner') }}?user_id=" + encodeURIComponent(select.value);
+}
+
+function confirmKick() {
+    var select = document.getElementById('user-select');
+    var label = select && select.selectedOptions.length ? select.selectedOptions[0].text.trim() : 'this user';
+    return confirm('Kick ' + label + '?');
+}
+</script>
+{% endblock %}

@@ -194,6 +194,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('exp_radio', 'Experimental Radio'),
         ('auto_translate', 'Auto Translate'),
         ('channel_moderation', 'Channel Moderation'),
+        ('executioner', 'Executioner'),
         ('suno_analyzer', 'Suno Analyzer'),
         ('suno_promotion', 'Suno Promotion'),
         ('suno_info', 'Suno Info'),
@@ -258,6 +259,36 @@ def create_app(db: Database, bot=None) -> Quart:
             from config import Config
             return bot.get_guild(Config.GUILD_ID)
         return None
+
+    async def get_guild_members(guild):
+        if not guild:
+            return []
+        members = list(getattr(guild, "members", []) or [])
+        if len(members) <= 1:
+            try:
+                members = [m async for m in guild.fetch_members(limit=None)]
+            except Exception:
+                pass
+        return sorted(
+            [m for m in members if not getattr(m, "bot", False)],
+            key=lambda m: ((m.display_name or m.name or "").casefold(), m.id),
+        )
+
+    def find_latest_cached_message(bot_obj, user_id: int):
+        latest = None
+        for message in getattr(bot_obj, "cached_messages", []) or []:
+            if getattr(getattr(message, "author", None), "id", None) != user_id:
+                continue
+            if latest is None or message.created_at > latest.created_at:
+                latest = message
+        if not latest:
+            return None
+        channel = getattr(latest, "channel", None)
+        return {
+            "type": "Message",
+            "timestamp": latest.created_at.timestamp(),
+            "summary": f"Message in #{getattr(channel, 'name', 'unknown-channel')}",
+        }
 
     # --- Routes ---
 
@@ -788,6 +819,86 @@ def create_app(db: Database, bot=None) -> Quart:
             except (json.JSONDecodeError, TypeError):
                 u["perms"] = []
         return await render_template("users.html", users=user_list, current_user_id=session.get("user_id"), all_permissions=ALL_PERMISSIONS)
+
+    @app.route("/executioner", methods=["GET", "POST"])
+    @permission_required('executioner')
+    async def executioner():
+        guild = get_guild()
+        selected_user_id = request.args.get("user_id", type=int)
+
+        if request.method == "POST":
+            form = await request.form
+            raw_user_id = (form.get("user_id") or "").strip()
+            reason = (form.get("reason") or "").strip()
+
+            if not raw_user_id.isdigit():
+                await flash("Please select a user.", "error")
+                return redirect(url_for("executioner"))
+            if not reason:
+                await flash("A reason is required.", "error")
+                return redirect(url_for("executioner", user_id=raw_user_id))
+            if not guild:
+                await flash("The bot is not connected to the configured server.", "error")
+                return redirect(url_for("executioner", user_id=raw_user_id))
+
+            user_id = int(raw_user_id)
+            member = guild.get_member(user_id)
+            if not member:
+                try:
+                    member = await guild.fetch_member(user_id)
+                except Exception:
+                    member = None
+            if not member:
+                await flash("The selected user is not a current server member.", "error")
+                return redirect(url_for("executioner"))
+
+            bot_member = guild.me
+            if not bot_member or not bot_member.guild_permissions.kick_members:
+                await flash("The bot does not have permission to kick members.", "error")
+                return redirect(url_for("executioner", user_id=user_id))
+            if member == guild.owner:
+                await flash("The server owner cannot be kicked.", "error")
+                return redirect(url_for("executioner", user_id=user_id))
+            if member.top_role >= bot_member.top_role:
+                await flash("The bot cannot kick this user because of the role hierarchy.", "error")
+                return redirect(url_for("executioner", user_id=user_id))
+
+            actor = session.get("username", "unknown")
+            audit_reason = f"{reason} (requested by {actor} via Admin UI)"
+            try:
+                await member.kick(reason=audit_reason[:512])
+            except Exception as exc:
+                await flash(f"Kick failed: {exc}", "error")
+                return redirect(url_for("executioner", user_id=user_id))
+
+            await db.add_audit_log(
+                event_type="user_kicked",
+                user_id=user_id,
+                user_name=str(member),
+                details=f"Reason: {reason}",
+                actor=actor,
+            )
+            await flash(f"{member} was kicked.", "success")
+            return redirect(url_for("executioner"))
+
+        members = await get_guild_members(guild)
+        latest_activity = None
+        if selected_user_id:
+            latest_activity = await db.get_latest_user_activity(selected_user_id)
+            cached_message = find_latest_cached_message(bot, selected_user_id) if bot else None
+            if cached_message and (
+                not latest_activity
+                or cached_message["timestamp"] > float(latest_activity.get("timestamp") or 0)
+            ):
+                latest_activity = cached_message
+
+        return await render_template(
+            "executioner.html",
+            members=members,
+            selected_user_id=selected_user_id,
+            latest_activity=latest_activity,
+            bot_connected=bool(guild),
+        )
 
     @app.route("/audit")
     @permission_required('audit')

@@ -101,6 +101,16 @@ class Database:
                 details TEXT,
                 actor TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS user_activity (
+                user_id INTEGER PRIMARY KEY,
+                user_name TEXT,
+                activity_type TEXT NOT NULL,
+                summary TEXT,
+                channel_id INTEGER,
+                channel_name TEXT,
+                timestamp REAL NOT NULL
+            );
         """)
         await self.db.commit()
         await self._run_migrations()
@@ -624,6 +634,19 @@ class Database:
         """)
         await self.db.commit()
 
+        await self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS user_activity (
+                user_id INTEGER PRIMARY KEY,
+                user_name TEXT,
+                activity_type TEXT NOT NULL,
+                summary TEXT,
+                channel_id INTEGER,
+                channel_name TEXT,
+                timestamp REAL NOT NULL
+            );
+        """)
+        await self.db.commit()
+
     # --- Channel Moderation ---
 
     async def has_channel_moderation_check(self, message_id: int, suno_url: str) -> bool:
@@ -973,6 +996,128 @@ class Database:
         async with self.db.execute("SELECT COUNT(*) as cnt FROM audit_log") as cursor:
             row = await cursor.fetchone()
             return row["cnt"]
+
+    async def get_latest_user_activity(self, user_id: int) -> Optional[dict]:
+        async def table_exists(name: str) -> bool:
+            async with self.db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (name,),
+            ) as cursor:
+                return await cursor.fetchone() is not None
+
+        queries = []
+        params = []
+
+        if await table_exists("audit_log"):
+            queries.append("""
+                SELECT timestamp, 'Audit Log' AS type,
+                       event_type || COALESCE(': ' || details, '') AS summary
+                FROM audit_log
+                WHERE user_id = ?
+            """)
+            params.append(user_id)
+
+        if await table_exists("user_activity"):
+            queries.append("""
+                SELECT timestamp, activity_type AS type,
+                       COALESCE(summary, activity_type) AS summary
+                FROM user_activity
+                WHERE user_id = ?
+            """)
+            params.append(user_id)
+
+        if await table_exists("song_posts"):
+            queries.append("""
+                SELECT posted_at AS timestamp, 'Song Post' AS type,
+                       COALESCE(song_title, url, 'Song posted') AS summary
+                FROM song_posts
+                WHERE user_id = ?
+            """)
+            params.append(user_id)
+
+        if await table_exists("song_reactions"):
+            queries.append("""
+                SELECT reacted_at AS timestamp, 'Reaction' AS type,
+                       'Reacted with ' || emoji AS summary
+                FROM song_reactions
+                WHERE reactor_user_id = ?
+            """)
+            params.append(user_id)
+
+        if await table_exists("party_playlist"):
+            queries.append("""
+                SELECT submitted_at AS timestamp, 'Party Playlist' AS type,
+                       COALESCE(song_title, url, 'Song submitted') AS summary
+                FROM party_playlist
+                WHERE user_id = ?
+            """)
+            params.append(user_id)
+
+        if await table_exists("quiz_scores"):
+            queries.append("""
+                SELECT last_solved_at AS timestamp, 'Quiz' AS type,
+                       'Solved a quiz question' AS summary
+                FROM quiz_scores
+                WHERE user_id = ?
+            """)
+            params.append(user_id)
+
+        if await table_exists("channel_moderation_log"):
+            queries.append("""
+                SELECT created_at AS timestamp, 'Channel Moderation' AS type,
+                       verdict || COALESCE(': ' || title, '') AS summary
+                FROM channel_moderation_log
+                WHERE user_id = ?
+            """)
+            params.append(user_id)
+
+        if await table_exists("exp_radio_songs"):
+            queries.append("""
+                SELECT submitted_at AS timestamp, 'Experimental Radio' AS type,
+                       COALESCE(title, suno_url, 'Song submitted') AS summary
+                FROM exp_radio_songs
+                WHERE user_id = ?
+            """)
+            params.append(user_id)
+
+        if not queries:
+            return None
+
+        sql = (
+            "SELECT timestamp, type, summary FROM ("
+            + " UNION ALL ".join(queries)
+            + ") WHERE timestamp IS NOT NULL ORDER BY timestamp DESC LIMIT 1"
+        )
+        async with self.db.execute(sql, tuple(params)) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def record_user_activity(
+        self,
+        *,
+        user_id: int,
+        user_name: str,
+        activity_type: str,
+        summary: str = "",
+        channel_id: int = None,
+        channel_name: str = None,
+        timestamp: float = None,
+    ):
+        ts = timestamp if timestamp is not None else time.time()
+        await self.db.execute(
+            "INSERT INTO user_activity "
+            "(user_id, user_name, activity_type, summary, channel_id, channel_name, timestamp) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET "
+            "user_name = excluded.user_name, "
+            "activity_type = excluded.activity_type, "
+            "summary = excluded.summary, "
+            "channel_id = excluded.channel_id, "
+            "channel_name = excluded.channel_name, "
+            "timestamp = excluded.timestamp",
+            (user_id, user_name, activity_type, summary, channel_id, channel_name, ts),
+        )
+        await self.db.commit()
 
     # --- Listening Party Config ---
 
