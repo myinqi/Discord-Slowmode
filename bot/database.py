@@ -2969,14 +2969,24 @@ class Database:
         await self.db.commit()
         return data
 
-    async def delete_all_exp_radio_songs(self) -> int:
-        """Soft-delete every active song. Returns the number of songs removed."""
+    async def delete_all_exp_radio_songs(self, source: str) -> int:
+        """Soft-delete active songs for exactly one exp-radio playlist source."""
+        if source not in {"submission", "admin", "intro", "outro"}:
+            raise ValueError("delete_all_exp_radio_songs requires a valid playlist source")
+        conditions = ["active = 1"]
+        params: list = [source]
+        conditions.append("playlist_source = ?")
+        where = " AND ".join(conditions)
         async with self.db.execute(
-            "SELECT COUNT(*) FROM exp_radio_songs WHERE active = 1"
+            f"SELECT COUNT(*) FROM exp_radio_songs WHERE {where}",
+            params,
         ) as cursor:
             row = await cursor.fetchone()
             count = row[0] if row else 0
-        await self.db.execute("UPDATE exp_radio_songs SET active = 0 WHERE active = 1")
+        await self.db.execute(
+            f"UPDATE exp_radio_songs SET active = 0 WHERE {where}",
+            params,
+        )
         await self.db.commit()
         return count
 

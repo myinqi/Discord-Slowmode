@@ -973,16 +973,30 @@
                     🎛 Admin Playlist
                     <span class="ml-2 text-xs text-gray-500 font-normal">{{ admin_songs|selectattr('active')|list|length }} active</span>
                 </h3>
-                <form method="POST" class="flex items-center gap-2">
-                    <input type="hidden" name="action" value="add_admin_song">
-                    <input type="url" name="suno_url" required
-                        placeholder="https://suno.com/s/..."
-                        class="w-64 bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm placeholder-gray-500 focus:border-discord-blurple focus:outline-none">
-                    <button type="submit"
-                        class="px-3 py-1.5 bg-discord-blurple hover:bg-indigo-500 text-white text-sm rounded-lg transition-colors whitespace-nowrap">
-                        + Add Song
-                    </button>
-                </form>
+                <div class="flex items-center gap-2 flex-wrap">
+                    {% set active_admin_count = admin_songs|selectattr('active')|list|length %}
+                    {% if active_admin_count %}
+                    <form method="POST" class="inline"
+                          onsubmit="return confirm('⚠️ Clear admin playlist?\n\nThis will remove all {{ active_admin_count }} active admin song(s).\nSubmission playlist songs will not be touched.\n\nProceed?');">
+                        <input type="hidden" name="action" value="delete_all_admin_songs">
+                        <button type="submit"
+                                class="px-2.5 py-1.5 bg-red-600/20 hover:bg-red-600/50 text-red-400 hover:text-red-300 rounded-lg text-sm transition-colors font-medium"
+                                title="Remove all songs from the admin playlist only">
+                            🗑 Clear Playlist
+                        </button>
+                    </form>
+                    {% endif %}
+                    <form method="POST" class="flex items-center gap-2">
+                        <input type="hidden" name="action" value="add_admin_song">
+                        <input type="url" name="suno_url" required
+                            placeholder="https://suno.com/s/..."
+                            class="w-64 bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm placeholder-gray-500 focus:border-discord-blurple focus:outline-none">
+                        <button type="submit"
+                            class="px-3 py-1.5 bg-discord-blurple hover:bg-indigo-500 text-white text-sm rounded-lg transition-colors whitespace-nowrap">
+                            + Add Song
+                        </button>
+                    </form>
+                </div>
             </div>
 
             {% set active_admin = admin_songs|selectattr('active')|list %}
