@@ -22,6 +22,44 @@ _OG_TITLE_RE = re.compile(
 _OG_DESC_RE = re.compile(
     r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']+)', re.I
 )
+_SUNO_SUFFIX_RE = re.compile(r"\s*\|\s*Suno(?:\s*AI)?\s*$", re.I)
+
+
+def _clean_suno_title(raw_title: str | None) -> str | None:
+    if not raw_title:
+        return None
+    title = _html.unescape(raw_title).strip()
+    title = _SUNO_SUFFIX_RE.sub("", title).strip()
+    return title or None
+
+
+def _split_title_artist_fallback(raw_title: str) -> tuple[str, str | None]:
+    matches = list(re.finditer(r"\s+by\s+", raw_title, flags=re.I))
+    if not matches:
+        return raw_title, None
+    match = matches[-1]
+    title = raw_title[:match.start()].strip()
+    artist = raw_title[match.end():].strip()
+    if not title or not artist:
+        return raw_title, None
+    return title, artist
+
+
+def _extract_suno_display_name(body: str) -> str | None:
+    candidates = re.findall(r'display_name\\":\\"((?:[^"\\]|\\[^"])*)\\"', body)
+    if not candidates:
+        candidates = re.findall(r'"display_name"\s*:\s*"((?:[^"\\]|\\.)*)"', body)
+    for dn in reversed(candidates):
+        dn = re.sub(r'\\\\u([0-9a-fA-F]{4})',
+                    lambda m: chr(int(m.group(1), 16)), dn)
+        dn = re.sub(r'\\u([0-9a-fA-F]{4})',
+                    lambda m: chr(int(m.group(1), 16)), dn)
+        dn = _html.unescape(dn).strip()
+        if (len(dn) > 1
+                and not re.match(r"^v\d", dn)
+                and dn not in ("Cover", "Remix")):
+            return dn
+    return None
 
 
 def extract_suno_id(url: str) -> str | None:
@@ -60,25 +98,26 @@ async def _fetch_one(session: aiohttp.ClientSession, url: str) -> dict:
     out: dict[str, str] = {}
     mt = _OG_TITLE_RE.search(body)
     if mt:
-        raw = _html.unescape(mt.group(1)).strip()
-        # Typical format: "Song Title by Artist | Suno" or "Song Title | Suno AI"
-        raw = re.sub(r"\s*\|\s*Suno(?:\s*AI)?\s*$", "", raw, flags=re.I)
-        m2 = re.match(r"^(.*?)\s+by\s+(.+)$", raw, re.I)
-        if m2:
-            out["title"] = m2.group(1).strip()
-            out["artist"] = m2.group(2).strip()
-        else:
+        raw = _clean_suno_title(mt.group(1))
+        if raw:
             out["title"] = raw
     else:
         # Fallback: look for <title>…</title>
         mt2 = re.search(r"<title[^>]*>([^<]+)</title>", body, re.I)
         if mt2:
-            raw = _html.unescape(mt2.group(1)).strip()
-            raw = re.sub(r"\s*\|\s*Suno(?:\s*AI)?\s*$", "", raw, flags=re.I)
+            raw = _clean_suno_title(mt2.group(1))
             if raw and raw.lower() != "suno":
                 out["title"] = raw
         if not out:
             print(f"[suno-meta] no og:title found on {target} (body {len(body)} bytes)")
+
+    artist = _extract_suno_display_name(body)
+    if artist:
+        out["artist"] = artist
+    elif out.get("title"):
+        out["title"], fallback_artist = _split_title_artist_fallback(out["title"])
+        if fallback_artist:
+            out["artist"] = fallback_artist
     return out
 
 

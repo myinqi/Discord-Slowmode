@@ -30,6 +30,56 @@ _BROWSER_UA = (
 # long string fields (resolved later from a separate flight chunk).
 _RSC_REF_RE = re.compile(r'^\$[0-9a-f]+$')
 
+_SUNO_SUFFIX_RE = re.compile(r'\s*[|\-–]\s*Suno(?:\s*AI)?\s*$', re.IGNORECASE)
+
+
+def _clean_suno_title(raw_title: str | None) -> str | None:
+    if not raw_title:
+        return None
+    title = _html.unescape(raw_title).strip()
+    title = _SUNO_SUFFIX_RE.sub("", title).strip()
+    return title or None
+
+
+def _split_title_artist_fallback(raw_title: str) -> tuple[str, str | None]:
+    """Best-effort fallback for old Suno titles like 'Title by Artist | Suno'.
+
+    Suno pages also expose the owner as structured RSC data. Prefer that
+    source whenever available; splitting title text on "by" can eat legitimate
+    song titles such as "... by Saki".
+    """
+    matches = list(re.finditer(r"\s+by\s+", raw_title, flags=re.IGNORECASE))
+    if not matches:
+        return raw_title, None
+    match = matches[-1]
+    title = raw_title[:match.start()].strip()
+    artist = raw_title[match.end():].strip()
+    if not title or not artist:
+        return raw_title, None
+    return title, artist
+
+
+def _extract_suno_display_name(page: str) -> str | None:
+    # Iterate matches in REVERSE — song owner is usually the last display_name
+    # on the page. Filter out version strings (v5.5), "Cover", "Remix", and
+    # single-char names.
+    candidates = re.findall(r'display_name\\":\\"((?:[^"\\]|\\[^"])*)\\"', page)
+    if not candidates:
+        candidates = re.findall(r'"display_name"\s*:\s*"((?:[^"\\]|\\.)*)"', page)
+    for dn in reversed(candidates):
+        # Decode double-escaped RSC unicode (\\uXXXX → char), then single-escaped (\uXXXX)
+        dn = re.sub(r'\\\\u([0-9a-fA-F]{4})',
+                    lambda m: chr(int(m.group(1), 16)), dn)
+        dn = re.sub(r'\\u([0-9a-fA-F]{4})',
+                    lambda m: chr(int(m.group(1), 16)), dn)
+        dn = _html.unescape(dn).strip()
+        if (len(dn) > 1
+                and not re.match(r'^v\d', dn)
+                and dn not in ("Cover", "Remix")):
+            return dn
+    return None
+
+
 def exp_rights_declaration(expiry_days: int) -> str:
     return (
         "I confirm that I created this song on Suno.ai, hold the necessary rights to stream it, "
@@ -162,42 +212,15 @@ async def scrape_suno(uuid: str) -> dict:
                 raw_title = _html.unescape(m.group(1)).strip()
 
         if raw_title:
-            raw_title = re.sub(r'\s*[|\-–]\s*Suno\s*$', '', raw_title, flags=re.IGNORECASE).strip()
-            bm = re.search(r'^(.+?)\s+by\s+(.+)$', raw_title)
-            if bm:
-                result["title"] = bm.group(1).strip()
-                result["artist"] = bm.group(2).strip()
-            else:
-                result["title"] = raw_title
+            result["title"] = _clean_suno_title(raw_title)
 
         # Artist fallback: display_name from RSC payload
-        # Iterate matches in REVERSE — song owner is usually the last display_name on the page.
-        # Filter out version strings (v5.5), "Cover", "Remix", and single-char names.
         if not result["artist"]:
-            # Use (?:[^"\\]|\\[^"])* so \\uXXXX is captured but \" closing delimiter is NOT consumed
-            candidates = re.findall(r'display_name\\":\\"((?:[^"\\]|\\[^"])*)\\"', page)
-            if not candidates:
-                candidates = re.findall(r'"display_name"\s*:\s*"((?:[^"\\]|\\.)*)"', page)
-            for dn in reversed(candidates):
-                # Decode double-escaped RSC unicode (\\uXXXX → char), then single-escaped (\uXXXX)
-                dn = re.sub(r'\\\\u([0-9a-fA-F]{4})',
-                            lambda m: chr(int(m.group(1), 16)), dn)
-                dn = re.sub(r'\\u([0-9a-fA-F]{4})',
-                            lambda m: chr(int(m.group(1), 16)), dn)
-                dn = _html.unescape(dn).strip()
-                if (len(dn) > 1
-                        and not re.match(r'^v\d', dn)
-                        and dn not in ("Cover", "Remix")):
-                    result["artist"] = dn
-                    break
+            result["artist"] = _extract_suno_display_name(page)
 
-        # Title-based artist extraction fallback (handles "Title by Artist" patterns)
+        # Last-resort title-based extraction for pages without structured owner data.
         if not result["artist"] and result["title"]:
-            tm = re.search(r'\bby\s+(.+?)(?:\s*\||\s*-\s*Suno|$)', result["title"])
-            if tm:
-                # Strip the "by Artist" part from the title and use it as artist
-                result["artist"] = tm.group(1).strip()
-                result["title"] = re.sub(r'\s+by\s+.+$', '', result["title"]).strip()
+            result["title"], result["artist"] = _split_title_artist_fallback(result["title"])
 
         # og:image
         m = re.search(r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']', page)
