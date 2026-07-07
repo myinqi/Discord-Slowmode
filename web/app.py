@@ -2862,6 +2862,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     _json.dumps(options_list),
                     image_filename,
                     creator_id=session.get("user_id"),
+                    creator_name=session.get("username", "unknown"),
                 )
                 await flash(f"Poll #{poll_id} created.", "success")
                 return redirect(url_for("polls"))
@@ -2980,7 +2981,10 @@ def create_app(db: Database, bot=None) -> Quart:
         for p in all_polls:
             p["options_list"] = _json.loads(p["options"])
             creator_id = p.get("creator_id")
-            if creator_id in web_user_names:
+            stored_creator_name = (p.get("creator_name") or "").strip()
+            if stored_creator_name:
+                p["creator_name"] = stored_creator_name
+            elif creator_id in web_user_names:
                 p["creator_name"] = web_user_names[creator_id]
             elif creator_id:
                 if creator_id not in discord_creator_names:
@@ -2990,6 +2994,14 @@ def create_app(db: Database, bot=None) -> Quart:
                             member = await guild.fetch_member(creator_id)
                         except Exception:
                             member = None
+                    if not member and bot:
+                        user = bot.get_user(creator_id)
+                        if not user:
+                            try:
+                                user = await bot.fetch_user(creator_id)
+                            except Exception:
+                                user = None
+                        member = user
                     discord_creator_names[creator_id] = (
                         str(member) if member else f"Discord user {creator_id}"
                     )

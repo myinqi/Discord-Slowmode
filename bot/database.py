@@ -204,7 +204,8 @@ class Database:
                 message_id INTEGER,
                 created_at REAL DEFAULT (unixepoch()),
                 active INTEGER DEFAULT 1,
-                creator_id INTEGER
+                creator_id INTEGER,
+                creator_name TEXT
             );
 
             CREATE TABLE IF NOT EXISTS quiz_questions (
@@ -302,6 +303,9 @@ class Database:
             poll_columns = [row[1] async for row in cursor]
         if "creator_id" not in poll_columns:
             await self.db.execute("ALTER TABLE polls ADD COLUMN creator_id INTEGER")
+            await self.db.commit()
+        if "creator_name" not in poll_columns:
+            await self.db.execute("ALTER TABLE polls ADD COLUMN creator_name TEXT")
             await self.db.commit()
 
         # Create radio_songs table
@@ -2009,10 +2013,20 @@ class Database:
 
     # --- Polls ---
 
-    async def create_poll(self, title: str, description: str, options: str, image_filename: str = None, creator_id: int = None) -> int:
+    async def create_poll(
+        self,
+        title: str,
+        description: str,
+        options: str,
+        image_filename: str = None,
+        creator_id: int = None,
+        creator_name: str = None,
+    ) -> int:
         cursor = await self.db.execute(
-            "INSERT INTO polls (title, description, options, image_filename, creator_id) VALUES (?, ?, ?, ?, ?)",
-            (title, description, options, image_filename, creator_id),
+            "INSERT INTO polls "
+            "(title, description, options, image_filename, creator_id, creator_name) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (title, description, options, image_filename, creator_id, creator_name),
         )
         await self.db.commit()
         return cursor.lastrowid

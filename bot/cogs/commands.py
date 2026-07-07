@@ -2171,6 +2171,7 @@ class PollOptionsModal(discord.ui.Modal, title="Create Poll"):
                 str(self.description.value or "").strip(),
                 json.dumps(options_list),
                 creator_id=self.creator_id,
+                creator_name=str(interaction.user),
             )
 
             options_text = "\n".join(f"{NUMBER_EMOJIS[i]}  {opt}" for i, opt in enumerate(options_list))
