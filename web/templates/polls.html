@@ -73,6 +73,7 @@
                             <span class="text-gray-600 text-xs">• Posted</span>
                             {% endif %}
                             <span class="text-gray-600 text-xs">• #{{ poll.id }}</span>
+                            <span class="text-gray-600 text-xs">• Created by {{ poll.creator_name }}</span>
                         </div>
                         <h4 class="text-white font-semibold text-lg mb-1">{{ poll.title }}</h4>
                         {% if poll.description %}

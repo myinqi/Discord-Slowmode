@@ -2856,7 +2856,13 @@ def create_app(db: Database, bot=None) -> Quart:
                         filepath = os.path.join(UPLOAD_DIR, image_filename)
                         await image_file.save(filepath)
 
-                poll_id = await db.create_poll(title, description, _json.dumps(options_list), image_filename)
+                poll_id = await db.create_poll(
+                    title,
+                    description,
+                    _json.dumps(options_list),
+                    image_filename,
+                    creator_id=session.get("user_id"),
+                )
                 await flash(f"Poll #{poll_id} created.", "success")
                 return redirect(url_for("polls"))
 
@@ -2967,8 +2973,17 @@ def create_app(db: Database, bot=None) -> Quart:
 
         # GET
         all_polls = await db.get_all_polls()
+        web_users = await db.get_all_web_users()
+        web_user_names = {u["id"]: u["username"] for u in web_users}
         for p in all_polls:
             p["options_list"] = _json.loads(p["options"])
+            creator_id = p.get("creator_id")
+            if creator_id in web_user_names:
+                p["creator_name"] = web_user_names[creator_id]
+            elif creator_id:
+                p["creator_name"] = "Discord user"
+            else:
+                p["creator_name"] = "Unknown"
         guild = get_guild()
         text_channels = []
         if guild:
