@@ -2975,16 +2975,27 @@ def create_app(db: Database, bot=None) -> Quart:
         all_polls = await db.get_all_polls()
         web_users = await db.get_all_web_users()
         web_user_names = {u["id"]: u["username"] for u in web_users}
+        guild = get_guild()
+        discord_creator_names = {}
         for p in all_polls:
             p["options_list"] = _json.loads(p["options"])
             creator_id = p.get("creator_id")
             if creator_id in web_user_names:
                 p["creator_name"] = web_user_names[creator_id]
             elif creator_id:
-                p["creator_name"] = "Discord user"
+                if creator_id not in discord_creator_names:
+                    member = guild.get_member(creator_id) if guild else None
+                    if not member and guild:
+                        try:
+                            member = await guild.fetch_member(creator_id)
+                        except Exception:
+                            member = None
+                    discord_creator_names[creator_id] = (
+                        str(member) if member else f"Discord user {creator_id}"
+                    )
+                p["creator_name"] = discord_creator_names[creator_id]
             else:
                 p["creator_name"] = "Unknown"
-        guild = get_guild()
         text_channels = []
         if guild:
             for ch in sorted(guild.text_channels, key=lambda c: c.position):
