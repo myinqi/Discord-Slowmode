@@ -3164,6 +3164,13 @@ class Database:
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS relic_custom_commands (
+                command TEXT PRIMARY KEY,
+                response TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
         """)
         await self.db.commit()
 
@@ -3223,6 +3230,71 @@ class Database:
 
     async def relic_delete_rank(self, rank_id: str) -> None:
         await self.db.execute("DELETE FROM relic_ranks WHERE id = ?", (rank_id,))
+        await self.db.commit()
+
+    # -----------------------------------------------------------------------
+    # Relic Hunt — custom chat commands
+    # -----------------------------------------------------------------------
+    @staticmethod
+    def _normalize_relic_custom_command(command: str) -> str:
+        return (command or "").strip().lstrip("!").lower()
+
+    async def relic_get_all_custom_commands(self) -> list[dict]:
+        async with self.db.execute(
+            "SELECT * FROM relic_custom_commands ORDER BY command ASC"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def relic_get_custom_command(self, command: str) -> Optional[dict]:
+        command = self._normalize_relic_custom_command(command)
+        if not command:
+            return None
+        async with self.db.execute(
+            "SELECT * FROM relic_custom_commands WHERE command = ?",
+            (command,),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def relic_upsert_custom_command(
+        self, command: str, response: str, enabled: bool = True
+    ) -> None:
+        command = self._normalize_relic_custom_command(command)
+        response = (response or "").strip()
+        if not command or not response:
+            return
+        now = time.time()
+        await self.db.execute("""
+            INSERT INTO relic_custom_commands
+              (command, response, enabled, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(command) DO UPDATE SET
+              response=excluded.response,
+              enabled=excluded.enabled,
+              updated_at=excluded.updated_at
+        """, (command, response, 1 if enabled else 0, now, now))
+        await self.db.commit()
+
+    async def relic_toggle_custom_command(self, command: str) -> None:
+        command = self._normalize_relic_custom_command(command)
+        if not command:
+            return
+        await self.db.execute(
+            "UPDATE relic_custom_commands "
+            "SET enabled = CASE enabled WHEN 1 THEN 0 ELSE 1 END, updated_at = ? "
+            "WHERE command = ?",
+            (time.time(), command),
+        )
+        await self.db.commit()
+
+    async def relic_delete_custom_command(self, command: str) -> None:
+        command = self._normalize_relic_custom_command(command)
+        if not command:
+            return
+        await self.db.execute(
+            "DELETE FROM relic_custom_commands WHERE command = ?",
+            (command,),
+        )
         await self.db.commit()
 
     # -----------------------------------------------------------------------

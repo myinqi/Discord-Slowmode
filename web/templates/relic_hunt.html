@@ -48,7 +48,7 @@
 {# ── Tabs ────────────────────────────────────────────────────────────────── #}
 <div class="border-b border-gray-700/50 mb-6">
   <nav class="flex flex-wrap gap-1" id="rh-tabs">
-    {% for tab_id, tab_label in [('dashboard','Dashboard'),('items','Items'),('recipes','Recipes'),('phrase','Phrase Puzzle'),('ranks','Ranks'),('users','Users'),('ritual','Ritual'),('events','Events'),('settings','Settings')] %}
+    {% for tab_id, tab_label in [('dashboard','Dashboard'),('items','Items'),('recipes','Recipes'),('commands','Commands'),('phrase','Phrase Puzzle'),('ranks','Ranks'),('users','Users'),('ritual','Ritual'),('events','Events'),('settings','Settings')] %}
     <button onclick="switchTab('{{ tab_id }}')" id="tab-{{ tab_id }}"
       class="rh-tab px-4 py-2 text-sm rounded-t-lg border-b-2 transition-colors {% if loop.first %}border-discord-blurple text-white{% else %}border-transparent text-gray-400 hover:text-gray-200{% endif %}">
       {{ tab_label }}
@@ -275,6 +275,64 @@
     </table>
     {% if not recipes %}
     <div class="px-4 py-8 text-center text-gray-500">No combine recipes yet.</div>
+    {% endif %}
+  </div>
+</div>
+
+{# ══════════════════════════════════════════════════════════════════════════
+   TAB: Custom Commands
+══════════════════════════════════════════════════════════════════════════ #}
+<div id="pane-commands" class="rh-pane hidden">
+  <div class="flex items-center justify-between mb-4 gap-3 flex-wrap">
+    <div>
+      <h3 class="text-white font-semibold">Custom Chat Commands</h3>
+      <p class="text-gray-400 text-xs mt-1">Define simple Twitch chat replies. Existing Raven's Nest game commands keep priority.</p>
+    </div>
+    <button onclick="openCommandModal()"
+      class="px-3 py-1.5 rounded-lg text-sm bg-discord-blurple hover:bg-indigo-500 text-white transition-colors">+ New Command</button>
+  </div>
+
+  <div class="bg-discord-dark rounded-xl border border-gray-700/50 overflow-x-auto">
+    <table class="w-full text-sm min-w-[760px]">
+      <thead class="border-b border-gray-700/50">
+        <tr class="text-left text-gray-400 text-xs">
+          <th class="px-3 py-2">On</th>
+          <th class="px-3 py-2">Command</th>
+          <th class="px-3 py-2">Bot Response</th>
+          <th class="px-3 py-2">Actions</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-700/30">
+        {% for cmd in custom_commands %}
+        <tr class="hover:bg-discord-lighter/30 transition-colors">
+          <td class="px-3 py-2">
+            <form method="POST" class="inline">
+              <input type="hidden" name="action" value="toggle_custom_command">
+              <input type="hidden" name="command" value="{{ cmd.command }}">
+              <button type="submit" class="w-4 h-4 rounded border transition-colors
+                {% if cmd.enabled %}bg-discord-blurple border-discord-blurple{% else %}border-gray-600{% endif %}">
+              </button>
+            </form>
+          </td>
+          <td class="px-3 py-2 text-white font-mono">!{{ cmd.command }}</td>
+          <td class="px-3 py-2 text-gray-300 max-w-xl truncate">{{ cmd.response }}</td>
+          <td class="px-3 py-2">
+            <div class="flex gap-1">
+              <button onclick='openCommandModal({{ cmd|tojson }})'
+                class="px-2 py-1 rounded text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">Edit</button>
+              <form method="POST" onsubmit="return confirm('Delete this custom command?')" class="inline">
+                <input type="hidden" name="action" value="delete_custom_command">
+                <input type="hidden" name="command" value="{{ cmd.command }}">
+                <button class="px-2 py-1 rounded text-xs bg-red-900/50 hover:bg-red-900 text-red-300 transition-colors">✕</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if not custom_commands %}
+    <div class="px-4 py-8 text-center text-gray-500">No custom commands yet.</div>
     {% endif %}
   </div>
 </div>
@@ -945,6 +1003,39 @@
   </div>
 </div>
 
+{# Custom command modal #}
+<div id="command-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+  onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="bg-discord-dark rounded-xl border border-gray-700/50 shadow-2xl w-full max-w-lg">
+    <div class="px-5 py-4 border-b border-gray-700/50 flex justify-between items-center">
+      <h3 id="command-modal-title" class="text-white font-semibold">Custom Command</h3>
+      <button onclick="document.getElementById('command-modal').classList.add('hidden')" class="text-gray-400 hover:text-white text-lg">✕</button>
+    </div>
+    <form method="POST" class="p-5 space-y-4">
+      <input type="hidden" name="action" value="upsert_custom_command">
+      <div>
+        <label class="text-gray-400 text-xs block mb-1">Command *</label>
+        <div class="flex">
+          <span class="inline-flex items-center px-3 rounded-l-lg border border-r-0 border-gray-600 bg-discord-darker text-gray-400 text-sm">!</span>
+          <input type="text" name="command" id="cmd-command" required maxlength="32" placeholder="discord"
+            class="w-full bg-discord-darker border border-gray-600 rounded-r-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none">
+        </div>
+      </div>
+      <div>
+        <label class="text-gray-400 text-xs block mb-1">Bot Response *</label>
+        <textarea name="response" id="cmd-response" rows="4" required maxlength="500"
+          class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none"></textarea>
+        <p class="text-gray-500 text-xs mt-1">Maximum 500 characters.</p>
+      </div>
+      <label class="flex items-center gap-2 cursor-pointer">
+        <input type="checkbox" name="enabled" id="cmd-enabled" value="1" checked class="w-4 h-4 accent-discord-blurple">
+        <span class="text-white text-sm">Enabled</span>
+      </label>
+      <button class="w-full px-4 py-2 rounded-lg bg-discord-blurple hover:bg-indigo-500 text-white text-sm transition-colors">Save Command</button>
+    </form>
+  </div>
+</div>
+
 {# Import JSON modal #}
 <div id="import-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
   onclick="if(event.target===this)this.classList.add('hidden')">
@@ -1024,6 +1115,14 @@ function openRecipeModal(recipe) {
   document.getElementById('cmod-priority').value = recipe && recipe.priority != null ? recipe.priority : 100;
   document.getElementById('cmod-en').checked     = !recipe || !!recipe.enabled;
   document.getElementById('recipe-modal').classList.remove('hidden');
+}
+
+function openCommandModal(cmd) {
+  document.getElementById('command-modal-title').textContent = cmd ? 'Edit Command' : 'New Command';
+  document.getElementById('cmd-command').value = cmd ? (cmd.command || '') : '';
+  document.getElementById('cmd-response').value = cmd ? (cmd.response || '') : '';
+  document.getElementById('cmd-enabled').checked = !cmd || !!cmd.enabled;
+  document.getElementById('command-modal').classList.remove('hidden');
 }
 
 function openRankModal(rank) {

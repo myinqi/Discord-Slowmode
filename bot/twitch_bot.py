@@ -231,6 +231,7 @@ class TwitchBot:
 
         handler = self._command_handlers.get(cmd)
         if not handler:
+            await self._dispatch_custom_command(cmd)
             return
 
         context = {
@@ -245,6 +246,20 @@ class TwitchBot:
             "tags":           tags,
         }
         asyncio.create_task(self._dispatch(handler, context))
+
+    async def _dispatch_custom_command(self, command: str) -> None:
+        getter = getattr(self.db, "relic_get_custom_command", None)
+        if not getter:
+            return
+        try:
+            custom = await getter(command)
+            if not custom or not custom.get("enabled"):
+                return
+            response = (custom.get("response") or "").strip()
+            if response:
+                await self.send(response)
+        except Exception as e:
+            _log(f"Custom command error: {e}", "error", "[twitch-irc]")
 
     async def _dispatch(self, handler, context: dict) -> None:
         try:

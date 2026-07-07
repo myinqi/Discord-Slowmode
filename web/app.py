@@ -5568,6 +5568,35 @@ def create_app(db: Database, bot=None) -> Quart:
                     "success",
                 )
 
+            elif action == "upsert_custom_command":
+                command = (form.get("command") or "").strip().lstrip("!").lower()
+                response = (form.get("response") or "").strip()
+                reserved_commands = {
+                    "raven", "nest", "items", "top", "rank", "daily",
+                    "ritual", "combine", "phrase", "solve", "relichelp", "relic",
+                }
+                if not re.fullmatch(r"[a-z0-9_][a-z0-9_-]{0,31}", command):
+                    await flash("Command must use 1-32 letters, numbers, underscores or hyphens.", "error")
+                elif command in reserved_commands:
+                    await flash(f"'!{command}' is a built-in Raven's Nest command.", "error")
+                elif not response:
+                    await flash("Response text is required.", "error")
+                else:
+                    await db.relic_upsert_custom_command(
+                        command,
+                        response[:500],
+                        enabled=bool(form.get("enabled")),
+                    )
+                    await flash(f"Command '!{command}' saved.", "success")
+
+            elif action == "toggle_custom_command":
+                await db.relic_toggle_custom_command(form.get("command", ""))
+
+            elif action == "delete_custom_command":
+                command = (form.get("command") or "").strip().lstrip("!")
+                await db.relic_delete_custom_command(command)
+                await flash(f"Command '!{command}' deleted.", "success")
+
             elif action == "save_phrase_puzzle":
                 enabled = bool(form.get("phrase_enabled"))
                 loop_queue = bool(form.get("phrase_loop_queue"))
@@ -5753,6 +5782,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 str(DEFAULT_COMBINE_RECIPES_VERSION),
             )
         recipes = await db.relic_get_all_combine_recipes()
+        custom_commands = await db.relic_get_all_custom_commands()
         users   = await db.relic_get_all_users()
         events  = await db.relic_get_all_events()
         active_events = await db.relic_get_active_events()
@@ -5821,6 +5851,7 @@ def create_app(db: Database, bot=None) -> Quart:
             total_mythic=total_mythic,
             ranks=ranks,
             recipes=recipes,
+            custom_commands=custom_commands,
             phrase_puzzle=phrase_puzzle,
             phrase_queue=phrase_queue,
             phrase_progress=phrase_progress,
