@@ -14,6 +14,45 @@ YOUTUBE_URL_RE   = re.compile(
     r'(?:https?://)?(?:www\.)?(?:youtu\.be/|youtube\.com/(?:watch\?v=|embed/|v/|shorts/))'
     r'([A-Za-z0-9_-]{11})'
 )
+ELEVENMUSIC_TRACK_RE = re.compile(
+    r'(?:https?://)?(?:www\.)?elevenmusic\.io/tracks/([A-Fa-f0-9]{24})'
+)
+
+
+def _decode_suno_json_string(value: str) -> str:
+    import html as _html
+    value = re.sub(r'\\\\u([0-9a-fA-F]{4})',
+                   lambda m: chr(int(m.group(1), 16)), value)
+    value = re.sub(r'\\u([0-9a-fA-F]{4})',
+                   lambda m: chr(int(m.group(1), 16)), value)
+    return _html.unescape(
+        value.replace(r'\"', '"').replace(r"\/", "/").strip()
+    )
+
+
+def _valid_suno_display_name(name: str | None) -> bool:
+    return bool(
+        name
+        and len(name) > 1
+        and not re.match(r"^v\d", name)
+        and name not in ("Cover", "Remix")
+    )
+
+
+def _extract_suno_clip_owner_display_name(page: str, song_id: str | None = None) -> str | None:
+    id_part = re.escape(song_id) if song_id else r"[a-f0-9-]{8,36}"
+    patterns = [
+        rf'\\"id\\":\\"{id_part}\\".*?\\"user_id\\":\\"[^"\\]+\\".*?\\"display_name\\":\\"((?:(?!\\").)*)\\"',
+        rf'"id"\s*:\s*"{id_part}".*?"user_id"\s*:\s*"[^"]+".*?"display_name"\s*:\s*"((?:[^"\\]|\\.)*)"',
+    ]
+    for pat in patterns:
+        m = re.search(pat, page, re.S)
+        if not m:
+            continue
+        name = _decode_suno_json_string(m.group(1))
+        if _valid_suno_display_name(name):
+            return name
+    return None
 
 
 async def _rpg_import_enemies(db, raw_json: str, _json) -> tuple[int, list[str]]:
@@ -1660,10 +1699,13 @@ def create_app(db: Database, bot=None) -> Quart:
 
                     # Artist fallback from display_name in JSON
                     if not artist:
+                        artist = _extract_suno_clip_owner_display_name(html, uuid)
+                    if not artist:
                         matches = re.findall(r'display_name\\":\\"([^"\\]+)\\"', html)
                         for dn in reversed(matches):
-                            if len(dn) > 1 and not dn.startswith('v') and dn not in ('Cover', 'Remix'):
-                                artist = dn.strip()
+                            dn = _decode_suno_json_string(dn)
+                            if _valid_suno_display_name(dn):
+                                artist = dn
                                 break
 
                     # Lyrics from prompt field
@@ -1763,6 +1805,137 @@ def create_app(db: Database, bot=None) -> Quart:
         if artist:
             artist = _html.unescape(artist)
         return {"lyrics": lyrics, "title": title, "image_url": image_url, "artist": artist, "video_url": video_url, "handle": handle}
+
+    async def _fetch_elevenmusic_meta(track_id: str):
+        """Fetch public ElevenMusic track metadata from the rendered track page."""
+        import html as _html
+        import json as _json
+
+        url = f"https://elevenmusic.io/tracks/{track_id}"
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "Chrome/126 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
+        result = {
+            "uuid": track_id,
+            "provider": "elevenmusic",
+            "source_url": url,
+            "title": track_id[:8],
+            "artist": "",
+            "image_url": "",
+            "video_url": None,
+            "audio_url": f"https://media.elevenmusic.io/tracks/{track_id}/hls/master.m3u8",
+            "lyrics": "",
+            "prompt": "",
+            "tags": [],
+            "model": "ElevenMusic",
+            "type": "elevenmusic",
+            "plays": None,
+            "likes": None,
+            "created_at": "",
+            "duration": None,
+            "handle": None,
+        }
+
+        try:
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(
+                    url,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=12),
+                ) as resp:
+                    if resp.status != 200:
+                        return result
+                    page = await resp.text()
+        except Exception:
+            return result
+
+        def _first(pattern):
+            m = re.search(pattern, page, re.S)
+            if not m:
+                return ""
+            return _html.unescape(m.group(1).replace(r"\/", "/").strip())
+
+        og_title = _first(r'<meta\s+property="og:title"\s+content="([^"]+)"')
+        if og_title:
+            og_title = re.sub(r"\s*\|\s*ElevenMusic\s*$", "", og_title).strip()
+            parts = og_title.rsplit(" - ", 1)
+            if len(parts) == 2:
+                result["title"], result["artist"] = parts[0].strip(), parts[1].strip()
+            else:
+                result["title"] = og_title
+
+        image_url = _first(r'<meta\s+property="og:image"\s+content="([^"]+)"')
+        if image_url:
+            result["image_url"] = image_url
+
+        audio_url = _first(r'<meta\s+property="og:audio"\s+content="([^"]+)"')
+        if audio_url:
+            result["audio_url"] = audio_url
+
+        description = _first(r'<meta\s+property="og:description"\s+content="([^"]*)"')
+        if description:
+            result["prompt"] = description
+
+        for raw in re.findall(r'<script[^>]+type="application/ld\+json"[^>]*>(.*?)</script>', page, re.S):
+            try:
+                data = _json.loads(_html.unescape(raw))
+            except Exception:
+                continue
+            if isinstance(data, dict) and data.get("@type") == "MusicRecording":
+                result["title"] = data.get("name") or result["title"]
+                artist_data = data.get("byArtist") or {}
+                if isinstance(artist_data, dict):
+                    result["artist"] = artist_data.get("name") or result["artist"]
+                if isinstance(data.get("image"), str):
+                    result["image_url"] = data["image"]
+                genres = data.get("genre")
+                if isinstance(genres, list):
+                    result["tags"] = [str(g) for g in genres if g]
+                elif isinstance(genres, str) and genres:
+                    result["tags"] = [genres]
+                dur = data.get("duration") or ""
+                m = re.match(r"PT(?:(\d+)M)?(?:(\d+)S)?", dur)
+                if m:
+                    result["duration"] = int(m.group(1) or 0) * 60 + int(m.group(2) or 0)
+                break
+
+        if result["duration"] is None:
+            m = re.search(r'"duration_ms"\s*:\s*(\d+)', page)
+            if m:
+                result["duration"] = int(m.group(1)) / 1000
+
+        if not result["artist"]:
+            artist = _first(r'"display_name"\s*:\s*"([^"\\]+)"')
+            if artist:
+                result["artist"] = artist
+
+        title = _first(r'"title"\s*:\s*"([^"\\]+)"')
+        if title and result["title"] == track_id[:8]:
+            result["title"] = title
+
+        animated = re.search(
+            r'"track"\s*:\s*\{.*?"id"\s*:\s*"' + re.escape(track_id) +
+            r'".*?"cover"\s*:\s*\{.*?"animated"\s*:\s*\{.*?"url"\s*:\s*"([^"\\]+)"',
+            page,
+            re.S,
+        )
+        if animated:
+            result["video_url"] = _html.unescape(animated.group(1).replace(r"\/", "/"))
+
+        lyric_lines = []
+        for line in re.findall(r'<p[^>]*class="[^"]*text-lg[^"]*"[^>]*>(.*?)</p>', page, re.S):
+            clean = re.sub(r"<[^>]+>", "", line)
+            clean = _html.unescape(clean).strip()
+            if clean and clean not in lyric_lines:
+                lyric_lines.append(clean)
+        if lyric_lines:
+            result["lyrics"] = "\n".join(lyric_lines)
+
+        return result
 
     @app.route("/api/suno-lyrics/<uuid>")
     @login_required
@@ -3044,6 +3217,10 @@ def create_app(db: Database, bot=None) -> Quart:
         """Fetch song title, artist and image from a Suno URL. Returns (title, artist, image_url)."""
         import html as _html
         try:
+            song_id = None
+            m_id = re.search(r'suno\.com/(?:s|song)/([A-Za-z0-9_-]+)', url or "")
+            if m_id:
+                song_id = m_id.group(1)
             async with aiohttp.ClientSession() as sess:
                 async with sess.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status != 200:
@@ -3056,6 +3233,7 @@ def create_app(db: Database, bot=None) -> Quart:
                         img_match = re.search(r'<meta\s+content=["\']([^"\']+)["\']\s+property=["\']og:image["\']', page_html)
                     if img_match:
                         image_url = img_match.group(1).strip()
+                    artist = _extract_suno_clip_owner_display_name(page_html, song_id)
                     # <title> format: "Song Title by Artist Name | Suno"
                     match = re.search(r'<title>([^<]+)</title>', page_html)
                     if match:
@@ -3063,8 +3241,9 @@ def create_app(db: Database, bot=None) -> Quart:
                         raw = re.sub(r'\s*[|\-\u2013]\s*Suno$', '', raw).strip()
                         by_match = re.search(r'^(.+?)\s+by\s+(.+)$', raw)
                         if by_match:
-                            return by_match.group(1).strip(), by_match.group(2).strip(), image_url
-                        return raw, None, image_url
+                            title = by_match.group(1).strip()
+                            return title, artist or by_match.group(2).strip(), image_url
+                        return raw, artist, image_url
         except Exception:
             pass
         return None, None, None
@@ -5781,8 +5960,14 @@ def create_app(db: Database, bot=None) -> Quart:
                     song_title, artist, image_url = await _fetch_suno_info(url)
                 elif YOUTUBE_URL_RE.search(url):
                     song_title, artist, image_url = await _fetch_youtube_info(url)
+                elif ELEVENMUSIC_TRACK_RE.search(url):
+                    track_id = ELEVENMUSIC_TRACK_RE.search(url).group(1).lower()
+                    meta = await _fetch_elevenmusic_meta(track_id)
+                    song_title = meta.get("title")
+                    artist = meta.get("artist")
+                    image_url = meta.get("image_url")
                 else:
-                    await flash("Invalid URL. Please provide a valid Suno or YouTube link.", "error")
+                    await flash("Invalid URL. Please provide a valid Suno, ElevenMusic or YouTube link.", "error")
                     return redirect(url_for("party_playlist"))
                 await db.party_submit_song(
                     user_id=0,
@@ -5992,8 +6177,14 @@ def create_app(db: Database, bot=None) -> Quart:
             song_title, artist, image_url = await _fetch_suno_info(url)
         elif YOUTUBE_URL_RE.search(url):
             song_title, artist, image_url = await _fetch_youtube_info(url)
+        elif ELEVENMUSIC_TRACK_RE.search(url):
+            track_id = ELEVENMUSIC_TRACK_RE.search(url).group(1).lower()
+            meta = await _fetch_elevenmusic_meta(track_id)
+            song_title = meta.get("title")
+            artist = meta.get("artist")
+            image_url = meta.get("image_url")
         else:
-            return jsonify({"ok": False, "error": "Please enter a valid Suno or YouTube URL"}), 400
+            return jsonify({"ok": False, "error": "Please enter a valid Suno, ElevenMusic or YouTube URL"}), 400
         await db.party_submit_song(
             user_id=0,
             user_name=artist or "Unknown Artist",
@@ -6535,13 +6726,31 @@ def create_app(db: Database, bot=None) -> Quart:
     @app.route("/api/suno-info/playlist")
     @permission_required('suno_info')
     async def api_suno_info_playlist():
-        """Parse a Suno playlist URL and return its songs + name."""
+        """Parse a Suno playlist URL or ElevenMusic track URL."""
         import aiohttp as _aiohttp, html as _html
         from quart import jsonify
         from bot.stream_manager import parse_suno_playlist
         url = (request.args.get("url") or "").strip()
         if not url:
             return jsonify({"error": "missing url"}), 400
+
+        eleven_match = ELEVENMUSIC_TRACK_RE.search(url)
+        if eleven_match:
+            track_id = eleven_match.group(1).lower()
+            meta = await _fetch_elevenmusic_meta(track_id)
+            song = {
+                "uuid": track_id,
+                "type": "elevenmusic",
+                "title": meta.get("title") or track_id[:8],
+                "artist": meta.get("artist") or "",
+                "image_url": meta.get("image_url") or "",
+                "audio_url": meta.get("audio_url") or "",
+                "duration": meta.get("duration"),
+                "source_url": meta.get("source_url") or url,
+                "_meta": meta,
+            }
+            return jsonify({"songs": [song], "name": "ElevenMusic"})
+
         try:
             songs = await parse_suno_playlist(url)
         except Exception as e:
@@ -6575,6 +6784,16 @@ def create_app(db: Database, bot=None) -> Quart:
         except Exception:
             pass
         return jsonify({"songs": songs, "name": name})
+
+    @app.route("/api/suno-info/eleven-song/<track_id>")
+    @permission_required('suno_info')
+    async def api_suno_info_eleven_song(track_id):
+        """Return public metadata for a single ElevenMusic track."""
+        from quart import jsonify
+
+        if not re.fullmatch(r"[A-Fa-f0-9]{24}", track_id or ""):
+            return jsonify({"error": "invalid track id"}), 400
+        return jsonify(await _fetch_elevenmusic_meta(track_id.lower()))
 
     @app.route("/api/suno-info/song/<uuid>")
     @permission_required('suno_info')

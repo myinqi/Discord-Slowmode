@@ -59,23 +59,61 @@ def _split_title_artist_fallback(raw_title: str) -> tuple[str, str | None]:
     return title, artist
 
 
+def _decode_suno_json_string(value: str) -> str:
+    value = re.sub(r'\\\\u([0-9a-fA-F]{4})',
+                   lambda m: chr(int(m.group(1), 16)), value)
+    value = re.sub(r'\\u([0-9a-fA-F]{4})',
+                   lambda m: chr(int(m.group(1), 16)), value)
+    return _html.unescape(
+        value.replace(r'\"', '"').replace(r"\/", "/").strip()
+    )
+
+
+def _valid_suno_display_name(name: str | None) -> bool:
+    if not name:
+        return False
+    return (
+        len(name) > 1
+        and not re.match(r'^v\d', name)
+        and name not in ("Cover", "Remix")
+    )
+
+
+def _extract_suno_clip_owner_display_name(page: str, uuid: str | None = None) -> str | None:
+    """Return the display_name attached to the main clip owner.
+
+    Remix pages include additional `clip_roots` users. A global/reversed
+    display_name scan can therefore pick the original clip artist instead of
+    the creator of the current clip.
+    """
+    id_part = re.escape(uuid) if uuid else r'[a-f0-9-]{8,36}'
+    patterns = [
+        rf'\\"id\\":\\"{id_part}\\".*?\\"user_id\\":\\"[^"\\]+\\".*?\\"display_name\\":\\"((?:(?!\\").)*)\\"',
+        rf'"id"\s*:\s*"{id_part}".*?"user_id"\s*:\s*"[^"]+".*?"display_name"\s*:\s*"((?:[^"\\]|\\.)*)"',
+    ]
+    for pat in patterns:
+        m = re.search(pat, page, re.S)
+        if not m:
+            continue
+        name = _decode_suno_json_string(m.group(1))
+        if _valid_suno_display_name(name):
+            return name
+    return None
+
+
 def _extract_suno_display_name(page: str) -> str | None:
     # Iterate matches in REVERSE — song owner is usually the last display_name
     # on the page. Filter out version strings (v5.5), "Cover", "Remix", and
     # single-char names.
+    owner = _extract_suno_clip_owner_display_name(page)
+    if owner:
+        return owner
     candidates = re.findall(r'display_name\\":\\"((?:[^"\\]|\\[^"])*)\\"', page)
     if not candidates:
         candidates = re.findall(r'"display_name"\s*:\s*"((?:[^"\\]|\\.)*)"', page)
     for dn in reversed(candidates):
-        # Decode double-escaped RSC unicode (\\uXXXX → char), then single-escaped (\uXXXX)
-        dn = re.sub(r'\\\\u([0-9a-fA-F]{4})',
-                    lambda m: chr(int(m.group(1), 16)), dn)
-        dn = re.sub(r'\\u([0-9a-fA-F]{4})',
-                    lambda m: chr(int(m.group(1), 16)), dn)
-        dn = _html.unescape(dn).strip()
-        if (len(dn) > 1
-                and not re.match(r'^v\d', dn)
-                and dn not in ("Cover", "Remix")):
+        dn = _decode_suno_json_string(dn)
+        if _valid_suno_display_name(dn):
             return dn
     return None
 
@@ -216,7 +254,10 @@ async def scrape_suno(uuid: str) -> dict:
 
         # Artist fallback: display_name from RSC payload
         if not result["artist"]:
-            result["artist"] = _extract_suno_display_name(page)
+            result["artist"] = (
+                _extract_suno_clip_owner_display_name(page, result.get("real_uuid") or uuid)
+                or _extract_suno_display_name(page)
+            )
 
         # Last-resort title-based extraction for pages without structured owner data.
         if not result["artist"] and result["title"]:

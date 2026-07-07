@@ -45,19 +45,51 @@ def _split_title_artist_fallback(raw_title: str) -> tuple[str, str | None]:
     return title, artist
 
 
-def _extract_suno_display_name(body: str) -> str | None:
+def _decode_suno_json_string(value: str) -> str:
+    value = re.sub(r'\\\\u([0-9a-fA-F]{4})',
+                   lambda m: chr(int(m.group(1), 16)), value)
+    value = re.sub(r'\\u([0-9a-fA-F]{4})',
+                   lambda m: chr(int(m.group(1), 16)), value)
+    return _html.unescape(
+        value.replace(r'\"', '"').replace(r"\/", "/").strip()
+    )
+
+
+def _valid_suno_display_name(name: str | None) -> bool:
+    return bool(
+        name
+        and len(name) > 1
+        and not re.match(r"^v\d", name)
+        and name not in ("Cover", "Remix")
+    )
+
+
+def _extract_suno_clip_owner_display_name(body: str, sid: str | None = None) -> str | None:
+    id_part = re.escape(sid) if sid else r"[a-f0-9-]{8,36}"
+    patterns = [
+        rf'\\"id\\":\\"{id_part}\\".*?\\"user_id\\":\\"[^"\\]+\\".*?\\"display_name\\":\\"((?:(?!\\").)*)\\"',
+        rf'"id"\s*:\s*"{id_part}".*?"user_id"\s*:\s*"[^"]+".*?"display_name"\s*:\s*"((?:[^"\\]|\\.)*)"',
+    ]
+    for pat in patterns:
+        m = re.search(pat, body, re.S)
+        if not m:
+            continue
+        name = _decode_suno_json_string(m.group(1))
+        if _valid_suno_display_name(name):
+            return name
+    return None
+
+
+def _extract_suno_display_name(body: str, sid: str | None = None) -> str | None:
+    owner = _extract_suno_clip_owner_display_name(body, sid)
+    if owner:
+        return owner
     candidates = re.findall(r'display_name\\":\\"((?:[^"\\]|\\[^"])*)\\"', body)
     if not candidates:
         candidates = re.findall(r'"display_name"\s*:\s*"((?:[^"\\]|\\.)*)"', body)
     for dn in reversed(candidates):
-        dn = re.sub(r'\\\\u([0-9a-fA-F]{4})',
-                    lambda m: chr(int(m.group(1), 16)), dn)
-        dn = re.sub(r'\\u([0-9a-fA-F]{4})',
-                    lambda m: chr(int(m.group(1), 16)), dn)
-        dn = _html.unescape(dn).strip()
-        if (len(dn) > 1
-                and not re.match(r"^v\d", dn)
-                and dn not in ("Cover", "Remix")):
+        dn = _decode_suno_json_string(dn)
+        if _valid_suno_display_name(dn):
             return dn
     return None
 
@@ -111,7 +143,7 @@ async def _fetch_one(session: aiohttp.ClientSession, url: str) -> dict:
         if not out:
             print(f"[suno-meta] no og:title found on {target} (body {len(body)} bytes)")
 
-    artist = _extract_suno_display_name(body)
+    artist = _extract_suno_display_name(body, sid)
     if artist:
         out["artist"] = artist
     elif out.get("title"):
