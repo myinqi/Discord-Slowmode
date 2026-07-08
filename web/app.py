@@ -5631,6 +5631,88 @@ def create_app(db: Database, bot=None) -> Quart:
                     await db.relic_add_phrase_to_queue(phrase)
                     await flash("Phrase added to the queue.", "success")
 
+            elif action == "generate_phrase_suggestion":
+                import bot.exp_stream_manager as _esm
+                if exp_stream_manager.is_running or _esm.stream_is_live:
+                    await flash("Phrase generation is disabled while the stream is running.", "error")
+                else:
+                    try:
+                        from bot.llm import OllamaClient
+                        from config import Config
+
+                        phrase_puzzle = await db.relic_get_phrase_puzzle()
+                        phrase_queue = await db.relic_get_phrase_queue()
+                        existing = []
+                        if phrase_puzzle.get("phrase"):
+                            existing.append(phrase_puzzle["phrase"])
+                        for queued in phrase_queue:
+                            phrase = (queued.get("phrase") or "").strip()
+                            if phrase and phrase not in existing:
+                                existing.append(phrase)
+                        examples = "\n".join(
+                            f"- {phrase}" for phrase in existing[:40]
+                        ) or "- The raven waits in the moonlit nest"
+                        prompt = (
+                            "Generate exactly one new phrase for a Twitch chat "
+                            "word/phrase puzzle in a game called Raven's Nest: Relic Hunt.\n"
+                            "Match the vibe of these existing phrases: dark fantasy, ravens, relics, rituals, "
+                            "mist, moonlight, playful mystery. The phrase should be memorable and solvable.\n\n"
+                            f"Existing phrases:\n{examples}\n\n"
+                            "Rules:\n"
+                            "- Output only the phrase, no quotes, no numbering, no explanation.\n"
+                            "- 4 to 10 words.\n"
+                            "- Avoid duplicating any existing phrase.\n"
+                            "- English only.\n"
+                        )
+                        client = OllamaClient(
+                            base_url=Config.OLLAMA_URL,
+                            model=Config.LLM_MODEL,
+                            timeout=Config.LLM_REQUEST_TIMEOUT,
+                        )
+                        data = await client.chat(
+                            [
+                                {
+                                    "role": "system",
+                                    "content": "You create concise phrase puzzle answers. Output only the final phrase.",
+                                },
+                                {"role": "user", "content": prompt},
+                            ],
+                            max_tokens=40,
+                            temperature=0.85,
+                            top_p=0.9,
+                        )
+                        suggestion = (
+                            ((data.get("message") or {}).get("content") or "")
+                            .strip()
+                            .strip('"“”')
+                            .strip()
+                        )
+                        suggestion = re.sub(r"^[\-\d\.\)\s]+", "", suggestion).strip()
+                        suggestion = suggestion.splitlines()[0].strip() if suggestion else ""
+                        if not any(char.isalpha() for char in suggestion):
+                            await flash("LLM did not return a usable phrase.", "error")
+                        else:
+                            session["relic_phrase_suggestion"] = suggestion[:160]
+                            await flash("Phrase suggestion generated. Review it before adding.", "success")
+                    except Exception as e:
+                        await flash(f"Phrase generation failed: {e}", "error")
+
+            elif action == "confirm_phrase_suggestion":
+                phrase = (form.get("suggested_phrase") or "").strip()
+                if not any(char.isalpha() for char in phrase):
+                    await flash(
+                        "A suggested phrase must contain at least one letter.",
+                        "error",
+                    )
+                else:
+                    await db.relic_add_phrase_to_queue(phrase)
+                    session.pop("relic_phrase_suggestion", None)
+                    await flash("Suggested phrase added to the queue.", "success")
+
+            elif action == "clear_phrase_suggestion":
+                session.pop("relic_phrase_suggestion", None)
+                await flash("Phrase suggestion discarded.", "success")
+
             elif action == "start_phrase":
                 phrase_id = int(form.get("phrase_id") or 0)
                 if await db.relic_activate_phrase(phrase_id):
@@ -5808,6 +5890,9 @@ def create_app(db: Database, bot=None) -> Quart:
         log     = await db.relic_get_recent_log(30)
         game_enabled = (await db.relic_get_setting("enabled")) != "false"
         listener_running = relic_hunt._running
+        import bot.exp_stream_manager as _esm
+        exp_stream_running = bool(exp_stream_manager.is_running or _esm.stream_is_live)
+        phrase_suggestion = session.get("relic_phrase_suggestion", "")
 
         # Load settings
         import json as _jrh
@@ -5845,6 +5930,7 @@ def create_app(db: Database, bot=None) -> Quart:
             events=events_parsed, ritual=ritual,
             log=log, game_enabled=game_enabled,
             listener_running=listener_running,
+            exp_stream_running=exp_stream_running,
             settings=settings,
             total_hunts=total_hunts,
             total_legendary=total_legendary,
@@ -5854,6 +5940,7 @@ def create_app(db: Database, bot=None) -> Quart:
             custom_commands=custom_commands,
             phrase_puzzle=phrase_puzzle,
             phrase_queue=phrase_queue,
+            phrase_suggestion=phrase_suggestion,
             phrase_progress=phrase_progress,
             phrase_found_letters=phrase_found_letters,
             phrase_total_letters=phrase_total_letters,
