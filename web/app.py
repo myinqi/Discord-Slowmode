@@ -5730,10 +5730,29 @@ def create_app(db: Database, bot=None) -> Quart:
                         "error",
                     )
                 else:
-                    phrase_id = await db.relic_add_phrase_to_queue(phrase)
+                    suggestions = session.get("relic_phrase_suggestions", [])
+                    if not isinstance(suggestions, list):
+                        suggestions = []
+                    phrases_to_add = []
+                    seen = set()
+                    for candidate in [phrase, *suggestions]:
+                        candidate = (candidate or "").strip()
+                        candidate = re.sub(r"[-‐‑‒–—―]+", " ", candidate)
+                        candidate = re.sub(r"\s+", " ", candidate).strip()
+                        if not any(char.isalpha() for char in candidate):
+                            continue
+                        key = candidate.casefold()
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        phrases_to_add.append(candidate)
+                    added = 0
+                    for candidate in phrases_to_add:
+                        await db.relic_add_phrase_to_queue(candidate)
+                        added += 1
                     session.pop("relic_phrase_suggestion", None)
                     session.pop("relic_phrase_suggestions", None)
-                    await flash(f"Suggested phrase added to the queue as #{phrase_id}.", "success")
+                    await flash(f"Added {added} suggested phrase(s) to the queue.", "success")
 
             elif action == "clear_phrase_suggestion":
                 session.pop("relic_phrase_suggestion", None)
