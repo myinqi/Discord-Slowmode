@@ -5717,17 +5717,23 @@ def create_app(db: Database, bot=None) -> Quart:
                         await flash(f"Phrase generation failed: {e}", "error")
 
             elif action == "confirm_phrase_suggestion":
-                phrase = (form.get("suggested_phrase") or "").strip()
+                phrase = (
+                    (form.get("suggested_phrase") or "")
+                    or (form.get("suggested_phrase_fallback") or "")
+                    or (session.get("relic_phrase_suggestion") or "")
+                ).strip()
+                phrase = re.sub(r"[-‐‑‒–—―]+", " ", phrase)
+                phrase = re.sub(r"\s+", " ", phrase).strip()
                 if not any(char.isalpha() for char in phrase):
                     await flash(
                         "A suggested phrase must contain at least one letter.",
                         "error",
                     )
                 else:
-                    await db.relic_add_phrase_to_queue(phrase)
+                    phrase_id = await db.relic_add_phrase_to_queue(phrase)
                     session.pop("relic_phrase_suggestion", None)
                     session.pop("relic_phrase_suggestions", None)
-                    await flash("Suggested phrase added to the queue.", "success")
+                    await flash(f"Suggested phrase added to the queue as #{phrase_id}.", "success")
 
             elif action == "clear_phrase_suggestion":
                 session.pop("relic_phrase_suggestion", None)

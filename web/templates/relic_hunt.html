@@ -408,6 +408,7 @@
         {% if phrase_suggestion %}
         <form method="POST" class="space-y-3 pt-3 border-t border-gray-700/50">
           <input type="hidden" name="action" value="confirm_phrase_suggestion">
+          <input type="hidden" name="suggested_phrase_fallback" id="phrase-suggestion-fallback" value="{{ phrase_suggestion }}">
           <div>
             <label class="block text-gray-400 text-xs mb-1">Selected Phrase</label>
             <textarea name="suggested_phrase" id="phrase-suggestion-input" rows="3" required
@@ -1175,6 +1176,8 @@ function openCommandModal(cmd) {
 function selectPhraseSuggestion(text) {
   var input = document.getElementById('phrase-suggestion-input');
   if(input) input.value = text || '';
+  var fallback = document.getElementById('phrase-suggestion-fallback');
+  if(fallback) fallback.value = text || '';
 }
 
 function openRankModal(rank) {
