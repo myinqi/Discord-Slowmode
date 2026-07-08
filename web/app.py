@@ -5663,7 +5663,8 @@ def create_app(db: Database, bot=None) -> Quart:
                             "- No quotes, no numbering, no explanation.\n"
                             "- Each phrase must be 4 to 10 words.\n"
                             "- Do not use apostrophes or contractions. Write phrases without possessive forms like raven's or relic's.\n"
-                            "- Use only letters, numbers, spaces, hyphens and simple commas if needed.\n"
+                            "- Separate words with normal spaces only. Do not use hyphens or dashes between words.\n"
+                            "- Use only letters, numbers, spaces and simple commas if needed.\n"
                             "- Avoid duplicating any existing phrase.\n"
                             "- English only.\n"
                         )
@@ -5693,6 +5694,7 @@ def create_app(db: Database, bot=None) -> Quart:
                         for line in content.splitlines():
                             suggestion = line.strip().strip('"“”').strip()
                             suggestion = re.sub(r"^[\-\d\.\)\s]+", "", suggestion).strip()
+                            suggestion = re.sub(r"[-‐‑‒–—―]+", " ", suggestion)
                             suggestion = re.sub(r"\s+", " ", suggestion)
                             if not any(char.isalpha() for char in suggestion):
                                 continue
