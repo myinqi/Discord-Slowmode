@@ -397,14 +397,23 @@
           <span class="px-2 py-0.5 rounded text-xs font-medium bg-gray-700 text-gray-300">qwen2.5</span>
           {% endif %}
         </div>
-        <form method="POST">
+        <form method="POST" onsubmit="return startPhraseGeneration()">
           <input type="hidden" name="action" value="generate_phrase_suggestion">
-          <button class="w-full px-4 py-2 rounded-lg text-sm transition-colors
+          <button id="phrase-generate-btn" class="w-full px-4 py-2 rounded-lg text-sm transition-colors
             {% if exp_stream_running %}bg-gray-800 text-gray-500 cursor-not-allowed{% else %}bg-discord-blurple hover:bg-indigo-500 text-white{% endif %}"
             {% if exp_stream_running %}disabled{% endif %}>
             Generate 10 Suggestions
           </button>
         </form>
+        <div id="phrase-generation-progress" class="hidden space-y-2">
+          <div class="flex items-center justify-between text-xs">
+            <span class="text-gray-300">Generating phrases…</span>
+            <span class="text-gray-500">qwen2.5</span>
+          </div>
+          <div class="h-2 bg-discord-darker rounded-full overflow-hidden border border-gray-700/50">
+            <div class="h-full w-1/3 bg-discord-blurple rounded-full animate-pulse"></div>
+          </div>
+        </div>
         {% if phrase_suggestion %}
         <form method="POST" class="space-y-3 pt-3 border-t border-gray-700/50">
           <input type="hidden" name="action" value="confirm_phrase_suggestion">
@@ -1178,6 +1187,19 @@ function selectPhraseSuggestion(text) {
   if(input) input.value = text || '';
   var fallback = document.getElementById('phrase-suggestion-fallback');
   if(fallback) fallback.value = text || '';
+}
+
+function startPhraseGeneration() {
+  var btn = document.getElementById('phrase-generate-btn');
+  var progress = document.getElementById('phrase-generation-progress');
+  if(btn){
+    if(btn.disabled) return false;
+    btn.disabled = true;
+    btn.textContent = 'Generating…';
+    btn.classList.add('opacity-60','cursor-wait');
+  }
+  if(progress) progress.classList.remove('hidden');
+  return true;
 }
 
 function openRankModal(rank) {

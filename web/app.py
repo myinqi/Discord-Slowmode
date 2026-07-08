@@ -5635,7 +5635,10 @@ def create_app(db: Database, bot=None) -> Quart:
                 import bot.exp_stream_manager as _esm
                 if exp_stream_manager.is_running or _esm.stream_is_live:
                     await flash("Phrase generation is disabled while the stream is running.", "error")
+                elif session.get("relic_phrase_generation_running"):
+                    await flash("Phrase generation is already running. Please wait for it to finish.", "error")
                 else:
+                    session["relic_phrase_generation_running"] = True
                     try:
                         from bot.llm import OllamaClient
                         from config import Config
@@ -5715,6 +5718,8 @@ def create_app(db: Database, bot=None) -> Quart:
                             await flash(f"Generated {len(suggestions)} phrase suggestions. Pick one and review it before adding.", "success")
                     except Exception as e:
                         await flash(f"Phrase generation failed: {e}", "error")
+                    finally:
+                        session.pop("relic_phrase_generation_running", None)
 
             elif action == "confirm_phrase_suggestion":
                 phrase = (
