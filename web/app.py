@@ -5653,14 +5653,17 @@ def create_app(db: Database, bot=None) -> Quart:
                             f"- {phrase}" for phrase in existing[:40]
                         ) or "- The raven waits in the moonlit nest"
                         prompt = (
-                            "Generate exactly one new phrase for a Twitch chat "
+                            "Generate exactly 10 new phrases for a Twitch chat "
                             "word/phrase puzzle in a game called Raven's Nest: Relic Hunt.\n"
                             "Match the vibe of these existing phrases: dark fantasy, ravens, relics, rituals, "
                             "mist, moonlight, playful mystery. The phrase should be memorable and solvable.\n\n"
                             f"Existing phrases:\n{examples}\n\n"
                             "Rules:\n"
-                            "- Output only the phrase, no quotes, no numbering, no explanation.\n"
-                            "- 4 to 10 words.\n"
+                            "- Output exactly 10 lines, one phrase per line.\n"
+                            "- No quotes, no numbering, no explanation.\n"
+                            "- Each phrase must be 4 to 10 words.\n"
+                            "- Do not use apostrophes or contractions. Write phrases without possessive forms like raven's or relic's.\n"
+                            "- Use only letters, numbers, spaces, hyphens and simple commas if needed.\n"
                             "- Avoid duplicating any existing phrase.\n"
                             "- English only.\n"
                         )
@@ -5673,27 +5676,41 @@ def create_app(db: Database, bot=None) -> Quart:
                             [
                                 {
                                     "role": "system",
-                                    "content": "You create concise phrase puzzle answers. Output only the final phrase.",
+                                    "content": "You create concise phrase puzzle answers. Output only the requested phrases, one per line.",
                                 },
                                 {"role": "user", "content": prompt},
                             ],
-                            max_tokens=40,
+                            max_tokens=220,
                             temperature=0.85,
                             top_p=0.9,
                         )
-                        suggestion = (
+                        content = (
                             ((data.get("message") or {}).get("content") or "")
                             .strip()
-                            .strip('"“”')
-                            .strip()
                         )
-                        suggestion = re.sub(r"^[\-\d\.\)\s]+", "", suggestion).strip()
-                        suggestion = suggestion.splitlines()[0].strip() if suggestion else ""
-                        if not any(char.isalpha() for char in suggestion):
-                            await flash("LLM did not return a usable phrase.", "error")
+                        suggestions = []
+                        seen = {phrase.casefold() for phrase in existing}
+                        for line in content.splitlines():
+                            suggestion = line.strip().strip('"“”').strip()
+                            suggestion = re.sub(r"^[\-\d\.\)\s]+", "", suggestion).strip()
+                            suggestion = re.sub(r"\s+", " ", suggestion)
+                            if not any(char.isalpha() for char in suggestion):
+                                continue
+                            if "'" in suggestion or "’" in suggestion:
+                                continue
+                            key = suggestion.casefold()
+                            if key in seen:
+                                continue
+                            seen.add(key)
+                            suggestions.append(suggestion[:160])
+                            if len(suggestions) >= 10:
+                                break
+                        if not suggestions:
+                            await flash("LLM did not return usable phrases.", "error")
                         else:
-                            session["relic_phrase_suggestion"] = suggestion[:160]
-                            await flash("Phrase suggestion generated. Review it before adding.", "success")
+                            session["relic_phrase_suggestions"] = suggestions
+                            session["relic_phrase_suggestion"] = suggestions[0]
+                            await flash(f"Generated {len(suggestions)} phrase suggestions. Pick one and review it before adding.", "success")
                     except Exception as e:
                         await flash(f"Phrase generation failed: {e}", "error")
 
@@ -5707,10 +5724,12 @@ def create_app(db: Database, bot=None) -> Quart:
                 else:
                     await db.relic_add_phrase_to_queue(phrase)
                     session.pop("relic_phrase_suggestion", None)
+                    session.pop("relic_phrase_suggestions", None)
                     await flash("Suggested phrase added to the queue.", "success")
 
             elif action == "clear_phrase_suggestion":
                 session.pop("relic_phrase_suggestion", None)
+                session.pop("relic_phrase_suggestions", None)
                 await flash("Phrase suggestion discarded.", "success")
 
             elif action == "start_phrase":
@@ -5893,6 +5912,9 @@ def create_app(db: Database, bot=None) -> Quart:
         import bot.exp_stream_manager as _esm
         exp_stream_running = bool(exp_stream_manager.is_running or _esm.stream_is_live)
         phrase_suggestion = session.get("relic_phrase_suggestion", "")
+        phrase_suggestions = session.get("relic_phrase_suggestions", [])
+        if not isinstance(phrase_suggestions, list):
+            phrase_suggestions = []
 
         # Load settings
         import json as _jrh
@@ -5941,6 +5963,7 @@ def create_app(db: Database, bot=None) -> Quart:
             phrase_puzzle=phrase_puzzle,
             phrase_queue=phrase_queue,
             phrase_suggestion=phrase_suggestion,
+            phrase_suggestions=phrase_suggestions,
             phrase_progress=phrase_progress,
             phrase_found_letters=phrase_found_letters,
             phrase_total_letters=phrase_total_letters,

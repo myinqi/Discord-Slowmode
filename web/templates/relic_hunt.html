@@ -402,17 +402,30 @@
           <button class="w-full px-4 py-2 rounded-lg text-sm transition-colors
             {% if exp_stream_running %}bg-gray-800 text-gray-500 cursor-not-allowed{% else %}bg-discord-blurple hover:bg-indigo-500 text-white{% endif %}"
             {% if exp_stream_running %}disabled{% endif %}>
-            Generate Suggestion
+            Generate 10 Suggestions
           </button>
         </form>
         {% if phrase_suggestion %}
         <form method="POST" class="space-y-3 pt-3 border-t border-gray-700/50">
           <input type="hidden" name="action" value="confirm_phrase_suggestion">
           <div>
-            <label class="block text-gray-400 text-xs mb-1">Suggested Phrase</label>
-            <textarea name="suggested_phrase" rows="3" required
+            <label class="block text-gray-400 text-xs mb-1">Selected Phrase</label>
+            <textarea name="suggested_phrase" id="phrase-suggestion-input" rows="3" required
               class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">{{ phrase_suggestion }}</textarea>
           </div>
+          {% if phrase_suggestions %}
+          <div class="space-y-1">
+            <div class="text-gray-400 text-xs">Suggestions</div>
+            <div class="grid gap-1.5">
+              {% for suggestion in phrase_suggestions %}
+              <button type="button" onclick='selectPhraseSuggestion({{ suggestion|tojson }})'
+                class="text-left px-3 py-2 rounded-lg bg-discord-darker hover:bg-gray-700 text-gray-300 text-xs transition-colors">
+                {{ suggestion }}
+              </button>
+              {% endfor %}
+            </div>
+          </div>
+          {% endif %}
           <button class="w-full px-4 py-2 rounded-lg bg-green-700/70 hover:bg-green-700 text-green-100 text-sm transition-colors">Confirm & Add</button>
         </form>
         <form method="POST">
@@ -1157,6 +1170,11 @@ function openCommandModal(cmd) {
   document.getElementById('cmd-response').value = cmd ? (cmd.response || '') : '';
   document.getElementById('cmd-enabled').checked = !cmd || !!cmd.enabled;
   document.getElementById('command-modal').classList.remove('hidden');
+}
+
+function selectPhraseSuggestion(text) {
+  var input = document.getElementById('phrase-suggestion-input');
+  if(input) input.value = text || '';
 }
 
 function openRankModal(rank) {
