@@ -4041,7 +4041,7 @@ def create_app(db: Database, bot=None) -> Quart:
                                     # manual “Post Stream Link” buttons).
                                     stream_url = await db.get_setting("exp_radio_stream_url") or ""
                                     if stream_url:
-                                        for slot in ("1", "2"):
+                                        for slot in ("1", "2", "3"):
                                             ch_id = await db.get_setting(f"exp_radio_post_channel_{slot}_id") or ""
                                             if not ch_id:
                                                 continue
@@ -4569,6 +4569,7 @@ def create_app(db: Database, bot=None) -> Quart:
             elif action == "save_exp_settings":
                 ch1 = form.get("exp_post_channel_1_id", "").strip()
                 ch2 = form.get("exp_post_channel_2_id", "").strip()
+                ch3 = form.get("exp_post_channel_3_id", "").strip()
                 expiry_ch = form.get("exp_expiry_channel_id", "").strip()
                 announcement_ch = form.get("exp_announcement_channel_id", "").strip()
                 announcement_msg = (form.get("exp_announcement_message") or "").strip()
@@ -4590,6 +4591,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     sched_time = ""
                 await db.set_setting("exp_radio_post_channel_1_id", ch1)
                 await db.set_setting("exp_radio_post_channel_2_id", ch2)
+                await db.set_setting("exp_radio_post_channel_3_id", ch3)
                 await db.set_setting("exp_radio_expiry_channel_id", expiry_ch)
                 await db.set_setting("exp_radio_announcement_channel_id", announcement_ch)
                 await db.set_setting("exp_radio_announcement_message", announcement_msg)
@@ -4771,7 +4773,12 @@ def create_app(db: Database, bot=None) -> Quart:
             elif action == "set_loop_selection":
                 sel = form.get("loop_selection", "shuffle")
                 await db.set_setting("exp_radio_loop_selection", sel)
-                await flash(f"Loop video selection: {'Shuffle' if sel == 'shuffle' else sel}", "success")
+                loop_selection_labels = {
+                    "shuffle": "Shuffle",
+                    "concat_all": "Concatenate all videos",
+                    "concat_all_random": "Concatenate all videos in random order",
+                }
+                await flash(f"Loop video selection: {loop_selection_labels.get(sel, sel)}", "success")
 
             return redirect(request.url)
 
@@ -4825,6 +4832,7 @@ def create_app(db: Database, bot=None) -> Quart:
         exp_stream_url = await db.get_setting("exp_radio_stream_url") or ""
         exp_post_channel_1_id = await db.get_setting("exp_radio_post_channel_1_id") or ""
         exp_post_channel_2_id = await db.get_setting("exp_radio_post_channel_2_id") or ""
+        exp_post_channel_3_id = await db.get_setting("exp_radio_post_channel_3_id") or ""
         exp_expiry_channel_id = await db.get_setting("exp_radio_expiry_channel_id") or ""
         exp_announcement_channel_id = await db.get_setting("exp_radio_announcement_channel_id") or ""
         exp_announcement_message = await db.get_setting("exp_radio_announcement_message") or ""
@@ -4927,6 +4935,7 @@ def create_app(db: Database, bot=None) -> Quart:
             exp_stream_url=exp_stream_url,
             exp_post_channel_1_id=exp_post_channel_1_id,
             exp_post_channel_2_id=exp_post_channel_2_id,
+            exp_post_channel_3_id=exp_post_channel_3_id,
             exp_expiry_channel_id=exp_expiry_channel_id,
             exp_announcement_channel_id=exp_announcement_channel_id,
             exp_announcement_message=exp_announcement_message,

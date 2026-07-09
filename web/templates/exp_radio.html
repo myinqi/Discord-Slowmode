@@ -60,6 +60,16 @@
                         {% endfor %}
                     </select>
                 </div>
+                <div class="space-y-2">
+                    <label class="block text-gray-400 text-xs">Discord Channel 3 (for posts)</label>
+                    <select name="exp_post_channel_3_id"
+                        class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                        <option value="">Select channel…</option>
+                        {% for ch in text_channels %}
+                        <option value="{{ ch.id }}" {% if ch.id|string == exp_post_channel_3_id %}selected{% endif %}>#{{ ch.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
             </div>
             <div class="pt-2 border-t border-gray-700/50 space-y-2">
                 <label class="block text-gray-400 text-xs">Expiry Notification Channel</label>
@@ -496,6 +506,13 @@
                             class="w-3.5 h-3.5 accent-discord-blurple">
                         <span class="text-gray-300 text-xs">🎞️ Concatenate all videos into one loop</span>
                     </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="loop_selection" value="concat_all_random"
+                            {% if loop_selection == 'concat_all_random' %}checked{% endif %}
+                            onchange="this.form.submit()"
+                            class="w-3.5 h-3.5 accent-discord-blurple">
+                        <span class="text-gray-300 text-xs">🔀🎞️ Concatenate all videos in random order</span>
+                    </label>
                     {% endif %}
                     {% for v in loop_videos %}
                     <div class="flex items-center gap-2 group">
@@ -630,7 +647,7 @@
                 <h3 class="text-white font-semibold">Post to Discord</h3>
             </div>
             <div class="p-5 space-y-3">
-                {% if not exp_post_channel_1_id and not exp_post_channel_2_id %}
+                {% if not exp_post_channel_1_id and not exp_post_channel_2_id and not exp_post_channel_3_id %}
                 <p class="text-gray-500 text-xs">No channels configured. Open ⚙️ Settings to set up posting channels and stream URL.</p>
                 {% endif %}
                 {% if exp_post_channel_1_id %}
@@ -639,6 +656,19 @@
                     <form method="POST">
                         <input type="hidden" name="action" value="post_exp_stream_url">
                         <input type="hidden" name="post_channel_id_select" value="{{ exp_post_channel_1_id }}">
+                        <button type="submit" {% if not exp_stream_url %}disabled title="Set a stream URL in ⚙️ Settings first"{% endif %}
+                            class="w-full px-3 py-2 bg-purple-600/20 hover:bg-purple-600/40 disabled:bg-gray-700/30 disabled:text-gray-500 text-purple-400 rounded-lg text-xs font-medium transition-colors">
+                            📺 Post Stream Link
+                        </button>
+                    </form>
+                </div>
+                {% endif %}
+                {% if exp_post_channel_3_id %}
+                <div>
+                    <p class="text-gray-400 text-xs mb-2">Channel 3: #{% for ch in text_channels %}{% if ch.id|string == exp_post_channel_3_id %}{{ ch.name }}{% endif %}{% endfor %}</p>
+                    <form method="POST">
+                        <input type="hidden" name="action" value="post_exp_stream_url">
+                        <input type="hidden" name="post_channel_id_select" value="{{ exp_post_channel_3_id }}">
                         <button type="submit" {% if not exp_stream_url %}disabled title="Set a stream URL in ⚙️ Settings first"{% endif %}
                             class="w-full px-3 py-2 bg-purple-600/20 hover:bg-purple-600/40 disabled:bg-gray-700/30 disabled:text-gray-500 text-purple-400 rounded-lg text-xs font-medium transition-colors">
                             📺 Post Stream Link

@@ -628,6 +628,17 @@ class ExpStreamManager:
                     if not loop_path:
                         loop_fn = random.choice(loop_vids)["filename"]
                         self._log(f"Concat-all failed, shuffle fallback: {loop_fn}", "error")
+            elif loop_sel == "concat_all_random":
+                if len(loop_vids) == 1:
+                    loop_fn = loop_vids[0]["filename"]
+                    self._log(f"Loop video (concat_all_random single): {loop_fn}")
+                else:
+                    shuffled_loop_vids = list(loop_vids)
+                    random.shuffle(shuffled_loop_vids)
+                    loop_path = await self._build_concat_all_video(shuffled_loop_vids, random_order=True)
+                    if not loop_path:
+                        loop_fn = random.choice(loop_vids)["filename"]
+                        self._log(f"Random concat-all failed, shuffle fallback: {loop_fn}", "error")
             elif loop_sel == "shuffle":
                 loop_fn = random.choice(loop_vids)["filename"]
                 self._log(f"Loop video (shuffle): {loop_fn}")
@@ -1377,17 +1388,19 @@ class ExpStreamManager:
 
     # ── Concat-all loop video builder ─────────────────────────────────────────
 
-    async def _build_concat_all_video(self, loop_vids: list) -> str | None:
+    async def _build_concat_all_video(self, loop_vids: list, random_order: bool = False) -> str | None:
         """Concatenate every uploaded loop video into one MP4.
 
-        The result is cached in assets/_concat_all.mp4. A sidecar hash file
-        (_concat_all.hash) records the sorted filename list and FFmpeg runtime
-        so the file is rebuilt automatically whenever videos are added/removed
-        or the container's FFmpeg version changes."""
+        The ordered result is cached in assets/_concat_all.mp4. Random-order
+        builds use a separate output file and are rebuilt on each stream setup.
+        A sidecar hash file records the input file signatures and FFmpeg runtime
+        so the ordered file is rebuilt automatically whenever videos are
+        added/removed or the container's FFmpeg version changes."""
         import hashlib
         assets   = os.path.join(self.exp_radio_dir, "assets")
-        out_path = os.path.join(assets, "_concat_all.mp4")
-        hash_file = os.path.join(assets, "_concat_all.hash")
+        stem = "_concat_all_random" if random_order else "_concat_all"
+        out_path = os.path.join(assets, f"{stem}.mp4")
+        hash_file = os.path.join(assets, f"{stem}.hash")
 
         paths = [os.path.join(assets, v["filename"]) for v in loop_vids]
         missing = [p for p in paths if not os.path.exists(p)]
@@ -1417,7 +1430,7 @@ class ExpStreamManager:
                 total_duration += max(0.0, float((out.decode().strip() or "0")))
             except Exception:
                 pass
-        vid_sig  = "|".join(sorted(file_sig_parts))
+        vid_sig = "|".join(file_sig_parts if random_order else sorted(file_sig_parts))
         ffmpeg_sig = "ffmpeg:unknown"
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -1431,8 +1444,8 @@ class ExpStreamManager:
             pass
         cur_hash = hashlib.md5(f"{builder_version}|{vid_sig}|{ffmpeg_sig}".encode()).hexdigest()
 
-        # Cache hit?
-        if os.path.exists(out_path) and os.path.exists(hash_file):
+        # Cache hit? Random-order mode intentionally rebuilds every stream setup.
+        if not random_order and os.path.exists(out_path) and os.path.exists(hash_file):
             try:
                 with open(hash_file) as fh:
                     if fh.read().strip() == cur_hash:
@@ -1441,7 +1454,8 @@ class ExpStreamManager:
             except Exception:
                 pass
 
-        self._log(f"Building concat-all loop video ({len(paths)} clips, 720p CFR 30)…")
+        order_note = "random-order " if random_order else ""
+        self._log(f"Building {order_note}concat-all loop video ({len(paths)} clips, 720p CFR 30)…")
         cmd = ["ffmpeg", "-y", "-nostats", "-progress", "pipe:2"]
         for p in paths:
             cmd += ["-fflags", "+genpts", "-i", p]
@@ -1520,7 +1534,8 @@ class ExpStreamManager:
 
         with open(hash_file, "w") as fh:
             fh.write(cur_hash)
-        self._log(f"Concat-all loop video ready ({len(paths)} clips combined, 720p CFR 30).")
+        label = "Random-order concat-all" if random_order else "Concat-all"
+        self._log(f"{label} loop video ready ({len(paths)} clips combined, 720p CFR 30).")
         return out_path
 
     # ── Combined ASS builder ───────────────────────────────────────────────────
