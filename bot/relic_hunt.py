@@ -245,7 +245,10 @@ class RelicHunt:
             (f"{p}relichelp",  self._cmd_help),
             (f"{p}relic",      self._cmd_admin),
         ]:
-            twitch_bot.register_command(cmd, handler)
+            if getattr(handler, "__name__", "") == "_cmd_admin":
+                twitch_bot.register_command(cmd, handler)
+            else:
+                twitch_bot.register_command(cmd, self._subscriber_guard(handler))
 
         asyncio.create_task(self._event_watcher_loop())
         await twitch_bot.start_listener()
@@ -455,6 +458,17 @@ class RelicHunt:
     async def _is_game_enabled(self) -> bool:
         val = await self.db.relic_get_setting("enabled")
         return val != "false"  # default ON unless explicitly disabled
+
+    def _subscriber_guard(self, handler):
+        async def wrapped(ctx: dict) -> None:
+            access_mode = (await self.db.relic_get_setting("access_mode")) or "everyone"
+            is_staff = ctx.get("is_broadcaster") or ctx.get("is_mod")
+            if access_mode == "subscribers" and not (ctx.get("is_sub") or is_staff):
+                name = ctx.get("username") or "there"
+                await self._send(f"@{name} Raven's Nest: Relic Hunt is currently available to subscribers only.")
+                return
+            await handler(ctx)
+        return wrapped
 
     async def _get_active_events_with_cfg(self) -> list:
         active = await self.db.relic_get_active_events()

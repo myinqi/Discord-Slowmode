@@ -771,6 +771,16 @@
     {% endfor %}
 
     <div class="pt-2 border-t border-gray-700/50 space-y-2">
+      <label class="block text-gray-400 text-xs mb-1">Game Access</label>
+      <select name="access_mode"
+        class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+        <option value="everyone" {% if settings.get('access_mode', 'everyone') != 'subscribers' %}selected{% endif %}>Everyone</option>
+        <option value="subscribers" {% if settings.get('access_mode') == 'subscribers' %}selected{% endif %}>Subscribers only</option>
+      </select>
+      <p class="text-gray-600 text-xs mt-0.5">Moderators and the broadcaster can still use commands.</p>
+    </div>
+
+    <div class="pt-2 border-t border-gray-700/50 space-y-2">
       {% for label, field in [
         ('Announce level-ups in chat','announce_level_ups'),
         ('Announce rank-ups in chat','announce_rank_ups'),

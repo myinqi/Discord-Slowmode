@@ -5372,12 +5372,17 @@ def create_app(db: Database, bot=None) -> Quart:
                     "vip_cooldown_multiplier", "ritual_reward_points",
                     "ritual_reward_xp", "ritual_legendary_chance",
                     "ritual_active_window_minutes",
+                    "access_mode",
                     "auto_event_enabled",
                     "auto_event_min_interval_minutes",
                     "auto_event_max_interval_minutes",
                 ):
                     if key in _bool_keys:
                         val = "true" if form.get(key) else "false"
+                    elif key == "access_mode":
+                        val = form.get(key, "everyone")
+                        if val not in ("everyone", "subscribers"):
+                            val = "everyone"
                     else:
                         val = form.get(key, "")
                     await db.relic_set_setting(key, val)
@@ -5967,6 +5972,7 @@ def create_app(db: Database, bot=None) -> Quart:
             "subscriber_cooldown_multiplier", "vip_cooldown_multiplier",
             "ritual_reward_points", "ritual_reward_xp", "ritual_legendary_chance",
             "ritual_active_window_minutes",
+            "access_mode",
             "auto_event_enabled",
             "auto_event_min_interval_minutes",
             "auto_event_max_interval_minutes",
