@@ -6447,17 +6447,89 @@ def create_app(db: Database, bot=None) -> Quart:
         canonical = f"https://suno.com/@{handle}"
         return canonical, handle.lower()
 
+    def _extract_suno_escaped_field(block: str, key: str) -> str | None:
+        marker = f'\\"{key}\\":\\"'
+        start = block.find(marker)
+        if start < 0:
+            return None
+        pos = start + len(marker)
+        chars: list[str] = []
+        while pos < len(block):
+            char = block[pos]
+            if char == "\\":
+                nxt = block[pos + 1] if pos + 1 < len(block) else ""
+                chars.append(char)
+                if nxt:
+                    chars.append(nxt)
+                    pos += 2
+                    continue
+            if char == '"':
+                backslashes = 0
+                idx = pos - 1
+                while idx >= 0 and block[idx] == "\\":
+                    backslashes += 1
+                    idx -= 1
+                if backslashes % 2 == 1:
+                    chars.append(char)
+                    pos += 1
+                    continue
+                return "".join(chars)
+            chars.append(char)
+            pos += 1
+        return None
+
+    def _extract_profile_song_cards(page: str, limit: int = 3) -> list[dict]:
+        """Extract the real profile song feed, excluding pinned/profile hero songs."""
+        start = page.find(r'\"content_id\":\"songs_feed\"')
+        if start < 0:
+            start = page.find("songs_feed")
+        if start < 0:
+            return []
+
+        sub = page[start : start + 260000]
+        marker = r'\"content_type\":\"clip\",\"content_item\":{'
+        idx = 0
+        songs: list[dict] = []
+        seen: set[str] = set()
+        while len(songs) < limit:
+            pos = sub.find(marker, idx)
+            if pos < 0:
+                break
+            block = sub[pos : pos + 22000]
+            entity = re.search(r'\\"entity_type\\":\\"([^\\"]+)\\"', block)
+            status = re.search(r'\\"status\\":\\"([^\\"]+)\\"', block)
+            title = _extract_suno_escaped_field(block, "title")
+            song_id = re.search(r'\\"id\\":\\"([a-f0-9-]{36})\\"', block, flags=re.I)
+            created = re.search(r'\\"created_at\\":\\"([^\\"]+)\\"', block)
+            if (
+                title
+                and song_id
+                and song_id.group(1) not in seen
+                and (not entity or entity.group(1) == "song_schema")
+                and (not status or status.group(1) == "complete")
+            ):
+                sid = song_id.group(1)
+                seen.add(sid)
+                songs.append(
+                    {
+                        "id": sid,
+                        "title": _decode_suno_json_string(title),
+                        "url": f"https://suno.com/song/{sid}",
+                        "created_at": created.group(1) if created else "",
+                    }
+                )
+            idx = pos + len(marker)
+        return songs
+
     async def _fetch_suno_profile(profile_url: str) -> dict:
-        """Fetch a Suno profile page and extract display name, avatar, pinned and latest song.
+        """Fetch a Suno profile page and extract display name, avatar and latest real song.
 
         Returns dict with keys:
           - display_name, avatar_url
-          - pinned_song_url, pinned_song_title (first prominent song on profile)
-          - latest_song_url, latest_song_title (most recently created song by date)
+          - latest_song_url, latest_song_title
         Best-effort; missing fields are None.
         """
         import html as _html
-        import json as _json
         out = {
             "display_name": None,
             "avatar_url": None,
@@ -6474,33 +6546,14 @@ def create_app(db: Database, bot=None) -> Quart:
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         }
 
-        # Fetch both pages concurrently
         async with aiohttp.ClientSession(headers=headers) as session:
-            main_task = session.get(
-                profile_url, timeout=aiohttp.ClientTimeout(total=15)
-            )
-            songs_page_url = f"{profile_url}?page=songs"
-            songs_task = session.get(
-                songs_page_url, timeout=aiohttp.ClientTimeout(total=15)
-            )
-
-            main_resp, songs_resp = await asyncio.gather(main_task, songs_task)
-
-            main_html = await main_resp.text() if main_resp.status == 200 else ""
-            songs_html = await songs_resp.text() if songs_resp.status == 200 else ""
-
-            if not main_html:
-                print(f"[suno_promotion] HTTP {main_resp.status} for {profile_url}")
+            async with session.get(profile_url, timeout=aiohttp.ClientTimeout(total=20)) as response:
+                if response.status != 200:
+                    print(f"[suno_promotion] HTTP {response.status} for {profile_url}")
+                    return out
+                html = await response.text()
+            if not html:
                 return out
-
-        # Use main HTML for most things, but songs_html for song list
-        html = main_html
-
-        # --- Pinned song: first /song/<uuid> in the main profile HTML ---
-        pinned_uuid = None
-        m = re.search(r'/song/([a-f0-9-]{36})', html)
-        if m:
-            pinned_uuid = m.group(1)
 
         # og:title — typically "Display Name | Suno" or just "Display Name"
         m = re.search(
@@ -6544,139 +6597,52 @@ def create_app(db: Database, bot=None) -> Quart:
             if m:
                 out["avatar_url"] = m.group(0)
 
-        # --- Pinned song: first /song/<uuid> in the profile HTML ---
-        pinned_uuid = None
-        m = re.search(r'/song/([a-f0-9-]{36})', html)
-        if m:
-            pinned_uuid = m.group(1)
-
-        # --- Collect ALL candidate song UUIDs from the user's playlists ---
-        # Suno renders songs client-side; only the pinned song is in the SSR HTML.
-        # Playlists ARE rendered server-side, so we scrape them for song UUIDs.
-        # Match both absolute (https://suno.com/playlist/UUID) and relative (/playlist/UUID)
-        raw_pl_ids = re.findall(r'(?:https://suno\.com)?/playlist/([a-f0-9-]{36})', html)
-        playlist_urls = list(dict.fromkeys(
-            f"https://suno.com/playlist/{pid}" for pid in raw_pl_ids
-        ))[:8]
-        print(f"[suno_promotion] playlists found: {len(playlist_urls)} for {profile_url}")
-        # Debug: dump first 500 chars of html to see what we actually got
-        print(f"[suno_promotion] html snippet: {html[:500]!r}")
-
-        candidate_ids: list[str] = []
-        seen_ids: set[str] = set()
-
-        # Non-song UUIDs to exclude (playlists, video uploads from CDN preload links)
-        exclude_ids: set[str] = set(raw_pl_ids)
-        for cdn_uuid in re.findall(r'video_upload_([a-f0-9-]{36})', html):
-            exclude_ids.add(cdn_uuid)
-
-        if pinned_uuid:
-            candidate_ids.append(pinned_uuid)
-            seen_ids.add(pinned_uuid)
-
-        # --- Primary source: ?page=songs page contains ALL songs in Recent order ---
-        # The first song is the latest, the list is already sorted by Suno
-        songs_from_page = []
-        if songs_html:
-            songs_from_page = re.findall(r'/song/([a-f0-9-]{36})', songs_html)
-            print(f"[suno_promotion] Found {len(songs_from_page)} songs on ?page=songs")
-            if songs_from_page:
-                print(f"[suno_promotion] First (latest) song from ?page=songs: {songs_from_page[0]}")
+        songs = _extract_profile_song_cards(html, 3)
+        if songs:
+            latest = songs[0]
+            out["latest_song_url"] = latest["url"]
+            out["latest_song_title"] = latest["title"]
+            out["latest_songs"] = songs
+            print(f"[suno_promotion] Latest real song for {profile_url}: {latest['title']!r}")
         else:
-            print(f"[suno_promotion] No songs_html available (HTTP error)")
-
-        # Add songs from ?page=songs to candidates (take first 20 for metadata fetch)
-        latest_from_songs_page = songs_from_page[0] if songs_from_page else None
-        for sid in songs_from_page[:20]:
-            if sid not in seen_ids:
-                candidate_ids.append(sid)
-                seen_ids.add(sid)
-
-        print(f"[suno_promotion] {len(candidate_ids)} candidate songs total for {profile_url}")
-
-        # --- Determine creation time via CDN timestamp in og:image ---
-        # og:image URL contains a Unix timestamp: _snapshot_0s_<ts>_image.jpeg
-        # We fetch the embed page (lightweight) for each candidate to get that ts.
-        sem = asyncio.Semaphore(6)
-
-        async def _get_ts_and_title(sid: str) -> tuple[str, int, str | None]:
-            """Returns (song_id, unix_timestamp, title_or_None)."""
-            async with sem:
-                try:
-                    async with aiohttp.ClientSession(headers=headers) as s:
-                        async with s.get(
-                            f"https://suno.com/song/{sid}",
-                            timeout=aiohttp.ClientTimeout(total=10),
-                        ) as r:
-                            if r.status != 200:
-                                return sid, 0, None
-                            body = await r.text()
-                    # Timestamp from CDN image URL — pattern: _snapshot_0s_<unix_ts>_image
-                    # The full og:image URL from song pages contains this pattern
-                    tm = re.search(r'snapshot_0s_(\d{9,12})', body)
-                    ts = int(tm.group(1)) if tm else 0
-                    # Title from <title> or og:title
-                    title_val = None
-                    ttm = re.search(r'<title>(.+?)\s*\|\s*Suno</title>', body)
-                    if ttm:
-                        raw = ttm.group(1).strip()
-                        parts = raw.rsplit(' by ', 1)
-                        title_val = parts[0].strip() if len(parts) == 2 else raw
-                    if not title_val:
-                        ttm = re.search(r'<meta\s+property=["\']og:title["\']\s+content=["\']([^"\']+)["\']', body)
-                        if ttm:
-                            title_val = _html.unescape(ttm.group(1).strip())
-                    return sid, ts, title_val
-                except Exception:
-                    return sid, 0, None
-
-        ts_results: list[tuple[str, int, str | None]] = list(
-            await asyncio.gather(
-                *[_get_ts_and_title(sid) for sid in candidate_ids],
-                return_exceptions=False,
-            )
-        )
-
-        # Sort candidates by timestamp descending
-        ts_results.sort(key=lambda x: x[1], reverse=True)
-
-        print(f"[suno_promotion] Top candidates by timestamp:")
-        for sid, ts, t in ts_results[:5]:
-            print(f"[suno_promotion]   {sid}: ts={ts} title={t!r}")
-
-        ts_map   = {sid: ts    for sid, ts, _ in ts_results}
-        title_map = {sid: title for sid, _, title in ts_results if title}
-
-        # Pinned = first UUID found in profile HTML
-        if pinned_uuid:
-            out["pinned_song_url"]   = f"https://suno.com/song/{pinned_uuid}"
-            out["pinned_song_title"] = title_map.get(pinned_uuid)
-
-        # Latest = the first song from ?page=songs (most recent) if available,
-        # otherwise fall back to highest timestamp from candidates
-        if latest_from_songs_page:
-            # Find title from our fetched results
-            latest_title = title_map.get(latest_from_songs_page)
-            # If we didn't fetch it, try to get metadata now
-            if not latest_title:
-                try:
-                    meta = await _fetch_suno_meta(latest_from_songs_page)
-                    latest_title = meta.get("title") if meta else None
-                except Exception:
-                    pass
-            out["latest_song_url"]   = f"https://suno.com/song/{latest_from_songs_page}"
-            out["latest_song_title"] = latest_title
-        elif ts_results:
-            # Fallback: use highest timestamp from candidates
-            latest_id, latest_ts, latest_title = ts_results[0]
-            out["latest_song_url"]   = f"https://suno.com/song/{latest_id}"
-            out["latest_song_title"] = latest_title
-
-            # If pinned == latest, keep both pointing to same song
-            if pinned_uuid and latest_id == pinned_uuid:
-                out["pinned_song_title"] = out["pinned_song_title"] or latest_title
+            out["latest_songs"] = []
+            print(f"[suno_promotion] No songs_feed songs found for {profile_url}")
 
         return out
+
+    async def _refresh_suno_promotion_entries(owner_id: int, entries: list[dict], mode: str = "sequential") -> tuple[int, int]:
+        parallel = mode == "parallel3"
+        semaphore = asyncio.Semaphore(3 if parallel else 1)
+
+        async def fetch_entry(entry: dict) -> tuple[dict, dict | None, Exception | None]:
+            async with semaphore:
+                try:
+                    return entry, await _fetch_suno_profile(entry["profile_url"]), None
+                except Exception as exc:
+                    return entry, None, exc
+
+        refreshed = 0
+        errors = 0
+        results = await asyncio.gather(*(fetch_entry(entry) for entry in entries))
+        for entry, info, exc in results:
+            if exc or not info:
+                print(f"[suno_promotion] Refresh failed for {entry.get('handle')}: {exc}")
+                errors += 1
+                continue
+            await db.suno_userlist_update_meta(
+                owner_user_id=owner_id,
+                entry_id=entry["id"],
+                display_name=info.get("display_name") or entry.get("display_name"),
+                avatar_url=info.get("avatar_url") or entry.get("avatar_url"),
+                last_song_url=info.get("latest_song_url") or entry.get("last_song_url"),
+                last_song_title=info.get("latest_song_title") or entry.get("last_song_title"),
+                pinned_song_url=None,
+                pinned_song_title=None,
+                latest_song_url=info.get("latest_song_url") or entry.get("latest_song_url"),
+                latest_song_title=info.get("latest_song_title") or entry.get("latest_song_title"),
+            )
+            refreshed += 1
+        return refreshed, errors
 
     @app.route("/suno-promotion", methods=["GET", "POST"])
     @permission_required('suno_promotion')
@@ -6704,8 +6670,8 @@ def create_app(db: Database, bot=None) -> Quart:
                         avatar_url=info.get("avatar_url"),
                         last_song_url=info.get("latest_song_url") or info.get("last_song_url"),
                         last_song_title=info.get("latest_song_title") or info.get("last_song_title"),
-                        pinned_song_url=info.get("pinned_song_url"),
-                        pinned_song_title=info.get("pinned_song_title"),
+                        pinned_song_url=None,
+                        pinned_song_title=None,
                         latest_song_url=info.get("latest_song_url"),
                         latest_song_title=info.get("latest_song_title"),
                         priority=priority,
@@ -6758,8 +6724,8 @@ def create_app(db: Database, bot=None) -> Quart:
                         avatar_url=info.get("avatar_url"),
                         last_song_url=info.get("latest_song_url") or info.get("last_song_url"),
                         last_song_title=info.get("latest_song_title") or info.get("last_song_title"),
-                        pinned_song_url=info.get("pinned_song_url"),
-                        pinned_song_title=info.get("pinned_song_title"),
+                        pinned_song_url=None,
+                        pinned_song_title=None,
                         latest_song_url=info.get("latest_song_url"),
                         latest_song_title=info.get("latest_song_title"),
                     )
@@ -6769,11 +6735,20 @@ def create_app(db: Database, bot=None) -> Quart:
                         await flash("Update failed (handle already in list?).", "error")
 
             elif action == "reset_cycle":
+                refresh_mode = form.get("refresh_mode", "sequential")
+                if refresh_mode not in ("sequential", "parallel3"):
+                    refresh_mode = "sequential"
                 affected = await db.suno_userlist_reset_done(owner_id)
-                if affected:
-                    await flash(f"Cycle ended — {affected} entr{'y' if affected == 1 else 'ies'} reopened.", "success")
+                all_entries = await db.suno_userlist_list(owner_id)
+                refreshed, errors = await _refresh_suno_promotion_entries(owner_id, all_entries, refresh_mode)
+                if affected or refreshed:
+                    await flash(
+                        f"Cycle ended — {affected} entr{'y' if affected == 1 else 'ies'} reopened; "
+                        f"refreshed {refreshed} latest songs ({errors} errors).",
+                        "success",
+                    )
                 else:
-                    await flash("No entries to reset.", "error")
+                    await flash("No entries to reset or refresh.", "error")
 
             elif action == "set_latest":
                 entry_id = int(form.get("entry_id", "0"))
@@ -6800,8 +6775,8 @@ def create_app(db: Database, bot=None) -> Quart:
                             avatar_url=entry.get("avatar_url"),
                             last_song_url=canonical_song_url,
                             last_song_title=song_title,
-                            pinned_song_url=entry.get("pinned_song_url"),
-                            pinned_song_title=entry.get("pinned_song_title"),
+                            pinned_song_url=None,
+                            pinned_song_title=None,
                             latest_song_url=canonical_song_url,
                             latest_song_title=song_title,
                         )
@@ -6819,35 +6794,15 @@ def create_app(db: Database, bot=None) -> Quart:
                         avatar_url=info.get("avatar_url") or entry.get("avatar_url"),
                         last_song_url=info.get("latest_song_url") or info.get("last_song_url") or entry.get("last_song_url"),
                         last_song_title=info.get("latest_song_title") or info.get("last_song_title") or entry.get("last_song_title"),
-                        pinned_song_url=info.get("pinned_song_url") or entry.get("pinned_song_url"),
-                        pinned_song_title=info.get("pinned_song_title") or entry.get("pinned_song_title"),
+                        pinned_song_url=None,
+                        pinned_song_title=None,
                         latest_song_url=info.get("latest_song_url") or entry.get("latest_song_url"),
                         latest_song_title=info.get("latest_song_title") or entry.get("latest_song_title"),
                     )
 
             elif action == "refresh_all":
                 all_entries = await db.suno_userlist_list(owner_id)
-                refreshed = 0
-                errors = 0
-                for entry in all_entries:
-                    try:
-                        info = await _fetch_suno_profile(entry["profile_url"])
-                        await db.suno_userlist_update_meta(
-                            owner_user_id=owner_id,
-                            entry_id=entry["id"],
-                            display_name=info.get("display_name") or entry.get("display_name"),
-                            avatar_url=info.get("avatar_url") or entry.get("avatar_url"),
-                            last_song_url=info.get("latest_song_url") or info.get("last_song_url") or entry.get("last_song_url"),
-                            last_song_title=info.get("latest_song_title") or info.get("last_song_title") or entry.get("last_song_title"),
-                            pinned_song_url=info.get("pinned_song_url") or entry.get("pinned_song_url"),
-                            pinned_song_title=info.get("pinned_song_title") or entry.get("pinned_song_title"),
-                            latest_song_url=info.get("latest_song_url") or entry.get("latest_song_url"),
-                            latest_song_title=info.get("latest_song_title") or entry.get("latest_song_title"),
-                        )
-                        refreshed += 1
-                    except Exception as exc:
-                        print(f"[suno_promotion] Refresh failed for {entry.get('handle')}: {exc}")
-                        errors += 1
+                refreshed, errors = await _refresh_suno_promotion_entries(owner_id, all_entries, "parallel3")
                 await flash(f"Refreshed {refreshed} entries ({errors} errors).", "success")
 
             # Preserve current filter state
