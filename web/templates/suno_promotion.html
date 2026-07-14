@@ -13,7 +13,9 @@
             <span><span class="text-green-400">●</span> Done: {{ done_count }}</span>
             <span><span class="text-purple-400">●</span> Paused: {{ paused_count }}</span>
         </div>
-        <form method="POST" class="inline" onsubmit="return confirm('End the current cycle? This reopens all {{ done_count }} done {{ 'entry' if done_count == 1 else 'entries' }}.');">
+        <form method="POST" class="inline"
+            data-updating-message="Updating Suno profiles and ending the cycle... This may take a moment."
+            onsubmit="return confirm('End the current cycle? This reopens all {{ done_count }} done {{ 'entry' if done_count == 1 else 'entries' }}.');">
             <input type="hidden" name="action" value="reset_cycle">
             <input type="hidden" name="filter_priority" value="{{ filter_priority }}">
             <input type="hidden" name="filter_status" value="{{ filter_status }}">
@@ -31,6 +33,11 @@
             </button>
         </form>
     </div>
+</div>
+
+<div id="suno-promotion-updating"
+    class="hidden mb-4 rounded-lg border border-discord-blurple/40 bg-discord-blurple/10 px-4 py-3 text-sm text-discord-blurple">
+    Updating Suno profiles... This may take a moment.
 </div>
 
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -109,7 +116,9 @@
                         {% if hide_paused %}✓ Paused hidden{% else %}Hide paused{% endif %}
                     </a>
 
-                    <form method="POST" class="inline" onsubmit="return confirm('Refresh all entries? This may take a moment.');">
+                    <form method="POST" class="inline"
+                        data-updating-message="Updating all Suno profiles... This may take a moment."
+                        onsubmit="return confirm('Refresh all entries? This may take a moment.');">
                         <input type="hidden" name="action" value="refresh_all">
                         <input type="hidden" name="filter_priority" value="{{ filter_priority }}">
                         <input type="hidden" name="filter_status" value="{{ filter_status }}">
@@ -229,7 +238,7 @@
                                         </select>
                                     </form>
 
-                                    <form method="POST" class="inline">
+                                    <form method="POST" class="inline" data-updating-message="Updating Suno profile...">
                                         <input type="hidden" name="action" value="refresh">
                                         <input type="hidden" name="entry_id" value="{{ e.id }}">
                                         <input type="hidden" name="filter_priority" value="{{ filter_priority }}">
@@ -284,4 +293,23 @@
         </div>
     </div>
 </div>
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const notice = document.getElementById('suno-promotion-updating');
+    document.querySelectorAll('form[data-updating-message]').forEach((form) => {
+        form.addEventListener('submit', () => {
+            if (notice) {
+                notice.textContent = form.dataset.updatingMessage || 'Updating...';
+                notice.classList.remove('hidden');
+            }
+            const button = form.querySelector('button[type="submit"]');
+            if (button) {
+                button.disabled = true;
+                button.textContent = 'Updating...';
+                button.classList.add('opacity-70', 'cursor-wait');
+            }
+        });
+    });
+});
+</script>
 {% endblock %}

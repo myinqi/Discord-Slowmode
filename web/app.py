@@ -6629,17 +6629,22 @@ def create_app(db: Database, bot=None) -> Quart:
                 print(f"[suno_promotion] Refresh failed for {entry.get('handle')}: {exc}")
                 errors += 1
                 continue
+            latest_song_url = info.get("latest_song_url") or entry.get("latest_song_url")
+            latest_song_title = info.get("latest_song_title") or entry.get("latest_song_title")
+            handled_song_url = entry.get("last_song_url")
+            is_done = bool(latest_song_url and handled_song_url and latest_song_url == handled_song_url)
             await db.suno_userlist_update_meta(
                 owner_user_id=owner_id,
                 entry_id=entry["id"],
                 display_name=info.get("display_name") or entry.get("display_name"),
                 avatar_url=info.get("avatar_url") or entry.get("avatar_url"),
-                last_song_url=info.get("latest_song_url") or entry.get("last_song_url"),
-                last_song_title=info.get("latest_song_title") or entry.get("last_song_title"),
+                last_song_url=entry.get("last_song_url"),
+                last_song_title=entry.get("last_song_title"),
                 pinned_song_url=None,
                 pinned_song_title=None,
-                latest_song_url=info.get("latest_song_url") or entry.get("latest_song_url"),
-                latest_song_title=info.get("latest_song_title") or entry.get("latest_song_title"),
+                latest_song_url=latest_song_url,
+                latest_song_title=latest_song_title,
+                done=is_done,
             )
             refreshed += 1
         return refreshed, errors
@@ -6668,8 +6673,8 @@ def create_app(db: Database, bot=None) -> Quart:
                         handle=handle,
                         display_name=info.get("display_name"),
                         avatar_url=info.get("avatar_url"),
-                        last_song_url=info.get("latest_song_url") or info.get("last_song_url"),
-                        last_song_title=info.get("latest_song_title") or info.get("last_song_title"),
+                        last_song_url=None,
+                        last_song_title=None,
                         pinned_song_url=None,
                         pinned_song_title=None,
                         latest_song_url=info.get("latest_song_url"),
@@ -6722,14 +6727,15 @@ def create_app(db: Database, bot=None) -> Quart:
                         handle=handle,
                         display_name=info.get("display_name"),
                         avatar_url=info.get("avatar_url"),
-                        last_song_url=info.get("latest_song_url") or info.get("last_song_url"),
-                        last_song_title=info.get("latest_song_title") or info.get("last_song_title"),
+                        last_song_url=None,
+                        last_song_title=None,
                         pinned_song_url=None,
                         pinned_song_title=None,
                         latest_song_url=info.get("latest_song_url"),
                         latest_song_title=info.get("latest_song_title"),
                     )
                     if ok:
+                        await db.suno_userlist_set_done(owner_id, entry_id, False)
                         await flash(f"Entry updated: @{handle}.", "success")
                     else:
                         await flash("Update failed (handle already in list?).", "error")
@@ -6773,12 +6779,13 @@ def create_app(db: Database, bot=None) -> Quart:
                             entry_id=entry_id,
                             display_name=entry.get("display_name"),
                             avatar_url=entry.get("avatar_url"),
-                            last_song_url=canonical_song_url,
-                            last_song_title=song_title,
+                            last_song_url=entry.get("last_song_url"),
+                            last_song_title=entry.get("last_song_title"),
                             pinned_song_url=None,
                             pinned_song_title=None,
                             latest_song_url=canonical_song_url,
                             latest_song_title=song_title,
+                            done=bool(entry.get("last_song_url") and entry.get("last_song_url") == canonical_song_url),
                         )
                         await flash(f"Latest song set to: {song_title or song_uuid}", "success")
 
@@ -6786,19 +6793,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 entry_id = int(form.get("entry_id", "0"))
                 entry = await db.suno_userlist_get(owner_id, entry_id)
                 if entry:
-                    info = await _fetch_suno_profile(entry["profile_url"])
-                    await db.suno_userlist_update_meta(
-                        owner_user_id=owner_id,
-                        entry_id=entry_id,
-                        display_name=info.get("display_name") or entry.get("display_name"),
-                        avatar_url=info.get("avatar_url") or entry.get("avatar_url"),
-                        last_song_url=info.get("latest_song_url") or info.get("last_song_url") or entry.get("last_song_url"),
-                        last_song_title=info.get("latest_song_title") or info.get("last_song_title") or entry.get("last_song_title"),
-                        pinned_song_url=None,
-                        pinned_song_title=None,
-                        latest_song_url=info.get("latest_song_url") or entry.get("latest_song_url"),
-                        latest_song_title=info.get("latest_song_title") or entry.get("latest_song_title"),
-                    )
+                    await _refresh_suno_promotion_entries(owner_id, [entry], "sequential")
 
             elif action == "refresh_all":
                 all_entries = await db.suno_userlist_list(owner_id)

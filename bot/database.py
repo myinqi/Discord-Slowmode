@@ -2668,10 +2668,19 @@ class Database:
     async def suno_userlist_set_done(
         self, owner_user_id: int, entry_id: int, done: bool
     ) -> bool:
-        cur = await self.db.execute(
-            "UPDATE suno_userlist SET done = ? WHERE owner_user_id = ? AND id = ?",
-            (1 if done else 0, owner_user_id, entry_id),
-        )
+        if done:
+            cur = await self.db.execute(
+                "UPDATE suno_userlist SET done = 1, "
+                "  last_song_url = COALESCE(latest_song_url, last_song_url), "
+                "  last_song_title = COALESCE(latest_song_title, last_song_title) "
+                "WHERE owner_user_id = ? AND id = ?",
+                (owner_user_id, entry_id),
+            )
+        else:
+            cur = await self.db.execute(
+                "UPDATE suno_userlist SET done = 0 WHERE owner_user_id = ? AND id = ?",
+                (owner_user_id, entry_id),
+            )
         await self.db.commit()
         return (cur.rowcount or 0) > 0
 
@@ -2739,15 +2748,19 @@ class Database:
         pinned_song_title: str | None = None,
         latest_song_url: str | None = None,
         latest_song_title: str | None = None,
+        done: bool | None = None,
     ) -> bool:
+        done_value = None if done is None else (1 if done else 0)
         cur = await self.db.execute(
             "UPDATE suno_userlist SET display_name = ?, avatar_url = ?, "
             "  last_song_url = ?, last_song_title = ?, "
             "  pinned_song_url = ?, pinned_song_title = ?, latest_song_url = ?, latest_song_title = ?, "
+            "  done = CASE WHEN ? IS NULL THEN done ELSE ? END, "
             "  last_fetched_at = ? "
             "WHERE owner_user_id = ? AND id = ?",
             (display_name, avatar_url, last_song_url, last_song_title,
              pinned_song_url, pinned_song_title, latest_song_url, latest_song_title,
+             done_value, done_value,
              time.time(),
              owner_user_id, entry_id),
         )
