@@ -63,6 +63,7 @@ let songripperMeta = null;
 let songripperAudioBuffer = null;
 let songripperAudioBytes = null;
 let songripperAudioUrl = '';
+let songripperAudioId = '';
 let songripperSourceExt = 'mp3';
 
 function songripperStatus(text) {
@@ -106,6 +107,7 @@ async function loadSongripperAudio() {
     songripperMeta = null;
     songripperAudioBuffer = null;
     songripperAudioBytes = null;
+    songripperAudioId = '';
     songripperProgress(5);
     songripperStatus('Metadaten werden geladen...');
 
@@ -118,6 +120,7 @@ async function loadSongripperAudio() {
     }
     songripperMeta = meta;
     const audioId = meta.realId || id;
+    songripperAudioId = audioId;
     document.getElementById('songripper-meta').classList.remove('hidden');
     document.getElementById('songripper-title').textContent = meta.title || audioId;
     document.getElementById('songripper-author').textContent = meta.author || '';
@@ -173,14 +176,28 @@ function songripperSaveBlob(blob, filename) {
 async function downloadSongripperAudio(format) {
     const safeName = songripperSafeName();
     if (format === 'mp3') {
-        if (!songripperAudioBytes) {
+        if (!songripperAudioId) {
             alert('Kein Audio geladen.');
             return;
         }
-        const blob = new Blob([songripperAudioBytes], {
-            type: songripperSourceExt === 'm4a' ? 'audio/mp4' : 'audio/mpeg'
-        });
-        songripperSaveBlob(blob, `${safeName}.${songripperSourceExt === 'm4a' ? 'm4a' : 'mp3'}`);
+        const btn = document.getElementById('songripper-mp3-btn');
+        btn.disabled = true;
+        songripperStatus('MP3 wird serverseitig neu codiert...');
+        try {
+            const url = `/songripper/download-mp3?id=${encodeURIComponent(songripperAudioId)}&filename=${encodeURIComponent(safeName + '.mp3')}`;
+            const resp = await fetch(url);
+            if (!resp.ok) {
+                const data = await resp.json().catch(() => ({}));
+                throw new Error(data.error || `Download fehlgeschlagen (${resp.status})`);
+            }
+            const blob = await resp.blob();
+            songripperSaveBlob(blob, `${safeName}.mp3`);
+            songripperStatus('Korrigierte MP3 heruntergeladen.');
+        } catch (err) {
+            songripperStatus(err.message || String(err));
+        } finally {
+            btn.disabled = false;
+        }
         return;
     }
 

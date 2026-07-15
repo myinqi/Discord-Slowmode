@@ -6207,6 +6207,83 @@ def create_app(db: Database, bot=None) -> Quart:
         except Exception as e:
             return jsonify({"error": str(e)}), 502
 
+    @app.route("/songripper/download-mp3")
+    @permission_required('songripper')
+    async def songripper_download_mp3():
+        """Download Suno audio server-side and re-encode it to a clean MP3."""
+        from quart import Response, jsonify
+        import aiohttp, re as _re, tempfile
+
+        song_id = request.args.get("id", "").strip()
+        filename = request.args.get("filename", "suno_song").strip()
+        filename = _re.sub(r"[^a-zA-Z0-9_. -]+", "", filename).strip(" .") or "suno_song"
+        if not filename.lower().endswith(".mp3"):
+            filename += ".mp3"
+        if not song_id:
+            return jsonify({"error": "No id provided"}), 400
+
+        uuid_match = _re.search(
+            r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}",
+            song_id,
+            _re.I,
+        )
+        if not uuid_match:
+            return jsonify({"error": "A resolved Suno song UUID is required."}), 400
+        audio_id = uuid_match.group(0)
+
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        try:
+            with tempfile.TemporaryDirectory(prefix="songripper_") as tmpdir:
+                src_path = os.path.join(tmpdir, "source.audio")
+                out_path = os.path.join(tmpdir, "clean.mp3")
+                last_status = None
+
+                async with aiohttp.ClientSession(headers=headers) as sess:
+                    for ext in ("mp3", "m4a"):
+                        url = f"https://cdn1.suno.ai/{audio_id}.{ext}"
+                        async with sess.get(url, timeout=aiohttp.ClientTimeout(total=120)) as resp:
+                            last_status = resp.status
+                            if resp.status != 200:
+                                continue
+                            with open(src_path, "wb") as fh:
+                                async for chunk in resp.content.iter_chunked(1024 * 256):
+                                    if chunk:
+                                        fh.write(chunk)
+                            break
+                    else:
+                        return jsonify({"error": f"Audio not available from Suno ({last_status})."}), 502
+
+                proc = await asyncio.create_subprocess_exec(
+                    "ffmpeg", "-y", "-hide_banner", "-v", "error",
+                    "-i", src_path,
+                    "-map", "0:a:0",
+                    "-vn",
+                    "-c:a", "libmp3lame",
+                    "-b:a", "320k",
+                    "-write_xing", "1",
+                    out_path,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _, err = await proc.communicate()
+                if proc.returncode != 0 or not os.path.exists(out_path):
+                    detail = err.decode("utf-8", errors="replace").strip()
+                    return jsonify({"error": f"MP3 re-encode failed: {detail or 'unknown ffmpeg error'}"}), 500
+
+                with open(out_path, "rb") as fh:
+                    payload = fh.read()
+
+            return Response(
+                payload,
+                mimetype="audio/mpeg",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{filename}"',
+                    "Content-Length": str(len(payload)),
+                },
+            )
+        except Exception as e:
+            return jsonify({"error": str(e)}), 502
+
     @app.route("/suno-analyzer/resolve")
     @permission_required('suno_analyzer')
     async def suno_analyzer_resolve():
