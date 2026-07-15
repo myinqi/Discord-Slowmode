@@ -48,7 +48,7 @@
 {# ── Tabs ────────────────────────────────────────────────────────────────── #}
 <div class="border-b border-gray-700/50 mb-6">
   <nav class="flex flex-wrap gap-1" id="rh-tabs">
-    {% for tab_id, tab_label in [('dashboard','Dashboard'),('items','Items'),('recipes','Recipes'),('commands','Commands'),('phrase','Phrase Puzzle'),('ranks','Ranks'),('users','Users'),('ritual','Ritual'),('events','Events'),('settings','Settings')] %}
+    {% for tab_id, tab_label in [('dashboard','Dashboard'),('items','Items'),('recipes','Recipes'),('commands','Commands'),('phrase','Phrase Puzzle'),('ranks','Ranks'),('users','Users'),('ritual','Ritual'),('village','Village'),('events','Events'),('settings','Settings')] %}
     <button onclick="switchTab('{{ tab_id }}')" id="tab-{{ tab_id }}"
       class="rh-tab px-4 py-2 text-sm rounded-t-lg border-b-2 transition-colors {% if loop.first %}border-discord-blurple text-white{% else %}border-transparent text-gray-400 hover:text-gray-200{% endif %}">
       {{ tab_label }}
@@ -61,8 +61,8 @@
    TAB: Dashboard
 ══════════════════════════════════════════════════════════════════════════ #}
 <div id="pane-dashboard" class="rh-pane">
-  <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-    {% for label, value in [('Hunters', users|length), ('Total Hunts', total_hunts), ('Legendary Finds', total_legendary), ('Mythic Finds', total_mythic)] %}
+  <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+    {% for label, value in [('Hunters', users|length), ('Total Hunts', total_hunts), ('Total Shinies', total_shinies), ('Legendary Finds', total_legendary), ('Mythic Finds', total_mythic)] %}
     <div class="bg-discord-dark rounded-xl p-4 border border-gray-700/50 text-center">
       <div class="text-2xl font-bold text-white">{{ value }}</div>
       <div class="text-gray-400 text-xs mt-1">{{ label }}</div>
@@ -599,6 +599,7 @@
         <tr class="text-left text-gray-400 text-xs">
           <th class="px-3 py-2">Username</th>
           <th class="px-3 py-2">Points</th>
+          <th class="px-3 py-2">Shinies</th>
           <th class="px-3 py-2">Level</th>
           <th class="px-3 py-2">Rank</th>
           <th class="px-3 py-2">XP</th>
@@ -614,6 +615,7 @@
         <tr class="hover:bg-discord-lighter/30 transition-colors">
           <td class="px-3 py-2 text-white">{{ u.username }}</td>
           <td class="px-3 py-2 text-yellow-400 font-mono">{{ u.points }}</td>
+          <td class="px-3 py-2 text-cyan-300 font-mono">{{ u.shinies or 0 }}</td>
           <td class="px-3 py-2 text-gray-300">{{ u.level }}</td>
           <td class="px-3 py-2 text-gray-400 text-xs">{{ rank.icon }} {{ rank.name }}</td>
           <td class="px-3 py-2 text-gray-400">{{ u.xp }}</td>
@@ -689,6 +691,92 @@
 </div>
 
 {# ══════════════════════════════════════════════════════════════════════════
+   TAB: Village
+══════════════════════════════════════════════════════════════════════════ #}
+<div id="pane-village" class="rh-pane hidden">
+  <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+    <div class="xl:col-span-2 space-y-4">
+      <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-5">
+        <div class="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h3 class="text-white font-semibold">🏘️ Hrafnathorp</h3>
+            <p class="text-gray-400 text-sm mt-1">A shared village built with Shinies. Each area can reach level 5.</p>
+          </div>
+          <div class="text-right">
+            <div class="text-2xl font-bold text-white">{{ settings.get('village_count', '1') or '1' }}</div>
+            <div class="text-gray-500 text-xs">villages founded</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid md:grid-cols-2 gap-4">
+        {% for area in village_areas %}
+        {% set level = area.level or 0 %}
+        {% set progress = area.progress or 0 %}
+        {% set max_level = area.max_level or 5 %}
+        {% set pct = progress if level < max_level else 100 %}
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-5 space-y-4">
+          <div class="flex justify-between items-start gap-3">
+            <div>
+              <h4 class="text-white font-semibold">{{ area.name }}</h4>
+              <p class="text-gray-500 text-xs capitalize">{{ area.resource_type }} payout</p>
+            </div>
+            <span class="px-2 py-0.5 rounded bg-purple-900/40 text-purple-200 text-xs">Level {{ level }}/{{ max_level }}</span>
+          </div>
+          <div>
+            <div class="flex justify-between text-xs text-gray-400 mb-1">
+              <span>Progress</span>
+              <span>{% if level >= max_level %}Maxed{% else %}{{ progress }}/100{% endif %}</span>
+            </div>
+            <div class="w-full bg-gray-700 rounded-full h-3">
+              <div class="bg-gradient-to-r from-purple-600 to-cyan-400 h-3 rounded-full" style="width:{{ pct }}%"></div>
+            </div>
+          </div>
+          <form method="POST" class="flex gap-2">
+            <input type="hidden" name="action" value="village_add_progress">
+            <input type="hidden" name="area_id" value="{{ area.area_id }}">
+            <input type="number" name="progress" value="1" min="1" max="100"
+              class="w-24 bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none">
+            <button class="px-3 py-1.5 rounded-lg text-sm bg-discord-blurple hover:bg-indigo-500 text-white transition-colors">Add Progress</button>
+          </form>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="space-y-4">
+      <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-5">
+        <h3 class="text-white font-semibold mb-3">Chat Commands</h3>
+        <div class="space-y-2 text-sm">
+          <div class="flex justify-between gap-3"><span class="text-gray-300">!village</span><span class="text-gray-500">status</span></div>
+          <div class="flex justify-between gap-3"><span class="text-gray-300">!entertain</span><span class="text-gray-500">Culture</span></div>
+          <div class="flex justify-between gap-3"><span class="text-gray-300">!teach</span><span class="text-gray-500">Education</span></div>
+          <div class="flex justify-between gap-3"><span class="text-gray-300">!trade</span><span class="text-gray-500">Trade</span></div>
+          <div class="flex justify-between gap-3"><span class="text-gray-300">!invest</span><span class="text-gray-500">Treasury</span></div>
+          <div class="flex justify-between gap-3"><span class="text-gray-300">!nextVillage</span><span class="text-gray-500">prestige</span></div>
+        </div>
+      </div>
+
+      <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-5">
+        <h3 class="text-white font-semibold mb-3">Current Defaults</h3>
+        <div class="space-y-2 text-sm text-gray-400">
+          <div>Donation cost: <span class="text-white">{{ settings.get('village_progress_cost_shinies', '5') or '5' }} Shinies</span></div>
+          <div>Next village cost: <span class="text-white">{{ settings.get('village_next_cost_shinies', '50') or '50' }} Shinies</span></div>
+          <div>Payout interval: <span class="text-white">{{ settings.get('village_payout_interval_minutes', '15') or '15' }} min</span></div>
+          <div>Active window: <span class="text-white">{{ settings.get('village_active_window_minutes', '30') or '30' }} min</span></div>
+        </div>
+      </div>
+
+      <form method="POST" onsubmit="return confirm('Reset Hrafnathorp village progress and village count?')"
+        class="bg-discord-dark rounded-xl border border-red-900/40 p-5">
+        <input type="hidden" name="action" value="village_reset">
+        <button class="w-full px-4 py-2 rounded-lg bg-red-900/50 hover:bg-red-900 text-red-200 text-sm transition-colors">Reset Village</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+{# ══════════════════════════════════════════════════════════════════════════
    TAB: Events
 ══════════════════════════════════════════════════════════════════════════ #}
 <div id="pane-events" class="rh-pane hidden">
@@ -750,7 +838,7 @@
    TAB: Settings
 ══════════════════════════════════════════════════════════════════════════ #}
 <div id="pane-settings" class="rh-pane hidden">
-  <form method="POST" class="bg-discord-dark rounded-xl border border-gray-700/50 p-6 space-y-4 max-w-lg">
+  <form method="POST" class="bg-discord-dark rounded-xl border border-gray-700/50 p-6 space-y-4 max-w-3xl">
     <input type="hidden" name="action" value="save_settings">
     <h3 class="text-white font-semibold mb-2">⚙️ Game Settings</h3>
     {% for label, field, default, hint in [
@@ -822,6 +910,52 @@
         The next event is scheduled after the current one ends plus a new random wait.
         Saving new interval values resets the timer immediately.
       </p>
+    </div>
+
+    <div class="pt-3 border-t border-gray-700/50 space-y-3">
+      <h4 class="text-white text-sm font-medium">💎 Shinies</h4>
+      <div class="grid grid-cols-3 gap-3">
+        {% for label, field, default in [
+          ('Per Find','shiny_per_find','1'),
+          ('Per Combine','shiny_per_combine','1'),
+          ('Per Ritual','shiny_per_ritual','1'),
+        ] %}
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">{{ label }}</label>
+          <input type="number" min="0" name="{{ field }}" value="{{ settings.get(field, default) or default }}"
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+        </div>
+        {% endfor %}
+      </div>
+      <p class="text-gray-500 text-xs">Shiny rewards are not multiplied by events.</p>
+    </div>
+
+    <div class="pt-3 border-t border-gray-700/50 space-y-3">
+      <h4 class="text-white text-sm font-medium">🏘️ Hrafnathorp Village</h4>
+      <label class="flex items-center gap-2 cursor-pointer">
+        <input type="checkbox" name="village_payout_enabled" value="true"
+          {% if settings.get('village_payout_enabled', 'true') != 'false' %}checked{% endif %}
+          class="w-4 h-4 accent-discord-blurple">
+        <span class="text-white text-sm">Enable automatic village payouts during stream</span>
+      </label>
+      <div class="grid grid-cols-2 gap-3">
+        {% for label, field, default, min_value in [
+          ('Donation Cost','village_progress_cost_shinies','5','1'),
+          ('Next Village Cost','village_next_cost_shinies','50','1'),
+          ('Payout Interval (min)','village_payout_interval_minutes','15','1'),
+          ('Active Window (min)','village_active_window_minutes','30','1'),
+          ('Points per Level','village_points_per_level','20','0'),
+          ('XP per Level','village_xp_per_level','12','0'),
+          ('Shinies per Level','village_shinies_per_level','1','0'),
+        ] %}
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">{{ label }}</label>
+          <input type="number" min="{{ min_value }}" name="{{ field }}" value="{{ settings.get(field, default) or default }}"
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+        </div>
+        {% endfor %}
+      </div>
+      <p class="text-gray-500 text-xs">Village payouts choose active hunters based on recent !raven activity.</p>
     </div>
 
     <button class="w-full mt-2 px-4 py-2 rounded-lg bg-discord-blurple hover:bg-indigo-500 text-white text-sm transition-colors">Save Settings</button>
@@ -1000,7 +1134,10 @@
         <div><label class="text-gray-400 text-xs block mb-1">Points</label>
           <input type="number" name="points" id="umod-pts" min="0"
             class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
-        <button class="w-full px-4 py-2 rounded-lg bg-discord-blurple hover:bg-indigo-500 text-white text-sm transition-colors">Save Points</button>
+        <div><label class="text-gray-400 text-xs block mb-1">Shinies</label>
+          <input type="number" name="shinies" id="umod-shinies" min="0"
+            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none"></div>
+        <button class="w-full px-4 py-2 rounded-lg bg-discord-blurple hover:bg-indigo-500 text-white text-sm transition-colors">Save Resources</button>
       </form>
       <form method="POST" class="space-y-3 pt-3 border-t border-gray-700/50">
         <input type="hidden" name="action" value="give_item">
@@ -1226,6 +1363,7 @@ function openUserModal(u) {
   document.getElementById('umod-id').value    = u.twitch_user_id;
   document.getElementById('umod-give-id').value = u.twitch_user_id;
   document.getElementById('umod-pts').value   = u.points;
+  document.getElementById('umod-shinies').value = u.shinies || 0;
   document.getElementById('user-modal-title').textContent = 'Edit: ' + u.username;
   document.getElementById('user-modal').classList.remove('hidden');
 }

@@ -5539,9 +5539,11 @@ def create_app(db: Database, bot=None) -> Quart:
 
             if action == "save_settings":
                 _bool_keys = {"announce_level_ups", "announce_rank_ups",
-                              "mods_bypass_cooldowns", "auto_event_enabled"}
-                _interval_keys = {"auto_event_min_interval_minutes",
-                                  "auto_event_max_interval_minutes"}
+                              "mods_bypass_cooldowns", "auto_event_enabled",
+                              "village_payout_enabled"}
+                _auto_event_interval_keys = {"auto_event_min_interval_minutes",
+                                             "auto_event_max_interval_minutes"}
+                _village_interval_keys = {"village_payout_interval_minutes"}
                 for key in (
                     "enabled", "command_prefix", "timezone",
                     "raven_cooldown_seconds", "ritual_cooldown_seconds",
@@ -5554,6 +5556,17 @@ def create_app(db: Database, bot=None) -> Quart:
                     "auto_event_enabled",
                     "auto_event_min_interval_minutes",
                     "auto_event_max_interval_minutes",
+                    "shiny_per_find",
+                    "shiny_per_combine",
+                    "shiny_per_ritual",
+                    "village_progress_cost_shinies",
+                    "village_next_cost_shinies",
+                    "village_payout_enabled",
+                    "village_payout_interval_minutes",
+                    "village_active_window_minutes",
+                    "village_points_per_level",
+                    "village_xp_per_level",
+                    "village_shinies_per_level",
                 ):
                     if key in _bool_keys:
                         val = "true" if form.get(key) else "false"
@@ -5566,8 +5579,10 @@ def create_app(db: Database, bot=None) -> Quart:
                     await db.relic_set_setting(key, val)
                 # Reset the next-event timer whenever interval settings change
                 # so the new values take effect immediately.
-                if _interval_keys & set(form.keys()):
+                if _auto_event_interval_keys & set(form.keys()):
                     await db.relic_set_setting("auto_event_next_at", "0")
+                if _village_interval_keys & set(form.keys()):
+                    await db.relic_set_setting("village_next_payout_at", "0")
                 await flash("Settings saved.", "success")
 
             elif action == "toggle_game":
@@ -5765,7 +5780,9 @@ def create_app(db: Database, bot=None) -> Quart:
                 response = (form.get("response") or "").strip()
                 reserved_commands = {
                     "raven", "nest", "items", "top", "rank", "daily",
-                    "ritual", "combine", "phrase", "solve", "relichelp", "relic",
+                    "ritual", "combine", "village", "entertain", "teach",
+                    "trade", "invest", "nextvillage", "phrase", "solve",
+                    "relichelp", "relic",
                 }
                 if not re.fullmatch(r"[a-z0-9_][a-z0-9_-]{0,31}", command):
                     await flash("Command must use 1-32 letters, numbers, underscores or hyphens.", "error")
@@ -5987,8 +6004,10 @@ def create_app(db: Database, bot=None) -> Quart:
                 user = await db.relic_get_user(uid)
                 if user:
                     user["points"] = max(0, int(form.get("points") or 0))
+                    if "shinies" in form:
+                        user["shinies"] = max(0, int(form.get("shinies") or 0))
                     await db.relic_upsert_user(user)
-                    await flash(f"Updated points for {user['username']}.", "success")
+                    await flash(f"Updated user resources for {user['username']}.", "success")
 
             elif action == "reset_user":
                 uid = form.get("twitch_user_id", "")
@@ -6072,6 +6091,21 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.relic_update_ritual(ritual["energy"], goal)
                 await flash("Ritual settings saved.", "success")
 
+            elif action == "village_add_progress":
+                area_id = form.get("area_id", "")
+                amount = max(0, int(form.get("progress") or 0))
+                area = await db.relic_add_village_progress(area_id, amount)
+                if area:
+                    await flash(f"Added {amount} progress to {area['name']}.", "success")
+                else:
+                    await flash("Village area not found.", "error")
+
+            elif action == "village_reset":
+                await db.relic_reset_village()
+                await db.relic_set_setting("village_count", "1")
+                await db.relic_set_setting("village_next_payout_at", "0")
+                await flash("Village progress reset.", "success")
+
             return redirect(request.url)
 
         # GET
@@ -6113,6 +6147,7 @@ def create_app(db: Database, bot=None) -> Quart:
         active_events = await db.relic_get_active_events()
         active_event_ids = {ae["event_id"] for ae in active_events}
         ritual  = await db.relic_get_ritual()
+        village_areas = await db.relic_get_village_areas()
         phrase_puzzle = await db.relic_get_phrase_puzzle()
         phrase_queue = await db.relic_get_phrase_queue()
         from bot.relic_hunt import _phrase_progress
@@ -6154,6 +6189,18 @@ def create_app(db: Database, bot=None) -> Quart:
             "auto_event_enabled",
             "auto_event_min_interval_minutes",
             "auto_event_max_interval_minutes",
+            "shiny_per_find",
+            "shiny_per_combine",
+            "shiny_per_ritual",
+            "village_progress_cost_shinies",
+            "village_next_cost_shinies",
+            "village_payout_enabled",
+            "village_payout_interval_minutes",
+            "village_active_window_minutes",
+            "village_points_per_level",
+            "village_xp_per_level",
+            "village_shinies_per_level",
+            "village_count",
         ):
             settings[key] = await db.relic_get_setting(key) or ""
 
@@ -6170,11 +6217,13 @@ def create_app(db: Database, bot=None) -> Quart:
         total_hunts = sum(u.get("commands_used", 0) for u in users)
         total_legendary = sum(u.get("legendary_finds", 0) for u in users)
         total_mythic = sum(u.get("mythic_finds", 0) for u in users)
+        total_shinies = sum(int(u.get("shinies") or 0) for u in users)
 
         return await render_template(
             "relic_hunt.html",
             items=items, users=users[:50],
             events=events_parsed, ritual=ritual,
+            village_areas=village_areas,
             log=log, game_enabled=game_enabled,
             listener_running=listener_running,
             exp_stream_running=exp_stream_running,
@@ -6182,6 +6231,7 @@ def create_app(db: Database, bot=None) -> Quart:
             total_hunts=total_hunts,
             total_legendary=total_legendary,
             total_mythic=total_mythic,
+            total_shinies=total_shinies,
             ranks=ranks,
             recipes=recipes,
             custom_commands=custom_commands,

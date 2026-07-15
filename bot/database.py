@@ -3074,6 +3074,7 @@ class Database:
                 username TEXT NOT NULL,
                 points INTEGER NOT NULL DEFAULT 0,
                 xp INTEGER NOT NULL DEFAULT 0,
+                shinies INTEGER NOT NULL DEFAULT 0,
                 level INTEGER NOT NULL DEFAULT 1,
                 last_raven_at REAL,
                 last_daily_at REAL,
@@ -3184,8 +3185,25 @@ class Database:
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS relic_village_areas (
+                area_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                resource_type TEXT NOT NULL,
+                level INTEGER NOT NULL DEFAULT 0,
+                progress INTEGER NOT NULL DEFAULT 0,
+                max_level INTEGER NOT NULL DEFAULT 5,
+                updated_at REAL NOT NULL
+            );
         """)
         await self.db.commit()
+
+        async with self.db.execute("PRAGMA table_info(relic_users)") as cur:
+            user_columns = [row["name"] for row in await cur.fetchall()]
+        if "shinies" not in user_columns:
+            await self.db.execute(
+                "ALTER TABLE relic_users ADD COLUMN shinies INTEGER NOT NULL DEFAULT 0"
+            )
+            await self.db.commit()
 
         async with self.db.execute("PRAGMA table_info(relic_phrase_puzzle)") as cur:
             phrase_columns = [row["name"] for row in await cur.fetchall()]
@@ -3200,6 +3218,7 @@ class Database:
         await self.db.commit()
 
         await self._migrate_phrase_to_queue()
+        await self.relic_seed_village_areas()
 
     # -----------------------------------------------------------------------
     # Relic Hunt — ranks
@@ -3935,18 +3954,19 @@ class Database:
         now = time.time()
         await self.db.execute("""
             INSERT INTO relic_users
-              (twitch_user_id, username, points, xp, level,
+              (twitch_user_id, username, points, xp, shinies, level,
                last_raven_at, last_daily_at, last_ritual_at,
                commands_used, legendary_finds, mythic_finds,
                created_at, updated_at)
             VALUES
-              (:twitch_user_id,:username,:points,:xp,:level,
+              (:twitch_user_id,:username,:points,:xp,:shinies,:level,
                :last_raven_at,:last_daily_at,:last_ritual_at,
                :commands_used,:legendary_finds,:mythic_finds,
                :now,:now)
             ON CONFLICT(twitch_user_id) DO UPDATE SET
               username=excluded.username,
-              points=excluded.points, xp=excluded.xp, level=excluded.level,
+              points=excluded.points, xp=excluded.xp,
+              shinies=excluded.shinies, level=excluded.level,
               last_raven_at=excluded.last_raven_at,
               last_daily_at=excluded.last_daily_at,
               last_ritual_at=excluded.last_ritual_at,
@@ -3954,8 +3974,41 @@ class Database:
               legendary_finds=excluded.legendary_finds,
               mythic_finds=excluded.mythic_finds,
               updated_at=excluded.updated_at
-        """, {**user, "now": now})
+        """, {**user, "shinies": int(user.get("shinies") or 0), "now": now})
         await self.db.commit()
+
+    async def relic_add_shinies(self, twitch_user_id: str, amount: int) -> None:
+        await self.db.execute(
+            "UPDATE relic_users SET shinies = MAX(0, shinies + ?), updated_at = ? "
+            "WHERE twitch_user_id = ?",
+            (int(amount), time.time(), twitch_user_id),
+        )
+        await self.db.commit()
+
+    async def relic_try_spend_shinies(self, twitch_user_id: str, amount: int) -> bool:
+        amount = max(0, int(amount))
+        if amount <= 0:
+            return True
+        await self.db.execute("BEGIN IMMEDIATE")
+        try:
+            async with self.db.execute(
+                "SELECT shinies FROM relic_users WHERE twitch_user_id = ?",
+                (twitch_user_id,),
+            ) as cur:
+                row = await cur.fetchone()
+            if not row or int(row["shinies"] or 0) < amount:
+                await self.db.rollback()
+                return False
+            await self.db.execute(
+                "UPDATE relic_users SET shinies = shinies - ?, updated_at = ? "
+                "WHERE twitch_user_id = ?",
+                (amount, time.time(), twitch_user_id),
+            )
+            await self.db.commit()
+            return True
+        except Exception:
+            await self.db.rollback()
+            raise
 
     async def relic_get_leaderboard(self, limit: int = 10) -> list[dict]:
         async with self.db.execute(
@@ -3977,6 +4030,103 @@ class Database:
             "DELETE FROM relic_user_items WHERE twitch_user_id = ?", (twitch_user_id,)
         )
         await self.db.commit()
+
+    # -----------------------------------------------------------------------
+    # Relic Hunt — Hrafnathorp village
+    # -----------------------------------------------------------------------
+    async def relic_seed_village_areas(self) -> None:
+        defaults = [
+            ("culture", "Culture", "points"),
+            ("education", "Education", "xp"),
+            ("trade", "Trade", "items"),
+            ("treasury", "Treasury", "shinies"),
+        ]
+        now = time.time()
+        for area_id, name, resource_type in defaults:
+            await self.db.execute("""
+                INSERT OR IGNORE INTO relic_village_areas
+                  (area_id, name, resource_type, level, progress, max_level, updated_at)
+                VALUES (?, ?, ?, 0, 0, 5, ?)
+            """, (area_id, name, resource_type, now))
+        await self.db.commit()
+
+    async def relic_get_village_areas(self) -> list[dict]:
+        await self.relic_seed_village_areas()
+        order = {"culture": 1, "education": 2, "trade": 3, "treasury": 4}
+        async with self.db.execute(
+            "SELECT * FROM relic_village_areas"
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+        return sorted(rows, key=lambda r: order.get(r["area_id"], 99))
+
+    async def relic_get_village_area(self, area_id: str) -> Optional[dict]:
+        await self.relic_seed_village_areas()
+        async with self.db.execute(
+            "SELECT * FROM relic_village_areas WHERE area_id = ?",
+            (area_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def relic_add_village_progress(self, area_id: str, amount: int = 1) -> Optional[dict]:
+        await self.db.execute("BEGIN IMMEDIATE")
+        try:
+            async with self.db.execute(
+                "SELECT * FROM relic_village_areas WHERE area_id = ?",
+                (area_id,),
+            ) as cur:
+                row = await cur.fetchone()
+            if not row:
+                await self.db.rollback()
+                return None
+            area = dict(row)
+            level = int(area["level"] or 0)
+            max_level = int(area["max_level"] or 5)
+            progress = int(area["progress"] or 0)
+            if level >= max_level:
+                await self.db.rollback()
+                area["leveled_up"] = False
+                area["is_maxed"] = True
+                return area
+            progress += max(0, int(amount))
+            leveled_up = False
+            while progress >= 100 and level < max_level:
+                progress -= 100
+                level += 1
+                leveled_up = True
+            if level >= max_level:
+                progress = 0
+            await self.db.execute("""
+                UPDATE relic_village_areas
+                SET level = ?, progress = ?, updated_at = ?
+                WHERE area_id = ?
+            """, (level, progress, time.time(), area_id))
+            await self.db.commit()
+            area.update({
+                "level": level,
+                "progress": progress,
+                "leveled_up": leveled_up,
+                "is_maxed": level >= max_level,
+            })
+            return area
+        except Exception:
+            await self.db.rollback()
+            raise
+
+    async def relic_reset_village(self) -> None:
+        await self.db.execute(
+            "UPDATE relic_village_areas SET level = 0, progress = 0, updated_at = ?",
+            (time.time(),),
+        )
+        await self.db.commit()
+
+    async def relic_get_active_users_since(self, cutoff: float) -> list[dict]:
+        async with self.db.execute(
+            "SELECT * FROM relic_users WHERE COALESCE(last_raven_at, 0) >= ? "
+            "ORDER BY last_raven_at DESC",
+            (cutoff,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
 
     # -----------------------------------------------------------------------
     # Relic Hunt — user inventory

@@ -26,6 +26,33 @@ def _xp_for_next(level: int) -> int:
 
 RARITY_ORDER = ["common", "uncommon", "rare", "epic", "legendary", "mythic"]
 
+VILLAGE_AREAS = {
+    "culture": {
+        "name": "Culture",
+        "resource": "points",
+        "command": "entertain",
+        "verb": "entertains the village square",
+    },
+    "education": {
+        "name": "Education",
+        "resource": "xp",
+        "command": "teach",
+        "verb": "teaches under the old raven tree",
+    },
+    "trade": {
+        "name": "Trade",
+        "resource": "items",
+        "command": "trade",
+        "verb": "opens a trade route through the mist",
+    },
+    "treasury": {
+        "name": "Treasury",
+        "resource": "shinies",
+        "command": "invest",
+        "verb": "invests in the glittering treasury",
+    },
+}
+
 DEFAULT_RANKS = [
     {"id": "nestling",            "name": "Nestling",            "min_points": 0,     "icon": "🐣"},
     {"id": "feather_finder",      "name": "Feather Finder",      "min_points": 250,   "icon": "🪶"},
@@ -240,6 +267,12 @@ class RelicHunt:
             (f"{p}daily",      self._cmd_daily),
             (f"{p}ritual",     self._cmd_ritual),
             (f"{p}combine",    self._cmd_combine),
+            (f"{p}village",    self._cmd_village),
+            (f"{p}entertain",  self._cmd_village_donate),
+            (f"{p}teach",      self._cmd_village_donate),
+            (f"{p}trade",      self._cmd_village_donate),
+            (f"{p}invest",     self._cmd_village_donate),
+            (f"{p}nextvillage", self._cmd_next_village),
             (f"{p}phrase",     self._cmd_phrase),
             (f"{p}solve",      self._cmd_solve),
             (f"{p}relichelp",  self._cmd_help),
@@ -269,6 +302,7 @@ class RelicHunt:
             try:
                 await self._tick_expired_events()
                 await self._tick_auto_event()
+                await self._tick_village_payout()
             except Exception as e:
                 _rlog(f"Event watcher error: {e}", "error")
             await asyncio.sleep(10)
@@ -325,6 +359,43 @@ class RelicHunt:
         gap = random.uniform(min_m * 60, max_m * 60)
         await self.db.relic_set_setting("auto_event_next_at", str(now + duration_min * 60 + gap))
         _rlog(f"Auto-event: next scheduled in ~{int((duration_min * 60 + gap) // 60)}m")
+
+    async def _tick_village_payout(self) -> None:
+        if (await self.db.relic_get_setting("village_payout_enabled")) == "false":
+            return
+        from bot.exp_stream_manager import stream_is_live
+        if not stream_is_live:
+            return
+        now = time.time()
+        interval_min = max(1, int((await self.db.relic_get_setting("village_payout_interval_minutes")) or 15))
+        next_at = float((await self.db.relic_get_setting("village_next_payout_at")) or 0)
+        if next_at == 0:
+            await self.db.relic_set_setting("village_next_payout_at", str(now + interval_min * 60))
+            _rlog(f"Hrafnathorp: first village payout scheduled in ~{interval_min}m")
+            return
+        if now < next_at:
+            return
+
+        await self.db.relic_set_setting("village_next_payout_at", str(now + interval_min * 60))
+        areas = [a for a in await self.db.relic_get_village_areas() if int(a.get("level") or 0) > 0]
+        if not areas:
+            return
+        window_min = max(1, int((await self.db.relic_get_setting("village_active_window_minutes")) or 30))
+        active_users = await self.db.relic_get_active_users_since(now - window_min * 60)
+        if not active_users:
+            return
+        village_count = max(1, int((await self.db.relic_get_setting("village_count")) or 1))
+        winners = random.sample(active_users, min(village_count, len(active_users)))
+        area = random.choice(areas)
+        reward_texts = []
+        for winner in winners:
+            reward_texts.append(await self._grant_village_reward(winner, area))
+        names = ", ".join(f"@{w['username']}" for w in winners)
+        await self._send(
+            f"🏘️ Hrafnathorp shares its {area['name']} bounty with {names}: "
+            f"{'; '.join(reward_texts)}."
+        )
+        _rlog(f"Hrafnathorp payout: {area['area_id']} L{area['level']} -> {names}")
 
     async def _send(self, msg: str) -> None:
         if self._bot:
@@ -406,7 +477,7 @@ class RelicHunt:
             user = {
                 "twitch_user_id": user_id,
                 "username": username,
-                "points": 0, "xp": 0, "level": 1,
+                "points": 0, "xp": 0, "shinies": 0, "level": 1,
                 "last_raven_at": None, "last_daily_at": None, "last_ritual_at": None,
                 "commands_used": 0, "legendary_finds": 0, "mythic_finds": 0,
                 "created_at": now, "updated_at": now,
@@ -415,8 +486,46 @@ class RelicHunt:
         else:
             if user.get("username") != username:
                 user["username"] = username
-                await self.db.relic_upsert_user(user)
+            await self.db.relic_upsert_user(user)
         return user
+
+    async def _grant_village_reward(self, user: dict, area: dict) -> str:
+        level = max(0, int(area.get("level") or 0))
+        resource = area.get("resource_type")
+        uid = user["twitch_user_id"]
+        name = user["username"]
+
+        if resource == "points":
+            amount = level * int((await self.db.relic_get_setting("village_points_per_level")) or 20)
+            user["points"] = int(user.get("points") or 0) + amount
+            await self.db.relic_upsert_user(user)
+            return f"@{name} +{amount} points"
+
+        if resource == "xp":
+            amount = level * int((await self.db.relic_get_setting("village_xp_per_level")) or 12)
+            user, _, _ = await self._apply_xp(user, amount)
+            await self.db.relic_upsert_user(user)
+            return f"@{name} +{amount} XP"
+
+        if resource == "shinies":
+            amount = level * int((await self.db.relic_get_setting("village_shinies_per_level")) or 1)
+            user["shinies"] = int(user.get("shinies") or 0) + amount
+            await self.db.relic_upsert_user(user)
+            return f"@{name} +{amount} Shiny"
+
+        if resource == "items":
+            all_items = await self.db.relic_get_all_items()
+            pool = [
+                item for item in all_items
+                if item.get("enabled") and item.get("rarity") in ("common", "uncommon")
+            ]
+            if pool:
+                prize = random.choice(pool)
+                await self.db.relic_add_item_to_user(uid, prize["id"])
+                return f"@{name} receives {prize.get('icon','')} {prize['name']}"
+            return f"@{name} receives a trade blessing"
+
+        return f"@{name} receives a village blessing"
 
     async def _get_ranks(self) -> list[dict]:
         ranks = await self.db.relic_get_all_ranks(active_only=True)
@@ -538,6 +647,8 @@ class RelicHunt:
         # Update user
         old_points = user["points"]
         user["points"]         += pts
+        shiny_gain = max(0, int((await self.db.relic_get_setting("shiny_per_find")) or 1))
+        user["shinies"] = int(user.get("shinies") or 0) + shiny_gain
         user["last_raven_at"]   = time.time()
         user["commands_used"]  += 1
         rarity = item.get("rarity", "common")
@@ -554,17 +665,17 @@ class RelicHunt:
         icon = item.get("icon", "") or ""
         iname = item["name"]
         if rarity == "mythic":
-            msg = f"🔥 MYTHIC DISCOVERY! @{name} has found {icon} {iname}. The Raven's Nest will remember this. +{pts} points, +{xp} XP."
+            msg = f"🔥 MYTHIC DISCOVERY! @{name} has found {icon} {iname}. The Raven's Nest will remember this. +{pts} points, +{xp} XP, +{shiny_gain} Shiny."
         elif rarity == "legendary":
-            msg = f"🌑 LEGENDARY RELIC! @{name}'s raven returns carrying {icon} {iname}! +{pts} points, +{xp} XP."
+            msg = f"🌑 LEGENDARY RELIC! @{name}'s raven returns carrying {icon} {iname}! +{pts} points, +{xp} XP, +{shiny_gain} Shiny."
         elif rarity == "epic":
-            msg = f"🌘 EPIC RELIC! @{name}'s raven brings back {icon} {iname}. +{pts} points, +{xp} XP."
+            msg = f"🌘 EPIC RELIC! @{name}'s raven brings back {icon} {iname}. +{pts} points, +{xp} XP, +{shiny_gain} Shiny."
         elif rarity == "rare":
-            msg = f"🪶 Rare find! @{name}'s raven returns with {icon} {iname}. +{pts} points, +{xp} XP."
+            msg = f"🪶 Rare find! @{name}'s raven returns with {icon} {iname}. +{pts} points, +{xp} XP, +{shiny_gain} Shiny."
         elif rarity == "uncommon":
-            msg = f"🍃 @{name}'s raven finds {icon} {iname}. {item.get('flavor_text','')} +{pts} points, +{xp} XP."
+            msg = f"🍃 @{name}'s raven finds {icon} {iname}. {item.get('flavor_text','')} +{pts} points, +{xp} XP, +{shiny_gain} Shiny."
         else:
-            msg = f"@{name} sends a raven into the mist... It returns with {icon} {iname}. +{pts} points, +{xp} XP."
+            msg = f"@{name} sends a raven into the mist... It returns with {icon} {iname}. +{pts} points, +{xp} XP, +{shiny_gain} Shiny."
 
         await self._send(msg)
         _rlog(f"{name} found {iname} ({rarity}) | +{pts}pts +{xp}xp")
@@ -616,7 +727,7 @@ class RelicHunt:
         await self._send(
             f"@{name}'s Nest | Rank: {rank['name']} | Level: {user['level']} | "
             f"XP: {user['xp']}/{next_xp} | Points: {user['points']} | "
-            f"Items: {total_items}{rarest_str}{next_str}"
+            f"Shinies: {int(user.get('shinies') or 0)} | Items: {total_items}{rarest_str}{next_str}"
         )
 
     async def _cmd_items(self, ctx: dict) -> None:
@@ -729,6 +840,8 @@ class RelicHunt:
             return
 
         user["last_ritual_at"] = time.time()
+        ritual_shiny_gain = max(0, int((await self.db.relic_get_setting("shiny_per_ritual")) or 1))
+        user["shinies"] = int(user.get("shinies") or 0) + ritual_shiny_gain
         await self.db.relic_upsert_user(user)
 
         # Check active event ritual multiplier
@@ -751,7 +864,10 @@ class RelicHunt:
             await self.db.relic_update_ritual(0, goal)
             reward_pts = int((await self.db.relic_get_setting("ritual_reward_points")) or 100)
             reward_xp  = int((await self.db.relic_get_setting("ritual_reward_xp")) or 50)
-            await self._send(f"🔥 The Raven Ritual is complete! All active hunters receive +{reward_pts} points and +{reward_xp} XP.")
+            await self._send(
+                f"🔥 The Raven Ritual is complete! All active hunters receive "
+                f"+{reward_pts} points, +{reward_xp} XP and +{ritual_shiny_gain} Shiny."
+            )
 
             # Reward all active users (hunted in last 30 min)
             window = int((await self.db.relic_get_setting("ritual_active_window_minutes")) or 30) * 60
@@ -761,6 +877,7 @@ class RelicHunt:
             for u in active_users:
                 old_points = u["points"]
                 u["points"] += reward_pts
+                u["shinies"] = int(u.get("shinies") or 0) + ritual_shiny_gain
                 u, _, _ = await self._apply_xp(u, reward_xp, old_points)
                 await self.db.relic_upsert_user(u)
 
@@ -776,7 +893,7 @@ class RelicHunt:
                     await self._send(f"The ritual chooses @{lucky['username']} and grants them {prize.get('icon','')} {prize['name']}!")
         else:
             await self.db.relic_update_ritual(new_energy, goal)
-            await self._send(f"@{name} adds {item_icon} {item_name} to the ritual circle. Ritual energy: {new_energy}/{goal}.")
+            await self._send(f"@{name} adds {item_icon} {item_name} to the ritual circle. +{ritual_shiny_gain} Shiny. Ritual energy: {new_energy}/{goal}.")
             _rlog(f"Ritual +{add_energy} energy by {name} via {item_name} ({new_energy}/{goal})")
 
     async def _cmd_combine(self, ctx: dict) -> None:
@@ -837,6 +954,10 @@ class RelicHunt:
         if not success:
             await self._send(f"@{name}'s raven lost track of the ingredients. Try again.")
             return
+        shiny_gain = max(0, int((await self.db.relic_get_setting("shiny_per_combine")) or 1))
+        if shiny_gain:
+            await self.db.relic_add_shinies(uid, shiny_gain)
+            msg = f"{msg} +{shiny_gain} Shiny."
 
         await self._send(msg)
         _rlog(
@@ -852,6 +973,95 @@ class RelicHunt:
                 await self._send(
                     f"⬆️ @{name} became a {new_rank['icon']} {new_rank['name']}!"
                 )
+
+    async def _cmd_village(self, ctx: dict) -> None:
+        if not await self._is_game_enabled():
+            return
+        areas = await self.db.relic_get_village_areas()
+        village_count = max(1, int((await self.db.relic_get_setting("village_count")) or 1))
+        parts = []
+        for area in areas:
+            level = int(area.get("level") or 0)
+            progress = int(area.get("progress") or 0)
+            max_level = int(area.get("max_level") or 5)
+            if area.get("resource_type") == "points":
+                payout = f"{level * int((await self.db.relic_get_setting('village_points_per_level')) or 20)} points"
+            elif area.get("resource_type") == "xp":
+                payout = f"{level * int((await self.db.relic_get_setting('village_xp_per_level')) or 12)} XP"
+            elif area.get("resource_type") == "shinies":
+                payout = f"{level * int((await self.db.relic_get_setting('village_shinies_per_level')) or 1)} Shiny"
+            else:
+                payout = "1 item"
+            parts.append(f"{area['name']} L{level}/{max_level} {progress}/100 ({payout})")
+        await self._send(
+            f"🏘️ Hrafnathorp | Villages: {village_count} | " + " | ".join(parts)
+        )
+
+    async def _cmd_village_donate(self, ctx: dict) -> None:
+        if not await self._is_game_enabled():
+            return
+        raw_command = ((ctx.get("text") or "").split(None, 1)[0]).lstrip("!").lower()
+        area_id = None
+        for candidate, cfg in VILLAGE_AREAS.items():
+            if raw_command == cfg["command"]:
+                area_id = candidate
+                break
+        if not area_id:
+            return
+        uid = ctx["user_id"]
+        name = ctx["username"]
+        user = await self._get_or_create_user(uid, name)
+        cost = max(1, int((await self.db.relic_get_setting("village_progress_cost_shinies")) or 5))
+        area = await self.db.relic_get_village_area(area_id)
+        if not area:
+            await self._send("Hrafnathorp is not ready yet.")
+            return
+        if int(area.get("level") or 0) >= int(area.get("max_level") or 5):
+            await self._send(f"@{name} {area['name']} is already at max level.")
+            return
+        if int(user.get("shinies") or 0) < cost:
+            await self._send(f"@{name} You need {cost} Shinies to help Hrafnathorp.")
+            return
+        if not await self.db.relic_try_spend_shinies(uid, cost):
+            await self._send(f"@{name} You need {cost} Shinies to help Hrafnathorp.")
+            return
+        updated = await self.db.relic_add_village_progress(area_id, 1)
+        if not updated:
+            await self._send("Hrafnathorp could not receive the donation.")
+            return
+        cfg = VILLAGE_AREAS[area_id]
+        if updated.get("leveled_up"):
+            await self._send(
+                f"🏘️ @{name} {cfg['verb']}. {updated['name']} rises to "
+                f"level {updated['level']}!"
+            )
+        else:
+            await self._send(
+                f"🏘️ @{name} {cfg['verb']}. {updated['name']} progress: "
+                f"{updated['progress']}/100."
+            )
+        _rlog(f"{name} donated {cost} Shinies to {area_id} ({updated['progress']}/100 L{updated['level']})")
+
+    async def _cmd_next_village(self, ctx: dict) -> None:
+        if not await self._is_game_enabled():
+            return
+        uid = ctx["user_id"]
+        name = ctx["username"]
+        user = await self._get_or_create_user(uid, name)
+        cost = max(1, int((await self.db.relic_get_setting("village_next_cost_shinies")) or 50))
+        if int(user.get("shinies") or 0) < cost:
+            await self._send(f"@{name} You need {cost} Shinies to found another village.")
+            return
+        if not await self.db.relic_try_spend_shinies(uid, cost):
+            await self._send(f"@{name} You need {cost} Shinies to found another village.")
+            return
+        village_count = max(1, int((await self.db.relic_get_setting("village_count")) or 1)) + 1
+        await self.db.relic_set_setting("village_count", str(village_count))
+        await self._send(
+            f"🏘️ @{name} founds another Hrafnathorp outpost! "
+            f"Village count: {village_count}."
+        )
+        _rlog(f"{name} founded village #{village_count} for {cost} Shinies")
 
     async def _cmd_phrase(self, ctx: dict) -> None:
         if not await self._is_game_enabled():
@@ -947,7 +1157,11 @@ class RelicHunt:
             await self._send(f"⬆️ @{name} reached level {user['level']}!")
 
     async def _cmd_help(self, ctx: dict) -> None:
-        await self._send("Raven's Nest commands: !raven, !nest, !items, !top, !rank, !daily, !ritual, !combine, !phrase, !solve, !relichelp")
+        await self._send(
+            "Raven's Nest commands: !raven, !nest, !items, !top, !rank, !daily, "
+            "!ritual, !combine, !village, !entertain, !teach, !trade, !invest, "
+            "!nextVillage, !phrase, !solve, !relichelp"
+        )
 
     async def _cmd_admin(self, ctx: dict) -> None:
         """Minimal admin commands for broadcaster/mods in chat."""
