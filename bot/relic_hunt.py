@@ -841,7 +841,6 @@ class RelicHunt:
 
         user["last_ritual_at"] = time.time()
         ritual_shiny_gain = max(0, int((await self.db.relic_get_setting("shiny_per_ritual")) or 1))
-        user["shinies"] = int(user.get("shinies") or 0) + ritual_shiny_gain
         await self.db.relic_upsert_user(user)
 
         # Check active event ritual multiplier
@@ -873,7 +872,10 @@ class RelicHunt:
             window = int((await self.db.relic_get_setting("ritual_active_window_minutes")) or 30) * 60
             all_users = await self.db.relic_get_all_users()
             cutoff = time.time() - window
-            active_users = [u for u in all_users if (u.get("last_raven_at") or 0) >= cutoff]
+            active_users = [
+                u for u in all_users
+                if max(u.get("last_raven_at") or 0, u.get("last_ritual_at") or 0) >= cutoff
+            ]
             for u in active_users:
                 old_points = u["points"]
                 u["points"] += reward_pts
@@ -893,7 +895,7 @@ class RelicHunt:
                     await self._send(f"The ritual chooses @{lucky['username']} and grants them {prize.get('icon','')} {prize['name']}!")
         else:
             await self.db.relic_update_ritual(new_energy, goal)
-            await self._send(f"@{name} adds {item_icon} {item_name} to the ritual circle. +{ritual_shiny_gain} Shiny. Ritual energy: {new_energy}/{goal}.")
+            await self._send(f"@{name} adds {item_icon} {item_name} to the ritual circle. Ritual energy: {new_energy}/{goal}.")
             _rlog(f"Ritual +{add_energy} energy by {name} via {item_name} ({new_energy}/{goal})")
 
     async def _cmd_combine(self, ctx: dict) -> None:
