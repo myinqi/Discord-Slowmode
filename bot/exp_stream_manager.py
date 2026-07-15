@@ -604,6 +604,7 @@ class ExpStreamManager:
         """Run one FFmpeg job that covers all songs without stopping between them."""
         bg_fn   = await self.db.get_setting("exp_radio_bg_filename") or ""
         bg_type = await self.db.get_setting("exp_radio_bg_type") or "image"
+        songs = await self._prepare_playback_songs(songs)
 
         # Resolve loop video: supports multiple uploads + shuffle / fixed / concat-all.
         loop_fn   = ""
@@ -1169,6 +1170,62 @@ class ExpStreamManager:
             return max(0.0, hours * 3600 + minutes * 60 + seconds)
         except (TypeError, ValueError):
             return None
+
+    async def _probe_audio_duration(self, song: dict) -> float | None:
+        mp3_filename = song.get("mp3_filename")
+        if not mp3_filename:
+            return None
+        mp3_path = os.path.join(self.exp_radio_dir, "mp3", mp3_filename)
+        if not os.path.exists(mp3_path):
+            return None
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ffprobe", "-v", "quiet",
+                "-show_entries", "format=duration",
+                "-of", "csv=p=0",
+                mp3_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            out, _ = await proc.communicate()
+            value = float((out.decode().strip() or "0"))
+            return value if value > 0 else None
+        except Exception as e:
+            self._log(f"Duration probe failed for '{song.get('title') or mp3_filename}': {e}", "error")
+            return None
+
+    async def _prepare_playback_songs(self, songs: list[dict]) -> list[dict]:
+        """Use the actual local MP3 duration for playback timing.
+
+        The DB duration can become stale if Suno metadata or manual edits drift
+        from the uploaded MP3. A wrong duration shifts every later song boundary
+        in the single-FFmpeg rotation, so the local audio file is the source of
+        truth for stream timing.
+        """
+        prepared: list[dict] = []
+        for song in songs:
+            item = dict(song)
+            probed = await self._probe_audio_duration(item)
+            if probed is not None:
+                try:
+                    stored = float(item.get("duration") or 0)
+                except (TypeError, ValueError):
+                    stored = 0.0
+                if not stored or abs(probed - stored) > 1.0:
+                    title = item.get("title") or item.get("mp3_filename") or "unknown"
+                    if stored:
+                        self._log(f"Duration corrected for '{title}': DB {stored:.1f}s → MP3 {probed:.1f}s")
+                    else:
+                        self._log(f"Duration filled for '{title}': MP3 {probed:.1f}s")
+                    song_id = item.get("id")
+                    if song_id:
+                        try:
+                            await self.db.update_exp_radio_song(song_id, duration=probed)
+                        except Exception as e:
+                            self._log(f"Duration DB update failed for song #{song_id}: {e}", "error")
+                item["duration"] = probed
+            prepared.append(item)
+        return prepared
 
     # ── Media helpers ──────────────────────────────────────────────────────────
 
