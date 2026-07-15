@@ -8,7 +8,7 @@
         <h3 class="text-white font-semibold">General Settings</h3>
     </div>
     <div class="p-5">
-        <form method="POST" class="space-y-5 max-w-lg">
+        <form method="POST" class="space-y-6 max-w-4xl">
             <div>
                 <label class="block text-sm font-medium text-gray-300 mb-1">Bot Name</label>
                 <input type="text" name="bot_name" value="{{ bot_name }}" required
@@ -54,6 +54,40 @@
                     {% endfor %}
                 </select>
                 <p class="text-xs text-gray-500 mt-1">Text channel where songs are posted via the "Post" button on the Party Playlist page.</p>
+            </div>
+            <div class="border-t border-gray-700/50 pt-5">
+                <div class="flex items-start justify-between gap-4 mb-4">
+                    <div>
+                        <h4 class="text-white font-semibold">Sidebar Navigation</h4>
+                        <p class="text-xs text-gray-500 mt-1">Choose which modules are shown in the left navigation. Permissions still control access.</p>
+                    </div>
+                    <div class="flex gap-2 text-xs">
+                        <button type="button" onclick="setSidebarNavChecks(true)"
+                            class="px-3 py-1.5 bg-discord-lighter hover:bg-gray-600 text-gray-200 rounded transition-colors">
+                            Select all
+                        </button>
+                        <button type="button" onclick="setSidebarNavChecks(false)"
+                            class="px-3 py-1.5 bg-discord-lighter hover:bg-gray-600 text-gray-200 rounded transition-colors">
+                            Hide all
+                        </button>
+                    </div>
+                </div>
+                <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                    {% for item in sidebar_nav_items %}
+                    <label class="flex items-center gap-3 px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-sm text-gray-300 hover:border-gray-600 cursor-pointer">
+                        <input type="checkbox" name="sidebar_{{ item.key }}" value="1"
+                            class="sidebar-nav-check w-4 h-4 rounded bg-discord-dark border-gray-600 text-discord-blurple focus:ring-discord-blurple"
+                            {% if item.key in sidebar_visible_items %}checked{% endif %}>
+                        {% if item.icon == 'trya_logo' %}
+                        <img src="{{ url_for('static', filename='TrYa_logo.png') }}" alt="" class="w-5 h-5 rounded object-cover">
+                        {% else %}
+                        <span class="w-5 text-center">{{ item.icon }}</span>
+                        {% endif %}
+                        <span>{{ item.label }}</span>
+                    </label>
+                    {% endfor %}
+                </div>
+                <p class="text-xs text-gray-500 mt-3">Dashboard and Settings are not controlled here, so the admin UI remains reachable for users with access.</p>
             </div>
             <button type="submit"
                 class="px-5 py-2.5 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg font-medium transition-colors">
@@ -163,4 +197,12 @@
         {% endif %}
     </div>
 </div>
+
+<script>
+function setSidebarNavChecks(checked) {
+    document.querySelectorAll('.sidebar-nav-check').forEach(function(input) {
+        input.checked = checked;
+    });
+}
+</script>
 {% endblock %}

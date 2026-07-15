@@ -64,10 +64,15 @@
             </div>
             {% set perms = session.get('permissions', []) %}
             {% set is_admin = session.get('is_admin') %}
-            {% macro nav_link(endpoint, icon, label, perm) %}
-            {% if is_admin or perm in perms %}
-                <a href="{{ url_for(endpoint) }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == endpoint %}active{% endif %}">
-                    <span class="sidebar-icon mr-3">{{ icon }}</span><span class="sidebar-label">{{ label }}</span>
+            {% macro nav_link(item) %}
+            {% if item.key in sidebar_visible_items and (is_admin or item.perm in perms) %}
+                <a href="{{ url_for(item.endpoint) }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == item.endpoint %}active{% endif %}">
+                    {% if item.icon == 'trya_logo' %}
+                    <span class="sidebar-icon mr-3"><img src="{{ url_for('static', filename='TrYa_logo.png') }}" alt="" class="w-5 h-5 rounded object-cover inline-block"></span>
+                    {% else %}
+                    <span class="sidebar-icon mr-3">{{ item.icon }}</span>
+                    {% endif %}
+                    <span class="sidebar-label">{{ item.label }}</span>
                 </a>
             {% endif %}
             {% endmacro %}
@@ -75,38 +80,14 @@
                 <a href="{{ url_for('dashboard') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'dashboard' %}active{% endif %}">
                     <span class="sidebar-icon mr-3">🏠</span><span class="sidebar-label">Dashboard</span>
                 </a>
-                {{ nav_link('channels', '📢', 'Channels', 'channels') }}
-                {{ nav_link('roles', '🛡️', 'Roles', 'roles') }}
-                {{ nav_link('users', '👥', 'Users', 'users') }}
-                {{ nav_link('welcome', '👋', 'Welcome', 'welcome') }}
-                {{ nav_link('party_playlist', '🎧', 'Party Playlist', 'party_playlist') }}
-                {{ nav_link('playlist_search', '🔍', 'Playlist Search', 'playlist_search') }}
-                {{ nav_link('player', '🎵', 'Suno Player', 'player') }}
-                {{ nav_link('song_stats', '📈', 'Song Stats', 'song_stats') }}
-                {{ nav_link('user_stats', '👤', 'User Stats', 'user_stats') }}
-                {{ nav_link('reaction_stats', '💬', 'Reaction Stats', 'reaction_stats') }}
-                {{ nav_link('reaction_roles', '🎭', 'Reaction Roles', 'reaction_roles') }}
-                {{ nav_link('image_posting', '🖼️', 'Image Posting', 'image_posting') }}
-                {{ nav_link('polls', '📊', 'Polls', 'polls') }}
-                {{ nav_link('quiz_admin', '❓', 'Quiz', 'quiz') }}
-                {{ nav_link('rpg_admin', '🎲', 'RPG', 'rpg') }}
-                {{ nav_link('radio_admin', '📻', 'Twitch', 'radio') }}
-                {{ nav_link('exp_radio_admin', '🎙️', 'Exp. Radio', 'exp_radio') }}
-                {{ nav_link('relic_hunt_admin', '🪶', "Raven's Nest", 'relic_hunt') }}
-                {{ nav_link('auto_translate_admin', '🌐', 'Auto Translate', 'auto_translate') }}
-                {{ nav_link('channel_moderation', '🛡️', 'Channel Mod', 'channel_moderation') }}
-                {{ nav_link('executioner', '🪓', 'Executioner', 'executioner') }}
-                {{ nav_link('songripper', '💿', 'Songripper', 'songripper') }}
-                {{ nav_link('suno_analyzer', '🔬', 'Suno Analyzer', 'suno_analyzer') }}
-                {{ nav_link('suno_promotion', '⭐', 'Suno Promotion', 'suno_promotion') }}
-                {% if is_admin or 'suno_info' in perms %}
-                <a href="{{ url_for('suno_info') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'suno_info' %}active{% endif %}">
-                    <span class="sidebar-icon mr-3"><img src="{{ url_for('static', filename='TrYa_logo.png') }}" alt="" class="w-5 h-5 rounded object-cover inline-block"></span><span class="sidebar-label">Suno Playlist Player</span>
+                {% for item in sidebar_nav_items %}
+                    {{ nav_link(item) }}
+                {% endfor %}
+                {% if is_admin or 'settings' in perms %}
+                <a href="{{ url_for('settings') }}" class="sidebar-link flex items-center px-3 py-2 rounded-md text-sm text-gray-300 {% if request.endpoint == 'settings' %}active{% endif %}">
+                    <span class="sidebar-icon mr-3">⚙️</span><span class="sidebar-label">Settings</span>
                 </a>
                 {% endif %}
-                {{ nav_link('audit', '📋', 'Audit Log', 'audit') }}
-                {{ nav_link('llm', '🤖', 'Corax Chat', 'llm') }}
-                {{ nav_link('settings', '⚙️', 'Settings', 'settings') }}
             </nav>
             <div class="p-3 border-t border-gray-700/50">
                 <div class="sidebar-footer-content flex items-center justify-between mb-2">

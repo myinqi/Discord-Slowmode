@@ -245,6 +245,53 @@ def create_app(db: Database, bot=None) -> Quart:
         ('rpg', 'RPG Adventures'),
     ]
 
+    SIDEBAR_NAV_ITEMS = [
+        {"key": "channels", "endpoint": "channels", "icon": "📢", "label": "Channels", "perm": "channels"},
+        {"key": "roles", "endpoint": "roles", "icon": "🛡️", "label": "Roles", "perm": "roles"},
+        {"key": "users", "endpoint": "users", "icon": "👥", "label": "Users", "perm": "users"},
+        {"key": "welcome", "endpoint": "welcome", "icon": "👋", "label": "Welcome", "perm": "welcome"},
+        {"key": "party_playlist", "endpoint": "party_playlist", "icon": "🎧", "label": "Party Playlist", "perm": "party_playlist"},
+        {"key": "playlist_search", "endpoint": "playlist_search", "icon": "🔍", "label": "Playlist Search", "perm": "playlist_search"},
+        {"key": "player", "endpoint": "player", "icon": "🎵", "label": "Suno Player", "perm": "player"},
+        {"key": "song_stats", "endpoint": "song_stats", "icon": "📈", "label": "Song Stats", "perm": "song_stats"},
+        {"key": "user_stats", "endpoint": "user_stats", "icon": "👤", "label": "User Stats", "perm": "user_stats"},
+        {"key": "reaction_stats", "endpoint": "reaction_stats", "icon": "💬", "label": "Reaction Stats", "perm": "reaction_stats"},
+        {"key": "reaction_roles", "endpoint": "reaction_roles", "icon": "🎭", "label": "Reaction Roles", "perm": "reaction_roles"},
+        {"key": "image_posting", "endpoint": "image_posting", "icon": "🖼️", "label": "Image Posting", "perm": "image_posting"},
+        {"key": "polls", "endpoint": "polls", "icon": "📊", "label": "Polls", "perm": "polls"},
+        {"key": "quiz", "endpoint": "quiz_admin", "icon": "❓", "label": "Quiz", "perm": "quiz"},
+        {"key": "rpg", "endpoint": "rpg_admin", "icon": "🎲", "label": "RPG", "perm": "rpg"},
+        {"key": "radio", "endpoint": "radio_admin", "icon": "📻", "label": "Twitch", "perm": "radio"},
+        {"key": "exp_radio", "endpoint": "exp_radio_admin", "icon": "🎙️", "label": "Exp. Radio", "perm": "exp_radio"},
+        {"key": "relic_hunt", "endpoint": "relic_hunt_admin", "icon": "🪶", "label": "Raven's Nest", "perm": "relic_hunt"},
+        {"key": "auto_translate", "endpoint": "auto_translate_admin", "icon": "🌐", "label": "Auto Translate", "perm": "auto_translate"},
+        {"key": "channel_moderation", "endpoint": "channel_moderation", "icon": "🛡️", "label": "Channel Mod", "perm": "channel_moderation"},
+        {"key": "executioner", "endpoint": "executioner", "icon": "🪓", "label": "Executioner", "perm": "executioner"},
+        {"key": "songripper", "endpoint": "songripper", "icon": "💿", "label": "Songripper", "perm": "songripper"},
+        {"key": "suno_analyzer", "endpoint": "suno_analyzer", "icon": "🔬", "label": "Suno Analyzer", "perm": "suno_analyzer"},
+        {"key": "suno_promotion", "endpoint": "suno_promotion", "icon": "⭐", "label": "Suno Promotion", "perm": "suno_promotion"},
+        {"key": "suno_info", "endpoint": "suno_info", "icon": "trya_logo", "label": "Suno Playlist Player", "perm": "suno_info"},
+        {"key": "audit", "endpoint": "audit", "icon": "📋", "label": "Audit Log", "perm": "audit"},
+        {"key": "llm", "endpoint": "llm", "icon": "🤖", "label": "Corax Chat", "perm": "llm"},
+    ]
+
+    def _parse_sidebar_visible(raw: str | None) -> set[str]:
+        known = {item["key"] for item in SIDEBAR_NAV_ITEMS}
+        if not raw:
+            return set(known)
+        if raw == "__none__":
+            return set()
+        selected = {part.strip() for part in raw.split(",") if part.strip()}
+        return selected & known
+
+    @app.context_processor
+    async def inject_sidebar_nav():
+        visible = _parse_sidebar_visible(await db.get_setting("sidebar_visible_items"))
+        return {
+            "sidebar_nav_items": SIDEBAR_NAV_ITEMS,
+            "sidebar_visible_items": visible,
+        }
+
     def admin_required(f):
         @functools.wraps(f)
         async def decorated(*args, **kwargs):
@@ -473,6 +520,11 @@ def create_app(db: Database, bot=None) -> Quart:
             party_max_songs = form.get("party_max_songs", "2").strip()
             party_voice_channel = form.get("party_voice_channel", "").strip()
             player_url = form.get("player_url", "").strip()
+            known_sidebar = {item["key"] for item in SIDEBAR_NAV_ITEMS}
+            sidebar_visible = [
+                item["key"] for item in SIDEBAR_NAV_ITEMS
+                if form.get(f"sidebar_{item['key']}") and item["key"] in known_sidebar
+            ]
 
             if bot_name:
                 await db.set_setting("bot_name", bot_name)
@@ -482,10 +534,11 @@ def create_app(db: Database, bot=None) -> Quart:
             await db.set_setting("party_max_songs", party_max_songs)
             await db.set_setting("party_voice_channel", party_voice_channel)
             await db.set_setting("player_url", player_url)
+            await db.set_setting("sidebar_visible_items", ",".join(sidebar_visible) or "__none__")
 
             await db.add_audit_log(
                 event_type="settings_changed",
-                details=f"Bot name: {bot_name}, Guild ID: {guild_id}, /new channel: {new_channel}, party_max_songs: {party_max_songs}, party_voice_channel: {party_voice_channel}, player_url: {player_url}",
+                details=f"Bot name: {bot_name}, Guild ID: {guild_id}, /new channel: {new_channel}, party_max_songs: {party_max_songs}, party_voice_channel: {party_voice_channel}, player_url: {player_url}, sidebar_visible_items: {len(sidebar_visible)}",
                 actor=session.get("username", "unknown"),
             )
             await flash("Settings saved.", "success")
