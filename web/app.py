@@ -234,6 +234,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('auto_translate', 'Auto Translate'),
         ('channel_moderation', 'Channel Moderation'),
         ('executioner', 'Executioner'),
+        ('songripper', 'Songripper'),
         ('suno_analyzer', 'Suno Analyzer'),
         ('suno_promotion', 'Suno Promotion'),
         ('suno_info', 'Suno Info'),
@@ -4094,34 +4095,113 @@ def create_app(db: Database, bot=None) -> Quart:
     from bot.live_log import log_event as _rh_log
     relic_hunt = RelicHunt(db)
 
-    async def _sync_exp_radio_song_durations(songs: list[dict]) -> int:
-        """Keep displayed Exp. Radio durations aligned with local MP3 files."""
-        changed = 0
+    def _fmt_exp_duration(seconds) -> str:
+        try:
+            total = int(round(float(seconds)))
+        except (TypeError, ValueError):
+            return "unknown"
+        if total <= 0:
+            return "unknown"
+        mins, secs = divmod(total, 60)
+        hours, mins = divmod(mins, 60)
+        if hours:
+            return f"{hours:d}:{mins:02d}:{secs:02d}"
+        return f"{mins:d}:{secs:02d}"
+
+    async def _exp_radio_stream_relevant_songs() -> list[dict]:
+        active_pl = (await db.get_setting("exp_radio_active_playlist")) or "submission"
+        if active_pl == "both":
+            songs = await db.get_all_exp_radio_songs(active_only=True, source="submission")
+            songs += await db.get_all_exp_radio_songs(active_only=True, source="admin")
+        else:
+            songs = await db.get_all_exp_radio_songs(active_only=True, source=active_pl)
+
+        intro_enabled = (await db.get_setting("exp_radio_intro_enabled")) or "off"
+        if intro_enabled == "on":
+            songs += await db.get_all_exp_radio_songs(active_only=True, source="intro")
+
+        outro_enabled = (await db.get_setting("exp_radio_outro_enabled")) or "off"
+        if outro_enabled == "on":
+            songs += await db.get_all_exp_radio_songs(active_only=True, source="outro")
+
+        seen: set[int] = set()
+        unique: list[dict] = []
         for song in songs:
+            song_id = int(song.get("id") or 0)
+            if song_id and song_id in seen:
+                continue
+            if song_id:
+                seen.add(song_id)
+            unique.append(song)
+        return unique
+
+    async def _check_exp_radio_durations() -> tuple[int, int, int, int]:
+        from bot.exp_stream_manager import log_event
+
+        songs = await _exp_radio_stream_relevant_songs()
+        checked = corrected = skipped = errors = 0
+        log_event(
+            f"Manual duration check started for {len(songs)} active stream song(s).",
+            prefix="[duration]",
+        )
+
+        for song in songs:
+            title = song.get("title") or song.get("mp3_filename") or f"#{song.get('id')}"
             if not song.get("mp3_filename"):
+                skipped += 1
+                log_event(f"Skipped #{song.get('id')} ({title!r}): no MP3 file.", prefix="[duration]")
                 continue
-            probed = await exp_stream_manager._probe_audio_duration(song)
+
+            checked += 1
+            try:
+                probed = await exp_stream_manager._probe_audio_duration(song)
+            except Exception as e:
+                errors += 1
+                log_event(
+                    f"Duration probe failed for #{song.get('id')} ({title!r}): {e}",
+                    level="error",
+                    prefix="[duration]",
+                )
+                continue
             if probed is None:
+                errors += 1
+                log_event(
+                    f"Duration probe failed for #{song.get('id')} ({title!r}): no duration detected.",
+                    level="error",
+                    prefix="[duration]",
+                )
                 continue
+
             try:
                 stored = float(song.get("duration") or 0)
             except (TypeError, ValueError):
                 stored = 0.0
-            if stored and abs(probed - stored) <= 1.0:
-                continue
-            song["duration"] = probed
-            song_id = song.get("id")
-            if song_id:
+
+            if not stored or abs(probed - stored) > 1.0:
                 try:
-                    await db.update_exp_radio_song(song_id, duration=probed)
-                    changed += 1
-                except Exception as e:
-                    _rh_log(
-                        f"Duration sync failed for song #{song_id}: {e}",
-                        "error",
-                        "[exp-radio]",
+                    await db.update_exp_radio_song(song["id"], duration=probed)
+                    corrected += 1
+                    log_event(
+                        f"Corrected #{song.get('id')} ({title!r}): "
+                        f"{_fmt_exp_duration(stored)} -> {_fmt_exp_duration(probed)} "
+                        f"({stored:.1f}s -> {probed:.1f}s).",
+                        prefix="[duration]",
                     )
-        return changed
+                except Exception as e:
+                    errors += 1
+                    log_event(
+                        f"Duration DB update failed for #{song.get('id')} ({title!r}): {e}",
+                        level="error",
+                        prefix="[duration]",
+                    )
+
+        log_event(
+            f"Manual duration check done: {checked} checked, {corrected} corrected, "
+            f"{skipped} skipped, {errors} error(s).",
+            level="error" if errors else "info",
+            prefix="[duration]",
+        )
+        return checked, corrected, skipped, errors
 
     async def _relic_hunt_autostart():
         """Auto-start the Relic Hunt IRC listener on app boot if the game is enabled
@@ -4313,6 +4393,22 @@ def create_app(db: Database, bot=None) -> Quart:
                         "Whisper runs in the background — refresh the page to see status updates.",
                         "success",
                     )
+
+            elif action == "check_durations":
+                import bot.exp_stream_manager as _esm
+                if _esm.stream_is_live:
+                    await flash("Cannot check durations while the stream is live.", "error")
+                else:
+                    checked, corrected, skipped, errors = await _check_exp_radio_durations()
+                    msg = (
+                        f"Duration check complete: {checked} checked, "
+                        f"{corrected} corrected, {skipped} skipped"
+                    )
+                    if errors:
+                        msg += f", {errors} error(s). Check the Live Log."
+                    else:
+                        msg += ". Details are in the Live Log."
+                    await flash(msg, "error" if errors else "success")
 
             elif action == "rescrape_metadata_one":
                 from bot.exp_radio_worker import scrape_suno
@@ -4812,7 +4908,6 @@ def create_app(db: Database, bot=None) -> Quart:
             return redirect(request.url)
 
         songs = await db.get_all_exp_radio_songs(active_only=True, source="submission")
-        await _sync_exp_radio_song_durations(songs)
         # Enrich each song with parsed analysis info for the admin UI:
         # word_count, coverage span and a transcript preview reconstructed
         # from the stored word_timestamps JSON.
@@ -4944,9 +5039,6 @@ def create_app(db: Database, bot=None) -> Quart:
         admin_songs = await db.get_all_exp_radio_songs(active_only=False, source="admin")
         intro_songs = await db.get_all_exp_radio_songs(active_only=False, source="intro")
         outro_songs = await db.get_all_exp_radio_songs(active_only=False, source="outro")
-        await _sync_exp_radio_song_durations(admin_songs)
-        await _sync_exp_radio_song_durations(intro_songs)
-        await _sync_exp_radio_song_durations(outro_songs)
         active_intro_songs = [s for s in intro_songs if s.get("active") and s.get("analysis_status") == "done" and s.get("mp3_filename")]
         active_outro_songs = [s for s in outro_songs if s.get("active") and s.get("analysis_status") == "done" and s.get("mp3_filename")]
         return await render_template(
@@ -6067,6 +6159,53 @@ def create_app(db: Database, bot=None) -> Quart:
     @permission_required('suno_analyzer')
     async def suno_analyzer():
         return await render_template("suno_analyzer.html")
+
+    @app.route("/songripper")
+    @permission_required('songripper')
+    async def songripper():
+        return await render_template("songripper.html")
+
+    @app.route("/songripper/resolve")
+    @permission_required('songripper')
+    async def songripper_resolve():
+        """Resolve Suno song/share URLs for the lightweight audio ripper."""
+        from quart import jsonify
+        import aiohttp, re as _re
+        song_id = request.args.get("id", "").strip()
+        if not song_id:
+            return jsonify({"error": "No id provided"}), 400
+        is_uuid = bool(_re.match(r'^[a-f0-9]{8}-[a-f0-9]{4}', song_id))
+        url = f"https://suno.com/song/{song_id}" if is_uuid else f"https://suno.com/s/{song_id}"
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return jsonify({"error": f"Suno returned {resp.status}"}), 502
+                    html = await resp.text()
+            result = {}
+            m = _re.search(r'"id"\s*:\s*"([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})"', html)
+            if not m:
+                m = _re.search(r'song/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})', html)
+            result["realId"] = m.group(1) if m else (song_id if is_uuid else None)
+            m = _re.search(r'<title>([^<|]+)', html)
+            result["title"] = m.group(1).strip() if m else ""
+            m = _re.search(r'cdn2\.suno\.ai/[^"]+\.jpeg', html)
+            result["artwork"] = "https://" + m.group(0) if m else ""
+            author = ""
+            title_by = _re.search(r'\bby\s+(.+?)(?:\s*\||\s*-\s*Suno|$)', result.get("title", ""))
+            if title_by:
+                author = title_by.group(1).strip()
+            if not author:
+                m = _re.search(r'\\"display_name\\":\\"([^\\]+)\\"', html)
+                if not m:
+                    m = _re.search(r'"display_name":"([^"]+)"', html)
+                if m:
+                    author = m.group(1)
+            result["author"] = author
+            return jsonify(result)
+        except Exception as e:
+            return jsonify({"error": str(e)}), 502
 
     @app.route("/suno-analyzer/resolve")
     @permission_required('suno_analyzer')
