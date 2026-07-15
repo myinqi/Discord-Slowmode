@@ -611,6 +611,20 @@
                         <span class="inline-block w-2.5 h-2.5 rounded-full bg-gray-500" id="exp-status-dot"></span>
                         <span class="text-gray-400 text-sm font-medium" id="exp-status-text">Offline</span>
                     </div>
+                    <div id="exp-current-song-card"
+                        class="hidden mt-3 rounded-lg border border-gray-700/60 bg-discord-darker/70 px-3 py-2">
+                        <p class="text-gray-500 text-[10px] uppercase tracking-wider mb-1">Current song</p>
+                        <p class="text-white text-sm font-semibold truncate" id="exp-now-playing-title">—</p>
+                        <p class="text-gray-400 text-xs truncate" id="exp-now-playing-artist">—</p>
+                        <div class="mt-2 flex items-center justify-between gap-3">
+                            <span class="text-gray-500 text-xs" id="exp-now-playing-position">—</span>
+                            <a href="#" target="_blank" rel="noopener"
+                                id="exp-now-playing-link"
+                                class="hidden text-discord-blurple hover:text-discord-blurple/80 text-xs font-medium">
+                                Suno ↗
+                            </a>
+                        </div>
+                    </div>
                     <p class="text-gray-500 text-xs truncate" id="exp-now-playing">—</p>
                     <p class="text-gray-600 text-xs mt-1 truncate" id="exp-ffmpeg-health">FFmpeg offline</p>
                     <p class="text-gray-600 text-xs mt-1 truncate" id="exp-obs-overlay-status">OBS overlay disabled</p>
@@ -1259,6 +1273,41 @@ function renderExpObsOverlayStatus(data, running) {
     obsEl.textContent = obs.label || 'OBS overlay disabled';
 }
 
+function renderExpCurrentSong(data, running) {
+    const card = document.getElementById('exp-current-song-card');
+    const legacyLine = document.getElementById('exp-now-playing');
+    const titleEl = document.getElementById('exp-now-playing-title');
+    const artistEl = document.getElementById('exp-now-playing-artist');
+    const posEl = document.getElementById('exp-now-playing-position');
+    const linkEl = document.getElementById('exp-now-playing-link');
+    if (!card || !legacyLine || !titleEl || !artistEl || !posEl || !linkEl) return;
+
+    const song = data.song || null;
+    if (!running || !song) {
+        card.classList.add('hidden');
+        legacyLine.classList.remove('hidden');
+        legacyLine.textContent = '—';
+        linkEl.classList.add('hidden');
+        linkEl.removeAttribute('href');
+        return;
+    }
+
+    const title = song.title || 'Unknown title';
+    const artist = song.artist || 'Unknown artist';
+    card.classList.remove('hidden');
+    legacyLine.classList.add('hidden');
+    titleEl.textContent = title;
+    artistEl.textContent = artist;
+    posEl.textContent = `Song ${data.song_index || 0}/${data.playlist_length || 0}`;
+    if (song.suno_url) {
+        linkEl.href = song.suno_url;
+        linkEl.classList.remove('hidden');
+    } else {
+        linkEl.classList.add('hidden');
+        linkEl.removeAttribute('href');
+    }
+}
+
 async function updateExpStatus() {
     try {
         const r = await fetch('/exp-radio/stream/status');
@@ -1278,15 +1327,14 @@ async function updateExpStatus() {
                 safeStopBtn.disabled = d.safe_stop_pending;
                 safeStopBtn.textContent = d.safe_stop_pending ? '🌙 Stopping…' : '🌙 Safe Stop';
             }
-            if (d.song) {
-                np.textContent = `${d.song.title || '?'} — ${d.song.artist || ''}  (${d.song_index || 0}/${d.playlist_length || 0})`;
-            }
+            renderExpCurrentSong(d, true);
             renderExpFfmpegHealth(d, true);
             renderExpObsOverlayStatus(d, true);
         } else {
             dot.className  = 'inline-block w-2.5 h-2.5 rounded-full bg-gray-500';
             text.textContent = 'Offline';
             np.textContent   = '—';
+            renderExpCurrentSong(d, false);
             if (safeStopBtn) { safeStopBtn.disabled = false; safeStopBtn.textContent = '🌙 Safe Stop'; }
             renderExpFfmpegHealth(d, false);
             renderExpObsOverlayStatus(d, false);
