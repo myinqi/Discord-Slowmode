@@ -4094,6 +4094,35 @@ def create_app(db: Database, bot=None) -> Quart:
     from bot.live_log import log_event as _rh_log
     relic_hunt = RelicHunt(db)
 
+    async def _sync_exp_radio_song_durations(songs: list[dict]) -> int:
+        """Keep displayed Exp. Radio durations aligned with local MP3 files."""
+        changed = 0
+        for song in songs:
+            if not song.get("mp3_filename"):
+                continue
+            probed = await exp_stream_manager._probe_audio_duration(song)
+            if probed is None:
+                continue
+            try:
+                stored = float(song.get("duration") or 0)
+            except (TypeError, ValueError):
+                stored = 0.0
+            if stored and abs(probed - stored) <= 1.0:
+                continue
+            song["duration"] = probed
+            song_id = song.get("id")
+            if song_id:
+                try:
+                    await db.update_exp_radio_song(song_id, duration=probed)
+                    changed += 1
+                except Exception as e:
+                    _rh_log(
+                        f"Duration sync failed for song #{song_id}: {e}",
+                        "error",
+                        "[exp-radio]",
+                    )
+        return changed
+
     async def _relic_hunt_autostart():
         """Auto-start the Relic Hunt IRC listener on app boot if the game is enabled
         and the exp_radio_twitch credentials are configured."""
@@ -4783,6 +4812,7 @@ def create_app(db: Database, bot=None) -> Quart:
             return redirect(request.url)
 
         songs = await db.get_all_exp_radio_songs(active_only=True, source="submission")
+        await _sync_exp_radio_song_durations(songs)
         # Enrich each song with parsed analysis info for the admin UI:
         # word_count, coverage span and a transcript preview reconstructed
         # from the stored word_timestamps JSON.
@@ -4914,6 +4944,9 @@ def create_app(db: Database, bot=None) -> Quart:
         admin_songs = await db.get_all_exp_radio_songs(active_only=False, source="admin")
         intro_songs = await db.get_all_exp_radio_songs(active_only=False, source="intro")
         outro_songs = await db.get_all_exp_radio_songs(active_only=False, source="outro")
+        await _sync_exp_radio_song_durations(admin_songs)
+        await _sync_exp_radio_song_durations(intro_songs)
+        await _sync_exp_radio_song_durations(outro_songs)
         active_intro_songs = [s for s in intro_songs if s.get("active") and s.get("analysis_status") == "done" and s.get("mp3_filename")]
         active_outro_songs = [s for s in outro_songs if s.get("active") and s.get("analysis_status") == "done" and s.get("mp3_filename")]
         return await render_template(
