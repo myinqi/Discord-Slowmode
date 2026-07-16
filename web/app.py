@@ -6100,11 +6100,16 @@ def create_app(db: Database, bot=None) -> Quart:
                 else:
                     await flash("Village area not found.", "error")
 
-            elif action == "village_reset":
+            elif action == "village_reset_progress":
                 await db.relic_reset_village()
-                await db.relic_set_setting("village_count", "1")
                 await db.relic_set_setting("village_next_payout_at", "0")
                 await flash("Village progress reset.", "success")
+
+            elif action == "village_set_count":
+                village_count = max(1, int(form.get("village_count") or 1))
+                await db.relic_set_setting("village_count", str(village_count))
+                await db.relic_set_setting("village_next_payout_at", "0")
+                await flash(f"Village count set to {village_count}.", "success")
 
             return redirect(request.url)
 

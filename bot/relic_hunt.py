@@ -1051,6 +1051,18 @@ class RelicHunt:
         name = ctx["username"]
         user = await self._get_or_create_user(uid, name)
         cost = max(1, int((await self.db.relic_get_setting("village_next_cost_shinies")) or 50))
+        areas = await self.db.relic_get_village_areas()
+        unfinished = [
+            area for area in areas
+            if int(area.get("level") or 0) < int(area.get("max_level") or 5)
+        ]
+        if unfinished:
+            names = ", ".join(area["name"] for area in unfinished)
+            await self._send(
+                f"@{name} Hrafnathorp is not fully built yet. "
+                f"Finish these areas first: {names}."
+            )
+            return
         if int(user.get("shinies") or 0) < cost:
             await self._send(f"@{name} You need {cost} Shinies to found another village.")
             return
@@ -1059,9 +1071,11 @@ class RelicHunt:
             return
         village_count = max(1, int((await self.db.relic_get_setting("village_count")) or 1)) + 1
         await self.db.relic_set_setting("village_count", str(village_count))
+        await self.db.relic_reset_village()
+        await self.db.relic_set_setting("village_next_payout_at", "0")
         await self._send(
             f"🏘️ @{name} founds another Hrafnathorp outpost! "
-            f"Village count: {village_count}."
+            f"Village count: {village_count}. A new village can now be built."
         )
         _rlog(f"{name} founded village #{village_count} for {cost} Shinies")
 
