@@ -5566,6 +5566,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     "village_active_window_minutes",
                     "village_points_per_level",
                     "village_xp_per_level",
+                    "village_items_per_level",
                     "village_shinies_per_level",
                 ):
                     if key in _bool_keys:
@@ -6204,6 +6205,7 @@ def create_app(db: Database, bot=None) -> Quart:
             "village_active_window_minutes",
             "village_points_per_level",
             "village_xp_per_level",
+            "village_items_per_level",
             "village_shinies_per_level",
             "village_count",
         ):

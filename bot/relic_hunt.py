@@ -514,15 +514,30 @@ class RelicHunt:
             return f"@{name} +{amount} Shiny"
 
         if resource == "items":
+            amount = level * int((await self.db.relic_get_setting("village_items_per_level")) or 1)
             all_items = await self.db.relic_get_all_items()
             pool = [
                 item for item in all_items
                 if item.get("enabled") and item.get("rarity") in ("common", "uncommon")
             ]
-            if pool:
-                prize = random.choice(pool)
-                await self.db.relic_add_item_to_user(uid, prize["id"])
-                return f"@{name} receives {prize.get('icon','')} {prize['name']}"
+            if pool and amount > 0:
+                prizes = [random.choice(pool) for _ in range(amount)]
+                for prize in prizes:
+                    await self.db.relic_add_item_to_user(uid, prize["id"])
+                counts: dict[str, dict] = {}
+                for prize in prizes:
+                    entry = counts.setdefault(
+                        prize["id"],
+                        {"item": prize, "count": 0},
+                    )
+                    entry["count"] += 1
+                parts = []
+                for entry in counts.values():
+                    prize = entry["item"]
+                    count = entry["count"]
+                    label = f"{prize.get('icon','')} {prize['name']}".strip()
+                    parts.append(f"{count}x {label}" if count > 1 else label)
+                return f"@{name} receives {', '.join(parts)}"
             return f"@{name} receives a trade blessing"
 
         return f"@{name} receives a village blessing"
@@ -993,7 +1008,8 @@ class RelicHunt:
             elif area.get("resource_type") == "shinies":
                 payout = f"{level * int((await self.db.relic_get_setting('village_shinies_per_level')) or 1)} Shiny"
             else:
-                payout = "1 item"
+                amount = level * int((await self.db.relic_get_setting("village_items_per_level")) or 1)
+                payout = f"{amount} item{'s' if amount != 1 else ''}"
             parts.append(f"{area['name']} L{level}/{max_level} {progress}/100 ({payout})")
         await self._send(
             f"🏘️ Hrafnathorp | Villages: {village_count} | " + " | ".join(parts)
