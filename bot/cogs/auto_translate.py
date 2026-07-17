@@ -110,7 +110,7 @@ async def _translate_openai(text: str, lang_name: str, api_key: str, model: str)
         "model": model or "gpt-4o-mini",
         "messages": messages,
         "temperature": 0.1,
-        "max_tokens": 1024,
+        "max_completion_tokens": 1024,
     }
     timeout = aiohttp.ClientTimeout(total=_TRANSLATE_TIMEOUT_OPENAI)
     async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
