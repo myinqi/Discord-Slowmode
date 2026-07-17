@@ -233,6 +233,15 @@ class AutoTranslateCog(commands.Cog):
                 if not translated or translated.strip() == text.strip():
                     continue
                 await message.channel.send(f"**{author_name}** {flag} {translated}")
+                try:
+                    await db.add_auto_translate_usage(
+                        engine=engine,
+                        target_lang=lang,
+                        source_chars=len(text),
+                        translated_chars=len(translated),
+                    )
+                except Exception as e:
+                    print(f"[auto_translate] Usage logging failed: {e}", flush=True)
             except asyncio.TimeoutError:
                 print(f"[auto_translate] Timeout for lang={lang} engine={engine}", flush=True)
             except Exception as e:

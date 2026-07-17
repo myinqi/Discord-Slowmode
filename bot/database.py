@@ -111,6 +111,19 @@ class Database:
                 channel_name TEXT,
                 timestamp REAL NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS auto_translate_usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at REAL NOT NULL,
+                month TEXT NOT NULL,
+                engine TEXT NOT NULL,
+                target_lang TEXT NOT NULL,
+                source_chars INTEGER NOT NULL DEFAULT 0,
+                translated_chars INTEGER NOT NULL DEFAULT 0,
+                request_count INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE INDEX IF NOT EXISTS idx_auto_translate_usage_month
+                ON auto_translate_usage(month, engine, target_lang);
         """)
         await self.db.commit()
         await self._run_migrations()
@@ -707,6 +720,47 @@ class Database:
             (key, value),
         )
         await self.db.commit()
+
+    async def add_auto_translate_usage(
+        self,
+        *,
+        engine: str,
+        target_lang: str,
+        source_chars: int,
+        translated_chars: int,
+    ) -> None:
+        now = time.time()
+        month = time.strftime("%Y-%m", time.localtime(now))
+        await self.db.execute("""
+            INSERT INTO auto_translate_usage
+                (created_at, month, engine, target_lang, source_chars,
+                 translated_chars, request_count)
+            VALUES (?, ?, ?, ?, ?, ?, 1)
+        """, (
+            now,
+            month,
+            engine,
+            target_lang,
+            max(0, int(source_chars or 0)),
+            max(0, int(translated_chars or 0)),
+        ))
+        await self.db.commit()
+
+    async def get_auto_translate_monthly_usage(self, limit: int = 18) -> list[dict]:
+        async with self.db.execute("""
+            SELECT
+                month,
+                engine,
+                target_lang,
+                SUM(source_chars) AS source_chars,
+                SUM(translated_chars) AS translated_chars,
+                SUM(request_count) AS requests
+            FROM auto_translate_usage
+            GROUP BY month, engine, target_lang
+            ORDER BY month DESC, engine ASC, target_lang ASC
+            LIMIT ?
+        """, (limit,)) as cur:
+            return [dict(r) for r in await cur.fetchall()]
 
     # --- Welcome Config ---
 

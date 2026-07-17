@@ -216,6 +216,57 @@
         </form>
     </div>
 
+    <!-- Monthly usage -->
+    <div class="bg-discord-dark border border-gray-700/50 rounded-xl overflow-hidden">
+        <div class="px-5 py-3 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold text-sm">Monthly usage</h3>
+        </div>
+        <div class="p-5">
+            {% if usage_rows %}
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="text-left text-gray-500 border-b border-gray-700/50">
+                            <th class="pb-2 pr-3">Month</th>
+                            <th class="pb-2 pr-3">Engine</th>
+                            <th class="pb-2 pr-3">Language</th>
+                            <th class="pb-2 pr-3 text-right">Requests</th>
+                            <th class="pb-2 pr-3 text-right">Source chars</th>
+                            <th class="pb-2 text-right">Translated chars</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-700/30">
+                        {% set ns = namespace(current_month='') %}
+                        {% for row in usage_rows %}
+                        {% if row.month != ns.current_month %}
+                        {% set total = usage_totals.get(row.month, {}) %}
+                        <tr class="bg-discord-darker/60">
+                            <td class="py-2 pr-3 text-white font-semibold">{{ row.month }}</td>
+                            <td class="py-2 pr-3 text-gray-400" colspan="2">Total</td>
+                            <td class="py-2 pr-3 text-right text-white">{{ "{:,}".format(total.get('requests', 0)) }}</td>
+                            <td class="py-2 pr-3 text-right text-white">{{ "{:,}".format(total.get('source_chars', 0)) }}</td>
+                            <td class="py-2 text-right text-white">{{ "{:,}".format(total.get('translated_chars', 0)) }}</td>
+                        </tr>
+                        {% set ns.current_month = row.month %}
+                        {% endif %}
+                        <tr>
+                            <td class="py-2 pr-3 text-gray-500">{{ row.month }}</td>
+                            <td class="py-2 pr-3 text-gray-300">{{ row.engine }}</td>
+                            <td class="py-2 pr-3 text-gray-300">{{ row.target_lang }}</td>
+                            <td class="py-2 pr-3 text-right text-gray-300">{{ "{:,}".format(row.requests or 0) }}</td>
+                            <td class="py-2 pr-3 text-right text-gray-300">{{ "{:,}".format(row.source_chars or 0) }}</td>
+                            <td class="py-2 text-right text-gray-300">{{ "{:,}".format(row.translated_chars or 0) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="text-gray-500 text-sm">No usage recorded yet. Successful auto-translations will appear here.</p>
+            {% endif %}
+        </div>
+    </div>
+
     <!-- Preview of output format -->
     <div class="bg-discord-dark border border-gray-700/50 rounded-xl overflow-hidden">
         <div class="px-5 py-3 border-b border-gray-700/50">

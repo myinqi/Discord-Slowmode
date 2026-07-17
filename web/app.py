@@ -7705,6 +7705,16 @@ def create_app(db: Database, bot=None) -> Quart:
         deepl_api_url = await db.get_setting("auto_translate_deepl_api_url") or "https://api-free.deepl.com/v2/translate"
         skip_open  = await db.get_setting("auto_translate_skip_open")  or ""
         skip_close = await db.get_setting("auto_translate_skip_close") or ""
+        usage_rows = await db.get_auto_translate_monthly_usage()
+        usage_totals: dict[str, dict] = {}
+        for row in usage_rows:
+            bucket = usage_totals.setdefault(
+                row["month"],
+                {"requests": 0, "source_chars": 0, "translated_chars": 0},
+            )
+            bucket["requests"] += int(row.get("requests") or 0)
+            bucket["source_chars"] += int(row.get("source_chars") or 0)
+            bucket["translated_chars"] += int(row.get("translated_chars") or 0)
         guild = get_guild()
         text_channels = []
         if guild:
@@ -7722,6 +7732,8 @@ def create_app(db: Database, bot=None) -> Quart:
             openai_api_key_configured=openai_api_key_configured,
             deepl_api_key_configured=deepl_api_key_configured,
             deepl_api_url=deepl_api_url,
+            usage_rows=usage_rows,
+            usage_totals=usage_totals,
             skip_open=skip_open,
             skip_close=skip_close,
             llm_model=_Cfg.LLM_MODEL,
