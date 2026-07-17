@@ -290,7 +290,7 @@ class AutoTranslateCog(commands.Cog):
 
         if output_mode == "combined":
             joined = "\n".join(f"{flag} {translated}" for _lang, flag, translated in translated_parts)
-            combined = f"**{author_name}** {joined}"
+            combined = f"**{author_name}**\n{joined}"
             if len(combined) <= 1900:
                 await message.channel.send(combined)
             else:
