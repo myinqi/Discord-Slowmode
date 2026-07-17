@@ -7693,7 +7693,13 @@ def create_app(db: Database, bot=None) -> Quart:
             if form.get("clear_openai_api_key"):
                 await db.set_setting("auto_translate_openai_api_key", "")
             elif openai_api_key:
-                await db.set_setting("auto_translate_openai_api_key", openai_api_key)
+                if openai_api_key.startswith("sk-") and len(openai_api_key) >= 20:
+                    await db.set_setting("auto_translate_openai_api_key", openai_api_key)
+                else:
+                    await flash(
+                        "Ignored invalid OpenAI API key value. Existing key was kept.",
+                        "warning",
+                    )
             if form.get("clear_deepl_api_key"):
                 await db.set_setting("auto_translate_deepl_api_key", "")
             elif deepl_api_key:
