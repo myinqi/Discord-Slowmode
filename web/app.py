@@ -7664,6 +7664,9 @@ def create_app(db: Database, bot=None) -> Quart:
             engine = form.get("engine", "google")
             if engine not in ("google", "llm", "openai", "deepl"):
                 engine = "google"
+            output_mode = form.get("output_mode", "separate")
+            if output_mode not in ("separate", "combined"):
+                output_mode = "separate"
             openai_model = (form.get("openai_model") or "gpt-4o-mini").strip()
             openai_api_key = (form.get("openai_api_key") or "").strip()
             deepl_api_key = (form.get("deepl_api_key") or "").strip()
@@ -7679,6 +7682,7 @@ def create_app(db: Database, bot=None) -> Quart:
             await db.set_setting("auto_translate_channel_id", channel_id)
             await db.set_setting("auto_translate_languages", ",".join(langs))
             await db.set_setting("auto_translate_engine", engine)
+            await db.set_setting("auto_translate_output_mode", output_mode)
             await db.set_setting("auto_translate_openai_model", openai_model)
             await db.set_setting("auto_translate_deepl_api_url", deepl_api_url)
             if form.get("clear_openai_api_key"):
@@ -7699,6 +7703,7 @@ def create_app(db: Database, bot=None) -> Quart:
         langs_str = await db.get_setting("auto_translate_languages") or ""
         selected_langs = [l.strip() for l in langs_str.split(",") if l.strip()]
         engine     = await db.get_setting("auto_translate_engine") or "google"
+        output_mode = await db.get_setting("auto_translate_output_mode") or "separate"
         openai_model = await db.get_setting("auto_translate_openai_model") or "gpt-4o-mini"
         openai_api_key_configured = bool((await db.get_setting("auto_translate_openai_api_key") or "").strip())
         deepl_api_key_configured = bool((await db.get_setting("auto_translate_deepl_api_key") or "").strip())
@@ -7728,6 +7733,7 @@ def create_app(db: Database, bot=None) -> Quart:
             channel_id=channel_id,
             selected_langs=selected_langs,
             engine=engine,
+            output_mode=output_mode,
             openai_model=openai_model,
             openai_api_key_configured=openai_api_key_configured,
             deepl_api_key_configured=deepl_api_key_configured,

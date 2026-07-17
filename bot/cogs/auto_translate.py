@@ -182,6 +182,9 @@ class AutoTranslateCog(commands.Cog):
                 return
 
         engine = (await db.get_setting("auto_translate_engine") or "google").strip()
+        output_mode = (await db.get_setting("auto_translate_output_mode") or "separate").strip()
+        if output_mode not in ("separate", "combined"):
+            output_mode = "separate"
 
         if engine == "llm":
             import bot.exp_stream_manager as _esm
@@ -215,6 +218,7 @@ class AutoTranslateCog(commands.Cog):
             pass
 
         author_name = message.author.display_name
+        translated_parts: list[tuple[str, str, str]] = []
 
         for lang in langs:
             try:
@@ -232,7 +236,7 @@ class AutoTranslateCog(commands.Cog):
                     translated = await _translate_google(text, lang)
                 if not translated or translated.strip() == text.strip():
                     continue
-                await message.channel.send(f"**{author_name}** {flag} {translated}")
+                translated_parts.append((lang, flag, translated))
                 try:
                     await db.add_auto_translate_usage(
                         engine=engine,
@@ -246,6 +250,21 @@ class AutoTranslateCog(commands.Cog):
                 print(f"[auto_translate] Timeout for lang={lang} engine={engine}", flush=True)
             except Exception as e:
                 print(f"[auto_translate] Error for lang={lang} engine={engine}: {e}", flush=True)
+
+        if not translated_parts:
+            return
+
+        if output_mode == "combined":
+            joined = " | ".join(f"{flag} {translated}" for _lang, flag, translated in translated_parts)
+            combined = f"**{author_name}** {joined}"
+            if len(combined) <= 1900:
+                await message.channel.send(combined)
+            else:
+                for _lang, flag, translated in translated_parts:
+                    await message.channel.send(f"**{author_name}** {flag} {translated}")
+        else:
+            for _lang, flag, translated in translated_parts:
+                await message.channel.send(f"**{author_name}** {flag} {translated}")
 
 
 async def setup(bot: commands.Bot):
