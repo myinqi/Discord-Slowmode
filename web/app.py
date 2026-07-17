@@ -7662,14 +7662,33 @@ def create_app(db: Database, bot=None) -> Quart:
             channel_id = (form.get("channel_id") or "").strip()
             langs = form.getlist("languages")
             engine = form.get("engine", "google")
-            if engine not in ("google", "llm"):
+            if engine not in ("google", "llm", "openai", "deepl"):
                 engine = "google"
+            openai_model = (form.get("openai_model") or "gpt-4o-mini").strip()
+            openai_api_key = (form.get("openai_api_key") or "").strip()
+            deepl_api_key = (form.get("deepl_api_key") or "").strip()
+            deepl_api_url = (form.get("deepl_api_url") or "https://api-free.deepl.com/v2/translate").strip()
+            if deepl_api_url not in (
+                "https://api-free.deepl.com/v2/translate",
+                "https://api.deepl.com/v2/translate",
+            ):
+                deepl_api_url = "https://api-free.deepl.com/v2/translate"
             skip_open  = (form.get("skip_open")  or "").strip()[:4]
             skip_close = (form.get("skip_close") or "").strip()[:4]
             await db.set_setting("auto_translate_enabled", enabled)
             await db.set_setting("auto_translate_channel_id", channel_id)
             await db.set_setting("auto_translate_languages", ",".join(langs))
             await db.set_setting("auto_translate_engine", engine)
+            await db.set_setting("auto_translate_openai_model", openai_model)
+            await db.set_setting("auto_translate_deepl_api_url", deepl_api_url)
+            if form.get("clear_openai_api_key"):
+                await db.set_setting("auto_translate_openai_api_key", "")
+            elif openai_api_key:
+                await db.set_setting("auto_translate_openai_api_key", openai_api_key)
+            if form.get("clear_deepl_api_key"):
+                await db.set_setting("auto_translate_deepl_api_key", "")
+            elif deepl_api_key:
+                await db.set_setting("auto_translate_deepl_api_key", deepl_api_key)
             await db.set_setting("auto_translate_skip_open", skip_open)
             await db.set_setting("auto_translate_skip_close", skip_close)
             await flash("Auto-translate settings saved.", "success")
@@ -7680,6 +7699,10 @@ def create_app(db: Database, bot=None) -> Quart:
         langs_str = await db.get_setting("auto_translate_languages") or ""
         selected_langs = [l.strip() for l in langs_str.split(",") if l.strip()]
         engine     = await db.get_setting("auto_translate_engine") or "google"
+        openai_model = await db.get_setting("auto_translate_openai_model") or "gpt-4o-mini"
+        openai_api_key_configured = bool((await db.get_setting("auto_translate_openai_api_key") or "").strip())
+        deepl_api_key_configured = bool((await db.get_setting("auto_translate_deepl_api_key") or "").strip())
+        deepl_api_url = await db.get_setting("auto_translate_deepl_api_url") or "https://api-free.deepl.com/v2/translate"
         skip_open  = await db.get_setting("auto_translate_skip_open")  or ""
         skip_close = await db.get_setting("auto_translate_skip_close") or ""
         guild = get_guild()
@@ -7695,6 +7718,10 @@ def create_app(db: Database, bot=None) -> Quart:
             channel_id=channel_id,
             selected_langs=selected_langs,
             engine=engine,
+            openai_model=openai_model,
+            openai_api_key_configured=openai_api_key_configured,
+            deepl_api_key_configured=deepl_api_key_configured,
+            deepl_api_url=deepl_api_url,
             skip_open=skip_open,
             skip_close=skip_close,
             llm_model=_Cfg.LLM_MODEL,

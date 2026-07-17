@@ -1,4 +1,5 @@
 import asyncio
+import aiohttp
 import discord
 from discord.ext import commands
 from bot.llm import OllamaClient
@@ -24,12 +25,39 @@ _LANG_META: dict[str, tuple[str, str]] = {
 
 _TRANSLATE_TIMEOUT_GOOGLE = 10.0
 _TRANSLATE_TIMEOUT_LLM = 45.0
+_TRANSLATE_TIMEOUT_OPENAI = 25.0
+_TRANSLATE_TIMEOUT_DEEPL = 15.0
 
 _LLM_SYSTEM = (
     "You are a professional translator. "
     "Translate the user's message to the requested language. "
     "Output ONLY the translated text — no explanations, no quotes, no preamble."
 )
+
+_DEEPL_LANG_MAP: dict[str, str] = {
+    "en": "EN-US",
+    "de": "DE",
+    "fr": "FR",
+    "es": "ES",
+    "it": "IT",
+    "pt": "PT-PT",
+    "nl": "NL",
+    "ru": "RU",
+    "no": "NB",
+    "ja": "JA",
+    "sv": "SV",
+    "pl": "PL",
+    "tr": "TR",
+    "ko": "KO",
+    "zh": "ZH",
+}
+
+
+def _clean_translation(value: str) -> str:
+    text = (value or "").strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"'):
+        text = text[1:-1].strip()
+    return text
 
 
 async def _translate_google(text: str, lang: str) -> str | None:
@@ -54,7 +82,54 @@ async def _translate_llm(client: OllamaClient, text: str, lang_name: str) -> str
         client.chat(messages, max_tokens=1024, temperature=0.1, top_p=0.9),
         timeout=_TRANSLATE_TIMEOUT_LLM,
     )
-    return ((resp.get("message") or {}).get("content") or "").strip() or None
+    return _clean_translation((resp.get("message") or {}).get("content") or "") or None
+
+
+async def _translate_openai(text: str, lang_name: str, api_key: str, model: str) -> str | None:
+    messages = [
+        {"role": "system", "content": _LLM_SYSTEM},
+        {"role": "user", "content": f"Translate to {lang_name}:\n\n{text}"},
+    ]
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model or "gpt-4o-mini",
+        "messages": messages,
+        "temperature": 0.1,
+        "max_tokens": 1024,
+    }
+    timeout = aiohttp.ClientTimeout(total=_TRANSLATE_TIMEOUT_OPENAI)
+    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+        async with session.post("https://api.openai.com/v1/chat/completions", json=payload) as response:
+            if response.status != 200:
+                body = await response.text()
+                raise RuntimeError(f"OpenAI HTTP {response.status}: {body[:300]}")
+            data = await response.json()
+    content = (
+        ((data.get("choices") or [{}])[0].get("message") or {}).get("content")
+        or ""
+    )
+    return _clean_translation(content) or None
+
+
+async def _translate_deepl(text: str, lang: str, api_key: str, api_url: str) -> str | None:
+    target_lang = _DEEPL_LANG_MAP.get(lang, lang.upper())
+    url = (api_url or "https://api-free.deepl.com/v2/translate").rstrip("/")
+    headers = {"Authorization": f"DeepL-Auth-Key {api_key}"}
+    payload = {"text": text, "target_lang": target_lang}
+    timeout = aiohttp.ClientTimeout(total=_TRANSLATE_TIMEOUT_DEEPL)
+    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+        async with session.post(url, data=payload) as response:
+            if response.status != 200:
+                body = await response.text()
+                raise RuntimeError(f"DeepL HTTP {response.status}: {body[:300]}")
+            data = await response.json()
+    translations = data.get("translations") or []
+    if not translations:
+        return None
+    return _clean_translation(translations[0].get("text") or "") or None
 
 
 class AutoTranslateCog(commands.Cog):
@@ -114,6 +189,20 @@ class AutoTranslateCog(commands.Cog):
                 print("[auto_translate] skipped (stream is live, LLM disabled during stream)", flush=True)
                 return
 
+        openai_api_key = (await db.get_setting("auto_translate_openai_api_key") or "").strip()
+        openai_model = (await db.get_setting("auto_translate_openai_model") or "gpt-4o-mini").strip()
+        deepl_api_key = (await db.get_setting("auto_translate_deepl_api_key") or "").strip()
+        deepl_api_url = (
+            await db.get_setting("auto_translate_deepl_api_url")
+            or "https://api-free.deepl.com/v2/translate"
+        ).strip()
+        if engine == "openai" and not openai_api_key:
+            print("[auto_translate] skipped (OpenAI API key missing)", flush=True)
+            return
+        if engine == "deepl" and not deepl_api_key:
+            print("[auto_translate] skipped (DeepL API key missing)", flush=True)
+            return
+
         loop = asyncio.get_event_loop()
         src_lang: str | None = None
         try:
@@ -135,6 +224,10 @@ class AutoTranslateCog(commands.Cog):
                 lang_name, flag = meta
                 if engine == "llm":
                     translated = await _translate_llm(self._llm_client, text, lang_name)
+                elif engine == "openai":
+                    translated = await _translate_openai(text, lang_name, openai_api_key, openai_model)
+                elif engine == "deepl":
+                    translated = await _translate_deepl(text, lang, deepl_api_key, deepl_api_url)
                 else:
                     translated = await _translate_google(text, lang)
                 if not translated or translated.strip() == text.strip():

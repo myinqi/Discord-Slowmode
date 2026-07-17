@@ -5,7 +5,7 @@
     <h2 class="text-2xl font-bold text-white">🌐 Auto Translate</h2>
 </div>
 
-<div class="max-w-xl space-y-6">
+<div class="max-w-2xl space-y-6">
 
     <div class="bg-discord-dark border border-gray-700/50 rounded-xl overflow-hidden">
         <div class="px-5 py-3 border-b border-gray-700/50">
@@ -51,7 +51,7 @@
                 <div class="space-y-2">
                     <label class="flex items-start gap-3 cursor-pointer select-none bg-discord-darker rounded-lg px-3 py-2.5 hover:bg-gray-700/50 transition-colors">
                         <input type="radio" name="engine" value="google"
-                            {% if engine != 'llm' %}checked{% endif %}
+                            {% if engine == 'google' or engine not in ['llm', 'openai', 'deepl'] %}checked{% endif %}
                             class="mt-0.5 w-4 h-4 accent-discord-blurple flex-shrink-0">
                         <span>
                             <span class="text-sm text-gray-300 font-medium">🌐 Google Translate (free)</span>
@@ -68,6 +68,79 @@
                             <span class="block text-xs text-amber-500/80 mt-1">⚠ Automatically disabled while the Exp. Radio stream is live — translations are skipped to protect the stream.</span>
                         </span>
                     </label>
+                    <label class="flex items-start gap-3 cursor-pointer select-none bg-discord-darker rounded-lg px-3 py-2.5 hover:bg-gray-700/50 transition-colors">
+                        <input type="radio" name="engine" value="openai"
+                            {% if engine == 'openai' %}checked{% endif %}
+                            class="mt-0.5 w-4 h-4 accent-discord-blurple flex-shrink-0">
+                        <span>
+                            <span class="text-sm text-gray-300 font-medium">💬 ChatGPT via OpenAI API</span>
+                            <span class="block text-xs text-gray-500 mt-0.5">Context-aware cloud translation. Requires an OpenAI API key and uses paid API credits.</span>
+                        </span>
+                    </label>
+                    <label class="flex items-start gap-3 cursor-pointer select-none bg-discord-darker rounded-lg px-3 py-2.5 hover:bg-gray-700/50 transition-colors">
+                        <input type="radio" name="engine" value="deepl"
+                            {% if engine == 'deepl' %}checked{% endif %}
+                            class="mt-0.5 w-4 h-4 accent-discord-blurple flex-shrink-0">
+                        <span>
+                            <span class="text-sm text-gray-300 font-medium">🪶 DeepL API</span>
+                            <span class="block text-xs text-gray-500 mt-0.5">Fast high-quality translation via DeepL. Requires a DeepL API key.</span>
+                        </span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Cloud translation credentials -->
+            <div class="grid md:grid-cols-2 gap-4">
+                <div class="space-y-2 bg-discord-darker rounded-lg p-3">
+                    <div>
+                        <label class="block text-gray-400 text-xs font-medium">OpenAI API key</label>
+                        <input type="password" name="openai_api_key"
+                            placeholder="{% if openai_api_key_configured %}Configured — leave empty to keep{% else %}sk-...{% endif %}"
+                            autocomplete="off"
+                            class="mt-1 w-full bg-discord-dark border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 text-xs font-medium">OpenAI model</label>
+                        <input type="text" name="openai_model" value="{{ openai_model }}"
+                            placeholder="gpt-4o-mini"
+                            class="mt-1 w-full bg-discord-dark border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                    </div>
+                    {% if openai_api_key_configured %}
+                    <label class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
+                        <input type="checkbox" name="clear_openai_api_key" class="w-4 h-4 accent-red-500">
+                        Clear saved OpenAI API key
+                    </label>
+                    {% endif %}
+                </div>
+
+                <div class="space-y-2 bg-discord-darker rounded-lg p-3">
+                    <div>
+                        <label class="block text-gray-400 text-xs font-medium">DeepL API key</label>
+                        <input type="password" name="deepl_api_key"
+                            placeholder="{% if deepl_api_key_configured %}Configured — leave empty to keep{% else %}DeepL API key{% endif %}"
+                            autocomplete="off"
+                            class="mt-1 w-full bg-discord-dark border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 text-xs font-medium">DeepL endpoint</label>
+                        <select name="deepl_api_url"
+                            class="mt-1 w-full bg-discord-dark border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                            <option value="https://api-free.deepl.com/v2/translate"
+                                {% if deepl_api_url != 'https://api.deepl.com/v2/translate' %}selected{% endif %}>
+                                DeepL Free API
+                            </option>
+                            <option value="https://api.deepl.com/v2/translate"
+                                {% if deepl_api_url == 'https://api.deepl.com/v2/translate' %}selected{% endif %}>
+                                DeepL Pro API
+                            </option>
+                        </select>
+                    </div>
+                    {% if deepl_api_key_configured %}
+                    <label class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
+                        <input type="checkbox" name="clear_deepl_api_key" class="w-4 h-4 accent-red-500">
+                        Clear saved DeepL API key
+                    </label>
+                    {% endif %}
                 </div>
             </div>
 
