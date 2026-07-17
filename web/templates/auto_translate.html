@@ -105,6 +105,13 @@
                             placeholder="gpt-4o-mini"
                             class="mt-1 w-full bg-discord-dark border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
                     </div>
+                    <div>
+                        <label class="block text-gray-400 text-xs font-medium">Daily token limit</label>
+                        <input type="number" name="openai_daily_token_limit" value="{{ openai_daily_token_limit }}"
+                            min="0" step="1000" placeholder="10000000"
+                            class="mt-1 w-full bg-discord-dark border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                        <p class="text-gray-500 text-xs mt-1">0 disables the local OpenAI token limit.</p>
+                    </div>
                     {% if openai_api_key_configured %}
                     <label class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
                         <input type="checkbox" name="clear_openai_api_key" class="w-4 h-4 accent-red-500">
@@ -257,7 +264,8 @@
                             <th class="pb-2 pr-3">Language</th>
                             <th class="pb-2 pr-3 text-right">Requests</th>
                             <th class="pb-2 pr-3 text-right">Source chars</th>
-                            <th class="pb-2 text-right">Translated chars</th>
+                            <th class="pb-2 pr-3 text-right">Translated chars</th>
+                            <th class="pb-2 text-right">Tokens</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-gray-700/30">
@@ -270,7 +278,8 @@
                             <td class="py-2 pr-3 text-gray-400" colspan="2">Total</td>
                             <td class="py-2 pr-3 text-right text-white">{{ "{:,}".format(total.get('requests', 0)) }}</td>
                             <td class="py-2 pr-3 text-right text-white">{{ "{:,}".format(total.get('source_chars', 0)) }}</td>
-                            <td class="py-2 text-right text-white">{{ "{:,}".format(total.get('translated_chars', 0)) }}</td>
+                            <td class="py-2 pr-3 text-right text-white">{{ "{:,}".format(total.get('translated_chars', 0)) }}</td>
+                            <td class="py-2 text-right text-white">{{ "{:,}".format(total.get('tokens', 0)) }}</td>
                         </tr>
                         {% set ns.current_month = row.month %}
                         {% endif %}
@@ -280,7 +289,8 @@
                             <td class="py-2 pr-3 text-gray-300">{{ row.target_lang }}</td>
                             <td class="py-2 pr-3 text-right text-gray-300">{{ "{:,}".format(row.requests or 0) }}</td>
                             <td class="py-2 pr-3 text-right text-gray-300">{{ "{:,}".format(row.source_chars or 0) }}</td>
-                            <td class="py-2 text-right text-gray-300">{{ "{:,}".format(row.translated_chars or 0) }}</td>
+                            <td class="py-2 pr-3 text-right text-gray-300">{{ "{:,}".format(row.translated_chars or 0) }}</td>
+                            <td class="py-2 text-right text-gray-300">{{ "{:,}".format(row.tokens or 0) }}</td>
                         </tr>
                         {% endfor %}
                     </tbody>

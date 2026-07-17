@@ -60,6 +60,18 @@ def _clean_translation(value: str) -> str:
     return text
 
 
+def _estimate_openai_tokens(text: str) -> int:
+    # Conservative enough for short chat messages: prompt + completion budget.
+    return max(1, len(text) // 3) + 350
+
+
+def _parse_positive_int(value: str, default: int = 0) -> int:
+    digits = "".join(ch for ch in (value or "") if ch.isdigit())
+    if not digits:
+        return default
+    return max(0, int(digits))
+
+
 async def _translate_google(text: str, lang: str) -> str | None:
     from deep_translator import GoogleTranslator
     loop = asyncio.get_event_loop()
@@ -85,7 +97,7 @@ async def _translate_llm(client: OllamaClient, text: str, lang_name: str) -> str
     return _clean_translation((resp.get("message") or {}).get("content") or "") or None
 
 
-async def _translate_openai(text: str, lang_name: str, api_key: str, model: str) -> str | None:
+async def _translate_openai(text: str, lang_name: str, api_key: str, model: str) -> tuple[str | None, int]:
     messages = [
         {"role": "system", "content": _LLM_SYSTEM},
         {"role": "user", "content": f"Translate to {lang_name}:\n\n{text}"},
@@ -111,7 +123,8 @@ async def _translate_openai(text: str, lang_name: str, api_key: str, model: str)
         ((data.get("choices") or [{}])[0].get("message") or {}).get("content")
         or ""
     )
-    return _clean_translation(content) or None
+    tokens = int((data.get("usage") or {}).get("total_tokens") or 0)
+    return _clean_translation(content) or None, tokens
 
 
 async def _translate_deepl(text: str, lang: str, api_key: str, api_url: str) -> str | None:
@@ -194,6 +207,9 @@ class AutoTranslateCog(commands.Cog):
 
         openai_api_key = (await db.get_setting("auto_translate_openai_api_key") or "").strip()
         openai_model = (await db.get_setting("auto_translate_openai_model") or "gpt-4o-mini").strip()
+        openai_daily_token_limit = _parse_positive_int(
+            await db.get_setting("auto_translate_openai_daily_token_limit") or "0"
+        )
         deepl_api_key = (await db.get_setting("auto_translate_deepl_api_key") or "").strip()
         deepl_api_url = (
             await db.get_setting("auto_translate_deepl_api_url")
@@ -219,6 +235,7 @@ class AutoTranslateCog(commands.Cog):
 
         author_name = message.author.display_name
         translated_parts: list[tuple[str, str, str]] = []
+        openai_tokens_today: int | None = None
 
         for lang in langs:
             try:
@@ -229,7 +246,23 @@ class AutoTranslateCog(commands.Cog):
                 if engine == "llm":
                     translated = await _translate_llm(self._llm_client, text, lang_name)
                 elif engine == "openai":
-                    translated = await _translate_openai(text, lang_name, openai_api_key, openai_model)
+                    if openai_daily_token_limit > 0:
+                        if openai_tokens_today is None:
+                            openai_tokens_today = await db.get_auto_translate_daily_tokens("openai")
+                        estimated = _estimate_openai_tokens(text)
+                        if openai_tokens_today + estimated > openai_daily_token_limit:
+                            print(
+                                "[auto_translate] skipped OpenAI translation "
+                                f"(daily token limit {openai_daily_token_limit} reached; "
+                                f"used={openai_tokens_today}, estimated_next={estimated})",
+                                flush=True,
+                            )
+                            continue
+                    translated, token_count = await _translate_openai(
+                        text, lang_name, openai_api_key, openai_model
+                    )
+                    if openai_tokens_today is not None:
+                        openai_tokens_today += token_count
                 elif engine == "deepl":
                     translated = await _translate_deepl(text, lang, deepl_api_key, deepl_api_url)
                 else:
@@ -243,6 +276,7 @@ class AutoTranslateCog(commands.Cog):
                         target_lang=lang,
                         source_chars=len(text),
                         translated_chars=len(translated),
+                        token_count=token_count if engine == "openai" else 0,
                     )
                 except Exception as e:
                     print(f"[auto_translate] Usage logging failed: {e}", flush=True)

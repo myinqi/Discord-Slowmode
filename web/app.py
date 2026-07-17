@@ -7668,6 +7668,10 @@ def create_app(db: Database, bot=None) -> Quart:
             if output_mode not in ("separate", "combined"):
                 output_mode = "separate"
             openai_model = (form.get("openai_model") or "gpt-4o-mini").strip()
+            openai_daily_token_limit = "".join(
+                ch for ch in (form.get("openai_daily_token_limit") or "0")
+                if ch.isdigit()
+            ) or "0"
             openai_api_key = (form.get("openai_api_key") or "").strip()
             deepl_api_key = (form.get("deepl_api_key") or "").strip()
             deepl_api_url = (form.get("deepl_api_url") or "https://api-free.deepl.com/v2/translate").strip()
@@ -7684,6 +7688,7 @@ def create_app(db: Database, bot=None) -> Quart:
             await db.set_setting("auto_translate_engine", engine)
             await db.set_setting("auto_translate_output_mode", output_mode)
             await db.set_setting("auto_translate_openai_model", openai_model)
+            await db.set_setting("auto_translate_openai_daily_token_limit", openai_daily_token_limit)
             await db.set_setting("auto_translate_deepl_api_url", deepl_api_url)
             if form.get("clear_openai_api_key"):
                 await db.set_setting("auto_translate_openai_api_key", "")
@@ -7705,6 +7710,7 @@ def create_app(db: Database, bot=None) -> Quart:
         engine     = await db.get_setting("auto_translate_engine") or "google"
         output_mode = await db.get_setting("auto_translate_output_mode") or "separate"
         openai_model = await db.get_setting("auto_translate_openai_model") or "gpt-4o-mini"
+        openai_daily_token_limit = await db.get_setting("auto_translate_openai_daily_token_limit") or "0"
         openai_api_key_configured = bool((await db.get_setting("auto_translate_openai_api_key") or "").strip())
         deepl_api_key_configured = bool((await db.get_setting("auto_translate_deepl_api_key") or "").strip())
         deepl_api_url = await db.get_setting("auto_translate_deepl_api_url") or "https://api-free.deepl.com/v2/translate"
@@ -7715,11 +7721,12 @@ def create_app(db: Database, bot=None) -> Quart:
         for row in usage_rows:
             bucket = usage_totals.setdefault(
                 row["month"],
-                {"requests": 0, "source_chars": 0, "translated_chars": 0},
+                {"requests": 0, "source_chars": 0, "translated_chars": 0, "tokens": 0},
             )
             bucket["requests"] += int(row.get("requests") or 0)
             bucket["source_chars"] += int(row.get("source_chars") or 0)
             bucket["translated_chars"] += int(row.get("translated_chars") or 0)
+            bucket["tokens"] += int(row.get("tokens") or 0)
         guild = get_guild()
         text_channels = []
         if guild:
@@ -7735,6 +7742,7 @@ def create_app(db: Database, bot=None) -> Quart:
             engine=engine,
             output_mode=output_mode,
             openai_model=openai_model,
+            openai_daily_token_limit=openai_daily_token_limit,
             openai_api_key_configured=openai_api_key_configured,
             deepl_api_key_configured=deepl_api_key_configured,
             deepl_api_url=deepl_api_url,

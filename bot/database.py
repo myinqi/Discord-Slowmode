@@ -115,11 +115,13 @@ class Database:
             CREATE TABLE IF NOT EXISTS auto_translate_usage (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 created_at REAL NOT NULL,
+                day TEXT NOT NULL,
                 month TEXT NOT NULL,
                 engine TEXT NOT NULL,
                 target_lang TEXT NOT NULL,
                 source_chars INTEGER NOT NULL DEFAULT 0,
                 translated_chars INTEGER NOT NULL DEFAULT 0,
+                token_count INTEGER NOT NULL DEFAULT 0,
                 request_count INTEGER NOT NULL DEFAULT 1
             );
             CREATE INDEX IF NOT EXISTS idx_auto_translate_usage_month
@@ -153,6 +155,20 @@ class Database:
         if "song_title" not in sp_columns:
             await self.db.execute("ALTER TABLE song_posts ADD COLUMN song_title TEXT")
             await self.db.commit()
+
+        async with self.db.execute("PRAGMA table_info(auto_translate_usage)") as cursor:
+            atu_columns = [row[1] async for row in cursor]
+        if "day" not in atu_columns:
+            await self.db.execute("ALTER TABLE auto_translate_usage ADD COLUMN day TEXT")
+            await self.db.commit()
+        if "token_count" not in atu_columns:
+            await self.db.execute("ALTER TABLE auto_translate_usage ADD COLUMN token_count INTEGER NOT NULL DEFAULT 0")
+            await self.db.commit()
+        await self.db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_auto_translate_usage_day
+                ON auto_translate_usage(day, engine)
+        """)
+        await self.db.commit()
 
         # Create song_reactions table
         await self.db.executescript("""
@@ -728,23 +744,42 @@ class Database:
         target_lang: str,
         source_chars: int,
         translated_chars: int,
+        token_count: int = 0,
     ) -> None:
         now = time.time()
+        day = time.strftime("%Y-%m-%d", time.localtime(now))
         month = time.strftime("%Y-%m", time.localtime(now))
         await self.db.execute("""
             INSERT INTO auto_translate_usage
-                (created_at, month, engine, target_lang, source_chars,
-                 translated_chars, request_count)
-            VALUES (?, ?, ?, ?, ?, ?, 1)
+                (created_at, day, month, engine, target_lang, source_chars,
+                 translated_chars, token_count, request_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
         """, (
             now,
+            day,
             month,
             engine,
             target_lang,
             max(0, int(source_chars or 0)),
             max(0, int(translated_chars or 0)),
+            max(0, int(token_count or 0)),
         ))
         await self.db.commit()
+
+    async def get_auto_translate_daily_tokens(
+        self,
+        engine: str,
+        day: str | None = None,
+    ) -> int:
+        if not day:
+            day = time.strftime("%Y-%m-%d", time.localtime(time.time()))
+        async with self.db.execute("""
+            SELECT COALESCE(SUM(token_count), 0) AS tokens
+            FROM auto_translate_usage
+            WHERE day = ? AND engine = ?
+        """, (day, engine)) as cur:
+            row = await cur.fetchone()
+            return int(row["tokens"] or 0) if row else 0
 
     async def get_auto_translate_monthly_usage(self, limit: int = 18) -> list[dict]:
         async with self.db.execute("""
@@ -754,6 +789,7 @@ class Database:
                 target_lang,
                 SUM(source_chars) AS source_chars,
                 SUM(translated_chars) AS translated_chars,
+                SUM(token_count) AS tokens,
                 SUM(request_count) AS requests
             FROM auto_translate_usage
             GROUP BY month, engine, target_lang
