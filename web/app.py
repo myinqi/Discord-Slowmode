@@ -5421,6 +5421,7 @@ def create_app(db: Database, bot=None) -> Quart:
     @permission_required('exp_radio')
     async def exp_radio_twitch_oauth_start():
         import secrets as _sec
+        from urllib.parse import urlencode
         client_id = await db.get_setting("exp_radio_twitch_client_id")
         if not client_id:
             await flash("Client ID not configured — save it first.", "error")
@@ -5428,13 +5429,13 @@ def create_app(db: Database, bot=None) -> Quart:
         state = _sec.token_urlsafe(16)
         session[_TWITCH_OAUTH_STATE_KEY] = state
         redirect_uri = request.url_root.rstrip("/") + url_for("exp_radio_twitch_oauth_callback")
-        params = (
-            f"client_id={client_id}"
-            f"&redirect_uri={redirect_uri}"
-            f"&response_type=code"
-            f"&scope={_TWITCH_BOT_SCOPES.replace(' ', '+')}"
-            f"&state={state}"
-        )
+        params = urlencode({
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": _TWITCH_BOT_SCOPES,
+            "state": state,
+        })
         return redirect(f"https://id.twitch.tv/oauth2/authorize?{params}")
 
     @app.route("/exp-radio/twitch-oauth-callback")
