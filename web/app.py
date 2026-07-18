@@ -5358,64 +5358,12 @@ def create_app(db: Database, bot=None) -> Quart:
     _TWITCH_BOT_SCOPES = "user:bot user:write:chat chat:read moderator:read:followers channel:read:subscriptions bits:read"
     _TWITCH_OAUTH_STATE_KEY = "twitch_oauth_state"
 
-    @app.route("/exp-radio/twitch-exchange-code", methods=["POST"])
-    @permission_required('exp_radio')
-    async def exp_radio_twitch_exchange_code():
-        """Exchange an authorization code (obtained via manual OAuth flow with
-        redirect_uri=https://localhost) for a refresh token and save it."""
-        import aiohttp as _aio
-        form = await request.form
-        code = (form.get("twitch_code") or "").strip()
-        if not code:
-            await flash("No code provided.", "error")
-            return redirect(url_for("exp_radio_admin"))
-        client_id     = await db.get_setting("exp_radio_twitch_client_id") or ""
-        client_secret = await db.get_setting("exp_radio_twitch_client_secret") or ""
-        if not (client_id and client_secret):
-            await flash("Client ID / Secret not configured.", "error")
-            return redirect(url_for("exp_radio_admin"))
-        try:
-            async with _aio.ClientSession() as _s:
-                async with _s.post(
-                    "https://id.twitch.tv/oauth2/token",
-                    data={
-                        "client_id":     client_id,
-                        "client_secret": client_secret,
-                        "code":          code,
-                        "grant_type":    "authorization_code",
-                        "redirect_uri":  "https://localhost",
-                    },
-                    timeout=_aio.ClientTimeout(total=15),
-                ) as _r:
-                    _d = await _r.json()
-                    if _r.status != 200 or "refresh_token" not in _d:
-                        await flash(f"Token exchange failed: {_d.get('message', _d)}", "error")
-                        return redirect(url_for("exp_radio_admin"))
-                    access_token  = _d["access_token"]
-                    refresh_token = _d["refresh_token"]
-                async with _s.get(
-                    "https://id.twitch.tv/oauth2/validate",
-                    headers={"Authorization": f"OAuth {access_token}"},
-                    timeout=_aio.ClientTimeout(total=10),
-                ) as _r:
-                    _v = await _r.json()
-                    bot_login  = _v.get("login", "")
-                    new_scopes = _v.get("scopes", [])
-            await db.set_setting("exp_radio_twitch_refresh_token", refresh_token)
-            await db.set_setting("exp_radio_twitch_bot_login", bot_login)
-            await db.set_setting("exp_radio_twitch_bot_user_id", "")
-            scope_ok = "chat:read" in new_scopes
-            await flash(
-                f"✅ Token saved for {bot_login} | scopes: {new_scopes}"
-                + (" — chat:read ✓ Relic Hunt ready!" if scope_ok else " — ⚠️ chat:read still missing"),
-                "success" if scope_ok else "error",
-            )
-            if scope_ok:
-                await relic_hunt.stop()
-                asyncio.create_task(_relic_hunt_autostart())
-        except Exception as _e:
-            await flash(f"Code exchange error: {_e}", "error")
-        return redirect(url_for("exp_radio_admin"))
+    def _twitch_oauth_redirect_uri() -> str:
+        from config import Config
+        public_base = Config.WEB_URL.strip().rstrip("/")
+        if not public_base:
+            public_base = request.url_root.rstrip("/")
+        return public_base + url_for("exp_radio_twitch_oauth_callback")
 
     @app.route("/exp-radio/twitch-oauth-start")
     @permission_required('exp_radio')
@@ -5428,7 +5376,7 @@ def create_app(db: Database, bot=None) -> Quart:
             return redirect(url_for("exp_radio_admin"))
         state = _sec.token_urlsafe(16)
         session[_TWITCH_OAUTH_STATE_KEY] = state
-        redirect_uri = request.url_root.rstrip("/") + url_for("exp_radio_twitch_oauth_callback")
+        redirect_uri = _twitch_oauth_redirect_uri()
         params = urlencode({
             "client_id": client_id,
             "redirect_uri": redirect_uri,
@@ -5454,7 +5402,7 @@ def create_app(db: Database, bot=None) -> Quart:
             return redirect(url_for("exp_radio_admin"))
         client_id     = await db.get_setting("exp_radio_twitch_client_id") or ""
         client_secret = await db.get_setting("exp_radio_twitch_client_secret") or ""
-        redirect_uri  = request.url_root.rstrip("/") + url_for("exp_radio_twitch_oauth_callback")
+        redirect_uri  = _twitch_oauth_redirect_uri()
         try:
             async with _aio.ClientSession() as _s:
                 async with _s.post(

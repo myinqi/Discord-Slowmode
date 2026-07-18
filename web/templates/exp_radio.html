@@ -369,20 +369,6 @@
                        class="block text-center px-3 py-2 rounded-lg bg-purple-700 hover:bg-purple-600 text-white transition-colors">
                         → Authorize Twitch Bot
                     </a>
-                    <details class="pt-2">
-                        <summary class="text-gray-500 hover:text-gray-300 cursor-pointer">Manual fallback</summary>
-                        <p class="text-gray-400 pt-2">Use this only if the redirect flow is blocked. Authorize with redirect_uri=https://localhost, copy the code= value, and exchange it here.</p>
-                        <a id="twitch-auth-link" href="#" target="_blank"
-                           onclick="buildAuthLink(event)"
-                           class="block text-center px-3 py-2 mt-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">
-                            Open manual Twitch Authorization Page
-                        </a>
-                    </details>
-                    <form method="POST" action="{{ url_for('exp_radio_twitch_exchange_code') }}" class="flex gap-2">
-                        <input type="text" name="twitch_code" placeholder="Paste code here…"
-                            class="flex-1 bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-discord-blurple focus:outline-none">
-                        <button class="px-3 py-1.5 rounded-lg bg-discord-blurple hover:bg-indigo-500 text-white text-sm whitespace-nowrap transition-colors">Exchange</button>
-                    </form>
                 </div>
                 {% elif exp_tw_client_id and exp_tw_scopes_ok %}
                 <a href="{{ url_for('exp_radio_twitch_oauth_start') }}"
@@ -391,19 +377,6 @@
                 </a>
                 {% endif %}
             </div>
-            <script>
-            function buildAuthLink(e) {
-                var cid = {{ exp_tw_client_id | tojson }};
-                if (!cid) { e.preventDefault(); alert('Save Client ID first.'); return; }
-                var url = 'https://id.twitch.tv/oauth2/authorize'
-                    + '?client_id=' + encodeURIComponent(cid)
-                    + '&redirect_uri=' + encodeURIComponent('https://localhost')
-                    + '&response_type=code'
-                    + '&scope=user%3Abot+user%3Awrite%3Achat+chat%3Aread+moderator%3Aread%3Afollowers+channel%3Aread%3Asubscriptions+bits%3Aread'
-                    + '&state=adminflow';
-                e.currentTarget.href = url;
-            }
-            </script>
         </div>
         <!-- Twitch Stream Key -->
         <div class="p-5 space-y-3">
