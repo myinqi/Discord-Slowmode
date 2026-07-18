@@ -81,8 +81,23 @@ class TwitchEventAlerts:
         if self._task and not self._task.done():
             return
         self._running = True
+        self.status.enabled = await self._enabled()
         self.status.running = True
+        self.status.connected = False
+        self.status.last_message = "Starting…" if self.status.enabled else "Disabled"
         self._task = asyncio.create_task(self._loop())
+        self._task.add_done_callback(self._on_task_done)
+
+    def _on_task_done(self, task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is None:
+            return
+        self.status.running = False
+        self.status.connected = False
+        self.status.last_message = f"Listener stopped: {exc}"
+        _log(self.status.last_message, "error", "[twitch-alerts]")
 
     async def stop(self) -> None:
         self._running = False
@@ -108,17 +123,17 @@ class TwitchEventAlerts:
         return (await self._setting("twitch_alerts_enabled")) == "on"
 
     async def _any_event_enabled(self) -> bool:
-        return any(
-            (await self._setting(key)) == "on"
-            for key in (
-                "twitch_alerts_follow_enabled",
-                "twitch_alerts_sub_enabled",
-                "twitch_alerts_resub_enabled",
-                "twitch_alerts_gift_enabled",
-                "twitch_alerts_cheer_enabled",
-                "twitch_alerts_raid_enabled",
-            )
-        )
+        for key in (
+            "twitch_alerts_follow_enabled",
+            "twitch_alerts_sub_enabled",
+            "twitch_alerts_resub_enabled",
+            "twitch_alerts_gift_enabled",
+            "twitch_alerts_cheer_enabled",
+            "twitch_alerts_raid_enabled",
+        ):
+            if await self._setting(key) == "on":
+                return True
+        return False
 
     async def _loop(self) -> None:
         backoff = 2.0
