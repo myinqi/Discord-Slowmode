@@ -232,6 +232,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('radio', 'Twitch Radio'),
         ('exp_radio', 'Experimental Radio'),
         ('auto_translate', 'Auto Translate'),
+        ('twitch_alerts', 'Twitch Alerts'),
         ('channel_moderation', 'Channel Moderation'),
         ('executioner', 'Executioner'),
         ('songripper', 'Songripper'),
@@ -264,6 +265,7 @@ def create_app(db: Database, bot=None) -> Quart:
         {"key": "radio", "endpoint": "radio_admin", "icon": "📻", "label": "Twitch", "perm": "radio"},
         {"key": "exp_radio", "endpoint": "exp_radio_admin", "icon": "🎙️", "label": "Exp. Radio", "perm": "exp_radio"},
         {"key": "relic_hunt", "endpoint": "relic_hunt_admin", "icon": "🪶", "label": "Raven's Nest", "perm": "relic_hunt"},
+        {"key": "twitch_alerts", "endpoint": "twitch_alerts_admin", "icon": "📣", "label": "Twitch Alerts", "perm": "twitch_alerts"},
         {"key": "auto_translate", "endpoint": "auto_translate_admin", "icon": "🌐", "label": "Auto Translate", "perm": "auto_translate"},
         {"key": "channel_moderation", "endpoint": "channel_moderation", "icon": "🛡️", "label": "Channel Mod", "perm": "channel_moderation"},
         {"key": "executioner", "endpoint": "executioner", "icon": "🪓", "label": "Executioner", "perm": "executioner"},
@@ -282,7 +284,9 @@ def create_app(db: Database, bot=None) -> Quart:
         if raw == "__none__":
             return set()
         selected = {part.strip() for part in raw.split(",") if part.strip()}
-        return selected & known
+        selected = selected & known
+        selected.add("twitch_alerts")
+        return selected
 
     @app.context_processor
     async def inject_sidebar_nav():
@@ -4134,6 +4138,7 @@ def create_app(db: Database, bot=None) -> Quart:
         app.radio_cleanup_task = asyncio.create_task(_radio_cleanup_loop())
         app.exp_radio_cleanup_task = asyncio.create_task(_exp_radio_cleanup_loop())
         app.exp_radio_schedule_task = asyncio.create_task(_exp_radio_schedule_loop())
+        await twitch_event_alerts.start()
         asyncio.create_task(_relic_hunt_autostart())
 
     # ── Experimental Radio ─────────────────────────────────────────────────────
@@ -4145,8 +4150,10 @@ def create_app(db: Database, bot=None) -> Quart:
 
     from bot.relic_hunt import RelicHunt
     from bot.twitch_bot import TwitchBot as _TwitchBot
+    from bot.twitch_event_alerts import DEFAULT_ALERT_SETTINGS, TwitchEventAlerts
     from bot.live_log import log_event as _rh_log
     relic_hunt = RelicHunt(db)
+    twitch_event_alerts = TwitchEventAlerts(db)
 
     def _fmt_exp_duration(seconds) -> str:
         try:
@@ -5348,7 +5355,7 @@ def create_app(db: Database, bot=None) -> Quart:
         })
 
     # ── Twitch Bot OAuth re-authorization ──────────────────────────────────────
-    _TWITCH_BOT_SCOPES = "user:bot user:write:chat chat:read"
+    _TWITCH_BOT_SCOPES = "user:bot user:write:chat chat:read moderator:read:followers channel:read:subscriptions"
     _TWITCH_OAUTH_STATE_KEY = "twitch_oauth_state"
 
     @app.route("/exp-radio/twitch-exchange-code", methods=["POST"])
@@ -5524,6 +5531,76 @@ def create_app(db: Database, bot=None) -> Quart:
             buf.getvalue(),
             mimetype="text/csv",
             headers={"Content-Disposition": "attachment; filename=exp_radio_consent.csv"},
+        )
+
+    # --- Twitch Event Chat Alerts ---
+    @app.route("/twitch-alerts", methods=["GET", "POST"])
+    @permission_required('twitch_alerts')
+    async def twitch_alerts_admin():
+        if request.method == "POST":
+            form = await request.form
+            action = form.get("action", "")
+
+            if action == "save_settings":
+                checkbox_keys = {
+                    "twitch_alerts_enabled",
+                    "twitch_alerts_follow_enabled",
+                    "twitch_alerts_sub_enabled",
+                    "twitch_alerts_resub_enabled",
+                    "twitch_alerts_gift_enabled",
+                    "twitch_alerts_raid_enabled",
+                }
+                for key in checkbox_keys:
+                    await db.set_setting(key, "on" if form.get(key) else "off")
+                for key in (
+                    "twitch_alerts_follow_template",
+                    "twitch_alerts_sub_template",
+                    "twitch_alerts_resub_template",
+                    "twitch_alerts_gift_template",
+                    "twitch_alerts_raid_template",
+                ):
+                    await db.set_setting(key, (form.get(key) or "")[:500])
+                await twitch_event_alerts.restart()
+                await flash("Twitch alert settings saved.", "success")
+
+            elif action == "restart_listener":
+                await twitch_event_alerts.restart()
+                await flash("Twitch EventSub listener restarted.", "success")
+
+            elif action == "test_message":
+                bot = _TwitchBot(db, key_prefix="exp_radio_twitch")
+                ok, msg = await bot.start()
+                if ok:
+                    sent = await bot.send("📣 Twitch alert test message from Corax.")
+                    await flash("Test message sent." if sent else "Could not send test message.", "success" if sent else "error")
+                else:
+                    await flash(f"Twitch bot error: {msg}", "error")
+
+            return redirect(url_for("twitch_alerts_admin"))
+
+        settings = {}
+        for key, default in DEFAULT_ALERT_SETTINGS.items():
+            settings[key] = await db.get_setting(key) or default
+
+        tw_diag = {}
+        try:
+            bot = _TwitchBot(db, key_prefix="exp_radio_twitch")
+            tw_diag = await bot.diagnose()
+        except Exception as exc:
+            tw_diag = {"ok": False, "message": str(exc), "scopes": []}
+
+        return await render_template(
+            "twitch_alerts.html",
+            settings=settings,
+            alert_status=twitch_event_alerts.status,
+            tw_diag=tw_diag,
+            required_alert_scopes=[
+                "user:write:chat",
+                "user:bot",
+                "chat:read",
+                "moderator:read:followers",
+                "channel:read:subscriptions",
+            ],
         )
 
     # --- Raven's Nest: Relic Hunt ---

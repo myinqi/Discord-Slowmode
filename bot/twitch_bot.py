@@ -11,6 +11,9 @@ Scopes required on the bot user's token:
     user:bot          — marks the user as a bot so Twitch allows it to post
                         in channels where it is a moderator / VIP (or where
                         the broadcaster has granted `channel:bot`).
+    chat:read         — required for IRC command listening.
+    moderator:read:followers and channel:read:subscriptions are used by the
+                        optional Twitch EventSub chat alerts.
 
 Setup expectation: the bot account must be **moderator** (or VIP) in the
 broadcaster's channel — easiest done by the broadcaster typing
