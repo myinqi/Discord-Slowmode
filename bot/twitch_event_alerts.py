@@ -32,6 +32,8 @@ DEFAULT_ALERT_SETTINGS = {
     "twitch_alerts_resub_template": "🌙 {user} subscribed for {months} month(s) ({tier})! Welcome back.",
     "twitch_alerts_gift_enabled": "on",
     "twitch_alerts_gift_template": "🎁 {gifter} gifted {total} sub(s) ({tier})!",
+    "twitch_alerts_cheer_enabled": "on",
+    "twitch_alerts_cheer_template": "✨ {user} cheered {bits} Bits! Thank you for the sparkle.",
     "twitch_alerts_raid_enabled": "on",
     "twitch_alerts_raid_template": "⚔️ Raid incoming from {user} with {viewers} viewer(s)! Welcome raiders!",
 }
@@ -113,6 +115,7 @@ class TwitchEventAlerts:
                 "twitch_alerts_sub_enabled",
                 "twitch_alerts_resub_enabled",
                 "twitch_alerts_gift_enabled",
+                "twitch_alerts_cheer_enabled",
                 "twitch_alerts_raid_enabled",
             )
         )
@@ -241,6 +244,8 @@ class TwitchEventAlerts:
             subscriptions.append(("channel.subscription.message", "1", {"broadcaster_user_id": broadcaster_id}))
         if await self._setting("twitch_alerts_gift_enabled") == "on":
             subscriptions.append(("channel.subscription.gift", "1", {"broadcaster_user_id": broadcaster_id}))
+        if await self._setting("twitch_alerts_cheer_enabled") == "on":
+            subscriptions.append(("channel.cheer", "1", {"broadcaster_user_id": broadcaster_id}))
         if await self._setting("twitch_alerts_raid_enabled") == "on":
             subscriptions.append(("channel.raid", "1", {"to_broadcaster_user_id": broadcaster_id}))
 
@@ -307,6 +312,15 @@ class TwitchEventAlerts:
                 "tier": _tier_label(event.get("tier")),
                 "total": event.get("total") or 1,
                 "cumulative_total": event.get("cumulative_total") or "",
+            }
+        elif sub_type == "channel.cheer":
+            template_key = "twitch_alerts_cheer_template"
+            anonymous = bool(event.get("is_anonymous"))
+            values = {
+                "user": "An anonymous raven" if anonymous else (event.get("user_name") or event.get("user_login") or "Someone"),
+                "login": "" if anonymous else (event.get("user_login") or ""),
+                "bits": event.get("bits") or 0,
+                "message": event.get("message") or "",
             }
         elif sub_type == "channel.raid":
             template_key = "twitch_alerts_raid_template"

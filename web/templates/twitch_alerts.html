@@ -75,6 +75,7 @@
         ('twitch_alerts_sub_enabled', 'twitch_alerts_sub_template', 'New subscription', '{user}, {login}, {tier}, {is_gift}'),
         ('twitch_alerts_resub_enabled', 'twitch_alerts_resub_template', 'Resub message', '{user}, {login}, {tier}, {months}, {streak_months}, {message}'),
         ('twitch_alerts_gift_enabled', 'twitch_alerts_gift_template', 'Gift subscription', '{gifter}, {login}, {tier}, {total}, {cumulative_total}'),
+        ('twitch_alerts_cheer_enabled', 'twitch_alerts_cheer_template', 'Bits / Cheer', '{user}, {login}, {bits}, {message}'),
         ('twitch_alerts_raid_enabled', 'twitch_alerts_raid_template', 'Incoming raid', '{user}, {login}, {viewers}')
       ] %}
       {% for enabled_key, template_key, label, placeholders in rows %}

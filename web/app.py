@@ -5355,7 +5355,7 @@ def create_app(db: Database, bot=None) -> Quart:
         })
 
     # ── Twitch Bot OAuth re-authorization ──────────────────────────────────────
-    _TWITCH_BOT_SCOPES = "user:bot user:write:chat chat:read moderator:read:followers channel:read:subscriptions"
+    _TWITCH_BOT_SCOPES = "user:bot user:write:chat chat:read moderator:read:followers channel:read:subscriptions bits:read"
     _TWITCH_OAUTH_STATE_KEY = "twitch_oauth_state"
 
     @app.route("/exp-radio/twitch-exchange-code", methods=["POST"])
@@ -5548,6 +5548,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     "twitch_alerts_sub_enabled",
                     "twitch_alerts_resub_enabled",
                     "twitch_alerts_gift_enabled",
+                    "twitch_alerts_cheer_enabled",
                     "twitch_alerts_raid_enabled",
                 }
                 for key in checkbox_keys:
@@ -5557,6 +5558,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     "twitch_alerts_sub_template",
                     "twitch_alerts_resub_template",
                     "twitch_alerts_gift_template",
+                    "twitch_alerts_cheer_template",
                     "twitch_alerts_raid_template",
                 ):
                     await db.set_setting(key, (form.get(key) or "")[:500])
@@ -5600,6 +5602,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 "chat:read",
                 "moderator:read:followers",
                 "channel:read:subscriptions",
+                "bits:read",
             ],
         )
 
