@@ -187,6 +187,8 @@ def create_app(db: Database, bot=None) -> Quart:
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.db = db
     app.bot = bot
+    branding_dir = os.path.join(os.path.dirname(db.db_path), "branding")
+    os.makedirs(branding_dir, exist_ok=True)
     app.scan_status = {"running": False, "progress": "", "result": ""}
     app.title_scan_status = {"running": False, "progress": "", "result": ""}
     app.reaction_scan_status = {"running": False, "progress": "", "result": ""}
@@ -288,12 +290,26 @@ def create_app(db: Database, bot=None) -> Quart:
         selected.add("twitch_alerts")
         return selected
 
+    @app.route("/branding/<filename>")
+    async def branding_asset(filename):
+        from quart import send_from_directory
+        return await send_from_directory(branding_dir, filename)
+
     @app.context_processor
     async def inject_sidebar_nav():
         visible = _parse_sidebar_visible(await db.get_setting("sidebar_visible_items"))
+        custom_icon = os.path.basename(await db.get_setting("admin_bot_icon") or "")
+        custom_icon_path = os.path.join(branding_dir, custom_icon) if custom_icon else ""
+        if custom_icon and os.path.isfile(custom_icon_path):
+            bot_icon_url = url_for("branding_asset", filename=custom_icon)
+        else:
+            custom_icon = ""
+            bot_icon_url = url_for("static", filename="Bot_icon_small.png")
         return {
             "sidebar_nav_items": SIDEBAR_NAV_ITEMS,
             "sidebar_visible_items": visible,
+            "admin_bot_icon_url": bot_icon_url,
+            "admin_bot_icon_custom": bool(custom_icon),
         }
 
     def admin_required(f):
@@ -468,6 +484,21 @@ def create_app(db: Database, bot=None) -> Quart:
             form = await request.form
             action = form.get("action", "")
 
+            if action == "reset_bot_icon":
+                current_icon = os.path.basename(await db.get_setting("admin_bot_icon") or "")
+                await db.set_setting("admin_bot_icon", "")
+                if current_icon:
+                    current_path = os.path.join(branding_dir, current_icon)
+                    if os.path.isfile(current_path):
+                        os.remove(current_path)
+                await db.add_audit_log(
+                    event_type="bot_icon_reset",
+                    details="Admin UI bot icon restored to default",
+                    actor=session.get("username", "unknown"),
+                )
+                await flash("Default bot icon restored.", "success")
+                return redirect(url_for("settings"))
+
             if action == "lp_add":
                 input_channel_id = form.get("input_channel_id", "").strip()
                 output_channel_id = form.get("output_channel_id", "").strip()
@@ -530,6 +561,51 @@ def create_app(db: Database, bot=None) -> Quart:
                 if form.get(f"sidebar_{item['key']}") and item["key"] in known_sidebar
             ]
 
+            files = await request.files
+            icon_file = files.get("bot_icon")
+            if icon_file and icon_file.filename:
+                import uuid
+                original_name = icon_file.filename.strip()
+                ext = original_name.rsplit(".", 1)[-1].lower() if "." in original_name else ""
+                allowed_icons = {"png", "jpg", "jpeg", "webp", "gif"}
+                if ext not in allowed_icons:
+                    await flash("Invalid bot icon. Use PNG, JPEG, WebP or GIF.", "error")
+                    return redirect(url_for("settings"))
+
+                stored_ext = "jpg" if ext == "jpeg" else ext
+                new_icon = f"bot_icon_{uuid.uuid4().hex}.{stored_ext}"
+                new_path = os.path.join(branding_dir, new_icon)
+                await icon_file.save(new_path)
+                try:
+                    if os.path.getsize(new_path) > 2 * 1024 * 1024:
+                        raise ValueError("Bot icon is larger than 2 MB.")
+                    with open(new_path, "rb") as icon_handle:
+                        header = icon_handle.read(16)
+                    valid_signature = (
+                        (stored_ext == "png" and header.startswith(b"\x89PNG\r\n\x1a\n"))
+                        or (stored_ext == "jpg" and header.startswith(b"\xff\xd8\xff"))
+                        or (stored_ext == "gif" and header.startswith((b"GIF87a", b"GIF89a")))
+                        or (
+                            stored_ext == "webp"
+                            and header.startswith(b"RIFF")
+                            and header[8:12] == b"WEBP"
+                        )
+                    )
+                    if not valid_signature:
+                        raise ValueError("The uploaded file is not a valid image of the selected type.")
+                except (OSError, ValueError) as exc:
+                    if os.path.isfile(new_path):
+                        os.remove(new_path)
+                    await flash(str(exc), "error")
+                    return redirect(url_for("settings"))
+
+                old_icon = os.path.basename(await db.get_setting("admin_bot_icon") or "")
+                await db.set_setting("admin_bot_icon", new_icon)
+                if old_icon and old_icon != new_icon:
+                    old_path = os.path.join(branding_dir, old_icon)
+                    if os.path.isfile(old_path):
+                        os.remove(old_path)
+
             if bot_name:
                 await db.set_setting("bot_name", bot_name)
             if guild_id:
@@ -542,7 +618,7 @@ def create_app(db: Database, bot=None) -> Quart:
 
             await db.add_audit_log(
                 event_type="settings_changed",
-                details=f"Bot name: {bot_name}, Guild ID: {guild_id}, /new channel: {new_channel}, party_max_songs: {party_max_songs}, party_voice_channel: {party_voice_channel}, player_url: {player_url}, sidebar_visible_items: {len(sidebar_visible)}",
+                details=f"Bot name: {bot_name}, Guild ID: {guild_id}, /new channel: {new_channel}, party_max_songs: {party_max_songs}, party_voice_channel: {party_voice_channel}, player_url: {player_url}, sidebar_visible_items: {len(sidebar_visible)}, bot_icon_uploaded: {bool(icon_file and icon_file.filename)}",
                 actor=session.get("username", "unknown"),
             )
             await flash("Settings saved.", "success")
