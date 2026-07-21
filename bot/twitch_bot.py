@@ -515,8 +515,13 @@ class TwitchBot:
     # ------------------------------------------------------------------
     # Diagnostics — used by the admin UI's "Test Connection" button.
     # ------------------------------------------------------------------
-    async def diagnose(self) -> dict:
-        """One-shot health check. Returns a dict with details for the UI."""
+    async def diagnose(self, required_scopes=None) -> dict:
+        """One-shot health check. Returns a dict with details for the UI.
+
+        ``required_scopes`` lets callers validate the token for its actual
+        role. Chat senders and broadcaster EventSub accounts deliberately
+        require different Twitch scopes.
+        """
         out = {
             "ok": False,
             "message": "",
@@ -551,7 +556,7 @@ class TwitchBot:
             await self.db.get_setting(self.SETTING_KEYS["broadcaster_login"]) or ""
         )
         # Verify required scopes
-        required = {"user:write:chat", "user:bot"}
+        required = set(required_scopes or {"user:write:chat", "user:bot"})
         missing = required - set(out["scopes"])
         if missing:
             out["message"] = f"Missing scopes: {', '.join(sorted(missing))}"

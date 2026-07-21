@@ -5665,17 +5665,32 @@ def create_app(db: Database, bot=None) -> Quart:
         for key, default in DEFAULT_ALERT_SETTINGS.items():
             settings[key] = await db.get_setting(key) or default
 
+        required_bot_scopes = [
+            "user:write:chat",
+            "user:bot",
+            "user:read:chat",
+            "chat:read",
+        ]
+        required_eventsub_scopes = [
+            "user:read:chat",
+            "moderator:read:followers",
+            "channel:read:subscriptions",
+            "bits:read",
+        ]
+
         tw_diag = {}
         try:
             bot = _TwitchBot(db, key_prefix="exp_radio_twitch")
-            tw_diag = await bot.diagnose()
+            tw_diag = await bot.diagnose(required_scopes=required_bot_scopes)
         except Exception as exc:
             tw_diag = {"ok": False, "message": str(exc), "scopes": []}
 
         eventsub_diag = {}
         try:
             eventsub_bot = _TwitchBot(db, key_prefix="twitch_alerts_eventsub")
-            eventsub_diag = await eventsub_bot.diagnose()
+            eventsub_diag = await eventsub_bot.diagnose(
+                required_scopes=required_eventsub_scopes
+            )
         except Exception as exc:
             eventsub_diag = {"ok": False, "message": str(exc), "scopes": []}
 
@@ -5685,18 +5700,8 @@ def create_app(db: Database, bot=None) -> Quart:
             alert_status=twitch_event_alerts.status,
             tw_diag=tw_diag,
             eventsub_diag=eventsub_diag,
-            required_bot_scopes=[
-                "user:write:chat",
-                "user:bot",
-                "user:read:chat",
-                "chat:read",
-            ],
-            required_eventsub_scopes=[
-                "user:read:chat",
-                "moderator:read:followers",
-                "channel:read:subscriptions",
-                "bits:read",
-            ],
+            required_bot_scopes=required_bot_scopes,
+            required_eventsub_scopes=required_eventsub_scopes,
         )
 
     # --- Raven's Nest: Relic Hunt ---
