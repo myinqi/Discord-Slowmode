@@ -4857,6 +4857,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.set_setting("exp_radio_announcement_channel_id", announcement_ch)
                 await db.set_setting("exp_radio_announcement_message", announcement_msg)
                 progress_overlay_en = "on" if form.get("exp_progress_overlay") else "off"
+                ravenveil_early_boost_en = "on" if form.get("exp_ravenveil_early_boost") else "off"
                 try:
                     max_per_user_v = max(1, min(20, int(form.get("exp_max_per_user", "4") or "4")))
                 except (ValueError, TypeError):
@@ -4882,6 +4883,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.set_setting("exp_radio_schedule_days", sched_days)
                 await db.set_setting("exp_radio_schedule_time", sched_time)
                 await db.set_setting("exp_radio_progress_overlay", progress_overlay_en)
+                await db.set_setting("exp_radio_ravenveil_early_boost", ravenveil_early_boost_en)
                 active_pl_v = form.get("exp_active_playlist", "submission")
                 if active_pl_v not in ("submission", "admin", "both"):
                     active_pl_v = "submission"
@@ -5101,6 +5103,7 @@ def create_app(db: Database, bot=None) -> Quart:
         exp_moderation_enabled  = await db.get_setting("exp_radio_moderation_enabled") or "off"
         exp_loop_mode           = await db.get_setting("exp_radio_loop_mode") or "reshuffle"
         exp_progress_overlay    = await db.get_setting("exp_radio_progress_overlay") or "off"
+        exp_ravenveil_early_boost = await db.get_setting("exp_radio_ravenveil_early_boost") or "off"
         exp_max_per_user        = int(await db.get_setting("exp_radio_max_per_user") or "4")
         exp_expiry_days         = int(await db.get_setting("exp_radio_expiry_days") or "14")
         if exp_expiry_days not in (7, 14):
@@ -5208,6 +5211,7 @@ def create_app(db: Database, bot=None) -> Quart:
             exp_obs_overlay_fps=exp_obs_overlay_fps,
             exp_loop_rtmp_key=exp_loop_rtmp_key,
             exp_progress_overlay=exp_progress_overlay,
+            exp_ravenveil_early_boost=exp_ravenveil_early_boost,
             exp_max_per_user=exp_max_per_user,
             exp_expiry_days=exp_expiry_days,
             exp_video_bitrate_kbps=exp_video_bitrate_kbps,
@@ -5431,8 +5435,10 @@ def create_app(db: Database, bot=None) -> Quart:
         })
 
     # ── Twitch Bot OAuth re-authorization ──────────────────────────────────────
-    _TWITCH_BOT_SCOPES = "user:bot user:write:chat chat:read moderator:read:followers channel:read:subscriptions bits:read"
+    _TWITCH_BOT_SCOPES = "user:bot user:write:chat user:read:chat chat:read"
+    _TWITCH_EVENTSUB_SCOPES = "user:read:chat moderator:read:followers channel:read:subscriptions bits:read"
     _TWITCH_OAUTH_STATE_KEY = "twitch_oauth_state"
+    _TWITCH_OAUTH_MODE_KEY = "twitch_oauth_mode"
 
     def _twitch_oauth_redirect_uri() -> str:
         from config import Config
@@ -5452,6 +5458,7 @@ def create_app(db: Database, bot=None) -> Quart:
             return redirect(url_for("exp_radio_admin"))
         state = _sec.token_urlsafe(16)
         session[_TWITCH_OAUTH_STATE_KEY] = state
+        session[_TWITCH_OAUTH_MODE_KEY] = "bot"
         redirect_uri = _twitch_oauth_redirect_uri()
         params = urlencode({
             "client_id": client_id,
@@ -5473,6 +5480,7 @@ def create_app(db: Database, bot=None) -> Quart:
             await flash(f"Twitch authorization denied: {error}", "error")
             return redirect(url_for("exp_radio_admin"))
         state_exp = session.pop(_TWITCH_OAUTH_STATE_KEY, None)
+        oauth_mode = session.pop(_TWITCH_OAUTH_MODE_KEY, "bot")
         if not state_exp or state_got != state_exp:
             await flash("OAuth state mismatch — possible CSRF. Try again.", "error")
             return redirect(url_for("exp_radio_admin"))
@@ -5508,6 +5516,28 @@ def create_app(db: Database, bot=None) -> Quart:
                         _v = await _r.json()
                         bot_login = _v.get("login", "")
                         new_scopes = _v.get("scopes", [])
+            if oauth_mode == "eventsub":
+                expected_login = (await db.get_setting("exp_radio_twitch_broadcaster_login") or "").strip().lower()
+                if expected_login and bot_login.lower() != expected_login:
+                    await flash(
+                        f"Broadcaster authorization must use {expected_login}, but Twitch authorized {bot_login}.",
+                        "error",
+                    )
+                    return redirect(url_for("twitch_alerts_admin"))
+                await db.set_setting("twitch_alerts_eventsub_client_id", client_id)
+                await db.set_setting("twitch_alerts_eventsub_client_secret", client_secret)
+                await db.set_setting("twitch_alerts_eventsub_refresh_token", refresh_token)
+                await db.set_setting("twitch_alerts_eventsub_broadcaster_login", expected_login or bot_login)
+                await db.set_setting("twitch_alerts_eventsub_bot_login", bot_login)
+                await db.set_setting("twitch_alerts_eventsub_bot_user_id", "")
+                await db.set_setting("twitch_alerts_eventsub_broadcaster_user_id", "")
+                await twitch_event_alerts.restart()
+                await flash(
+                    f"EventSub authorized as broadcaster {bot_login} with scopes: {new_scopes}.",
+                    "success",
+                )
+                return redirect(url_for("twitch_alerts_admin"))
+
             await db.set_setting("exp_radio_twitch_refresh_token", refresh_token)
             await db.set_setting("exp_radio_twitch_bot_login", bot_login)
             await db.set_setting("exp_radio_twitch_bot_user_id", "")
@@ -5522,9 +5552,33 @@ def create_app(db: Database, bot=None) -> Quart:
             if scope_ok:
                 await relic_hunt.stop()
                 asyncio.create_task(_relic_hunt_autostart())
+                await twitch_event_alerts.restart()
         except Exception as _e:
             await flash(f"OAuth callback error: {_e}", "error")
         return redirect(url_for("exp_radio_admin"))
+
+    @app.route("/twitch-alerts/broadcaster-oauth-start")
+    @permission_required('twitch_alerts')
+    async def twitch_alerts_broadcaster_oauth_start():
+        import secrets as _sec
+        from urllib.parse import urlencode
+        client_id = await db.get_setting("exp_radio_twitch_client_id")
+        broadcaster_login = await db.get_setting("exp_radio_twitch_broadcaster_login")
+        if not client_id or not broadcaster_login:
+            await flash("Configure the Twitch Client ID and broadcaster login in Exp. Radio first.", "error")
+            return redirect(url_for("twitch_alerts_admin"))
+        state = _sec.token_urlsafe(16)
+        session[_TWITCH_OAUTH_STATE_KEY] = state
+        session[_TWITCH_OAUTH_MODE_KEY] = "eventsub"
+        params = urlencode({
+            "client_id": client_id,
+            "redirect_uri": _twitch_oauth_redirect_uri(),
+            "response_type": "code",
+            "scope": _TWITCH_EVENTSUB_SCOPES,
+            "state": state,
+            "force_verify": "true",
+        })
+        return redirect(f"https://id.twitch.tv/oauth2/authorize?{params}")
 
     @app.route("/exp-radio/consent-csv")
     @permission_required('exp_radio')
@@ -5575,6 +5629,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     "twitch_alerts_gift_enabled",
                     "twitch_alerts_cheer_enabled",
                     "twitch_alerts_raid_enabled",
+                    "twitch_alerts_watch_streak_enabled",
                 }
                 for key in checkbox_keys:
                     await db.set_setting(key, "on" if form.get(key) else "off")
@@ -5585,6 +5640,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     "twitch_alerts_gift_template",
                     "twitch_alerts_cheer_template",
                     "twitch_alerts_raid_template",
+                    "twitch_alerts_watch_streak_template",
                 ):
                     await db.set_setting(key, (form.get(key) or "")[:500])
                 await twitch_event_alerts.restart()
@@ -5616,15 +5672,27 @@ def create_app(db: Database, bot=None) -> Quart:
         except Exception as exc:
             tw_diag = {"ok": False, "message": str(exc), "scopes": []}
 
+        eventsub_diag = {}
+        try:
+            eventsub_bot = _TwitchBot(db, key_prefix="twitch_alerts_eventsub")
+            eventsub_diag = await eventsub_bot.diagnose()
+        except Exception as exc:
+            eventsub_diag = {"ok": False, "message": str(exc), "scopes": []}
+
         return await render_template(
             "twitch_alerts.html",
             settings=settings,
             alert_status=twitch_event_alerts.status,
             tw_diag=tw_diag,
-            required_alert_scopes=[
+            eventsub_diag=eventsub_diag,
+            required_bot_scopes=[
                 "user:write:chat",
                 "user:bot",
+                "user:read:chat",
                 "chat:read",
+            ],
+            required_eventsub_scopes=[
+                "user:read:chat",
                 "moderator:read:followers",
                 "channel:read:subscriptions",
                 "bits:read",

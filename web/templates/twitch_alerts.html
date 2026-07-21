@@ -16,10 +16,12 @@
         <input type="hidden" name="action" value="test_message">
         <button class="px-3 py-2 rounded-lg bg-discord-blurple hover:bg-indigo-500 text-white text-sm transition-colors">Send test</button>
       </form>
+      <a href="{{ url_for('twitch_alerts_broadcaster_oauth_start') }}"
+        class="px-3 py-2 rounded-lg bg-purple-700 hover:bg-purple-600 text-white text-sm transition-colors">Authorize broadcaster</a>
     </div>
   </div>
 
-  <div class="grid md:grid-cols-3 gap-4">
+  <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
     <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-4">
       <p class="text-gray-400 text-xs uppercase tracking-wide">Feature</p>
       <p class="mt-2 text-lg font-semibold {% if settings.get('twitch_alerts_enabled') == 'on' %}text-green-300{% else %}text-gray-300{% endif %}">
@@ -34,11 +36,18 @@
       <p class="text-xs text-gray-500 mt-1">{{ alert_status.last_message }}</p>
     </div>
     <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-4">
-      <p class="text-gray-400 text-xs uppercase tracking-wide">Twitch token</p>
+      <p class="text-gray-400 text-xs uppercase tracking-wide">Chat sender</p>
       <p class="mt-2 text-lg font-semibold {% if tw_diag.ok %}text-green-300{% else %}text-yellow-300{% endif %}">
         {{ tw_diag.bot_login or 'Not verified' }}
       </p>
       <p class="text-xs text-gray-500 mt-1">{{ tw_diag.message }}</p>
+    </div>
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-4">
+      <p class="text-gray-400 text-xs uppercase tracking-wide">Event account</p>
+      <p class="mt-2 text-lg font-semibold {% if eventsub_diag.ok %}text-green-300{% else %}text-yellow-300{% endif %}">
+        {{ eventsub_diag.bot_login or 'Not authorized' }}
+      </p>
+      <p class="text-xs text-gray-500 mt-1">{{ eventsub_diag.message }}</p>
     </div>
   </div>
 
@@ -47,7 +56,7 @@
     <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between">
       <div>
         <h3 class="text-white font-semibold">Settings</h3>
-        <p class="text-gray-500 text-xs mt-1">Uses the Experimental Radio Twitch credentials.</p>
+        <p class="text-gray-500 text-xs mt-1">Corax posts messages; the broadcaster grants access to channel events.</p>
       </div>
       <label class="flex items-center gap-2 cursor-pointer">
         <input type="checkbox" name="twitch_alerts_enabled" value="on"
@@ -59,15 +68,23 @@
 
     <div class="p-5 space-y-5">
       <div class="rounded-lg bg-discord-darker/80 border border-gray-700/50 p-4">
-        <h4 class="text-white text-sm font-medium mb-2">Required Twitch scopes</h4>
+        <h4 class="text-white text-sm font-medium mb-2">Chat sender scopes</h4>
         <div class="flex flex-wrap gap-2">
-          {% for scope in required_alert_scopes %}
+          {% for scope in required_bot_scopes %}
           <span class="px-2 py-1 rounded bg-gray-800 text-xs {% if scope in tw_diag.scopes %}text-green-300{% else %}text-yellow-300{% endif %}">
             {{ scope }}{% if scope in tw_diag.scopes %} ✓{% endif %}
           </span>
           {% endfor %}
         </div>
-        <p class="text-gray-500 text-xs mt-3">If a scope is missing, re-authorize Twitch in Exp. Radio settings. Raid alerts do not need an extra scope, but chat posting still needs the bot scopes.</p>
+        <h4 class="text-white text-sm font-medium mt-4 mb-2">Broadcaster EventSub scopes</h4>
+        <div class="flex flex-wrap gap-2">
+          {% for scope in required_eventsub_scopes %}
+          <span class="px-2 py-1 rounded bg-gray-800 text-xs {% if scope in eventsub_diag.scopes %}text-green-300{% else %}text-yellow-300{% endif %}">
+            {{ scope }}{% if scope in eventsub_diag.scopes %} ✓{% endif %}
+          </span>
+          {% endfor %}
+        </div>
+        <p class="text-gray-500 text-xs mt-3">Authorize Corax in Exp. Radio and the broadcaster here. Raid alerts do not require an event scope.</p>
       </div>
 
       {% set rows = [
@@ -76,7 +93,8 @@
         ('twitch_alerts_resub_enabled', 'twitch_alerts_resub_template', 'Resub message', '{user}, {login}, {tier}, {months}, {streak_months}, {message}'),
         ('twitch_alerts_gift_enabled', 'twitch_alerts_gift_template', 'Gift subscription', '{gifter}, {login}, {tier}, {total}, {cumulative_total}'),
         ('twitch_alerts_cheer_enabled', 'twitch_alerts_cheer_template', 'Bits / Cheer', '{user}, {login}, {bits}, {message}'),
-        ('twitch_alerts_raid_enabled', 'twitch_alerts_raid_template', 'Incoming raid', '{user}, {login}, {viewers}')
+        ('twitch_alerts_raid_enabled', 'twitch_alerts_raid_template', 'Incoming raid', '{user}, {login}, {viewers}'),
+        ('twitch_alerts_watch_streak_enabled', 'twitch_alerts_watch_streak_template', 'Watch streak', '{user}, {login}, {streak}, {points}')
       ] %}
       {% for enabled_key, template_key, label, placeholders in rows %}
       <div class="rounded-lg border border-gray-700/50 bg-discord-darker/50 p-4 space-y-3">

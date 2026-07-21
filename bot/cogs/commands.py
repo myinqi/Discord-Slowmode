@@ -1830,6 +1830,7 @@ class CommandsCog(commands.Cog):
             name="🎙️ Experimental Radio",
             value=(
                 "**`/twitch-submit`** — Submit a Suno song to the Experimental Radio\n"
+                "**`/twitch-replace`** — Replace your oldest Experimental Radio submission\n"
                 "**`/twitch-delete`** — Remove one of your Experimental Radio submissions\n"
                 "**`/twitch-playlist`** — Show the Experimental Radio playlist"
             ),
@@ -1858,6 +1859,25 @@ class CommandsCog(commands.Cog):
         )
         embed.set_footer(text="Click 'I Agree & Submit' to proceed with your submission.")
         view = ExpRadioTermsView(self.bot)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+    @app_commands.command(name="twitch-replace", description="Replace your oldest Experimental Radio submission")
+    async def exp_radio_replace(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        max_per_user = int(await self.bot.db.get_setting("exp_radio_max_per_user") or "4")
+        expiry_days = int(await self.bot.db.get_setting("exp_radio_expiry_days") or "14")
+        if expiry_days not in (7, 14):
+            expiry_days = 14
+        embed = discord.Embed(
+            title="🔄 Replace Experimental Radio Submission",
+            description=(
+                _exp_terms_display(max_per_user, expiry_days)
+                + "\n\nYour oldest active submission will be removed after the new URL has been validated."
+            ),
+            color=discord.Color.purple(),
+        )
+        embed.set_footer(text="Click 'I Agree & Replace' to proceed.")
+        view = ExpRadioTermsView(self.bot, replace=True)
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
     @app_commands.command(name="twitch-delete", description="Remove one of your Experimental Radio submissions")
@@ -1974,13 +1994,18 @@ def _exp_terms_display(limit: int, expiry_days: int) -> str:
 
 
 class ExpRadioTermsView(discord.ui.View):
-    def __init__(self, bot):
+    def __init__(self, bot, replace: bool = False):
         super().__init__(timeout=120)
         self.bot = bot
+        self.replace = replace
+        if replace:
+            for item in self.children:
+                if isinstance(item, discord.ui.Button) and item.style == discord.ButtonStyle.green:
+                    item.label = "✅ I Agree & Replace"
 
     @discord.ui.button(label="✅ I Agree & Submit", style=discord.ButtonStyle.green)
     async def agree(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(ExpRadioSubmitModal(self.bot))
+        await interaction.response.send_modal(ExpRadioSubmitModal(self.bot, replace=self.replace))
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1997,9 +2022,12 @@ class ExpRadioSubmitModal(discord.ui.Modal, title="Submit to Experimental Radio"
         max_length=250,
     )
 
-    def __init__(self, bot):
-        super().__init__()
+    def __init__(self, bot, replace: bool = False):
+        super().__init__(
+            title="Replace Experimental Radio Song" if replace else "Submit to Experimental Radio"
+        )
         self.bot = bot
+        self.replace = replace
 
     async def on_submit(self, interaction: discord.Interaction):
         import hashlib
@@ -2042,12 +2070,17 @@ class ExpRadioSubmitModal(discord.ui.Modal, title="Submit to Experimental Radio"
             return
         suno_uuid = m.group(1)
 
+        existing_songs = await self.bot.db.get_exp_radio_songs_by_user(interaction.user.id)
+        # get_exp_radio_songs_by_user returns newest first, so the last row is
+        # the oldest active submission and therefore the replacement target.
+        replace_target = existing_songs[-1] if self.replace and existing_songs else None
+
         max_per_user = int(await self.bot.db.get_setting("exp_radio_max_per_user") or str(_EXP_MAX_PER_USER_DEFAULT))
         count = await self.bot.db.count_exp_radio_songs_by_user(interaction.user.id)
-        if count >= max_per_user:
+        if not self.replace and count >= max_per_user:
             await interaction.followup.send(
                 f"❌ You already have {max_per_user} submissions. "
-                "Use `/twitch-delete` to remove one first.",
+                "Use `/twitch-replace` to replace the oldest one or `/twitch-delete` to remove one.",
                 ephemeral=True,
             )
             return
@@ -2070,6 +2103,19 @@ class ExpRadioSubmitModal(discord.ui.Modal, title="Submit to Experimental Radio"
             expiry_days=expiry_days,
         )
 
+        replaced_song = None
+        if replace_target:
+            replaced_song = await self.bot.db.delete_exp_radio_song(replace_target["id"])
+            if not replaced_song:
+                # Keep the operation all-or-nothing from the user's point of
+                # view if the old row unexpectedly disappeared meanwhile.
+                await self.bot.db.delete_exp_radio_song(song_id)
+                await interaction.followup.send(
+                    "❌ The previous submission could not be replaced. Your existing song was kept.",
+                    ephemeral=True,
+                )
+                return
+
         web_url = self.bot.web_url
         if web_url:
             upload_link = f"{web_url}/exp-radio/upload/{upload_token}"
@@ -2087,16 +2133,21 @@ class ExpRadioSubmitModal(discord.ui.Modal, title="Submit to Experimental Radio"
                 ),
                 color=0xf5a623,
             )
-            embed.set_footer(text=f"Song #{song_id} registered • expires in {expiry_days} days")
+            footer = f"Song #{song_id} registered • expires in {expiry_days} days"
+            if replaced_song:
+                replaced_title = replaced_song.get("title") or f"Song #{replaced_song['id']}"
+                footer += f" • replaced {replaced_title}"
+            embed.set_footer(text=footer)
             await interaction.followup.send(
-                "✅ **Song registered!**",
+                "✅ **Song replaced!**" if replaced_song else "✅ **Song registered!**",
                 embed=embed,
                 view=view,
                 ephemeral=True,
             )
         else:
+            status_text = "replaced" if replaced_song else "registered"
             await interaction.followup.send(
-                f"✅ **Song registered!** (#{song_id})\n\n"
+                f"✅ **Song {status_text}!** (#{song_id})\n\n"
                 "⚠️ Upload link unavailable — ask an admin to set `WEB_URL`.",
                 ephemeral=True,
             )

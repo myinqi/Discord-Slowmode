@@ -161,6 +161,19 @@
                 </p>
             </div>
             <div class="pt-2 border-t border-gray-700/50 space-y-2">
+                <label class="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" name="exp_ravenveil_early_boost"
+                        {% if exp_ravenveil_early_boost == 'on' %}checked{% endif %}
+                        class="w-4 h-4 accent-discord-blurple">
+                    <span class="text-white text-sm">Tarja early-play boost</span>
+                </label>
+                <p class="text-gray-500 text-xs">
+                    Places one random ready submission by <span class="text-gray-400">t_ravenveil</span>
+                    at a random position that starts within the stream's first 60 minutes.
+                    Intro duration counts toward the window; admin, intro and outro songs are excluded.
+                </p>
+            </div>
+            <div class="pt-2 border-t border-gray-700/50 space-y-2">
                 <p class="text-white text-sm font-medium">When the playlist ends</p>
                 <label class="flex items-start gap-2 cursor-pointer select-none">
                     <input type="radio" name="exp_loop_mode" value="stop"

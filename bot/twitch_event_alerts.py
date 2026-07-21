@@ -36,6 +36,8 @@ DEFAULT_ALERT_SETTINGS = {
     "twitch_alerts_cheer_template": "✨ {user} cheered {bits} Bits! Thank you for the sparkle.",
     "twitch_alerts_raid_enabled": "on",
     "twitch_alerts_raid_template": "⚔️ Raid incoming from {user} with {viewers} viewer(s)! Welcome raiders!",
+    "twitch_alerts_watch_streak_enabled": "on",
+    "twitch_alerts_watch_streak_template": "🔥 {user} reached a watch streak of {streak} streams!",
 }
 
 
@@ -130,6 +132,7 @@ class TwitchEventAlerts:
             "twitch_alerts_gift_enabled",
             "twitch_alerts_cheer_enabled",
             "twitch_alerts_raid_enabled",
+            "twitch_alerts_watch_streak_enabled",
         ):
             if await self._setting(key) == "on":
                 return True
@@ -172,12 +175,26 @@ class TwitchEventAlerts:
                 next_url = _EVENTSUB_WS_URL
 
     async def _connect_once(self, url: str) -> None:
-        bot = TwitchBot(self.db, key_prefix="exp_radio_twitch")
-        ok, msg = await bot.start()
+        chat_bot = TwitchBot(self.db, key_prefix="exp_radio_twitch")
+        ok, msg = await chat_bot.start()
         if not ok:
-            self.status.last_message = f"Twitch credentials error: {msg}"
+            self.status.last_message = f"Twitch chat credentials error: {msg}"
             await asyncio.sleep(30)
             return
+
+        eventsub_bot = TwitchBot(self.db, key_prefix="twitch_alerts_eventsub")
+        eventsub_ok, eventsub_msg = await eventsub_bot.start()
+        if not eventsub_ok:
+            # Keep Follow/Raid usable while installations migrate to the
+            # separate broadcaster authorization. Broadcaster-only events
+            # will be rejected by Twitch until that authorization exists.
+            eventsub_bot = chat_bot
+            _log(
+                f"Broadcaster EventSub authorization unavailable ({eventsub_msg}); "
+                "using chat token as fallback",
+                "error",
+                "[twitch-alerts]",
+            )
 
         async with aiohttp.ClientSession() as session:
             async with session.ws_connect(
@@ -194,13 +211,19 @@ class TwitchEventAlerts:
                     if not self._running:
                         break
                     if msg.type == aiohttp.WSMsgType.TEXT:
-                        await self._handle_frame(bot, session, msg.json())
+                        await self._handle_frame(chat_bot, eventsub_bot, session, msg.json())
                     elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
                         break
         self._ws = None
         self.status.connected = False
 
-    async def _handle_frame(self, bot: TwitchBot, session: aiohttp.ClientSession, data: Dict[str, Any]) -> None:
+    async def _handle_frame(
+        self,
+        chat_bot: TwitchBot,
+        eventsub_bot: TwitchBot,
+        session: aiohttp.ClientSession,
+        data: Dict[str, Any],
+    ) -> None:
         metadata = data.get("metadata") or {}
         payload = data.get("payload") or {}
         message_type = metadata.get("message_type")
@@ -216,7 +239,7 @@ class TwitchEventAlerts:
         if message_type == "session_welcome":
             session_id = ((payload.get("session") or {}).get("id") or "")
             self.status.session_id = session_id
-            await self._subscribe_enabled_events(bot, session, session_id)
+            await self._subscribe_enabled_events(eventsub_bot, session, session_id)
             return
 
         if message_type == "session_reconnect":
@@ -226,7 +249,7 @@ class TwitchEventAlerts:
         if message_type == "notification":
             sub = payload.get("subscription") or {}
             event = payload.get("event") or {}
-            await self._announce(bot, sub.get("type") or "", event)
+            await self._announce(chat_bot, sub.get("type") or "", event)
             return
 
         if message_type == "revocation":
@@ -263,8 +286,15 @@ class TwitchEventAlerts:
             subscriptions.append(("channel.cheer", "1", {"broadcaster_user_id": broadcaster_id}))
         if await self._setting("twitch_alerts_raid_enabled") == "on":
             subscriptions.append(("channel.raid", "1", {"to_broadcaster_user_id": broadcaster_id}))
+        if await self._setting("twitch_alerts_watch_streak_enabled") == "on":
+            subscriptions.append((
+                "channel.chat.notification",
+                "1",
+                {"broadcaster_user_id": broadcaster_id, "user_id": bot_user_id},
+            ))
 
         created = 0
+        failed = []
         for sub_type, version, condition in subscriptions:
             payload = {
                 "type": sub_type,
@@ -286,8 +316,11 @@ class TwitchEventAlerts:
                     created += 1
                     continue
                 body = await resp.text()
+                failed.append(sub_type)
                 _log(f"Could not subscribe to {sub_type}: HTTP {resp.status} {body[:300]}", "error", "[twitch-alerts]")
         self.status.last_message = f"Subscribed to {created}/{len(subscriptions)} Twitch event(s)"
+        if failed:
+            self.status.last_message += f"; failed: {', '.join(failed)}"
         _log(self.status.last_message, "info", "[twitch-alerts]")
 
     async def _announce(self, bot: TwitchBot, sub_type: str, event: Dict[str, Any]) -> None:
@@ -343,6 +376,17 @@ class TwitchEventAlerts:
                 "user": event.get("from_broadcaster_user_name") or event.get("from_broadcaster_user_login") or "Someone",
                 "login": event.get("from_broadcaster_user_login") or "",
                 "viewers": event.get("viewers") or 0,
+            }
+        elif sub_type == "channel.chat.notification":
+            if event.get("notice_type") != "watch_streak":
+                return
+            watch_streak = event.get("watch_streak") or {}
+            template_key = "twitch_alerts_watch_streak_template"
+            values = {
+                "user": event.get("chatter_user_name") or event.get("chatter_user_login") or "Someone",
+                "login": event.get("chatter_user_login") or "",
+                "streak": watch_streak.get("streak_count") or 0,
+                "points": watch_streak.get("channel_points_awarded") or 0,
             }
         else:
             return

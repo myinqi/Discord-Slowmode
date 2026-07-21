@@ -778,7 +778,7 @@
               class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
             <button class="px-4 py-2 rounded-lg bg-discord-blurple hover:bg-indigo-500 text-white text-sm transition-colors">Save</button>
           </div>
-          <p class="text-gray-500 text-xs">Controls how many active hunters receive automatic village payouts.</p>
+          <p class="text-gray-500 text-xs">Completed villages each add one random level-5 area reward; the current village adds one reward from a built area.</p>
         </form>
 
         <form method="POST" onsubmit="return confirm('Reset current Hrafnathorp village progress? The village count will stay unchanged.')">
@@ -970,7 +970,7 @@
         </div>
         {% endfor %}
       </div>
-      <p class="text-gray-500 text-xs">Village payouts choose active hunters based on recent !raven activity.</p>
+      <p class="text-gray-500 text-xs">Each completed village contributes a random level-5 area reward. The current village contributes one built area's current-level reward. All rewards are announced together.</p>
     </div>
 
     <button class="w-full mt-2 px-4 py-2 rounded-lg bg-discord-blurple hover:bg-indigo-500 text-white text-sm transition-colors">Save Settings</button>

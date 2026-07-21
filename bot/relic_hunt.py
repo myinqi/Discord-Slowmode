@@ -377,25 +377,46 @@ class RelicHunt:
             return
 
         await self.db.relic_set_setting("village_next_payout_at", str(now + interval_min * 60))
-        areas = [a for a in await self.db.relic_get_village_areas() if int(a.get("level") or 0) > 0]
-        if not areas:
-            return
+        areas = await self.db.relic_get_village_areas()
         window_min = max(1, int((await self.db.relic_get_setting("village_active_window_minutes")) or 30))
         active_users = await self.db.relic_get_active_users_since(now - window_min * 60)
         if not active_users:
             return
         village_count = max(1, int((await self.db.relic_get_setting("village_count")) or 1))
-        winners = random.sample(active_users, min(village_count, len(active_users)))
-        area = random.choice(areas)
-        reward_texts = []
-        for winner in winners:
-            reward_texts.append(await self._grant_village_reward(winner, area))
-        names = ", ".join(f"@{w['username']}" for w in winners)
-        await self._send(
-            f"🏘️ Hrafnathorp shares its {area['name']} bounty with {names}: "
-            f"{'; '.join(reward_texts)}."
+        completed_count = max(0, village_count - 1)
+
+        payout_sources = []
+        for index in range(completed_count):
+            area = dict(random.choice(areas))
+            area["level"] = 5
+            payout_sources.append((f"Village {index + 1} {area['name']} L5", area))
+
+        current_areas = [a for a in areas if int(a.get("level") or 0) > 0]
+        if current_areas:
+            area = dict(random.choice(current_areas))
+            payout_sources.append((f"Current {area['name']} L{area['level']}", area))
+        if not payout_sources:
+            return
+
+        recipients = list(active_users)
+        random.shuffle(recipients)
+        rewards = []
+        for index, (source, area) in enumerate(payout_sources):
+            reward = await self._grant_village_reward(
+                recipients[index % len(recipients)],
+                area,
+            )
+            reward["source"] = source
+            rewards.append(reward)
+
+        message = self._format_village_payout_message(
+            rewards,
+            completed_count=completed_count,
+            includes_current=bool(current_areas),
         )
-        _rlog(f"Hrafnathorp payout: {area['area_id']} L{area['level']} -> {names}")
+        await self._send(message)
+        detail = " | ".join(f"{r['source']}: {r['text']}" for r in rewards)
+        _rlog(f"Hrafnathorp payout: {detail}")
 
     async def _send(self, msg: str) -> None:
         if self._bot:
@@ -489,7 +510,7 @@ class RelicHunt:
             await self.db.relic_upsert_user(user)
         return user
 
-    async def _grant_village_reward(self, user: dict, area: dict) -> str:
+    async def _grant_village_reward(self, user: dict, area: dict) -> dict:
         level = max(0, int(area.get("level") or 0))
         resource = area.get("resource_type")
         uid = user["twitch_user_id"]
@@ -499,19 +520,22 @@ class RelicHunt:
             amount = level * int((await self.db.relic_get_setting("village_points_per_level")) or 20)
             user["points"] = int(user.get("points") or 0) + amount
             await self.db.relic_upsert_user(user)
-            return f"@{name} +{amount} points"
+            return {"username": name, "resource": resource, "amount": amount,
+                    "text": f"@{name} +{amount} points"}
 
         if resource == "xp":
             amount = level * int((await self.db.relic_get_setting("village_xp_per_level")) or 12)
             user, _, _ = await self._apply_xp(user, amount)
             await self.db.relic_upsert_user(user)
-            return f"@{name} +{amount} XP"
+            return {"username": name, "resource": resource, "amount": amount,
+                    "text": f"@{name} +{amount} XP"}
 
         if resource == "shinies":
             amount = level * int((await self.db.relic_get_setting("village_shinies_per_level")) or 1)
             user["shinies"] = int(user.get("shinies") or 0) + amount
             await self.db.relic_upsert_user(user)
-            return f"@{name} +{amount} Shiny"
+            return {"username": name, "resource": resource, "amount": amount,
+                    "text": f"@{name} +{amount} Shiny"}
 
         if resource == "items":
             amount = level * int((await self.db.relic_get_setting("village_items_per_level")) or 1)
@@ -537,10 +561,65 @@ class RelicHunt:
                     count = entry["count"]
                     label = f"{prize.get('icon','')} {prize['name']}".strip()
                     parts.append(f"{count}x {label}" if count > 1 else label)
-                return f"@{name} receives {', '.join(parts)}"
-            return f"@{name} receives a trade blessing"
+                return {"username": name, "resource": resource, "amount": amount,
+                        "text": f"@{name} receives {', '.join(parts)}"}
+            return {"username": name, "resource": resource, "amount": 0,
+                    "text": f"@{name} receives a trade blessing"}
 
-        return f"@{name} receives a village blessing"
+        return {"username": name, "resource": "blessing", "amount": 0,
+                "text": f"@{name} receives a village blessing"}
+
+    @staticmethod
+    def _format_village_payout_message(
+        rewards: list[dict],
+        *,
+        completed_count: int,
+        includes_current: bool,
+    ) -> str:
+        detailed = "🏘️ Hrafnathorp payout: " + " | ".join(
+            f"{reward['source']} → {reward['text']}" for reward in rewards
+        )
+        if len(detailed) <= 490:
+            return detailed
+
+        totals: dict[str, dict[str, int]] = {}
+        for reward in rewards:
+            user_totals = totals.setdefault(reward["username"], {})
+            resource = reward["resource"]
+            user_totals[resource] = user_totals.get(resource, 0) + int(reward["amount"] or 0)
+
+        parts = []
+        labels = {
+            "points": "points",
+            "xp": "XP",
+            "items": "items",
+            "shinies": "Shinies",
+        }
+        for username, resources in totals.items():
+            amounts = [
+                f"+{amount} {labels[resource]}"
+                for resource, amount in resources.items()
+                if amount > 0 and resource in labels
+            ]
+            parts.append(f"@{username} {', '.join(amounts) or 'village blessing'}")
+
+        source_summary = f"{completed_count} completed village{'s' if completed_count != 1 else ''}"
+        if includes_current:
+            source_summary += " + current village"
+        prefix = f"🏘️ Hrafnathorp payout ({source_summary}): "
+        included = []
+        for index, part in enumerate(parts):
+            remaining = len(parts) - index - 1
+            suffix = f" | +{remaining} more rewarded" if remaining else ""
+            candidate = prefix + " | ".join([*included, part]) + suffix
+            if len(candidate) > 490:
+                break
+            included.append(part)
+        remaining = len(parts) - len(included)
+        message = prefix + " | ".join(included)
+        if remaining:
+            message += f" | +{remaining} more rewarded"
+        return message[:490]
 
     async def _get_ranks(self) -> list[dict]:
         ranks = await self.db.relic_get_all_ranks(active_only=True)

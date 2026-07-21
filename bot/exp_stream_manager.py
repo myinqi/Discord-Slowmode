@@ -113,6 +113,53 @@ _LOG_BUFFER_MAX = 1000
 stream_is_live: bool = False
 
 _PRE_START_LOCK_MINUTES = 60
+_EARLY_SUBMITTER_LOGIN = "t_ravenveil"
+_EARLY_SUBMITTER_WINDOW_SECONDS = 60 * 60
+
+
+def _place_submitter_song_in_early_window(
+    songs: list[dict],
+    *,
+    submitter_login: str,
+    initial_offset: float = 0.0,
+    window_seconds: float = _EARLY_SUBMITTER_WINDOW_SECONDS,
+) -> tuple[list[dict], dict | None, int | None, float | None]:
+    """Place one matching submission at a random start inside an early window."""
+    normalized_login = (submitter_login or "").strip().lstrip("@").casefold()
+    candidates = [
+        song for song in songs
+        if (song.get("playlist_source") or "submission") == "submission"
+        and str(song.get("user_name") or "").strip().lstrip("@").casefold()
+        == normalized_login
+    ]
+    if not candidates or initial_offset >= window_seconds:
+        return list(songs), None, None, None
+
+    selected = random.choice(candidates)
+    remaining = list(songs)
+    remaining.remove(selected)
+
+    valid_slots: list[tuple[int, float]] = []
+    starts_at = max(0.0, float(initial_offset or 0.0))
+    if starts_at < window_seconds:
+        valid_slots.append((0, starts_at))
+    for index, song in enumerate(remaining, start=1):
+        try:
+            duration = max(0.0, float(song.get("duration") or 300.0))
+        except (TypeError, ValueError):
+            duration = 300.0
+        starts_at += duration
+        if starts_at < window_seconds:
+            valid_slots.append((index, starts_at))
+        else:
+            break
+
+    if not valid_slots:
+        return list(songs), None, None, None
+
+    insert_at, starts_at = random.choice(valid_slots)
+    remaining.insert(insert_at, selected)
+    return remaining, selected, insert_at, starts_at
 
 
 async def is_submissions_locked(db) -> tuple[bool, str]:
@@ -375,15 +422,39 @@ class ExpStreamManager:
 
         random.shuffle(ready)
 
-        # Prepend intro song if enabled
+        # Select the intro first so its duration can count towards the early
+        # play window, then prepend it after the regular playlist is arranged.
+        intro_song = None
         intro_enabled = (await self.db.get_setting("exp_radio_intro_enabled")) or "off"
         if intro_enabled == "on":
             intro_songs = await self.db.get_all_exp_radio_songs(active_only=True, source="intro")
             intro_selection = await self.db.get_setting("exp_radio_intro_selection") or "random"
             intro_song = _pick_special_song(intro_songs, intro_selection)
             if intro_song:
-                ready = [intro_song] + ready
                 self._log(f"Intro song: {intro_song.get('title', '?')}")
+
+        early_boost = (await self.db.get_setting("exp_radio_ravenveil_early_boost")) or "off"
+        if early_boost == "on":
+            try:
+                intro_duration = float(intro_song.get("duration") or 300.0) if intro_song else 0.0
+            except (TypeError, ValueError):
+                intro_duration = 300.0 if intro_song else 0.0
+            ready, boosted_song, regular_slot, starts_at = _place_submitter_song_in_early_window(
+                ready,
+                submitter_login=_EARLY_SUBMITTER_LOGIN,
+                initial_offset=intro_duration,
+            )
+            if boosted_song:
+                minutes, seconds = divmod(int(starts_at or 0), 60)
+                self._log(
+                    f"Tarja early-play boost: {boosted_song.get('title', '?')} placed at "
+                    f"regular slot {(regular_slot or 0) + 1} (starts around {minutes}:{seconds:02d})."
+                )
+            else:
+                self._log("Tarja early-play boost: no eligible t_ravenveil submission found.")
+
+        if intro_song:
+            ready = [intro_song] + ready
 
         # Store outro for end-of-stream injection
         self._outro_song = None

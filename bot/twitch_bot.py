@@ -11,9 +11,11 @@ Scopes required on the bot user's token:
     user:bot          — marks the user as a bot so Twitch allows it to post
                         in channels where it is a moderator / VIP (or where
                         the broadcaster has granted `channel:bot`).
+    user:read:chat    — required for EventSub chat notifications such as
+                        viewer watch streaks.
     chat:read         — required for IRC command listening.
-    moderator:read:followers, channel:read:subscriptions and bits:read are
-                        used by the optional Twitch EventSub chat alerts.
+    Broadcaster-only EventSub scopes are authorized separately by the channel
+                        owner in the Twitch Alerts admin page.
 
 Setup expectation: the bot account must be **moderator** (or VIP) in the
 broadcaster's channel — easiest done by the broadcaster typing
@@ -25,6 +27,8 @@ from __future__ import annotations
 import asyncio
 import re
 import time
+from collections import deque
+from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
 import aiohttp
@@ -41,6 +45,26 @@ _IRC_URL      = "wss://irc-ws.chat.twitch.tv:443"
 # How early (in seconds) to proactively refresh the access token before its
 # stated expiry. Twitch tokens last ~4h, 5 minutes safety is plenty.
 _REFRESH_LEAD_TIME = 300
+
+# Keep all chat producers inside one conservative Twitch chat lane. This
+# remains safe if the bot temporarily loses moderator/VIP status: regular
+# accounts are limited to one message per second per channel and 20 messages
+# per 30 seconds. A failed 429 is retried without executing the originating
+# game command again.
+_CHAT_MIN_INTERVAL = 1.1
+_CHAT_WINDOW_SECONDS = 30.0
+_CHAT_WINDOW_MAX = 19
+_CHAT_429_RETRIES = 2
+
+
+@dataclass
+class _ChatSendLane:
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    sent_at: deque[float] = field(default_factory=deque)
+    last_attempt_at: float = 0.0
+
+
+_CHAT_SEND_LANES: Dict[Tuple[str, str], _ChatSendLane] = {}
 
 # Parse: @tag=val;tag2=val2 :nick!nick@nick.tmi.twitch.tv PRIVMSG #channel :message
 _PRIVMSG_RE = re.compile(
@@ -286,35 +310,111 @@ class TwitchBot:
             ok, _ = await self._resolve_user_ids()
             if not ok:
                 return False
+
+        lane_key = (self._broadcaster_user_id, self._bot_user_id)
+        lane = _CHAT_SEND_LANES.setdefault(lane_key, _ChatSendLane())
+        async with lane.lock:
+            return await self._send_queued(message, lane)
+
+    async def _wait_for_chat_slot(self, lane: _ChatSendLane) -> None:
+        while True:
+            now = time.monotonic()
+            while lane.sent_at and now - lane.sent_at[0] >= _CHAT_WINDOW_SECONDS:
+                lane.sent_at.popleft()
+
+            wait_for = max(0.0, lane.last_attempt_at + _CHAT_MIN_INTERVAL - now)
+            if len(lane.sent_at) >= _CHAT_WINDOW_MAX:
+                wait_for = max(
+                    wait_for,
+                    lane.sent_at[0] + _CHAT_WINDOW_SECONDS - now,
+                )
+            if wait_for <= 0:
+                return
+            await asyncio.sleep(wait_for)
+
+    @staticmethod
+    def _retry_delay(response: aiohttp.ClientResponse) -> float:
+        delays = [_CHAT_MIN_INTERVAL]
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            try:
+                delays.append(float(retry_after))
+            except (TypeError, ValueError):
+                pass
+        reset_at = response.headers.get("Ratelimit-Reset")
+        if reset_at:
+            try:
+                delays.append(float(reset_at) - time.time())
+            except (TypeError, ValueError):
+                pass
+        return min(max(delays), _CHAT_WINDOW_SECONDS)
+
+    async def _send_queued(self, message: str, lane: _ChatSendLane) -> bool:
+        auth_retried = False
+        rate_retries = 0
         try:
             async with aiohttp.ClientSession() as s:
-                async with s.post(
-                    _CHAT_URL,
-                    headers={
-                        "Authorization": f"Bearer {self._access_token}",
-                        "Client-Id": self._client_id or "",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "broadcaster_id": self._broadcaster_user_id,
-                        "sender_id":      self._bot_user_id,
-                        "message":        message,
-                    },
-                    timeout=aiohttp.ClientTimeout(total=10),
-                ) as r:
-                    if r.status == 401:
-                        # Token may have been revoked mid-stream — try a
-                        # one-shot refresh and retry once.
-                        self._access_token = None
-                        self._access_expires_at = 0.0
-                        if await self._ensure_token():
-                            return await self.send(message)
-                        return False
-                    if r.status >= 300:
-                        body = await r.text()
-                        _log(f"Send failed {r.status}: {body[:300]}", "error", "[twitch]")
-                        return False
-                    return True
+                while True:
+                    await self._wait_for_chat_slot(lane)
+                    async with s.post(
+                        _CHAT_URL,
+                        headers={
+                            "Authorization": f"Bearer {self._access_token}",
+                            "Client-Id": self._client_id or "",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "broadcaster_id": self._broadcaster_user_id,
+                            "sender_id":      self._bot_user_id,
+                            "message":        message,
+                        },
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    ) as r:
+                        lane.last_attempt_at = time.monotonic()
+                        if r.status == 401 and not auth_retried:
+                            auth_retried = True
+                            self._access_token = None
+                            self._access_expires_at = 0.0
+                            if await self._ensure_token():
+                                continue
+                            return False
+                        if r.status == 429 and rate_retries < _CHAT_429_RETRIES:
+                            rate_retries += 1
+                            delay = self._retry_delay(r)
+                            body = await r.text()
+                            _log(
+                                f"Chat rate limit hit; queued retry {rate_retries}/"
+                                f"{_CHAT_429_RETRIES} in {delay:.1f}s: {body[:180]}",
+                                "info",
+                                "[twitch]",
+                            )
+                            await asyncio.sleep(delay)
+                            continue
+                        if r.status >= 300:
+                            body = await r.text()
+                            _log(f"Send failed {r.status}: {body[:300]}", "error", "[twitch]")
+                            return False
+                        data = await r.json(content_type=None)
+                        result = (data.get("data") or [{}])[0]
+                        if result.get("is_sent", True) is False:
+                            drop = result.get("drop_reason") or {}
+                            code = drop.get("code") or "unknown"
+                            reason = drop.get("message") or "Twitch dropped the message"
+                            if code == "msg_ratelimit" and rate_retries < _CHAT_429_RETRIES:
+                                rate_retries += 1
+                                delay = self._retry_delay(r)
+                                _log(
+                                    f"Chat message dropped by rate limit; queued retry "
+                                    f"{rate_retries}/{_CHAT_429_RETRIES} in {delay:.1f}s",
+                                    "info",
+                                    "[twitch]",
+                                )
+                                await asyncio.sleep(delay)
+                                continue
+                            _log(f"Chat message dropped ({code}): {reason}", "error", "[twitch]")
+                            return False
+                        lane.sent_at.append(time.monotonic())
+                        return True
         except Exception as e:
             _log(f"Send error: {e}", "error", "[twitch]")
             return False
