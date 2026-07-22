@@ -1848,6 +1848,15 @@ class CommandsCog(commands.Cog):
     @app_commands.command(name="twitch-submit", description="Submit a Suno song to the Experimental Radio")
     async def exp_radio_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+        submission_ban = await self.bot.db.get_exp_radio_submission_ban(interaction.user.id)
+        if submission_ban:
+            remaining = int(submission_ban.get("streams_remaining") or 0)
+            await interaction.followup.send(
+                f"⛔ You cannot submit Experimental Radio songs for the next "
+                f"**{remaining} stream{'s' if remaining != 1 else ''}**.",
+                ephemeral=True,
+            )
+            return
         max_per_user = int(await self.bot.db.get_setting("exp_radio_max_per_user") or "4")
         expiry_days = int(await self.bot.db.get_setting("exp_radio_expiry_days") or "14")
         if expiry_days not in (7, 14):
@@ -1864,6 +1873,15 @@ class CommandsCog(commands.Cog):
     @app_commands.command(name="twitch-replace", description="Replace your oldest Experimental Radio submission")
     async def exp_radio_replace(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+        submission_ban = await self.bot.db.get_exp_radio_submission_ban(interaction.user.id)
+        if submission_ban:
+            remaining = int(submission_ban.get("streams_remaining") or 0)
+            await interaction.followup.send(
+                f"⛔ You cannot replace Experimental Radio songs for the next "
+                f"**{remaining} stream{'s' if remaining != 1 else ''}**.",
+                ephemeral=True,
+            )
+            return
         max_per_user = int(await self.bot.db.get_setting("exp_radio_max_per_user") or "4")
         expiry_days = int(await self.bot.db.get_setting("exp_radio_expiry_days") or "14")
         if expiry_days not in (7, 14):
@@ -2032,6 +2050,17 @@ class ExpRadioSubmitModal(discord.ui.Modal, title="Submit to Experimental Radio"
     async def on_submit(self, interaction: discord.Interaction):
         import hashlib
         await interaction.response.defer(ephemeral=True)
+
+        submission_ban = await self.bot.db.get_exp_radio_submission_ban(interaction.user.id)
+        if submission_ban:
+            remaining = int(submission_ban.get("streams_remaining") or 0)
+            action = "replace" if self.replace else "submit"
+            await interaction.followup.send(
+                f"⛔ You cannot {action} Experimental Radio songs for the next "
+                f"**{remaining} stream{'s' if remaining != 1 else ''}**.",
+                ephemeral=True,
+            )
+            return
 
         # Block submissions while the stream is live or within 60 min of
         # a scheduled start — upload endpoint rejects with 503 anyway, which

@@ -233,6 +233,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('quiz', 'Quiz'),
         ('radio', 'Twitch Radio'),
         ('exp_radio', 'Experimental Radio'),
+        ('submission_bans', 'Submission Bans'),
         ('auto_translate', 'Auto Translate'),
         ('twitch_alerts', 'Twitch Alerts'),
         ('channel_moderation', 'Channel Moderation'),
@@ -266,6 +267,7 @@ def create_app(db: Database, bot=None) -> Quart:
         {"key": "rpg", "endpoint": "rpg_admin", "icon": "🎲", "label": "RPG", "perm": "rpg"},
         {"key": "radio", "endpoint": "radio_admin", "icon": "📻", "label": "Twitch", "perm": "radio"},
         {"key": "exp_radio", "endpoint": "exp_radio_admin", "icon": "🎙️", "label": "Exp. Radio", "perm": "exp_radio"},
+        {"key": "submission_bans", "endpoint": "submission_bans", "icon": "⛔", "label": "Submission Bans", "perm": "submission_bans"},
         {"key": "relic_hunt", "endpoint": "relic_hunt_admin", "icon": "🪶", "label": "Raven's Nest", "perm": "relic_hunt"},
         {"key": "twitch_alerts", "endpoint": "twitch_alerts_admin", "icon": "📣", "label": "Twitch Alerts", "perm": "twitch_alerts"},
         {"key": "auto_translate", "endpoint": "auto_translate_admin", "icon": "🌐", "label": "Auto Translate", "perm": "auto_translate"},
@@ -1070,6 +1072,123 @@ def create_app(db: Database, bot=None) -> Quart:
             members=members,
             selected_user_id=selected_user_id,
             latest_activity=latest_activity,
+            bot_connected=bool(guild),
+        )
+
+    @app.route("/submission-bans", methods=["GET", "POST"])
+    @permission_required('submission_bans')
+    async def submission_bans():
+        guild = get_guild()
+        members = await get_guild_members(guild)
+        member_by_id = {member.id: member for member in members}
+        actor = session.get("username", "unknown")
+
+        if request.method == "POST":
+            form = await request.form
+            action = (form.get("action") or "").strip()
+            raw_user_id = (form.get("user_id") or "").strip()
+            if not raw_user_id.isdigit():
+                await flash("Please select a Discord user.", "error")
+                return redirect(url_for("submission_bans"))
+            user_id = int(raw_user_id)
+
+            if action == "set_ban":
+                member = member_by_id.get(user_id)
+                if not member:
+                    await flash("The selected Discord user could not be found.", "error")
+                    return redirect(url_for("submission_bans"))
+                try:
+                    stream_count = int(form.get("streams_remaining") or "1")
+                except (TypeError, ValueError):
+                    stream_count = 0
+                if not 1 <= stream_count <= 100:
+                    await flash("The number of streams must be between 1 and 100.", "error")
+                    return redirect(url_for("submission_bans"))
+                await db.set_exp_radio_submission_ban(
+                    user_id=member.id,
+                    user_name=member.name,
+                    display_name=member.display_name,
+                    streams_remaining=stream_count,
+                    created_by=actor,
+                )
+                await db.add_audit_log(
+                    event_type="exp_radio_submission_ban_set",
+                    user_id=member.id,
+                    user_name=str(member),
+                    details=f"Experimental Radio submissions blocked for {stream_count} stream(s)",
+                    actor=actor,
+                )
+                await flash(
+                    f"{member.display_name} is blocked for the next {stream_count} stream(s).",
+                    "success",
+                )
+
+            elif action == "update_ban":
+                ban = await db.get_exp_radio_submission_ban(user_id)
+                if not ban:
+                    await flash("This submission ban no longer exists.", "error")
+                    return redirect(url_for("submission_bans"))
+                try:
+                    stream_count = int(form.get("streams_remaining") or "1")
+                except (TypeError, ValueError):
+                    stream_count = 0
+                if not 1 <= stream_count <= 100:
+                    await flash("The number of streams must be between 1 and 100.", "error")
+                    return redirect(url_for("submission_bans"))
+                member = member_by_id.get(user_id)
+                await db.set_exp_radio_submission_ban(
+                    user_id=user_id,
+                    user_name=member.name if member else ban["user_name"],
+                    display_name=member.display_name if member else ban["display_name"],
+                    streams_remaining=stream_count,
+                    created_by=actor,
+                )
+                await db.add_audit_log(
+                    event_type="exp_radio_submission_ban_updated",
+                    user_id=user_id,
+                    user_name=ban["user_name"],
+                    details=f"Remaining blocked streams set to {stream_count}",
+                    actor=actor,
+                )
+                await flash("Submission ban updated.", "success")
+
+            elif action == "remove_ban":
+                removed = await db.remove_exp_radio_submission_ban(user_id)
+                if removed:
+                    await db.add_audit_log(
+                        event_type="exp_radio_submission_ban_removed",
+                        user_id=user_id,
+                        user_name=removed["user_name"],
+                        details="Experimental Radio submission ban removed manually",
+                        actor=actor,
+                    )
+                    await flash("Submission ban removed.", "success")
+                else:
+                    await flash("This submission ban no longer exists.", "error")
+            else:
+                await flash("Unknown action.", "error")
+            return redirect(url_for("submission_bans"))
+
+        bans = await db.get_exp_radio_submission_bans()
+        for ban in bans:
+            member = member_by_id.get(int(ban["user_id"]))
+            ban["avatar_url"] = str(member.display_avatar.url) if member else ""
+            if member:
+                ban["user_name"] = member.name
+                ban["display_name"] = member.display_name
+
+        member_options = [
+            {
+                "id": member.id,
+                "user_name": member.name,
+                "display_name": member.display_name,
+            }
+            for member in members
+        ]
+        return await render_template(
+            "submission_bans.html",
+            members=member_options,
+            bans=bans,
             bot_connected=bool(guild),
         )
 

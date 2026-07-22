@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}Submission Bans{% endblock %}
+{% block content %}
+<div class="max-w-6xl space-y-6">
+    <div>
+        <h2 class="text-2xl font-bold text-white flex items-center gap-2">⛔ Submission Bans</h2>
+        <p class="text-gray-400 text-sm mt-1">
+            Block selected Discord users from Experimental Radio submissions for a defined number of upcoming streams.
+        </p>
+    </div>
+
+    {% if not bot_connected %}
+    <div class="px-4 py-3 rounded-lg bg-discord-red/20 text-red-300 border border-discord-red/30 text-sm">
+        The bot is not connected to the configured Discord server. User selection is currently unavailable.
+    </div>
+    {% endif %}
+
+    <section class="bg-discord-dark rounded-xl border border-gray-700/50 overflow-hidden">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">Add or replace a submission ban</h3>
+            <p class="text-gray-500 text-xs mt-1">
+                Search by Discord display name or username. Re-adding an existing user replaces their remaining stream count.
+            </p>
+        </div>
+        <form method="POST" class="p-5 grid lg:grid-cols-[minmax(0,1fr)_12rem_auto] gap-4 items-end">
+            <input type="hidden" name="action" value="set_ban">
+            <div class="space-y-2">
+                <label for="member-search" class="block text-gray-400 text-xs">Discord user</label>
+                <input id="member-search" type="search" autocomplete="off"
+                    placeholder="Search display name or @username…"
+                    class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-discord-blurple">
+                <select id="member-select" name="user_id" required size="7"
+                    class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple">
+                    <option value="" disabled selected>Select a Discord user…</option>
+                    {% for member in members %}
+                    <option value="{{ member.id }}"
+                        data-search="{{ (member.display_name ~ ' ' ~ member.user_name ~ ' ' ~ member.id)|lower }}">
+                        {{ member.display_name }}{% if member.user_name != member.display_name %} (@{{ member.user_name }}){% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label for="streams-remaining" class="block text-gray-400 text-xs mb-2">Upcoming streams</label>
+                <input id="streams-remaining" type="number" name="streams_remaining" min="1" max="100" value="1" required
+                    class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple">
+            </div>
+            <button type="submit" {% if not bot_connected %}disabled{% endif %}
+                class="px-5 py-2 bg-discord-red/80 hover:bg-discord-red disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-colors">
+                Block submissions
+            </button>
+        </form>
+    </section>
+
+    <section class="bg-discord-dark rounded-xl border border-gray-700/50 overflow-hidden">
+        <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between gap-4">
+            <div>
+                <h3 class="text-white font-semibold">Active submission bans</h3>
+                <p class="text-gray-500 text-xs mt-1">The count decreases once whenever a new Experimental Radio stream starts.</p>
+            </div>
+            <span class="px-2.5 py-1 rounded-full bg-red-900/30 text-red-300 text-xs">{{ bans|length }} active</span>
+        </div>
+
+        {% if bans %}
+        <div class="divide-y divide-gray-700/50">
+            {% for ban in bans %}
+            <div class="p-5 flex flex-col lg:flex-row lg:items-center gap-4">
+                <div class="flex items-center gap-3 min-w-0 flex-1">
+                    {% if ban.avatar_url %}
+                    <img src="{{ ban.avatar_url }}" alt="" class="w-11 h-11 rounded-full object-cover flex-shrink-0">
+                    {% else %}
+                    <div class="w-11 h-11 rounded-full bg-gray-700 text-gray-300 flex items-center justify-center font-semibold flex-shrink-0">
+                        {{ (ban.display_name or ban.user_name or '?')[:1]|upper }}
+                    </div>
+                    {% endif %}
+                    <div class="min-w-0">
+                        <p class="text-white font-semibold truncate">{{ ban.display_name }}</p>
+                        <p class="text-gray-500 text-sm truncate">@{{ ban.user_name }} · Discord ID {{ ban.user_id }}</p>
+                    </div>
+                </div>
+                <form method="POST" class="flex flex-wrap items-end gap-2">
+                    <input type="hidden" name="action" value="update_ban">
+                    <input type="hidden" name="user_id" value="{{ ban.user_id }}">
+                    <div>
+                        <label class="block text-gray-500 text-xs mb-1">Streams remaining</label>
+                        <input type="number" name="streams_remaining" min="1" max="100"
+                            value="{{ ban.streams_remaining }}" required
+                            class="w-28 px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple">
+                    </div>
+                    <button type="submit"
+                        class="px-4 py-2 bg-discord-blurple/20 hover:bg-discord-blurple/40 text-blue-300 rounded-lg text-sm transition-colors">
+                        Save
+                    </button>
+                </form>
+                <form method="POST"
+                    onsubmit='return confirm({{ ("Remove the submission ban for " ~ ban.display_name ~ "?")|tojson }});'>
+                    <input type="hidden" name="action" value="remove_ban">
+                    <input type="hidden" name="user_id" value="{{ ban.user_id }}">
+                    <button type="submit"
+                        class="px-4 py-2 bg-red-900/30 hover:bg-red-900/60 text-red-300 rounded-lg text-sm transition-colors">
+                        Remove
+                    </button>
+                </form>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="px-5 py-10 text-center text-gray-500 text-sm">No active submission bans.</div>
+        {% endif %}
+    </section>
+</div>
+
+<script>
+const memberSearch = document.getElementById('member-search');
+const memberSelect = document.getElementById('member-select');
+
+if (memberSearch && memberSelect) {
+    memberSearch.addEventListener('input', () => {
+        const query = memberSearch.value.trim().toLowerCase();
+        let firstMatch = null;
+        for (const option of memberSelect.options) {
+            const matches = !query || (option.dataset.search || '').includes(query);
+            option.hidden = option.disabled ? Boolean(query) : !matches;
+            if (!option.disabled && matches && !firstMatch) firstMatch = option;
+        }
+        if (memberSelect.selectedOptions.length && memberSelect.selectedOptions[0].hidden) {
+            memberSelect.value = firstMatch ? firstMatch.value : '';
+        }
+    });
+}
+</script>
+{% endblock %}

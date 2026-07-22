@@ -126,6 +126,18 @@ class Database:
             );
             CREATE INDEX IF NOT EXISTS idx_auto_translate_usage_month
                 ON auto_translate_usage(month, engine, target_lang);
+
+            CREATE TABLE IF NOT EXISTS exp_radio_submission_bans (
+                user_id INTEGER PRIMARY KEY,
+                user_name TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                streams_remaining INTEGER NOT NULL DEFAULT 1,
+                created_at REAL DEFAULT (unixepoch()),
+                updated_at REAL DEFAULT (unixepoch()),
+                created_by TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_exp_radio_submission_bans_remaining
+                ON exp_radio_submission_bans(streams_remaining);
         """)
         await self.db.commit()
         await self._run_migrations()
@@ -144,6 +156,33 @@ class Database:
             wu_columns = [row[1] async for row in cursor]
         if "permissions" not in wu_columns:
             await self.db.execute("ALTER TABLE web_users ADD COLUMN permissions TEXT DEFAULT '[]'")
+            await self.db.commit()
+
+        # Existing installations may have an explicit sidebar allow-list.
+        # Add the new module once, then leave future visibility changes to
+        # the normal Settings UI.
+        migration_key = "migration_sidebar_submission_bans_v1"
+        async with self.db.execute(
+            "SELECT value FROM settings WHERE key = ?", (migration_key,)
+        ) as cursor:
+            sidebar_migrated = await cursor.fetchone()
+        if not sidebar_migrated:
+            async with self.db.execute(
+                "SELECT value FROM settings WHERE key = 'sidebar_visible_items'"
+            ) as cursor:
+                sidebar_row = await cursor.fetchone()
+            if sidebar_row and sidebar_row[0] and sidebar_row[0] != "__none__":
+                visible_items = [item for item in sidebar_row[0].split(",") if item]
+                if "submission_bans" not in visible_items:
+                    visible_items.append("submission_bans")
+                    await self.db.execute(
+                        "UPDATE settings SET value = ? WHERE key = 'sidebar_visible_items'",
+                        (",".join(visible_items),),
+                    )
+            await self.db.execute(
+                "INSERT INTO settings (key, value) VALUES (?, 'done')",
+                (migration_key,),
+            )
             await self.db.commit()
 
         # Add message_id column to song_posts if missing
@@ -3008,6 +3047,85 @@ class Database:
         ) as cursor:
             row = await cursor.fetchone()
             return row[0] if row else 0
+
+    async def get_exp_radio_submission_ban(self, user_id: int) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM exp_radio_submission_bans "
+            "WHERE user_id = ? AND streams_remaining > 0",
+            (user_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_exp_radio_submission_bans(self) -> list[dict]:
+        async with self.db.execute(
+            "SELECT * FROM exp_radio_submission_bans "
+            "WHERE streams_remaining > 0 "
+            "ORDER BY streams_remaining DESC, display_name COLLATE NOCASE"
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def set_exp_radio_submission_ban(
+        self,
+        user_id: int,
+        user_name: str,
+        display_name: str,
+        streams_remaining: int,
+        created_by: str = "",
+    ) -> None:
+        streams_remaining = max(1, int(streams_remaining))
+        await self.db.execute(
+            """
+            INSERT INTO exp_radio_submission_bans
+                (user_id, user_name, display_name, streams_remaining, created_by)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                user_name = excluded.user_name,
+                display_name = excluded.display_name,
+                streams_remaining = excluded.streams_remaining,
+                updated_at = unixepoch(),
+                created_by = excluded.created_by
+            """,
+            (user_id, user_name, display_name, streams_remaining, created_by),
+        )
+        await self.db.commit()
+
+    async def remove_exp_radio_submission_ban(self, user_id: int) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM exp_radio_submission_bans WHERE user_id = ?",
+            (user_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        await self.db.execute(
+            "DELETE FROM exp_radio_submission_bans WHERE user_id = ?",
+            (user_id,),
+        )
+        await self.db.commit()
+        return data
+
+    async def advance_exp_radio_submission_bans(self) -> list[dict]:
+        """Consume one blocked stream and return the affected rows."""
+        async with self.db.execute(
+            "SELECT * FROM exp_radio_submission_bans WHERE streams_remaining > 0"
+        ) as cursor:
+            affected = [dict(row) for row in await cursor.fetchall()]
+        if not affected:
+            return []
+        await self.db.execute(
+            "UPDATE exp_radio_submission_bans "
+            "SET streams_remaining = streams_remaining - 1, updated_at = unixepoch() "
+            "WHERE streams_remaining > 0"
+        )
+        await self.db.execute(
+            "DELETE FROM exp_radio_submission_bans WHERE streams_remaining <= 0"
+        )
+        await self.db.commit()
+        for row in affected:
+            row["streams_remaining_after"] = max(0, int(row["streams_remaining"]) - 1)
+        return affected
 
     async def update_exp_radio_song(self, song_id: int, **fields):
         """Generic field update for exp_radio_songs."""

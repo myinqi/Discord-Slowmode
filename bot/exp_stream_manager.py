@@ -230,6 +230,7 @@ class ExpStreamManager:
         # Set when the first FFmpeg process exists. start() returns earlier,
         # while media is still being prepared.
         self._stream_ready_event = asyncio.Event()
+        self._submission_bans_advanced = False
         # Live log: each entry is (unix_ts: float, level: str, line: str).
         # The actual buffer is module-level (see _LOG_BUFFER below) so that
         # background workers and web actions which don't have a reference to
@@ -476,6 +477,7 @@ class ExpStreamManager:
         self.playlist    = ready
         await self._save_playlist_snapshot(ready, active_pl, scheduled)
         self._stream_ready_event.clear()
+        self._submission_bans_advanced = False
         self._reset_ffmpeg_health("offline")
         self._set_obs_overlay_status(False, "disabled", "OBS overlay disabled", "local")
         # Connect to Twitch chat if enabled and credentials exist
@@ -813,6 +815,28 @@ class ExpStreamManager:
         chat_task   = asyncio.create_task(self._post_now_playing_loop(songs))
         stderr_task = asyncio.create_task(self._pipe_ffmpeg_stderr(self._process))
         announce_task = asyncio.create_task(self._announce_rotation_end(total_dur))
+        if not self._submission_bans_advanced:
+            self._submission_bans_advanced = True
+            try:
+                advanced = await self.db.advance_exp_radio_submission_bans()
+                for ban in advanced:
+                    remaining = int(ban.get("streams_remaining_after") or 0)
+                    name = ban.get("display_name") or ban.get("user_name") or ban.get("user_id")
+                    if remaining:
+                        self._log(
+                            f"Submission ban advanced for {name}: {remaining} stream(s) remaining."
+                        )
+                    else:
+                        self._log(f"Submission ban completed for {name}.")
+                    await self.db.add_audit_log(
+                        event_type="exp_radio_submission_ban_advanced",
+                        user_id=ban.get("user_id"),
+                        user_name=ban.get("user_name"),
+                        details=f"Stream started; {remaining} blocked stream(s) remaining",
+                        actor="system",
+                    )
+            except Exception as exc:
+                self._log(f"Could not advance submission bans: {exc}", "error")
         proc = self._process
         await proc.wait()
         rc = proc.returncode
