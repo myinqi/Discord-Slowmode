@@ -11,6 +11,7 @@ import random
 import re
 import shutil
 import tempfile
+import textwrap
 import time
 import unicodedata
 
@@ -37,7 +38,7 @@ _EMOJI_RE = re.compile(
 )
 
 _PLAYLIST_REPEATS = 50
-_LYRICS_WINDOW_LINES = 20   # how many lyrics lines are visible at once
+_LYRICS_WINDOW_LINES = 14   # how many lyrics lines are visible at once
 _LYRICS_MIN_INTERVAL = 0.5  # min seconds between scroll steps (very short songs)
 _LYRICS_MAX_INTERVAL = 4.0  # max seconds between scroll steps (very long songs)
 
@@ -64,9 +65,14 @@ _TYPOGRAPHIC_MAP = str.maketrans({
     "\u00A7": "",                      # section sign
 })
 
-# Hard limit on how many chars we render per lyric line — anything longer is
-# truncated with an ellipsis so the visual lyrics box has a stable width.
+# Fallback wrap width used before the final overlay dimensions are available.
 _LYRICS_MAX_LINE_CHARS = 85
+
+_LYRIC_SECTION_RE = re.compile(
+    r"^(?:intro|verse(?:\s+\d+)?|pre[- ]?chorus|chorus|hook|refrain|"
+    r"post[- ]?chorus|bridge|break|interlude|instrumental|solo|outro)$",
+    re.IGNORECASE,
+)
 
 
 def _renderable_char(ch: str) -> bool:
@@ -113,6 +119,54 @@ def _normalize_text(text: str) -> str:
     text = text.translate(_TYPOGRAPHIC_MAP)
     text = "".join(ch for ch in text if _renderable_char(ch))
     return text.strip()
+
+
+def _clean_lyric_lines(raw: str) -> list[str]:
+    """Turn Suno's lightly formatted prompt into overlay-friendly lyrics."""
+    lines: list[str] = []
+
+    def add_blank():
+        if lines and lines[-1] != "":
+            lines.append("")
+
+    for raw_line in raw.replace("\r", "").split("\n"):
+        cleaned = _normalize_text(raw_line)
+        if not cleaned:
+            add_blank()
+            continue
+
+        is_heading = bool(re.match(r"^#{1,6}(?:\s|\*)", cleaned))
+        cleaned = re.sub(r"^#{1,6}\s*", "", cleaned).strip()
+        is_bold_line = (
+            len(cleaned) >= 4
+            and cleaned.startswith(("**", "__"))
+            and cleaned.endswith(("**", "__"))
+        )
+        cleaned = cleaned.replace("**", "").replace("__", "")
+        cleaned = cleaned.replace("~~", "").replace("`", "").strip(" *_")
+        if not cleaned:
+            continue
+
+        tag = re.fullmatch(r"\[([^\]]+)\]", cleaned)
+        if tag:
+            section = re.sub(r"\s+", " ", tag.group(1)).strip()
+            if not _LYRIC_SECTION_RE.fullmatch(section):
+                continue
+            add_blank()
+            lines.append(section.upper())
+            lines.append("")
+            continue
+
+        if is_heading or is_bold_line:
+            add_blank()
+            lines.append(cleaned.upper())
+            lines.append("")
+        else:
+            lines.append(cleaned)
+
+    while lines and lines[-1] == "":
+        lines.pop()
+    return lines
 
 
 def _transliterate_for_overlay(text: str) -> str:
@@ -950,50 +1004,8 @@ class StreamManager:
                     # the old `.replace()` chain missed this and left literal
                     # `\u00e4` etc. in the lyrics).
                     raw = _decode_json_string(raw)
-                    raw = raw.replace("\r", "")
-                    lines = []
-                    for line in raw.split("\n"):
-                        cleaned = _normalize_text(line)
-                        # Strip any trailing char above Latin Extended-B that
-                        # isn't a letter or digit — catches Suno line-end
-                        # decorators (music notes, arrows, etc.) that pass
-                        # _renderable_char but have no glyph in Noto Sans.
-                        while (cleaned and ord(cleaned[-1]) > 0x024F
-                               and unicodedata.category(cleaned[-1])[0] not in ('L', 'N')):
-                            cleaned = cleaned[:-1]
-                        cleaned = cleaned.strip()
-                        if not cleaned:
-                            continue
-                        # Drop stage directions like [intro], [verse], [chorus],
-                        # [instrumentals, fade in ...] — they add no lyrical value
-                        # and sometimes carry invisible chars that render as tofu.
-                        stripped = cleaned.strip()
-                        if stripped.startswith("[") and stripped.endswith("]"):
-                            continue
-                        lines.append(cleaned)
+                    lines = _clean_lyric_lines(raw)
                     print(f"[radio] Scraped {len(lines)} lyrics lines from {suno_url}")
-                    # Diagnostic: dump the last few chars of every non-empty
-                    # line so we can identify *any* stray glyph-box source.
-                    suspicious = []
-                    for i, ln in enumerate(lines):
-                        if not ln:
-                            continue
-                        # Flag any line with a non-basic-ASCII last char…
-                        last = ord(ln[-1])
-                        if last > 0x7E or last < 0x20:
-                            tail = ln[-5:] if len(ln) >= 5 else ln
-                            cps = " ".join(f"U+{ord(c):04X}" for c in tail)
-                            suspicious.append(f"#{i} | …{tail!r} -> {cps}")
-                    if suspicious:
-                        for s in suspicious[:10]:
-                            print(f"[radio] LYRIC TAIL {s}")
-                    else:
-                        print(f"[radio] LYRIC TAIL: all {len(lines)} lines end with ASCII")
-                    # Extra: dump first 5 lines fully hex-encoded for debugging
-                    for i, ln in enumerate(lines[:5]):
-                        hexcodes = " ".join(f"{ord(c):04X}" for c in ln)
-                        print(f"[radio] LINE[{i}] hex: {hexcodes}")
-                        print(f"[radio] LINE[{i}] txt: {ln!r}")
                     return lines
         except Exception as e:
             print(f"[radio] Lyrics scrape error: {e}")
@@ -1012,7 +1024,21 @@ class StreamManager:
         if not lines:
             text = " "
         else:
-            n = len(lines)
+            max_chars = getattr(self, "_lyrics_max_chars", _LYRICS_MAX_LINE_CHARS)
+            wrapped_lines = []
+            for line in lines:
+                if not line:
+                    if wrapped_lines and wrapped_lines[-1] != "":
+                        wrapped_lines.append("")
+                    continue
+                wrapped_lines.extend(textwrap.wrap(
+                    line,
+                    width=max_chars,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                ) or [line])
+
+            n = len(wrapped_lines)
             # Total scroll positions: padding + lines + padding
             total_steps = n + window
             # Per-song step interval, clamped so very short or very long
@@ -1022,18 +1048,11 @@ class StreamManager:
                                max(song_duration, 1.0) / max(total_steps, 1)))
             step = int(max(0.0, elapsed_in_song) / interval)
             step = max(0, min(step, total_steps))
-            padded = [""] * window + lines + [""] * window
+            padded = [""] * window + wrapped_lines + [""] * window
             visible = padded[step:step + window]
             # Always keep `window` lines so the overlay height never jumps.
             while len(visible) < window:
                 visible.append("")
-            # Truncate over-long lines so they never escape the fixed box width.
-            max_chars = getattr(self, "_lyrics_max_chars", _LYRICS_MAX_LINE_CHARS)
-            visible = [
-                (ln if len(ln) <= max_chars
-                 else ln[:max_chars - 1].rstrip() + "…")
-                for ln in visible
-            ]
             text = "\n".join(visible) or " "
         # Atomic write: ffmpeg reads this file every frame (reload=1), so a
         # mid-write read can corrupt drawtext's parser and crash the encoder.
@@ -1168,8 +1187,8 @@ class StreamManager:
         lyrics_box_w = max(200, round(1140 * _lyrics_width_pct / 80))
         lyrics_box_h = 800
         lyrics_pad = 24
-        # ~11px per char at fontsize 22 (Noto Sans proportional); minus padding
-        self._lyrics_max_chars = max(20, int((lyrics_box_w - 2 * lyrics_pad) / 11))
+        # Approximate proportional Noto Sans width at 28 px, minus padding.
+        self._lyrics_max_chars = max(18, int((lyrics_box_w - 2 * lyrics_pad) / 14))
         lyrics_box = (
             f"drawbox=x={lyrics_box_x}:y={lyrics_box_y}"
             f":w={lyrics_box_w}:h={lyrics_box_h}"
@@ -1179,7 +1198,7 @@ class StreamManager:
             f"drawtext=font='{font}'"
             f":textfile='{self._lyrics_path}'"
             f":reload=1"
-            f":fontsize=22:fontcolor=white:line_spacing=4"
+            f":fontsize=28:fontcolor=white:line_spacing=7"
             f":borderw=2:bordercolor=black@0.9"
             f":x={lyrics_box_x + lyrics_pad}"
             f":y={lyrics_box_y + lyrics_pad}"

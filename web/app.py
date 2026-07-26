@@ -3766,8 +3766,6 @@ def create_app(db: Database, bot=None) -> Quart:
                     max_duration_sec = min(1800, max(60, round(max_duration_minutes * 60)))
                 except (TypeError, ValueError):
                     max_duration_sec = 360
-                post_ch1 = form.get("post_channel_1_id", "").strip()
-                post_ch2 = form.get("post_channel_2_id", "").strip()
                 expiry_ch = form.get("expiry_channel_id", "").strip()
                 tw_client_id = form.get("twitch_client_id", "").strip()
                 tw_client_secret = form.get("twitch_client_secret", "").strip()
@@ -3784,8 +3782,6 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.set_setting("radio_stream_name", stream_name)
                 await db.set_setting("radio_max_per_user", str(max_per_user))
                 await db.set_setting("radio_max_duration_seconds", str(max_duration_sec))
-                await db.set_setting("radio_post_channel_1_id", post_ch1)
-                await db.set_setting("radio_post_channel_2_id", post_ch2)
                 await db.set_setting("radio_expiry_channel_id", expiry_ch)
                 if tw_client_id:
                     await db.set_setting("radio_twitch_client_id", tw_client_id)
@@ -3827,59 +3823,6 @@ def create_app(db: Database, bot=None) -> Quart:
 
                 await flash("Configuration saved.", "success")
 
-            elif action == "post_upload_url":
-                ch_id = form.get("post_channel_id_select", "")
-                guild = get_guild()
-                if guild and ch_id:
-                    channel = guild.get_channel(int(ch_id)) or guild.get_thread(int(ch_id))
-                    if channel:
-                        import discord
-                        base_url = str(request.host_url).rstrip("/")
-                        embed = discord.Embed(
-                            title="\U0001F3B5 Song Upload",
-                            description=f"Submit your track for the stream!\n\n**[Upload here]({base_url}/radio/upload)**",
-                            color=discord.Color.green(),
-                        )
-                        await channel.send(embed=embed)
-                        await flash(f"Upload link posted to #{channel.name}.", "success")
-
-            elif action == "post_stream_url":
-                ch_id = form.get("post_channel_id_select", "")
-                stream_url = await db.get_setting("radio_stream_url") or ""
-                guild = get_guild()
-                if guild and ch_id and stream_url:
-                    channel = guild.get_channel(int(ch_id)) or guild.get_thread(int(ch_id))
-                    if channel:
-                        import discord
-                        # Resolve current playlist name
-                        _src = await db.get_setting("radio_source_mode") or "submissions"
-                        if _src == "suno_playlist":
-                            _pl_id = await db.get_setting("radio_active_suno_playlist")
-                            if _pl_id:
-                                _pl = await db.get_suno_playlist(int(_pl_id))
-                                _pl_name = _pl["description"] if _pl and _pl.get("description") else "Suno Playlist"
-                            else:
-                                _pl_name = "Suno Playlist"
-                        else:
-                            _pl_name = "Submissions Playlist"
-                        embed = discord.Embed(
-                            title="\U0001F4FA Live Stream",
-                            description=f"Watch the stream now!\n\n\U0001F4CB Playlist: **{_pl_name}**\n\n**[Tune in]({stream_url})**",
-                            color=discord.Color.purple(),
-                        )
-                        await channel.send(embed=embed)
-                        await flash(f"Stream link posted to #{channel.name}.", "success")
-
-            elif action == "save_post_channels":
-                ch1 = form.get("channel_1_id", "").strip()
-                ch2 = form.get("channel_2_id", "").strip()
-                if ch1:
-                    await db.set_setting("radio_post_channel_1_id", ch1)
-                if ch2:
-                    await db.set_setting("radio_post_channel_2_id", ch2)
-                from quart import jsonify
-                return jsonify({"ok": True})
-
             elif action == "save_lyrics_config":
                 lyrics_width = form.get("lyrics_width", "80")
                 if lyrics_width not in ("80", "60", "40"):
@@ -3890,7 +3833,10 @@ def create_app(db: Database, bot=None) -> Quart:
             elif action == "save_song_pip_config":
                 spip_enabled  = "on" if form.get("song_pip_enabled") == "on" else "off"
                 spip_format   = form.get("song_pip_format", "9:16")
-                spip_scale    = form.get("song_pip_scale", "20")
+                try:
+                    spip_scale = str(max(5, min(70, int(form.get("song_pip_scale", "20")))))
+                except (TypeError, ValueError):
+                    spip_scale = "20"
                 spip_position = form.get("song_pip_position", "top-right")
                 await db.set_setting("radio_song_pip_enabled",  spip_enabled)
                 await db.set_setting("radio_song_pip_format",   spip_format)
@@ -3995,8 +3941,6 @@ def create_app(db: Database, bot=None) -> Quart:
             for ch in sorted(guild.text_channels, key=lambda c: c.position):
                 text_channels.append({"id": ch.id, "name": ch.name})
 
-        post_channel_1_id = await db.get_setting("radio_post_channel_1_id") or ""
-        post_channel_2_id = await db.get_setting("radio_post_channel_2_id") or ""
         expiry_channel_id = await db.get_setting("radio_expiry_channel_id") or ""
         # Twitch chat-bot (modern Helix flow)
         tw_client_id     = await db.get_setting("radio_twitch_client_id") or ""
@@ -4031,8 +3975,6 @@ def create_app(db: Database, bot=None) -> Quart:
             stream_name=stream_name, max_per_user=max_per_user,
             max_duration_minutes=max_duration_sec / 60,
             text_channels=text_channels,
-            post_channel_1_id=post_channel_1_id,
-            post_channel_2_id=post_channel_2_id,
             expiry_channel_id=expiry_channel_id,
             shuffle=shuffle,
             tw_client_id=tw_client_id,
