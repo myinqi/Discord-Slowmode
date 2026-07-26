@@ -3824,8 +3824,9 @@ def create_app(db: Database, bot=None) -> Quart:
                 await flash("Configuration saved.", "success")
 
             elif action == "save_lyrics_config":
-                lyrics_width = form.get("lyrics_width", "80")
-                if lyrics_width not in ("80", "60", "40"):
+                try:
+                    lyrics_width = str(max(40, min(80, int(form.get("lyrics_width", "80")))))
+                except (TypeError, ValueError):
                     lyrics_width = "80"
                 await db.set_setting("radio_lyrics_width", lyrics_width)
                 await flash("Lyrics config saved.", "success")

@@ -175,21 +175,12 @@
                 <form method="POST" class="space-y-3">
                     <input type="hidden" name="action" value="save_lyrics_config">
                     <div>
-                        <label class="block text-gray-400 text-xs mb-2">Box Width</label>
-                        <div class="flex gap-3">
-                            {% for val, lbl, hint in [('80', '80%', 'Default'), ('60', '60%', 'Narrower'), ('40', '40%', 'Compact')] %}
-                            <label class="flex-1 cursor-pointer">
-                                <input type="radio" name="lyrics_width" value="{{ val }}" class="hidden peer"
-                                    {% if lyrics_width == val %}checked{% endif %}>
-                                <span class="block text-center py-2 rounded text-sm transition-colors
-                                    peer-checked:bg-discord-blurple peer-checked:text-white
-                                    bg-discord-darker text-gray-400 hover:bg-gray-600/40">
-                                    <span class="block font-medium">{{ lbl }}</span>
-                                    <span class="block text-xs opacity-70">{{ hint }}</span>
-                                </span>
-                            </label>
-                            {% endfor %}
-                        </div>
+                        <label class="block text-gray-400 text-xs mb-2">
+                            Box Width: <span id="lyrics-width-label" class="text-gray-300">{{ lyrics_width }}%</span>
+                        </label>
+                        <input type="range" name="lyrics_width" min="40" max="80" step="1"
+                            value="{{ lyrics_width }}" class="w-full accent-discord-blurple"
+                            oninput="document.getElementById('lyrics-width-label').textContent=this.value+'%'">
                     </div>
                     <button type="submit"
                         class="w-full px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg font-medium text-sm transition-colors">
