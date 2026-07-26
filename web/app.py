@@ -193,6 +193,9 @@ def create_app(db: Database, bot=None) -> Quart:
     app.title_scan_status = {"running": False, "progress": "", "result": ""}
     app.reaction_scan_status = {"running": False, "progress": "", "result": ""}
     app.cleanup_status = {"running": False, "progress": "", "result": ""}
+    # Serializes manual starts of both radio managers. The scheduled Exp.
+    # Radio start additionally checks the legacy manager before it fires.
+    app.radio_start_lock = asyncio.Lock()
 
     @app.template_filter("timestamp_to_date")
     def timestamp_to_date(ts):
@@ -3600,10 +3603,15 @@ def create_app(db: Database, bot=None) -> Quart:
             )
 
         if request.method == "POST":
-            import hashlib, uuid, time, json as _json
+            import hashlib, tempfile, uuid, time
+            from bot.exp_radio_worker import download_mp3, scrape_suno
             form = await request.form
             suno_url = form.get("suno_url", "").strip()
             rights_agreed = form.get("rights_agreed")
+
+            # Honeypot check before making any outbound request.
+            if form.get("website", ""):
+                return redirect(url_for("radio_upload"))
 
             if not rights_agreed:
                 await flash("You must agree to the streaming rights declaration.", "error")
@@ -3613,6 +3621,11 @@ def create_app(db: Database, bot=None) -> Quart:
                 await flash("Please provide the Suno URL.", "error")
                 return redirect(url_for("radio_upload"))
 
+            id_match = re.search(r'https?://(?:www\.)?suno\.com/(?:s|song)/([A-Za-z0-9_-]+)', suno_url)
+            if not id_match:
+                await flash("Please provide a valid Suno song URL or short link.", "error")
+                return redirect(url_for("radio_upload"))
+
             # Rate limiting
             client_ip = request.headers.get("X-Forwarded-For", request.remote_addr) or "unknown"
             upload_count = await db.count_radio_uploads_by_ip(client_ip)
@@ -3620,33 +3633,48 @@ def create_app(db: Database, bot=None) -> Quart:
                 await flash("Upload limit reached. Please try again later.", "error")
                 return redirect(url_for("radio_upload"))
 
-            # Get file
-            files = await request.files
-            mp3_file = files.get("mp3_file")
-            if not mp3_file or not mp3_file.filename:
-                await flash("Please select an MP3 file.", "error")
+            submitted_id = id_match.group(1)
+            meta = await scrape_suno(submitted_id)
+            real_uuid = meta.get("real_uuid")
+            title = (meta.get("title") or "").strip()
+            artist = (meta.get("artist") or "").strip()
+            if not real_uuid:
+                await flash("Could not resolve this Suno song. It may be private or unavailable.", "error")
+                return redirect(url_for("radio_upload"))
+            if not title or not artist:
+                fallback_title, fallback_artist, _ = await _fetch_suno_info(suno_url)
+                title = title or (fallback_title or "").strip()
+                artist = artist or (fallback_artist or "").strip()
+            if not title:
+                await flash("Could not fetch song information from this Suno URL.", "error")
+                return redirect(url_for("radio_upload"))
+            artist = artist or "Unknown Artist"
+
+            # The public form has no account login, so the Suno profile owner
+            # is the stable identity used for the per-user submission limit.
+            artist_count = await db.count_active_radio_songs_by_artist(artist)
+            if artist_count >= max_per_user:
+                await flash(
+                    f"'{artist}' already has {artist_count} active song(s) in the playlist "
+                    f"(maximum {max_per_user}).",
+                    "error",
+                )
                 return redirect(url_for("radio_upload"))
 
-            if not mp3_file.filename.lower().endswith(".mp3"):
-                await flash("Only .mp3 files are accepted.", "error")
-                return redirect(url_for("radio_upload"))
-
-            # Honeypot check
-            if form.get("website", ""):
-                return redirect(url_for("radio_upload"))
-
-            # Save temp file for validation
-            original_filename = mp3_file.filename
             unique_name = f"radio_{uuid.uuid4().hex}.mp3"
             filepath = os.path.join(RADIO_UPLOAD_DIR, unique_name)
-            await mp3_file.save(filepath)
+            original_filename = f"{real_uuid}.mp3"
+            with tempfile.TemporaryDirectory(prefix="radio_suno_", dir=RADIO_UPLOAD_DIR) as temp_dir:
+                downloaded_path = await download_mp3(real_uuid, temp_dir, log_prefix="[radio]")
+                if not downloaded_path or not os.path.exists(downloaded_path):
+                    await flash("Could not download audio from Suno.", "error")
+                    return redirect(url_for("radio_upload"))
 
-            # Validate
-            result = await _validate_mp3(filepath, max_duration_sec)
-            if "error" in result:
-                os.remove(filepath)
-                await flash(result["error"], "error")
-                return redirect(url_for("radio_upload"))
+                result = await _validate_mp3(downloaded_path, max_duration_sec)
+                if "error" in result:
+                    await flash(result["error"], "error")
+                    return redirect(url_for("radio_upload"))
+                os.replace(downloaded_path, filepath)
 
             # Strip cover art / non-audio streams to prevent concat stalls
             stripped_path = filepath + ".stripped.mp3"
@@ -3666,38 +3694,28 @@ def create_app(db: Database, bot=None) -> Quart:
                 if os.path.exists(stripped_path):
                     os.remove(stripped_path)
 
-            # Fetch Suno metadata
-            title, artist, _ = await _fetch_suno_info(suno_url)
-            if not title:
-                os.remove(filepath)
-                await flash("Could not fetch song info from the Suno URL.", "error")
-                return redirect(url_for("radio_upload"))
-            artist = artist or "Unknown Artist"
-
-            # The public form has no account login, so the Suno profile owner
-            # is the stable identity used for the per-user submission limit.
-            artist_count = await db.count_active_radio_songs_by_artist(artist)
-            if artist_count >= max_per_user:
-                os.remove(filepath)
-                await flash(
-                    f"'{artist}' already has {artist_count} active song(s) in the playlist "
-                    f"(maximum {max_per_user}).",
-                    "error",
-                )
-                return redirect(url_for("radio_upload"))
+            # The normalized file may differ slightly in size from the CDN file.
+            result["size"] = os.path.getsize(filepath)
 
             # Generate rights hash
             rights_hash = hashlib.sha256(
                 f"{RIGHTS_DECLARATION_TEXT}|{time.time()}|{client_ip}|{original_filename}|{suno_url}".encode()
             ).hexdigest()
 
-            song_id = await db.add_radio_song(
-                title=title, artist=artist, suno_url=suno_url,
-                filename=unique_name, original_filename=original_filename,
-                file_size=result["size"], duration=result["duration"],
-                bitrate=result["bitrate"], uploaded_by_ip=client_ip,
-                rights_declaration=RIGHTS_DECLARATION_TEXT, rights_hash=rights_hash,
-            )
+            try:
+                song_id = await db.add_radio_song(
+                    title=title, artist=artist, suno_url=suno_url,
+                    filename=unique_name, original_filename=original_filename,
+                    file_size=result["size"], duration=result["duration"],
+                    bitrate=result["bitrate"], uploaded_by_ip=client_ip,
+                    rights_declaration=RIGHTS_DECLARATION_TEXT, rights_hash=rights_hash,
+                )
+            except Exception:
+                try:
+                    os.remove(filepath)
+                except OSError:
+                    pass
+                raise
             await flash(f"'{title}' by {artist} uploaded successfully! (#{song_id})", "success")
             return redirect(url_for("radio_upload"))
 
@@ -4074,11 +4092,39 @@ def create_app(db: Database, bot=None) -> Quart:
     from bot.stream_manager import StreamManager
     stream_manager = StreamManager(db, RADIO_UPLOAD_DIR)
 
+    async def _legacy_radio_start_block_reason() -> str:
+        """Explain why the legacy radio must not be started right now."""
+        if exp_stream_manager.is_running:
+            return "Experimental Radio is currently live."
+
+        enabled = await db.get_setting("exp_radio_schedule_enabled") or "off"
+        if enabled != "on":
+            return ""
+        days_csv = await db.get_setting("exp_radio_schedule_days") or ""
+        days = {int(day) for day in days_csv.split(",") if day.strip().isdigit()}
+        if not days:
+            return ""
+
+        from datetime import datetime
+        now = datetime.now()
+        if now.weekday() not in days:
+            return ""
+        schedule_time = (await db.get_setting("exp_radio_schedule_time") or "").strip()
+        time_note = f" at {schedule_time}" if schedule_time else ""
+        return (
+            "Experimental Radio is scheduled for today"
+            f"{time_note}. The legacy radio is locked for the entire scheduled day."
+        )
+
     @app.route("/radio/stream/status")
     @permission_required('radio')
     async def radio_stream_status():
         from quart import jsonify
-        return jsonify(await stream_manager.get_status())
+        status = await stream_manager.get_status()
+        reason = "" if status.get("running") else await _legacy_radio_start_block_reason()
+        status["start_blocked"] = bool(reason)
+        status["start_block_reason"] = reason
+        return jsonify(status)
 
     @app.route("/admin/twitch-radio/test-connection", methods=["POST"])
     @permission_required('radio')
@@ -4121,7 +4167,11 @@ def create_app(db: Database, bot=None) -> Quart:
     async def radio_stream_action(action):
         from quart import jsonify
         if action == "start":
-            result = await stream_manager.start()
+            async with app.radio_start_lock:
+                reason = await _legacy_radio_start_block_reason()
+                if reason:
+                    return jsonify({"ok": False, "error": reason, "start_blocked": True}), 409
+                result = await stream_manager.start()
         elif action == "stop":
             result = await stream_manager.stop()
         elif action == "next":
@@ -4335,7 +4385,12 @@ def create_app(db: Database, bot=None) -> Quart:
                         and now.minute == target_m
                         and cur_min_key != app.exp_schedule_last_fired):
                     app.exp_schedule_last_fired = cur_min_key
-                    if exp_stream_manager.is_running:
+                    if stream_manager.is_running or stream_manager._loading:
+                        log_event(
+                            "Scheduler: legacy Twitch Radio is running or starting — skipping auto-start.",
+                            level="error", prefix="[exp-schedule]",
+                        )
+                    elif exp_stream_manager.is_running:
                         log_event(
                             "Scheduler: stream already running \u2014 skipping auto-start.",
                             prefix="[exp-schedule]",
@@ -5571,7 +5626,15 @@ def create_app(db: Database, bot=None) -> Quart:
             twitch_key = await db.get_setting("exp_radio_twitch_key") or ""
             if not twitch_key:
                 return jsonify({"ok": False, "error": "No Twitch stream key configured."}), 400
-            result = await exp_stream_manager.start(twitch_key, legacy_pipeline=(action == "start_legacy"))
+            async with app.radio_start_lock:
+                if stream_manager.is_running or stream_manager._loading:
+                    return jsonify({
+                        "ok": False,
+                        "error": "The legacy Twitch Radio is currently running or starting.",
+                    }), 409
+                result = await exp_stream_manager.start(
+                    twitch_key, legacy_pipeline=(action == "start_legacy"),
+                )
         elif action == "stop":
             result = await exp_stream_manager.stop()
         elif action == "safe_stop":

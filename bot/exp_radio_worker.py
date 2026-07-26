@@ -138,7 +138,7 @@ def ensure_exp_dirs(exp_radio_dir: str):
 
 # ─── MP3 download ─────────────────────────────────────────────────────────────
 
-async def download_mp3(uuid: str, mp3_dir: str) -> str | None:
+async def download_mp3(uuid: str, mp3_dir: str, log_prefix: str = "[exp-radio]") -> str | None:
     """Download Suno audio from CDN. Tries .mp3 first, falls back to .m4a
     (Opus codec) which Suno now serves to a subset of users. Any .m4a is
     transcoded to .mp3 so downstream code (FFmpeg concat demuxer, Whisper,
@@ -160,21 +160,21 @@ async def download_mp3(uuid: str, mp3_dir: str) -> str | None:
                         return None
                     return await resp.read()
         except Exception as e:
-            print(f"[exp-radio] {ext.upper()} fetch error {uuid}: {e}", flush=True)
+            print(f"{log_prefix} {ext.upper()} fetch error {uuid}: {e}", flush=True)
             return None
 
     data = await _fetch("mp3")
     if data:
         with open(dest, "wb") as f:
             f.write(data)
-        print(f"[exp-radio] Downloaded {uuid}.mp3 ({len(data) // 1024} KB)", flush=True)
+        print(f"{log_prefix} Downloaded {uuid}.mp3 ({len(data) // 1024} KB)", flush=True)
         return dest
 
     # MP3 unavailable — try M4A (Opus-in-MP4) and transcode.
-    print(f"[exp-radio] MP3 unavailable for {uuid}, trying M4A…", flush=True)
+    print(f"{log_prefix} MP3 unavailable for {uuid}, trying M4A…", flush=True)
     data = await _fetch("m4a")
     if not data:
-        print(f"[exp-radio] Neither MP3 nor M4A available for {uuid}", flush=True)
+        print(f"{log_prefix} Neither MP3 nor M4A available for {uuid}", flush=True)
         return None
     tmp_path = os.path.join(mp3_dir, f"{uuid}.m4a")
     try:
@@ -189,10 +189,10 @@ async def download_mp3(uuid: str, mp3_dir: str) -> str | None:
         )
         _, err = await proc.communicate()
         if proc.returncode != 0:
-            print(f"[exp-radio] M4A→MP3 transcode failed for {uuid}: "
+            print(f"{log_prefix} M4A→MP3 transcode failed for {uuid}: "
                   f"{(err or b'').decode('utf-8', 'replace')[:200]}", flush=True)
             return None
-        print(f"[exp-radio] Downloaded {uuid}.m4a ({len(data) // 1024} KB) → transcoded to MP3", flush=True)
+        print(f"{log_prefix} Downloaded {uuid}.m4a ({len(data) // 1024} KB) → transcoded to MP3", flush=True)
         return dest
     finally:
         try: os.remove(tmp_path)

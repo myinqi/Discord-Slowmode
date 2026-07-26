@@ -41,6 +41,7 @@
                         🔄
                     </button>
                 </div>
+                <p id="stream-action-message" class="hidden mt-3 text-xs"></p>
             </div>
         </div>
 
@@ -599,11 +600,21 @@ if (chSelect) {
 }
 
 async function streamAction(action) {
+    const message = document.getElementById('stream-action-message');
     try {
         const resp = await fetch('/radio/stream/' + action, { method: 'POST' });
         const data = await resp.json();
+        if (!resp.ok || data.error) {
+            message.textContent = data.error || 'Stream action failed.';
+            message.className = 'mt-3 text-xs text-red-400';
+            return;
+        }
+        message.textContent = '';
+        message.className = 'hidden mt-3 text-xs';
         updateStatus(data);
     } catch (e) {
+        message.textContent = 'Stream action failed: ' + e.message;
+        message.className = 'mt-3 text-xs text-red-400';
         console.error('Stream action failed:', e);
     }
 }
@@ -612,6 +623,19 @@ function updateStatus(data) {
     const dot = document.getElementById('status-dot');
     const text = document.getElementById('status-text');
     const np = document.getElementById('now-playing');
+    const play = document.getElementById('btn-play');
+    const message = document.getElementById('stream-action-message');
+    play.disabled = Boolean(data.start_blocked);
+    play.classList.toggle('opacity-40', Boolean(data.start_blocked));
+    play.classList.toggle('cursor-not-allowed', Boolean(data.start_blocked));
+    play.title = data.start_blocked ? data.start_block_reason : 'Start';
+    if (data.start_blocked && !data.running) {
+        message.textContent = data.start_block_reason;
+        message.className = 'mt-3 text-xs text-yellow-400';
+    } else if (message.classList.contains('text-yellow-400')) {
+        message.textContent = '';
+        message.className = 'hidden mt-3 text-xs';
+    }
     if (data.running) {
         dot.className = 'inline-block w-2 h-2 bg-green-400 rounded-full animate-pulse';
         text.textContent = 'Live';

@@ -48,7 +48,7 @@
         {% endif %}
         {% endwith %}
 
-        <form method="POST" enctype="multipart/form-data" class="bg-discord-dark rounded-xl border border-gray-700/50 p-6 space-y-5">
+        <form method="POST" id="song-submit-form" class="bg-discord-dark rounded-xl border border-gray-700/50 p-6 space-y-5">
             <!-- Honeypot -->
             <div style="display:none">
                 <input type="text" name="website" tabindex="-1" autocomplete="off">
@@ -59,16 +59,9 @@
                 <input type="url" name="suno_url" required
                     class="w-full bg-discord-darker border border-gray-600 rounded-lg px-4 py-2.5 text-white text-sm focus:border-accent focus:outline-none"
                     placeholder="https://suno.com/song/...">
-                <p class="text-gray-500 text-xs mt-1">The song title and artist will be automatically extracted.</p>
-            </div>
-
-            <div>
-                <label class="block text-gray-300 text-sm font-medium mb-1">MP3 File *</label>
-                <input type="file" name="mp3_file" accept=".mp3,audio/mpeg" required
-                    class="w-full text-gray-400 text-sm file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:bg-accent/20 file:text-accent hover:file:bg-accent/40 file:cursor-pointer">
                 <p class="text-gray-500 text-xs mt-1">
-                    Max 20 MB, max {{ '%g'|format(max_duration_sec / 60) }} minutes, MP3 only.
-                    The playable audio duration is measured after upload.
+                    Song information and audio are fetched automatically from Suno.
+                    Maximum audio length: {{ '%g'|format(max_duration_sec / 60) }} minutes.
                 </p>
             </div>
 
@@ -90,9 +83,9 @@
                 </label>
             </div>
 
-            <button type="submit"
+            <button type="submit" id="song-submit-button"
                 class="w-full px-4 py-3 bg-accent hover:bg-accent-hover text-white rounded-lg font-semibold text-sm transition-colors">
-                Upload Song
+                Submit Song
             </button>
         </form>
 
@@ -101,5 +94,14 @@
         </p>
         {% endif %}
     </div>
+    <script>
+        const form = document.getElementById('song-submit-form');
+        const button = document.getElementById('song-submit-button');
+        form?.addEventListener('submit', () => {
+            button.disabled = true;
+            button.textContent = 'Fetching song from Suno...';
+            button.classList.add('opacity-60', 'cursor-wait');
+        });
+    </script>
 </body>
 </html>
