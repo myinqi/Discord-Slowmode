@@ -1071,17 +1071,9 @@ class StreamManager:
         return path
 
     async def _write_header(self):
-        """Write the playlist title to the header overlay file."""
-        source_mode = getattr(self, "_source_mode", "submissions")
-        if source_mode == "suno_playlist":
-            active_id = await self.db.get_setting("radio_active_suno_playlist")
-            if active_id:
-                pl = await self.db.get_suno_playlist(int(active_id))
-                title = (pl["description"] if pl and pl.get("description") else "Suno Playlist")
-            else:
-                title = "Suno Playlist"
-        else:
-            title = "Submissions Playlist"
+        """Write the configured stream name to the header overlay file."""
+        title = (await self.db.get_setting("radio_stream_name") or "Twitch Radio").strip()
+        title = title or "Twitch Radio"
         title = _normalize_text(title)
         try:
             tmp = self._header_path + ".tmp"
