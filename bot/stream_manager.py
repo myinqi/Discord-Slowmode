@@ -43,6 +43,7 @@ _LYRICS_WINDOW_LINES = 20   # fills the 800 px box at the current font size
 _LYRICS_MIN_INTERVAL = 0.5  # min seconds between scroll steps (very short songs)
 _LYRICS_MAX_INTERVAL = 4.0  # max seconds between scroll steps (very long songs)
 _LYRICS_SCROLL_DURATION_FACTOR = 0.85  # leave a calm tail after all lyrics passed
+_NOW_PLAYING_CHAT_DELAY = 12.0
 
 # Map common typographic Unicode that some renderers / fonts handle poorly
 # back to their plain ASCII equivalents. We keep diacritics intact.
@@ -483,6 +484,10 @@ class StreamManager:
         self._lyrics_cache = {}  # {song_id: [lines]}
         self._concat_start = 0
         self._twitch_chat = None
+        self._chat_announcement_task = None
+        self._chat_announcement_token = 0
+        self._last_announced_song_key = None
+        self._last_announced_at = 0.0
         self._suno_dl_dir = None  # temp dir for downloaded Suno playlist songs
         self._header_path = None  # playlist title overlay file
         self._loading = False  # guard against concurrent start() calls
@@ -847,6 +852,9 @@ class StreamManager:
         self._song_pip_paths = {}
         self._video_url_cache = {}
         self._visual_meta_cache = {}
+        self._chat_announcement_token = 0
+        self._last_announced_song_key = None
+        self._last_announced_at = 0.0
 
         # Determine radio source mode
         source_mode = await self.db.get_setting("radio_source_mode") or "submissions"
@@ -1001,6 +1009,14 @@ class StreamManager:
         ]
 
     async def _teardown(self):
+        self._chat_announcement_token += 1
+        if self._chat_announcement_task and not self._chat_announcement_task.done():
+            self._chat_announcement_task.cancel()
+            try:
+                await self._chat_announcement_task
+            except asyncio.CancelledError:
+                pass
+        self._chat_announcement_task = None
         for t in self._tasks:
             t.cancel()
             try:
@@ -1021,6 +1037,56 @@ class StreamManager:
                 except Exception:
                     pass
             self._process = None
+
+    def _schedule_now_playing_announcement(self, song: dict):
+        """Post a stable song change to Twitch chat after a short delay."""
+        if not self._twitch_chat:
+            return
+        if self._chat_announcement_task and not self._chat_announcement_task.done():
+            self._chat_announcement_task.cancel()
+        self._chat_announcement_token += 1
+        token = self._chat_announcement_token
+        self._chat_announcement_task = asyncio.create_task(
+            self._post_now_playing_delayed(dict(song), token)
+        )
+
+    async def _post_now_playing_delayed(self, song: dict, token: int):
+        try:
+            await asyncio.sleep(_NOW_PLAYING_CHAT_DELAY)
+            if (
+                not self.is_running
+                or token != self._chat_announcement_token
+                or not self._twitch_chat
+                or not self.current_song
+                or self.current_song.get("id") != song.get("id")
+            ):
+                return
+
+            song_key = (
+                str(song.get("id") or ""),
+                str(song.get("title") or ""),
+                str(song.get("suno_url") or ""),
+            )
+            now = time.monotonic()
+            duration = max(30.0, float(song.get("duration") or 180.0) * 0.9)
+            if (
+                song_key == self._last_announced_song_key
+                and now - self._last_announced_at < duration
+            ):
+                print(f"[radio] Duplicate Now Playing suppressed: {song.get('title', '')}")
+                return
+
+            chat_msg = f"\U0001F3B5 Now Playing: {song['title']} - {song['artist']}"
+            suno_url = song.get("suno_url", "")
+            if suno_url:
+                chat_msg += f" | {suno_url}"
+            await self._twitch_chat.send(chat_msg)
+            self._last_announced_song_key = song_key
+            self._last_announced_at = now
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            print(f"[radio] Delayed Now Playing error: {exc}")
 
     def _cleanup_temp(self):
         if self._temp_dir:
@@ -1420,13 +1486,7 @@ class StreamManager:
                     self.current_index = (self._concat_start + song_i) % n
                     self._write_overlay(actual)
                     print(f"[radio] Now playing: {actual['title']} by {actual['artist']}")
-                    # Post to Twitch chat
-                    if self._twitch_chat:
-                        suno_url = actual.get("suno_url", "")
-                        chat_msg = f"\U0001F3B5 Now Playing: {actual['title']} - {actual['artist']}"
-                        if suno_url:
-                            chat_msg += f" | {suno_url}"
-                        await self._twitch_chat.send(chat_msg)
+                    self._schedule_now_playing_announcement(actual)
                     # Scrape lyrics async for this song
                     song_id = actual["id"]
                     if song_id not in self._lyrics_cache:

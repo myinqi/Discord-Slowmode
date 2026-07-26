@@ -4152,6 +4152,9 @@ def create_app(db: Database, bot=None) -> Quart:
                             ch = guild.get_channel(int(channel_id_str))
                             if ch:
                                 try:
+                                    stream_name = (
+                                        await db.get_setting("radio_stream_name") or "Twitch Radio"
+                                    ).strip() or "Twitch Radio"
                                     lines = []
                                     for s in expired_songs:
                                         title = s.get("title", "Unknown")
@@ -4162,8 +4165,9 @@ def create_app(db: Database, bot=None) -> Quart:
                                         else:
                                             lines.append(f"- **{title}** - {artist}")
                                     msg = (
-                                        f"🗑️ **{len(expired_songs)} Song{'s' if len(expired_songs) != 1 else ''} "
-                                        f"expired and removed from the radio playlist:**\n\n"
+                                        f"🗑️ **{stream_name}: {len(expired_songs)} "
+                                        f"song{'s' if len(expired_songs) != 1 else ''} "
+                                        f"expired and {'were' if len(expired_songs) != 1 else 'was'} removed:**\n\n"
                                         + "\n".join(lines)
                                     )
                                     await ch.send(msg)
