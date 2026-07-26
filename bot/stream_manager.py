@@ -1371,7 +1371,7 @@ class StreamManager:
             "-c:v", "libx264", "-profile:v", "main", "-level", "4.0",
             "-preset", "ultrafast",
             "-pix_fmt", "yuv420p",
-            "-b:v", "2500k", "-maxrate", "2500k", "-bufsize", "5000k",
+            "-b:v", "2000k", "-maxrate", "2000k", "-bufsize", "4000k",
             "-r", "30",
             "-g", "60", "-keyint_min", "60",
             "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
