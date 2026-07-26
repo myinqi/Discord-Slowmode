@@ -796,7 +796,7 @@ class StreamManager:
         refresh_tok = await self.db.get_setting("radio_twitch_refresh_token")
         broadcaster = await self.db.get_setting("radio_twitch_broadcaster_login")
         if client_id and refresh_tok and broadcaster:
-            self._twitch_chat = TwitchBot(self.db)
+            self._twitch_chat = TwitchBot(self.db, key_prefix="radio_twitch")
             ok, msg = await self._twitch_chat.start()
             if not ok:
                 print(f"[radio] Twitch bot disabled: {msg}")

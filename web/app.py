@@ -3528,13 +3528,19 @@ def create_app(db: Database, bot=None) -> Quart:
     )
 
     MAX_UPLOAD_SIZE_MB = 20
-    MAX_DURATION_SEC = 360
     MAX_BITRATE_KBPS = 320
     MAX_UPLOADS_PER_IP = 3
 
-    async def _validate_mp3(filepath: str) -> dict:
+    def _format_duration_limit(seconds: int) -> str:
+        minutes, remainder = divmod(seconds, 60)
+        if remainder:
+            return f"{minutes} minute(s) {remainder} second(s)"
+        return f"{minutes} minute(s)"
+
+    async def _validate_mp3(filepath: str, max_duration_sec: int) -> dict:
         """Validate an MP3 file. Returns dict with info or 'error' key."""
         import asyncio, mimetypes, json as _json
+        from bot.audio_utils import get_decoded_audio_duration
         # MIME type check
         mime, _ = mimetypes.guess_type(filepath)
         if mime not in ("audio/mpeg", "audio/mp3"):
@@ -3555,14 +3561,17 @@ def create_app(db: Database, bot=None) -> Quart:
                 return {"error": "Not a valid audio file."}
             info = _json.loads(stdout)
             fmt = info.get("format", {})
-            duration = float(fmt.get("duration", 0))
             bitrate = int(fmt.get("bit_rate", 0)) // 1000
             # Check for audio stream
             has_audio = any(s.get("codec_type") == "audio" for s in info.get("streams", []))
             if not has_audio:
                 return {"error": "No audio stream found in file."}
-            if duration > MAX_DURATION_SEC:
-                return {"error": f"Track too long. Maximum {MAX_DURATION_SEC // 60} minutes."}
+            duration = await get_decoded_audio_duration(filepath)
+            if duration <= 0:
+                return {"error": "Could not determine the playable audio duration."}
+            if duration > max_duration_sec:
+                limit = _format_duration_limit(max_duration_sec)
+                return {"error": f"Track too long. Maximum {limit}."}
             if duration < 5:
                 return {"error": "Track too short. Minimum 5 seconds."}
             return {"duration": round(duration, 1), "bitrate": min(bitrate, MAX_BITRATE_KBPS), "size": size}
@@ -3573,10 +3582,22 @@ def create_app(db: Database, bot=None) -> Quart:
 
     @app.route("/radio/upload", methods=["GET", "POST"])
     async def radio_upload():
+        stream_name = (await db.get_setting("radio_stream_name") or "Twitch Radio").strip()
+        try:
+            max_per_user = max(1, int(await db.get_setting("radio_max_per_user") or "3"))
+        except (TypeError, ValueError):
+            max_per_user = 3
+        try:
+            max_duration_sec = max(60, int(await db.get_setting("radio_max_duration_seconds") or "360"))
+        except (TypeError, ValueError):
+            max_duration_sec = 360
         # Check if uploads are enabled
         upload_enabled = await db.get_setting("radio_upload_enabled")
         if upload_enabled == "0":
-            return await render_template("radio_upload.html", closed=True)
+            return await render_template(
+                "radio_upload.html", closed=True, stream_name=stream_name,
+                max_per_user=max_per_user, max_duration_sec=max_duration_sec,
+            )
 
         if request.method == "POST":
             import hashlib, uuid, time, json as _json
@@ -3621,7 +3642,7 @@ def create_app(db: Database, bot=None) -> Quart:
             await mp3_file.save(filepath)
 
             # Validate
-            result = await _validate_mp3(filepath)
+            result = await _validate_mp3(filepath, max_duration_sec)
             if "error" in result:
                 os.remove(filepath)
                 await flash(result["error"], "error")
@@ -3653,11 +3674,16 @@ def create_app(db: Database, bot=None) -> Quart:
                 return redirect(url_for("radio_upload"))
             artist = artist or "Unknown Artist"
 
-            # Artist limit: max 3 active songs per artist
+            # The public form has no account login, so the Suno profile owner
+            # is the stable identity used for the per-user submission limit.
             artist_count = await db.count_active_radio_songs_by_artist(artist)
-            if artist_count >= 3:
+            if artist_count >= max_per_user:
                 os.remove(filepath)
-                await flash(f"Artist '{artist}' already has {artist_count} songs in the playlist (max 3).", "error")
+                await flash(
+                    f"'{artist}' already has {artist_count} active song(s) in the playlist "
+                    f"(maximum {max_per_user}).",
+                    "error",
+                )
                 return redirect(url_for("radio_upload"))
 
             # Generate rights hash
@@ -3675,7 +3701,14 @@ def create_app(db: Database, bot=None) -> Quart:
             await flash(f"'{title}' by {artist} uploaded successfully! (#{song_id})", "success")
             return redirect(url_for("radio_upload"))
 
-        return await render_template("radio_upload.html", closed=False, rights_text=RIGHTS_DECLARATION_TEXT, content_guidelines=CONTENT_GUIDELINES_TEXT)
+        return await render_template(
+            "radio_upload.html", closed=False,
+            rights_text=RIGHTS_DECLARATION_TEXT,
+            content_guidelines=CONTENT_GUIDELINES_TEXT,
+            stream_name=stream_name,
+            max_per_user=max_per_user,
+            max_duration_sec=max_duration_sec,
+        )
 
     @app.route("/radio", methods=["GET", "POST"])
     @permission_required('radio')
@@ -3705,6 +3738,16 @@ def create_app(db: Database, bot=None) -> Quart:
                 stream_url = form.get("stream_url", "").strip()
                 upload_enabled = "1" if form.get("upload_enabled") else "0"
                 shuffle = "1" if form.get("shuffle") else "0"
+                stream_name = form.get("stream_name", "").strip()[:100] or "Twitch Radio"
+                try:
+                    max_per_user = min(25, max(1, int(form.get("max_per_user", "3"))))
+                except (TypeError, ValueError):
+                    max_per_user = 3
+                try:
+                    max_duration_minutes = float(form.get("max_duration_minutes", "6"))
+                    max_duration_sec = min(1800, max(60, round(max_duration_minutes * 60)))
+                except (TypeError, ValueError):
+                    max_duration_sec = 360
                 post_ch1 = form.get("post_channel_1_id", "").strip()
                 post_ch2 = form.get("post_channel_2_id", "").strip()
                 expiry_ch = form.get("expiry_channel_id", "").strip()
@@ -3720,6 +3763,9 @@ def create_app(db: Database, bot=None) -> Quart:
                     await db.set_setting("radio_stream_url", stream_url)
                 await db.set_setting("radio_upload_enabled", upload_enabled)
                 await db.set_setting("radio_shuffle", shuffle)
+                await db.set_setting("radio_stream_name", stream_name)
+                await db.set_setting("radio_max_per_user", str(max_per_user))
+                await db.set_setting("radio_max_duration_seconds", str(max_duration_sec))
                 await db.set_setting("radio_post_channel_1_id", post_ch1)
                 await db.set_setting("radio_post_channel_2_id", post_ch2)
                 await db.set_setting("radio_expiry_channel_id", expiry_ch)
@@ -3912,6 +3958,15 @@ def create_app(db: Database, bot=None) -> Quart:
         masked_key = f"****{twitch_key[-4:]}" if len(twitch_key) > 4 else ""
         stream_url = await db.get_setting("radio_stream_url") or ""
         upload_enabled = await db.get_setting("radio_upload_enabled") or "1"
+        stream_name = await db.get_setting("radio_stream_name") or "Twitch Radio"
+        try:
+            max_per_user = max(1, int(await db.get_setting("radio_max_per_user") or "3"))
+        except (TypeError, ValueError):
+            max_per_user = 3
+        try:
+            max_duration_sec = max(60, int(await db.get_setting("radio_max_duration_seconds") or "360"))
+        except (TypeError, ValueError):
+            max_duration_sec = 360
         bg_filename = await db.get_setting("radio_background_filename") or ""
         bg_type = await db.get_setting("radio_background_type") or "image"
         shuffle = await db.get_setting("radio_shuffle") or "0"
@@ -3955,6 +4010,8 @@ def create_app(db: Database, bot=None) -> Quart:
             "radio.html",
             songs=songs, masked_key=masked_key, stream_url=stream_url,
             upload_enabled=upload_enabled, bg_filename=bg_filename, bg_type=bg_type,
+            stream_name=stream_name, max_per_user=max_per_user,
+            max_duration_minutes=max_duration_sec / 60,
             text_channels=text_channels,
             post_channel_1_id=post_channel_1_id,
             post_channel_2_id=post_channel_2_id,
@@ -3965,6 +4022,7 @@ def create_app(db: Database, bot=None) -> Quart:
             tw_refresh_masked=tw_refresh_masked,
             tw_broadcaster_login=tw_broadcaster_login,
             tw_bot_login=tw_bot_login,
+            tw_oauth_redirect_uri=_twitch_oauth_redirect_uri(),
             source_mode=source_mode,
             suno_playlists=suno_playlists,
             active_suno_playlist=active_suno_playlist,
@@ -4028,9 +4086,35 @@ def create_app(db: Database, bot=None) -> Quart:
         """One-shot health-check for the Twitch chat-bot credentials."""
         from quart import jsonify
         from bot.twitch_bot import TwitchBot
-        bot = TwitchBot(db)
+        bot = TwitchBot(db, key_prefix="radio_twitch")
         result = await bot.diagnose()
         return jsonify(result)
+
+    @app.route("/radio/twitch-oauth-start")
+    @permission_required('radio')
+    async def radio_twitch_oauth_start():
+        """Authorize the legacy radio chat bot through the public HTTPS callback."""
+        import secrets as _sec
+        from urllib.parse import urlencode
+
+        client_id = await db.get_setting("radio_twitch_client_id")
+        client_secret = await db.get_setting("radio_twitch_client_secret")
+        if not client_id or not client_secret:
+            await flash("Save the Twitch Client ID and Client Secret first.", "error")
+            return redirect(url_for("radio_admin"))
+
+        state = _sec.token_urlsafe(16)
+        session[_TWITCH_OAUTH_STATE_KEY] = state
+        session[_TWITCH_OAUTH_MODE_KEY] = "radio_bot"
+        params = urlencode({
+            "client_id": client_id,
+            "redirect_uri": _twitch_oauth_redirect_uri(),
+            "response_type": "code",
+            "scope": _TWITCH_BOT_SCOPES,
+            "state": state,
+            "force_verify": "true",
+        })
+        return redirect(f"https://id.twitch.tv/oauth2/authorize?{params}")
 
     @app.route("/radio/stream/<action>", methods=["POST"])
     @permission_required('radio')
@@ -5589,22 +5673,24 @@ def create_app(db: Database, bot=None) -> Quart:
         return redirect(f"https://id.twitch.tv/oauth2/authorize?{params}")
 
     @app.route("/exp-radio/twitch-oauth-callback")
-    @permission_required('exp_radio')
+    @login_required
     async def exp_radio_twitch_oauth_callback():
         import aiohttp as _aio
         code      = request.args.get("code", "")
         state_got = request.args.get("state", "")
         error     = request.args.get("error_description") or request.args.get("error", "")
+        oauth_mode = session.pop(_TWITCH_OAUTH_MODE_KEY, "bot")
+        return_endpoint = "radio_admin" if oauth_mode == "radio_bot" else "exp_radio_admin"
         if error:
             await flash(f"Twitch authorization denied: {error}", "error")
-            return redirect(url_for("exp_radio_admin"))
+            return redirect(url_for(return_endpoint))
         state_exp = session.pop(_TWITCH_OAUTH_STATE_KEY, None)
-        oauth_mode = session.pop(_TWITCH_OAUTH_MODE_KEY, "bot")
         if not state_exp or state_got != state_exp:
             await flash("OAuth state mismatch — possible CSRF. Try again.", "error")
-            return redirect(url_for("exp_radio_admin"))
-        client_id     = await db.get_setting("exp_radio_twitch_client_id") or ""
-        client_secret = await db.get_setting("exp_radio_twitch_client_secret") or ""
+            return redirect(url_for(return_endpoint))
+        credential_prefix = "radio_twitch" if oauth_mode == "radio_bot" else "exp_radio_twitch"
+        client_id     = await db.get_setting(f"{credential_prefix}_client_id") or ""
+        client_secret = await db.get_setting(f"{credential_prefix}_client_secret") or ""
         redirect_uri  = _twitch_oauth_redirect_uri()
         try:
             async with _aio.ClientSession() as _s:
@@ -5622,7 +5708,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     _d = await _r.json()
                     if _r.status != 200 or "refresh_token" not in _d:
                         await flash(f"Token exchange failed: {_d.get('message', _d)}", "error")
-                        return redirect(url_for("exp_radio_admin"))
+                        return redirect(url_for(return_endpoint))
                     access_token  = _d["access_token"]
                     refresh_token = _d["refresh_token"]
                 # Resolve bot login from the new token
@@ -5635,6 +5721,16 @@ def create_app(db: Database, bot=None) -> Quart:
                         _v = await _r.json()
                         bot_login = _v.get("login", "")
                         new_scopes = _v.get("scopes", [])
+            if oauth_mode == "radio_bot":
+                await db.set_setting("radio_twitch_refresh_token", refresh_token)
+                await db.set_setting("radio_twitch_bot_login", bot_login)
+                await db.set_setting("radio_twitch_bot_user_id", "")
+                await flash(
+                    f"Twitch Radio bot authorized as {bot_login} with scopes: {new_scopes}.",
+                    "success",
+                )
+                return redirect(url_for("radio_admin"))
+
             if oauth_mode == "eventsub":
                 expected_login = (await db.get_setting("exp_radio_twitch_broadcaster_login") or "").strip().lower()
                 if expected_login and bot_login.lower() != expected_login:
@@ -5674,7 +5770,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 await twitch_event_alerts.restart()
         except Exception as _e:
             await flash(f"OAuth callback error: {_e}", "error")
-        return redirect(url_for("exp_radio_admin"))
+        return redirect(url_for(return_endpoint))
 
     @app.route("/twitch-alerts/broadcaster-oauth-start")
     @permission_required('twitch_alerts')

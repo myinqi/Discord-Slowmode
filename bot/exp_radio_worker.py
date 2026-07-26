@@ -529,54 +529,9 @@ async def get_duration(mp3_path: str) -> float:
     the audio stream to null gives the duration FFmpeg can really play, which
     is the value used for the submission length gate and stream timing.
     """
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-hide_banner", "-v", "error",
-            "-nostats", "-progress", "pipe:1",
-            "-i", mp3_path,
-            "-map", "0:a:0",
-            "-f", "null", "-",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        out, _ = await proc.communicate()
-        progress = {}
-        for raw_line in out.decode("utf-8", errors="replace").splitlines():
-            if "=" not in raw_line:
-                continue
-            key, value = raw_line.split("=", 1)
-            progress[key.strip()] = value.strip()
-        raw_us = progress.get("out_time_us") or progress.get("out_time_ms")
-        if raw_us:
-            value = float(raw_us) / 1_000_000.0
-            if value > 0:
-                return value
-        raw_time = progress.get("out_time")
-        if raw_time:
-            parts = raw_time.split(":")
-            if len(parts) == 3:
-                value = float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
-                if value > 0:
-                    return value
-    except Exception as e:
-        print(f"[exp-radio] decoded duration probe failed for {mp3_path}: {e}", flush=True)
+    from bot.audio_utils import get_decoded_audio_duration
 
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "ffprobe", "-v", "quiet",
-            "-select_streams", "a:0",
-            "-show_entries", "stream=duration",
-            "-of", "csv=p=0",
-            mp3_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        out, _ = await proc.communicate()
-        value = float((out.decode().strip() or "0"))
-        return value if value > 0 else 0.0
-    except Exception as e:
-        print(f"[exp-radio] stream duration probe failed for {mp3_path}: {e}", flush=True)
-        return 0.0
+    return await get_decoded_audio_duration(mp3_path)
 
 
 # ─── Whisper analysis ─────────────────────────────────────────────────────────

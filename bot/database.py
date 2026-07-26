@@ -2447,9 +2447,12 @@ class Database:
 
     async def count_active_radio_songs_by_artist(self, artist: str) -> int:
         """Count active radio songs for a given artist (case-insensitive)."""
+        import time
         async with self.db.execute(
-            "SELECT COUNT(*) FROM radio_songs WHERE active = 1 AND LOWER(artist) = LOWER(?)",
-            (artist,),
+            "SELECT COUNT(*) FROM radio_songs "
+            "WHERE active = 1 AND LOWER(artist) = LOWER(?) "
+            "AND (expires_at IS NULL OR expires_at > ?)",
+            (artist, time.time()),
         ) as cursor:
             return (await cursor.fetchone())[0]
 

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Song Upload</title>
+    <title>{{ stream_name }} - Song Upload</title>
     <link rel="icon" type="image/png" href="/static/Bot_icon_small.png">
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -25,8 +25,8 @@
     <div class="w-full max-w-lg">
         <div class="text-center mb-8">
             <img src="/static/TrYa_logo.png" alt="TrYa" class="mx-auto mb-4 max-h-24">
-            <h1 class="text-3xl font-bold text-white">🎵 Song Upload</h1>
-            <p class="text-gray-400 mt-2">Submit your track for the stream</p>
+            <h1 class="text-3xl font-bold text-white">{{ stream_name }}</h1>
+            <p class="text-gray-400 mt-2">🎵 Song Upload</p>
         </div>
 
         {% if closed %}
@@ -66,7 +66,10 @@
                 <label class="block text-gray-300 text-sm font-medium mb-1">MP3 File *</label>
                 <input type="file" name="mp3_file" accept=".mp3,audio/mpeg" required
                     class="w-full text-gray-400 text-sm file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:bg-accent/20 file:text-accent hover:file:bg-accent/40 file:cursor-pointer">
-                <p class="text-gray-500 text-xs mt-1">Max 20 MB, max 6 minutes, MP3 only.</p>
+                <p class="text-gray-500 text-xs mt-1">
+                    Max 20 MB, max {{ '%g'|format(max_duration_sec / 60) }} minutes, MP3 only.
+                    The playable audio duration is measured after upload.
+                </p>
             </div>
 
             <div class="bg-discord-darker rounded-lg border border-gray-600 p-4">
@@ -93,7 +96,9 @@
             </button>
         </form>
 
-        <p class="text-gray-600 text-xs text-center mt-4">Max 3 uploads per hour per IP address.</p>
+        <p class="text-gray-600 text-xs text-center mt-4">
+            Max {{ max_per_user }} active song(s) per Suno user · max 3 uploads per hour per IP address.
+        </p>
         {% endif %}
     </div>
 </body>
