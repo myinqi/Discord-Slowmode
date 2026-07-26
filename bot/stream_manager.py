@@ -5,6 +5,7 @@ ensuring seamless transitions without stream interruptions.
 """
 
 import asyncio
+import html as html_lib
 import math
 import os
 import random
@@ -38,9 +39,10 @@ _EMOJI_RE = re.compile(
 )
 
 _PLAYLIST_REPEATS = 50
-_LYRICS_WINDOW_LINES = 14   # how many lyrics lines are visible at once
+_LYRICS_WINDOW_LINES = 20   # fills the 800 px box at the current font size
 _LYRICS_MIN_INTERVAL = 0.5  # min seconds between scroll steps (very short songs)
 _LYRICS_MAX_INTERVAL = 4.0  # max seconds between scroll steps (very long songs)
+_LYRICS_SCROLL_DURATION_FACTOR = 0.85  # leave a calm tail after all lyrics passed
 
 # Map common typographic Unicode that some renderers / fonts handle poorly
 # back to their plain ASCII equivalents. We keep diacritics intact.
@@ -485,6 +487,7 @@ class StreamManager:
         self._header_path = None  # playlist title overlay file
         self._loading = False  # guard against concurrent start() calls
         self._video_url_cache = {}   # uuid -> video_url str | None
+        self._visual_meta_cache = {} # uuid -> video, cover and resolved Suno UUID
         self._song_pip_paths = {}    # uuid -> path to loop-trimmed pip clip
         self._song_pip_concat_path = None
         self._song_pip_ready = False  # True only after ALL clips are prepared
@@ -558,28 +561,64 @@ class StreamManager:
             pass
         return 180
 
-    async def _fetch_video_url(self, suno_url: str) -> str | None:
-        """Scrape a Suno song page for its video_cover_url."""
+    async def _fetch_visual_meta(self, suno_url: str) -> dict:
+        """Scrape video and cover metadata from a Suno song or short URL."""
+        result = {"video_url": None, "cover_url": None, "real_uuid": None}
         if not suno_url:
-            return None
+            return result
         try:
             headers = {"User-Agent": _BROWSER_UA}
             async with aiohttp.ClientSession() as sess:
                 async with sess.get(suno_url, headers=headers,
                                     timeout=aiohttp.ClientTimeout(total=15)) as resp:
                     if resp.status != 200:
-                        return None
-                    html = await resp.text()
-            m = re.search(r'"video_cover_url"\s*:\s*"([^"]+)"', html)
+                        print(f"[radio] Visual metadata HTTP {resp.status}: {suno_url}")
+                        return result
+                    page = await resp.text()
+                    final_url = str(resp.url)
+
+            uuid_match = re.search(
+                r'([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})',
+                final_url,
+                re.IGNORECASE,
+            )
+            if not uuid_match:
+                uuid_match = re.search(
+                    r'"id"\s*:\s*"([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})"',
+                    page,
+                    re.IGNORECASE,
+                )
+            if not uuid_match:
+                uuid_match = re.search(
+                    r'song/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})',
+                    page,
+                    re.IGNORECASE,
+                )
+            if uuid_match:
+                result["real_uuid"] = uuid_match.group(1)
+
+            m = re.search(r'"video_cover_url"\s*:\s*"([^"]+)"', page)
             if not m:
-                m = re.search(r'video_cover_url\\":\\"([^"\\]+)\\"', html)
+                m = re.search(r'video_cover_url\\":\\"([^"\\]+)\\"', page)
             if m:
                 url = m.group(1).replace("\\/", "/")
                 print(f"[radio] Song PiP video URL: {url[:60]}")
-                return url
+                result["video_url"] = html_lib.unescape(url)
+
+            for pattern in (
+                r'<meta\s+(?:property|name)=["\']og:image["\']\s+content=["\']([^"\']+)["\']',
+                r'<meta\s+content=["\']([^"\']+)["\']\s+(?:property|name)=["\']og:image["\']',
+                r'"image_url"\s*:\s*"([^"]+)"',
+            ):
+                image_match = re.search(pattern, page, re.IGNORECASE)
+                if image_match:
+                    result["cover_url"] = html_lib.unescape(
+                        image_match.group(1).replace("\\/", "/")
+                    )
+                    break
         except Exception as e:
-            print(f"[radio] _fetch_video_url error: {e}")
-        return None
+            print(f"[radio] _fetch_visual_meta error: {e}")
+        return result
 
     async def _download_file(self, url: str, dest: str) -> bool:
         """Download url to dest. Returns True on success."""
@@ -591,6 +630,7 @@ class StreamManager:
                 async with sess.get(url, headers=headers,
                                     timeout=aiohttp.ClientTimeout(total=60)) as resp:
                     if resp.status != 200:
+                        print(f"[radio] Download HTTP {resp.status}: {url[:80]}")
                         return False
                     data = await resp.read()
             with open(dest, "wb") as fh:
@@ -625,10 +665,15 @@ class StreamManager:
         vid_cache_dir = os.path.join(self.radio_dir, "suno_cache", "video")
         os.makedirs(vid_cache_dir, exist_ok=True)
 
-        # 1) Fetch video URL (cached by key)
-        if key not in self._video_url_cache:
-            self._video_url_cache[key] = await self._fetch_video_url(suno_url) if suno_url else None
-        video_url = self._video_url_cache.get(key)
+        # 1) Fetch video URL, cover URL and canonical UUID in one request.
+        if key not in self._visual_meta_cache:
+            self._visual_meta_cache[key] = (
+                await self._fetch_visual_meta(suno_url) if suno_url else {}
+            )
+        visual_meta = self._visual_meta_cache.get(key) or {}
+        video_url = visual_meta.get("video_url")
+        self._video_url_cache[key] = video_url
+        suno_uuid = visual_meta.get("real_uuid") or suno_uuid
 
         # Target: all clips normalized to 720×1280 (9:16 HD portrait), h264.
         # Crop-to-fill so content always fills the frame without black bars.
@@ -669,13 +714,14 @@ class StreamManager:
                 return norm_path
 
         # 3) Fallback: cover image → 10 s static clip at same normalized size
-        image_url = song.get("image_url") or (
+        image_url = song.get("image_url") or visual_meta.get("cover_url") or (
             f"https://cdn1.suno.ai/image_large_{suno_uuid}.jpeg" if suno_uuid else None
         )
         cover_path = os.path.join(vid_cache_dir, f"cover_{key}.jpg")
         cover_vid = os.path.join(vid_cache_dir, f"cover_{_NW}x{_NH}_{key}.mp4")
         if os.path.exists(cover_vid):
             self._song_pip_paths[key] = cover_vid
+            print(f"[radio] Song PiP ready (cached cover): {key}")
             return cover_vid
         if image_url and await self._download_file(image_url, cover_path):
             proc = await asyncio.create_subprocess_exec(
@@ -800,6 +846,7 @@ class StreamManager:
         self._song_pip_ready = False
         self._song_pip_paths = {}
         self._video_url_cache = {}
+        self._visual_meta_cache = {}
 
         # Determine radio source mode
         source_mode = await self.db.get_setting("radio_source_mode") or "submissions"
@@ -1045,7 +1092,8 @@ class StreamManager:
             # songs still look reasonable.
             interval = max(_LYRICS_MIN_INTERVAL,
                            min(_LYRICS_MAX_INTERVAL,
-                               max(song_duration, 1.0) / max(total_steps, 1)))
+                               (max(song_duration, 1.0) * _LYRICS_SCROLL_DURATION_FACTOR)
+                               / max(total_steps, 1)))
             step = int(max(0.0, elapsed_in_song) / interval)
             step = max(0, min(step, total_steps))
             padded = [""] * window + wrapped_lines + [""] * window
