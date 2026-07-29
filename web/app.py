@@ -2289,13 +2289,24 @@ def create_app(db: Database, bot=None) -> Quart:
                 discord.utils.escape_markdown(display_name)
             )
 
-        lines = ["**Player reactions**"]
+        compact_parts = []
         for emoji in PLAYER_REACTION_EMOJIS:
             names = grouped.get(emoji) or []
             if names:
-                lines.append(f"{emoji} {', '.join(names)}")
-        if len(lines) == 1:
-            lines.append("No Player reactions yet.")
+                more = len(names) - 1
+                suffix = f" +{more} more" if more else ""
+                compact_parts.append(f"{emoji} {names[0]}{suffix}")
+
+        if compact_parts:
+            lines = [f"**Player reactions** {' · '.join(compact_parts)}"]
+            if any(len(names) > 1 for names in grouped.values()):
+                lines.extend(["", "**All reactions**"])
+                for emoji in PLAYER_REACTION_EMOJIS:
+                    names = grouped.get(emoji) or []
+                    if names:
+                        lines.append(f"{emoji} {', '.join(names)}")
+        else:
+            lines = ["**Player reactions** No Player reactions yet."]
         summary = "\n".join(lines)
         if len(summary) > 1950:
             summary = summary[:1947].rstrip() + "..."
