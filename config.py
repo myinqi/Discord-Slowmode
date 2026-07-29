@@ -8,6 +8,8 @@ class Config:
     # Discord
     DISCORD_TOKEN: str = os.getenv("DISCORD_TOKEN", "")
     GUILD_ID: int = int(os.getenv("GUILD_ID", "0"))
+    DISCORD_CLIENT_ID: str = os.getenv("DISCORD_CLIENT_ID", "")
+    DISCORD_CLIENT_SECRET: str = os.getenv("DISCORD_CLIENT_SECRET", "")
 
     # Web
     WEB_HOST: str = os.getenv("WEB_HOST", "0.0.0.0")

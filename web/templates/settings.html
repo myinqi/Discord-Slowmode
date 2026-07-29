@@ -64,6 +64,37 @@
                     class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple focus:ring-1 focus:ring-discord-blurple">
                 <p class="text-xs text-gray-500 mt-1">Public URL to the Suno web player. Posted by the <code>/player</code> slash command.</p>
             </div>
+            <div class="border-t border-gray-700/50 pt-5">
+                <h4 class="text-white font-semibold">Suno Player Discord Connection</h4>
+                <p class="text-xs text-gray-500 mt-1 mb-4">OAuth2 is used only to link a Player user to a Discord identity. It does not replace the Admin UI login.</p>
+                <div class="grid md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-300 mb-1">Discord Application Client ID</label>
+                        <input type="text" name="player_discord_client_id" value="{{ player_discord_client_id }}"
+                            class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple focus:ring-1 focus:ring-discord-blurple">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-300 mb-1">Discord Application Client Secret</label>
+                        <input type="password" name="player_discord_client_secret" value=""
+                            placeholder="{% if player_discord_secret_configured %}Configured - leave empty to keep{% else %}Client secret{% endif %}"
+                            autocomplete="new-password"
+                            class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple focus:ring-1 focus:ring-discord-blurple">
+                        {% if player_discord_secret_configured %}
+                        <label class="flex items-center gap-2 mt-2 text-xs text-gray-400">
+                            <input type="checkbox" name="clear_player_discord_client_secret" value="1"
+                                class="w-4 h-4 rounded bg-discord-dark border-gray-600 text-discord-blurple focus:ring-discord-blurple">
+                            Clear saved client secret
+                        </label>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="mt-4">
+                    <label class="block text-sm font-medium text-gray-300 mb-1">OAuth2 Redirect URL</label>
+                    <input type="text" value="{{ player_discord_callback_url }}" readonly
+                        class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-gray-400 font-mono text-sm">
+                    <p class="text-xs text-gray-500 mt-1">Add this exact URL to the OAuth2 Redirects of the same Discord application as Corax.</p>
+                </div>
+            </div>
             <div>
                 <label class="block text-sm font-medium text-gray-300 mb-1">Party Playlist — Post Channel</label>
                 <select name="party_voice_channel"

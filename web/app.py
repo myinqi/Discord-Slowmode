@@ -3,7 +3,9 @@ import os
 import re
 import functools
 import math
+import secrets
 import time
+from urllib.parse import urlencode
 import bcrypt
 import aiohttp
 from quart import Quart, render_template, request, redirect, url_for, session, flash
@@ -193,6 +195,7 @@ def create_app(db: Database, bot=None) -> Quart:
     app.title_scan_status = {"running": False, "progress": "", "result": ""}
     app.reaction_scan_status = {"running": False, "progress": "", "result": ""}
     app.cleanup_status = {"running": False, "progress": "", "result": ""}
+    app.player_reaction_locks = {}
     # Serializes manual starts of both radio managers. The scheduled Exp.
     # Radio start additionally checks the legacy manager before it fires.
     app.radio_start_lock = asyncio.Lock()
@@ -371,6 +374,29 @@ def create_app(db: Database, bot=None) -> Quart:
             from config import Config
             return bot.get_guild(Config.GUILD_ID)
         return None
+
+    def _public_web_url() -> str:
+        from config import Config
+        configured = Config.WEB_URL.strip().rstrip("/")
+        if configured:
+            return configured
+        return request.url_root.rstrip("/")
+
+    def _player_discord_callback_url() -> str:
+        return f"{_public_web_url()}/player/discord/callback"
+
+    async def _player_discord_oauth_credentials() -> tuple[str, str]:
+        from config import Config
+        client_id = (
+            await db.get_setting("player_discord_client_id")
+            or Config.DISCORD_CLIENT_ID
+            or (str(bot.user.id) if bot and bot.user else "")
+        )
+        client_secret = (
+            await db.get_setting("player_discord_client_secret")
+            or Config.DISCORD_CLIENT_SECRET
+        )
+        return client_id.strip(), client_secret.strip()
 
     async def get_guild_members(guild):
         if not guild:
@@ -560,6 +586,8 @@ def create_app(db: Database, bot=None) -> Quart:
             party_max_songs = form.get("party_max_songs", "2").strip()
             party_voice_channel = form.get("party_voice_channel", "").strip()
             player_url = form.get("player_url", "").strip()
+            player_discord_client_id = form.get("player_discord_client_id", "").strip()
+            player_discord_client_secret = form.get("player_discord_client_secret", "").strip()
             known_sidebar = {item["key"] for item in SIDEBAR_NAV_ITEMS}
             sidebar_visible = [
                 item["key"] for item in SIDEBAR_NAV_ITEMS
@@ -619,6 +647,13 @@ def create_app(db: Database, bot=None) -> Quart:
             await db.set_setting("party_max_songs", party_max_songs)
             await db.set_setting("party_voice_channel", party_voice_channel)
             await db.set_setting("player_url", player_url)
+            await db.set_setting("player_discord_client_id", player_discord_client_id)
+            if form.get("clear_player_discord_client_secret") == "1":
+                await db.set_setting("player_discord_client_secret", "")
+            elif player_discord_client_secret:
+                await db.set_setting(
+                    "player_discord_client_secret", player_discord_client_secret
+                )
             await db.set_setting("sidebar_visible_items", ",".join(sidebar_visible) or "__none__")
 
             await db.add_audit_log(
@@ -635,6 +670,16 @@ def create_app(db: Database, bot=None) -> Quart:
         party_max_songs = await db.get_setting("party_max_songs") or "2"
         party_voice_channel = await db.get_setting("party_voice_channel") or ""
         player_url = await db.get_setting("player_url") or ""
+        from config import Config
+        player_discord_client_id = (
+            await db.get_setting("player_discord_client_id")
+            or Config.DISCORD_CLIENT_ID
+            or (str(bot.user.id) if bot and bot.user else "")
+        )
+        player_discord_secret_configured = bool(
+            await db.get_setting("player_discord_client_secret")
+            or Config.DISCORD_CLIENT_SECRET
+        )
         monitored = await db.get_monitored_channels()
         guild = get_guild()
         channel_options = []
@@ -680,6 +725,9 @@ def create_app(db: Database, bot=None) -> Quart:
                                      new_command_channel=new_command_channel, channel_options=channel_options,
                                      party_max_songs=party_max_songs, party_voice_channel=party_voice_channel,
                                      player_url=player_url,
+                                     player_discord_client_id=player_discord_client_id,
+                                     player_discord_secret_configured=player_discord_secret_configured,
+                                     player_discord_callback_url=_player_discord_callback_url(),
                                      all_text_channels=all_text_channels,
                                      monitored_channels=monitored,
                                      available_output_channels=available_output_channels,
@@ -1673,7 +1721,146 @@ def create_app(db: Database, bot=None) -> Quart:
     @app.route("/player")
     @permission_required('player')
     async def player():
-        return await render_template("player.html", channels=await _get_player_channels())
+        connection = await db.get_player_discord_connection(session["user_id"])
+        client_id, client_secret = await _player_discord_oauth_credentials()
+        return await render_template(
+            "player.html",
+            channels=await _get_player_channels(),
+            discord_connection=connection,
+            discord_oauth_ready=bool(client_id and client_secret),
+        )
+
+    @app.route("/player/discord/connect")
+    @permission_required('player')
+    async def player_discord_connect():
+        client_id, client_secret = await _player_discord_oauth_credentials()
+        if not client_id or not client_secret:
+            await flash(
+                "Discord connection is not configured yet. Add the OAuth2 credentials in Settings.",
+                "error",
+            )
+            return redirect(url_for("player"))
+
+        state = secrets.token_urlsafe(32)
+        session["player_discord_oauth_state"] = state
+        query = urlencode({
+            "client_id": client_id,
+            "response_type": "code",
+            "redirect_uri": _player_discord_callback_url(),
+            "scope": "identify",
+            "state": state,
+            "prompt": "consent",
+        })
+        return redirect(f"https://discord.com/oauth2/authorize?{query}")
+
+    @app.route("/player/discord/callback")
+    @permission_required('player')
+    async def player_discord_callback():
+        expected_state = session.pop("player_discord_oauth_state", "")
+        returned_state = request.args.get("state", "")
+        if not expected_state or not secrets.compare_digest(expected_state, returned_state):
+            await flash("Discord connection failed: invalid OAuth2 state.", "error")
+            return redirect(url_for("player"))
+        if request.args.get("error"):
+            await flash("Discord connection was cancelled.", "error")
+            return redirect(url_for("player"))
+
+        code = request.args.get("code", "")
+        client_id, client_secret = await _player_discord_oauth_credentials()
+        if not code or not client_id or not client_secret:
+            await flash("Discord connection failed: incomplete OAuth2 response.", "error")
+            return redirect(url_for("player"))
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=15)
+            async with aiohttp.ClientSession(timeout=timeout) as http:
+                async with http.post(
+                    "https://discord.com/api/v10/oauth2/token",
+                    data={
+                        "client_id": client_id,
+                        "client_secret": client_secret,
+                        "grant_type": "authorization_code",
+                        "code": code,
+                        "redirect_uri": _player_discord_callback_url(),
+                    },
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                ) as token_response:
+                    token_data = await token_response.json(content_type=None)
+                    if token_response.status != 200:
+                        raise RuntimeError(token_data.get("error_description") or "token exchange failed")
+
+                access_token = token_data.get("access_token", "")
+                async with http.get(
+                    "https://discord.com/api/v10/users/@me",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                ) as user_response:
+                    user_data = await user_response.json(content_type=None)
+                    if user_response.status != 200:
+                        raise RuntimeError(user_data.get("message") or "Discord user lookup failed")
+        except Exception as exc:
+            print(f"[player-oauth] Discord connection failed: {exc}", flush=True)
+            await flash("Discord connection failed. Please try again.", "error")
+            return redirect(url_for("player"))
+
+        discord_user_id = int(user_data["id"])
+        guild = get_guild()
+        member = guild.get_member(discord_user_id) if guild else None
+        if guild and member is None:
+            try:
+                member = await guild.fetch_member(discord_user_id)
+            except Exception:
+                member = None
+        if member is None:
+            await flash(
+                "Discord connection failed: your account is not a member of this server.",
+                "error",
+            )
+            return redirect(url_for("player"))
+
+        display_name = re.sub(
+            r"\s+",
+            " ",
+            member.display_name or user_data.get("global_name") or user_data["username"],
+        ).strip()
+        avatar_url = str(member.display_avatar.url) if member.display_avatar else ""
+        linked = await db.link_player_discord_account(
+            web_user_id=session["user_id"],
+            discord_user_id=discord_user_id,
+            discord_username=user_data["username"],
+            discord_display_name=display_name,
+            discord_avatar=avatar_url,
+        )
+        if not linked:
+            await flash(
+                "This Discord account is already connected to another web user.",
+                "error",
+            )
+            return redirect(url_for("player"))
+
+        await db.add_audit_log(
+            event_type="player_discord_connected",
+            user_id=discord_user_id,
+            user_name=display_name,
+            details=f"Linked to web user {session.get('username', 'unknown')}",
+            actor=session.get("username", "unknown"),
+        )
+        await flash(f"Discord connected as {display_name}.", "success")
+        return redirect(url_for("player"))
+
+    @app.route("/player/discord/disconnect", methods=["POST"])
+    @permission_required('player')
+    async def player_discord_disconnect():
+        connection = await db.get_player_discord_connection(session["user_id"])
+        await db.unlink_player_discord_account(session["user_id"])
+        if connection:
+            await db.add_audit_log(
+                event_type="player_discord_disconnected",
+                user_id=connection["discord_user_id"],
+                user_name=connection["discord_display_name"],
+                actor=session.get("username", "unknown"),
+            )
+        await flash("Discord account disconnected from the Player.", "success")
+        return redirect(url_for("player"))
 
     # --- Public player (no login required) ---
     @app.route("/public/player")
@@ -1839,8 +2026,135 @@ def create_app(db: Database, bot=None) -> Quart:
                 pass
         return jsonify({"missing": [str(m) for m in missing], "ok": True})
 
+    PLAYER_REACTION_EMOJIS = ("💜", "💯", "👏🏻", "❤️‍🔥", "🫶🏻", "🔥")
+
+    async def _update_player_reaction_summary(song_post: dict) -> tuple[bool, str | None]:
+        """Create/reuse the song thread and maintain its single summary message."""
+        import discord
+
+        if not bot or not bot.is_ready():
+            return False, "Discord bot is offline"
+        guild = get_guild()
+        if not guild:
+            return False, "Discord server is unavailable"
+
+        message_id = int(song_post["message_id"])
+        channel_id = int(song_post["channel_id"])
+        record = await db.get_player_reaction_thread(message_id)
+        thread = None
+        if record:
+            thread = guild.get_thread(int(record["thread_id"]))
+            if thread is None:
+                try:
+                    fetched = await bot.fetch_channel(int(record["thread_id"]))
+                    if isinstance(fetched, discord.Thread):
+                        thread = fetched
+                except (discord.NotFound, discord.Forbidden):
+                    thread = None
+
+        channel = guild.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await bot.fetch_channel(channel_id)
+            except (discord.NotFound, discord.Forbidden):
+                return False, "Song channel is unavailable"
+
+        try:
+            starter = await channel.fetch_message(message_id)
+        except (discord.NotFound, discord.Forbidden):
+            return False, "Song message is unavailable"
+
+        if thread is None:
+            thread = getattr(starter, "thread", None) or guild.get_thread(message_id)
+        if thread is None:
+            raw_title = (song_post.get("song_title") or "Song").strip()
+            clean_title = re.sub(r"\s+", " ", raw_title)[:86]
+            try:
+                thread = await starter.create_thread(
+                    name=f"Reactions · {clean_title}",
+                    auto_archive_duration=1440,
+                    reason="Suno Player reaction summary",
+                )
+            except discord.HTTPException as exc:
+                return False, f"Could not create reaction thread: {exc}"
+
+        if thread.archived:
+            try:
+                await thread.edit(archived=False, reason="New Suno Player reaction")
+            except discord.HTTPException as exc:
+                return False, f"Could not reopen reaction thread: {exc}"
+
+        reactions = await db.get_player_song_reactions(message_id)
+        grouped = {emoji: [] for emoji in PLAYER_REACTION_EMOJIS}
+        for reaction in reactions:
+            display_name = re.sub(
+                r"\s+", " ", reaction["discord_display_name"]
+            ).strip()
+            grouped.setdefault(reaction["emoji"], []).append(
+                discord.utils.escape_markdown(display_name)
+            )
+
+        lines = ["**Player reactions**"]
+        for emoji in PLAYER_REACTION_EMOJIS:
+            names = grouped.get(emoji) or []
+            if names:
+                lines.append(f"{emoji} {', '.join(names)}")
+        if len(lines) == 1:
+            lines.append("No Player reactions yet.")
+        summary = "\n".join(lines)
+        if len(summary) > 1950:
+            summary = summary[:1947].rstrip() + "..."
+
+        summary_message = None
+        summary_id = record.get("summary_message_id") if record else None
+        if summary_id:
+            try:
+                summary_message = await thread.fetch_message(int(summary_id))
+            except (discord.NotFound, discord.Forbidden):
+                summary_message = None
+        try:
+            if summary_message:
+                await summary_message.edit(
+                    content=summary,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            else:
+                summary_message = await thread.send(
+                    summary,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+        except discord.HTTPException as exc:
+            return False, f"Could not update reaction summary: {exc}"
+
+        await db.set_player_reaction_thread(
+            message_id=message_id,
+            channel_id=channel_id,
+            thread_id=thread.id,
+            summary_message_id=summary_message.id,
+        )
+        return True, None
+
+    @app.route("/api/player-discord-status")
+    @permission_required('player')
+    async def api_player_discord_status():
+        from quart import jsonify
+
+        connection = await db.get_player_discord_connection(session["user_id"])
+        emojis = []
+        message_id = request.args.get("message_id", "")
+        if connection and message_id.isdigit():
+            emojis = await db.get_player_user_reactions(
+                int(message_id), int(connection["discord_user_id"])
+            )
+        return jsonify({
+            "connected": bool(connection),
+            "display_name": connection["discord_display_name"] if connection else None,
+            "avatar_url": connection["discord_avatar"] if connection else None,
+            "emojis": emojis,
+        })
+
     @app.route("/api/player-songs")
-    @login_required
+    @permission_required('player')
     async def api_player_songs():
         from quart import jsonify
         channel_id = request.args.get("channel_id", "").strip()
@@ -1851,46 +2165,86 @@ def create_app(db: Database, bot=None) -> Quart:
         return jsonify(songs)
 
     @app.route("/api/player-react", methods=["POST"])
-    @login_required
+    @permission_required('player')
     async def api_player_react():
         from quart import jsonify
         data = await request.get_json()
         if not data:
             return jsonify({"error": "No data"}), 400
-        message_id = data.get("message_id")
-        channel_id = data.get("channel_id")
-        song_url = data.get("song_url", "")
-        post_author_id = data.get("post_author_id")
+        message_id = str(data.get("message_id") or "")
         emoji = data.get("emoji", "")
-        song_title = data.get("song_title")
-        if not message_id or not emoji:
+        if not message_id.isdigit() or emoji not in PLAYER_REACTION_EMOJIS:
             return jsonify({"error": "Missing message_id or emoji"}), 400
-        reactor_user_id = session.get("user_id", 0)
-        reactor_user_name = session.get("username", "web-user")
-        await db.add_song_reaction(
-            message_id=int(message_id),
-            channel_id=int(channel_id or 0),
-            song_url=song_url,
-            post_author_id=int(post_author_id) if post_author_id else None,
-            reactor_user_id=int(reactor_user_id),
-            reactor_user_name=reactor_user_name,
-            emoji=emoji,
-            song_title=song_title,
-        )
-        # Also add the reaction on the actual Discord message via the bot
-        discord_ok = False
-        if bot and bot.is_ready() and channel_id:
-            try:
-                guild = get_guild()
-                if guild:
-                    ch = guild.get_channel(int(channel_id))
+
+        message_id_int = int(message_id)
+        song_post = await db.get_song_post_by_message_id(message_id_int)
+        if not song_post:
+            return jsonify({"error": "Unknown song message"}), 404
+
+        lock = app.player_reaction_locks.setdefault(message_id_int, asyncio.Lock())
+        async with lock:
+            connection = await db.get_player_discord_connection(session["user_id"])
+            if connection:
+                added = await db.toggle_player_song_reaction(
+                    message_id=message_id_int,
+                    channel_id=int(song_post["channel_id"]),
+                    web_user_id=session["user_id"],
+                    discord_user_id=int(connection["discord_user_id"]),
+                    discord_display_name=connection["discord_display_name"],
+                    emoji=emoji,
+                )
+                if added:
+                    await db.add_song_reaction(
+                        message_id=message_id_int,
+                        channel_id=int(song_post["channel_id"]),
+                        song_url=song_post["url"],
+                        post_author_id=int(song_post["user_id"]),
+                        reactor_user_id=int(connection["discord_user_id"]),
+                        reactor_user_name=connection["discord_display_name"],
+                        emoji=emoji,
+                        song_title=song_post.get("song_title"),
+                    )
+                thread_ok, thread_error = await _update_player_reaction_summary(song_post)
+                if not thread_ok:
+                    print(f"[player-react] {thread_error}", flush=True)
+                return jsonify({
+                    "ok": True,
+                    "mode": "thread",
+                    "active": added,
+                    "thread": thread_ok,
+                    "warning": thread_error,
+                })
+
+            reactor_user_id = session.get("user_id", 0)
+            reactor_user_name = session.get("username", "web-user")
+            await db.add_song_reaction(
+                message_id=message_id_int,
+                channel_id=int(song_post["channel_id"]),
+                song_url=song_post["url"],
+                post_author_id=int(song_post["user_id"]),
+                reactor_user_id=int(reactor_user_id),
+                reactor_user_name=reactor_user_name,
+                emoji=emoji,
+                song_title=song_post.get("song_title"),
+            )
+
+            discord_ok = False
+            if bot and bot.is_ready():
+                try:
+                    guild = get_guild()
+                    ch = guild.get_channel(int(song_post["channel_id"])) if guild else None
                     if ch:
-                        msg = await ch.fetch_message(int(message_id))
+                        msg = await ch.fetch_message(message_id_int)
                         await msg.add_reaction(emoji)
                         discord_ok = True
-            except Exception as e:
-                print(f"[player-react] Failed to add Discord reaction: {e}")
-        return jsonify({"ok": True, "discord": discord_ok})
+                except Exception as exc:
+                    print(f"[player-react] Failed to add Discord reaction: {exc}", flush=True)
+            return jsonify({
+                "ok": True,
+                "mode": "bot",
+                "active": True,
+                "discord": discord_ok,
+            })
 
     @app.route("/api/suno-resolve/<short_id>")
     @login_required

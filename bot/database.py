@@ -224,6 +224,41 @@ class Database:
                 song_title TEXT,
                 UNIQUE(message_id, reactor_user_id, emoji)
             );
+
+            CREATE TABLE IF NOT EXISTS player_discord_connections (
+                web_user_id INTEGER PRIMARY KEY,
+                discord_user_id INTEGER NOT NULL UNIQUE,
+                discord_username TEXT NOT NULL,
+                discord_display_name TEXT NOT NULL,
+                discord_avatar TEXT,
+                connected_at REAL DEFAULT (unixepoch()),
+                updated_at REAL DEFAULT (unixepoch()),
+                FOREIGN KEY (web_user_id) REFERENCES web_users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS player_song_reactions (
+                message_id INTEGER NOT NULL,
+                channel_id INTEGER NOT NULL,
+                web_user_id INTEGER NOT NULL,
+                discord_user_id INTEGER NOT NULL,
+                discord_display_name TEXT NOT NULL,
+                emoji TEXT NOT NULL,
+                reacted_at REAL DEFAULT (unixepoch()),
+                PRIMARY KEY (message_id, discord_user_id, emoji),
+                FOREIGN KEY (web_user_id) REFERENCES web_users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS player_reaction_threads (
+                message_id INTEGER PRIMARY KEY,
+                channel_id INTEGER NOT NULL,
+                thread_id INTEGER NOT NULL,
+                summary_message_id INTEGER,
+                created_at REAL DEFAULT (unixepoch()),
+                updated_at REAL DEFAULT (unixepoch())
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_player_song_reactions_message
+                ON player_song_reactions(message_id, reacted_at);
         """)
         await self.db.commit()
 
@@ -928,6 +963,7 @@ class Database:
             await self.db.commit()
             return True
         except aiosqlite.IntegrityError:
+            await self.db.rollback()
             return False
 
     async def update_web_user_password(self, user_id: int, password_hash: str):
@@ -1715,6 +1751,165 @@ class Database:
         await self.db.execute(
             "DELETE FROM song_reactions WHERE message_id = ? AND reactor_user_id = ? AND emoji = ?",
             (message_id, reactor_user_id, emoji),
+        )
+        await self.db.commit()
+
+    async def get_player_discord_connection(self, web_user_id: int) -> dict | None:
+        async with self.db.execute(
+            "SELECT * FROM player_discord_connections WHERE web_user_id = ?",
+            (web_user_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def link_player_discord_account(
+        self,
+        web_user_id: int,
+        discord_user_id: int,
+        discord_username: str,
+        discord_display_name: str,
+        discord_avatar: str | None,
+    ) -> bool:
+        """Link a Discord identity to one web account.
+
+        Returns False when the Discord account is already linked to another
+        web user.
+        """
+        try:
+            await self.db.execute(
+                """
+                INSERT INTO player_discord_connections
+                    (web_user_id, discord_user_id, discord_username,
+                     discord_display_name, discord_avatar)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(web_user_id) DO UPDATE SET
+                    discord_user_id = excluded.discord_user_id,
+                    discord_username = excluded.discord_username,
+                    discord_display_name = excluded.discord_display_name,
+                    discord_avatar = excluded.discord_avatar,
+                    updated_at = unixepoch()
+                """,
+                (
+                    web_user_id,
+                    discord_user_id,
+                    discord_username,
+                    discord_display_name,
+                    discord_avatar,
+                ),
+            )
+            await self.db.commit()
+            return True
+        except aiosqlite.IntegrityError:
+            await self.db.rollback()
+            return False
+
+    async def unlink_player_discord_account(self, web_user_id: int):
+        await self.db.execute(
+            "DELETE FROM player_discord_connections WHERE web_user_id = ?",
+            (web_user_id,),
+        )
+        await self.db.commit()
+
+    async def toggle_player_song_reaction(
+        self,
+        message_id: int,
+        channel_id: int,
+        web_user_id: int,
+        discord_user_id: int,
+        discord_display_name: str,
+        emoji: str,
+    ) -> bool:
+        """Toggle a linked user's Player reaction and return True when added."""
+        async with self.db.execute(
+            """
+            SELECT 1 FROM player_song_reactions
+            WHERE message_id = ? AND discord_user_id = ? AND emoji = ?
+            """,
+            (message_id, discord_user_id, emoji),
+        ) as cursor:
+            exists = await cursor.fetchone()
+        if exists:
+            await self.db.execute(
+                """
+                DELETE FROM player_song_reactions
+                WHERE message_id = ? AND discord_user_id = ? AND emoji = ?
+                """,
+                (message_id, discord_user_id, emoji),
+            )
+            await self.db.commit()
+            return False
+
+        await self.db.execute(
+            """
+            INSERT INTO player_song_reactions
+                (message_id, channel_id, web_user_id, discord_user_id,
+                 discord_display_name, emoji)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                message_id,
+                channel_id,
+                web_user_id,
+                discord_user_id,
+                discord_display_name,
+                emoji,
+            ),
+        )
+        await self.db.commit()
+        return True
+
+    async def get_player_song_reactions(self, message_id: int) -> list[dict]:
+        async with self.db.execute(
+            """
+            SELECT discord_user_id, discord_display_name, emoji, reacted_at
+            FROM player_song_reactions
+            WHERE message_id = ?
+            ORDER BY reacted_at, discord_display_name COLLATE NOCASE
+            """,
+            (message_id,),
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def get_player_user_reactions(
+        self, message_id: int, discord_user_id: int
+    ) -> list[str]:
+        async with self.db.execute(
+            """
+            SELECT emoji FROM player_song_reactions
+            WHERE message_id = ? AND discord_user_id = ?
+            ORDER BY reacted_at
+            """,
+            (message_id, discord_user_id),
+        ) as cursor:
+            return [row[0] for row in await cursor.fetchall()]
+
+    async def get_player_reaction_thread(self, message_id: int) -> dict | None:
+        async with self.db.execute(
+            "SELECT * FROM player_reaction_threads WHERE message_id = ?",
+            (message_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def set_player_reaction_thread(
+        self,
+        message_id: int,
+        channel_id: int,
+        thread_id: int,
+        summary_message_id: int | None,
+    ):
+        await self.db.execute(
+            """
+            INSERT INTO player_reaction_threads
+                (message_id, channel_id, thread_id, summary_message_id)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(message_id) DO UPDATE SET
+                channel_id = excluded.channel_id,
+                thread_id = excluded.thread_id,
+                summary_message_id = excluded.summary_message_id,
+                updated_at = unixepoch()
+            """,
+            (message_id, channel_id, thread_id, summary_message_id),
         )
         await self.db.commit()
 

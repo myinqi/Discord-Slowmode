@@ -36,6 +36,12 @@
     .music-btn.playing .play-icon{display:none}
     .music-btn.playing .pause-icon{display:inline-block}
     #load-status{font-size:11px;color:#666;padding-bottom:2px;white-space:nowrap}
+    .discord-link-row{display:flex;align-items:center;gap:9px;padding-top:8px;border-top:1px solid rgba(255,255,255,.07);font-size:12px;color:#aaa}
+    .discord-link-row img{width:28px;height:28px;border-radius:50%;object-fit:cover;background:#252530}
+    .discord-link-row .discord-name{color:#eee;font-weight:600}
+    .discord-link-action{margin-left:auto;padding:6px 10px;border:1px solid #4c4c60;border-radius:7px;background:#252536;color:#ddd;font-size:12px;cursor:pointer;text-decoration:none;transition:background .15s,border-color .15s}
+    .discord-link-action:hover{background:#34344a;border-color:#5865f2}
+    .discord-link-action:disabled{opacity:.45;cursor:not-allowed}
     /* -- Now Playing card -- */
     .np-card{display:flex;gap:14px;align-items:flex-start}
     .artwork-wrap{width:216px;flex-shrink:0;display:none;position:relative;border-radius:10px;overflow:hidden;background:#1a1a1a;aspect-ratio:1/1;cursor:pointer;transition:aspect-ratio .2s}
@@ -62,6 +68,13 @@
     .vol-wrap input[type=range]{width:70px;accent-color:#5865F2}
     .vol-icon{width:18px;height:18px;color:#8b86b8;flex-shrink:0}
     .vol-icon svg{width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}
+    @media (max-width:640px){
+        .player-wrap{width:100%;min-width:0}
+        .transport{flex-wrap:wrap}
+        .seek-bar{min-width:110px}
+        .vol-wrap{flex:0 0 100%;width:100%;justify-content:flex-end;padding-top:2px;box-sizing:border-box}
+        .vol-wrap input[type=range]{width:min(180px,55vw);max-width:calc(100% - 30px)}
+    }
     /* -- Auto-next bar -- */
     .auto-row{display:flex;align-items:center;gap:8px;margin-top:6px}
     .auto-row span{font-size:12px;color:#555}
@@ -133,6 +146,24 @@
                     <svg viewBox="0 0 24 24"><path d="M5.2 14.7c-1.7 0-3-1.3-3-3s1.3-3 3-3c3.4 0 4.5 6.6 7.8 6.6 1.7 0 3-1.3 3-3s-1.3-3-3-3c-3.3 0-4.4 6.6-7.8 6.6Z"/><path d="M18.8 14.7c1.7 0 3-1.3 3-3s-1.3-3-3-3c-3.4 0-4.5 6.6-7.8 6.6-1.7 0-3-1.3-3-3s1.3-3 3-3c3.3 0 4.4 6.6 7.8 6.6Z"/></svg>
                 </button>
                 <span id="load-status"></span>
+            </div>
+            <div class="discord-link-row">
+                {% if discord_connection %}
+                    {% if discord_connection.discord_avatar %}
+                    <img src="{{ discord_connection.discord_avatar }}" alt="">
+                    {% endif %}
+                    <span>Discord: <span class="discord-name">{{ discord_connection.discord_display_name }}</span></span>
+                    <form method="POST" action="{{ url_for('player_discord_disconnect') }}" class="ml-auto">
+                        <button type="submit" class="discord-link-action" title="Disconnect Discord account">Disconnect</button>
+                    </form>
+                {% else %}
+                    <span>Discord reactions</span>
+                    {% if discord_oauth_ready %}
+                    <a href="{{ url_for('player_discord_connect') }}" class="discord-link-action">Connect Discord</a>
+                    {% else %}
+                    <button type="button" class="discord-link-action" disabled title="Configure Discord OAuth2 in Settings">Not configured</button>
+                    {% endif %}
+                {% endif %}
             </div>
         </div>
     </div>
@@ -568,7 +599,7 @@ async function play(i){
     document.getElementById('tinfo').textContent=e.title;
     updateSub(e,i);showLyrics(null);
     document.getElementById('reactRow').style.display='flex';
-    updateReactBtns();
+    updateReactBtns(e.messageId);
     renderQ();resetCd();
     var uuid;
     if(e.isUUID){uuid=e.id;}else{setStatus('Resolving…');uuid=await resolveShortId(e.id);}
@@ -630,10 +661,17 @@ function toggleHidePlayed(){hidePlayed=!hidePlayed;document.getElementById('btnH
 function toggleAutoload(){autoloadEnabled=!autoloadEnabled;document.getElementById('btnAutoload').classList.toggle('is-on',autoloadEnabled);saveSettings();}
 
 /* --- Emoji Reactions --- */
-function updateReactBtns(){
-    /* Reset all reaction buttons */
+async function updateReactBtns(messageId){
     var btns=document.querySelectorAll('.react-btn');
     btns.forEach(function(b){b.classList.remove('reacted');});
+    if(!messageId)return;
+    try{
+        var response=await fetch('/api/player-discord-status?message_id='+encodeURIComponent(messageId));
+        if(!response.ok)return;
+        var data=await response.json();
+        var active=new Set(data.emojis||[]);
+        btns.forEach(function(b){b.classList.toggle('reacted',active.has(b.getAttribute('data-emoji')));});
+    }catch(_){ }
 }
 
 async function react(btn){
@@ -641,12 +679,15 @@ async function react(btn){
     var emoji=btn.getAttribute('data-emoji');
     var realIdx=getPlayIndex(cur);var e=T[realIdx];
     if(!e.messageId){setStatus('⚠ No message ID — cannot save reaction');return;}
-    btn.classList.toggle('reacted');
     try{
-        await fetch('/api/player-react',{
+        var response=await fetch('/api/player-react',{
             method:'POST',headers:{'Content-Type':'application/json'},
             body:JSON.stringify({message_id:e.messageId,channel_id:e.channelId,song_url:e.url,post_author_id:e.userId,emoji:emoji,song_title:e.title})
         });
+        var data=await response.json();
+        if(!response.ok||!data.ok){throw new Error(data.error||('HTTP '+response.status));}
+        btn.classList.toggle('reacted',Boolean(data.active));
+        if(data.warning)setStatus('Reaction saved · '+data.warning);
     }catch(ex){console.error('Reaction failed',ex);}
 }
 
