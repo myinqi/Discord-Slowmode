@@ -1785,9 +1785,24 @@ def create_app(db: Database, bot=None) -> Quart:
                     },
                     headers={"Content-Type": "application/x-www-form-urlencoded"},
                 ) as token_response:
-                    token_data = await token_response.json(content_type=None)
+                    token_body = await token_response.text()
+                    try:
+                        import json
+                        token_data = json.loads(token_body)
+                    except (TypeError, ValueError):
+                        token_data = {}
                     if token_response.status != 200:
-                        raise RuntimeError(token_data.get("error_description") or "token exchange failed")
+                        error_code = token_data.get("error") or "unknown_error"
+                        error_description = (
+                            token_data.get("error_description")
+                            or token_data.get("message")
+                            or token_body[:200]
+                            or "Discord returned an empty response"
+                        )
+                        raise RuntimeError(
+                            f"token exchange HTTP {token_response.status}: "
+                            f"{error_code}: {error_description}"
+                        )
 
                 access_token = token_data.get("access_token", "")
                 async with http.get(
@@ -1799,7 +1814,11 @@ def create_app(db: Database, bot=None) -> Quart:
                         raise RuntimeError(user_data.get("message") or "Discord user lookup failed")
         except Exception as exc:
             print(f"[player-oauth] Discord connection failed: {exc}", flush=True)
-            await flash("Discord connection failed. Please try again.", "error")
+            await flash(
+                "Discord rejected the connection. Check the application client secret "
+                "and OAuth2 redirect URL, then try again.",
+                "error",
+            )
             return redirect(url_for("player"))
 
         discord_user_id = int(user_data["id"])
