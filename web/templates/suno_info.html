@@ -90,11 +90,6 @@
     #lyrics-box{flex:1;min-height:0;overflow-y:auto;white-space:pre-wrap;font-family:ui-sans-serif,system-ui;font-size:13px;line-height:1.7;color:#ccc;padding:6px 4px;scroll-behavior:smooth}
     #lyrics-box .ly-line{padding:2px 6px;border-radius:4px}
     #lyrics-box .ly-marker{color:#888;font-style:italic;font-size:11px;letter-spacing:.05em;text-transform:uppercase;margin-top:6px}
-    /* Highlights only apply when auto-scroll is enabled (.ly-auto). */
-    #lyrics-box.ly-auto .ly-line{transition:background .25s,color .25s}
-    #lyrics-box.ly-auto .ly-line.active{background:#2d2456;color:#fff;font-weight:500}
-    #lyrics-box.ly-auto .ly-line.past{color:#666}
-
     /* Lyrics translate buttons */
     .ly-tr-btn{padding:2px 8px;border-radius:5px;font-size:11px;font-weight:500;cursor:pointer;border:none;background:#1c1c22;color:#777;transition:all .15s}
     .ly-tr-btn:hover:not(:disabled){color:#ddd;background:#2a2a34}
@@ -509,7 +504,7 @@
                 </button>
             </div>
             <div class="si-panel active" data-panel="lyrics">
-                <div class="flex items-center justify-between gap-2 mb-2">
+                <div class="flex items-center gap-2 mb-2">
                     <div class="flex items-center gap-1">
                         <span class="text-gray-600 text-xs">Translate:</span>
                         <button class="ly-tr-btn" id="btn-ly-de" onclick="translateLyrics('DE')" title="Deutsch">DE</button>
@@ -517,11 +512,6 @@
                         <button class="ly-tr-btn" id="btn-ly-fr" onclick="translateLyrics('FR')" title="Français">FR</button>
                         <button class="ly-tr-btn ly-tr-orig" id="btn-ly-orig" style="display:none" onclick="showOriginalLyrics()">↩ Original</button>
                     </div>
-                    <label class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer select-none">
-                        <input type="checkbox" id="ly-autoscroll"
-                            class="w-3.5 h-3.5 accent-discord-blurple cursor-pointer">
-                        <span>Auto-scroll</span>
-                    </label>
                 </div>
                 <div id="lyrics-box">Pick a song to see its lyrics.</div>
             </div>
@@ -2011,8 +2001,7 @@ function renderLyrics(text){
 }
 
 function isAutoOn(){
-    var el = document.getElementById('ly-autoscroll');
-    return !!(el && el.checked);
+    return false;
 }
 
 /* Clear all highlight classes — used when auto-scroll is off. */
@@ -2226,8 +2215,6 @@ audio.addEventListener('timeupdate', function(){
         box.scrollTo({top: Math.max(0,target), behavior:'smooth'});
     }
 });
-
-document.getElementById('ly-autoscroll').addEventListener('change', applyAutoscrollMode);
 
 /* --- Audio bindings ------------------------------------------------------- */
 audio.addEventListener('timeupdate', function(){
