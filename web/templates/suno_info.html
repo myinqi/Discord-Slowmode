@@ -266,6 +266,9 @@
                     class="px-3 py-1 rounded-md bg-transparent text-gray-400 hover:text-white font-medium transition-colors"
                     onclick="switchSource('party')">Party Playlist</button>
                 {% endif %}
+                <button id="src-exp-radio-btn"
+                    class="px-3 py-1 rounded-md bg-transparent text-gray-400 hover:text-white font-medium transition-colors"
+                    onclick="switchSource('exp-radio')">Exp. Radio</button>
             </div>
             <!-- Playlist URL row -->
             <div id="src-playlist-row" class="flex flex-col sm:flex-row gap-2">
@@ -301,6 +304,18 @@
                 <span id="party-status" class="text-gray-500 text-xs"></span>
             </div>
             {% endif %}
+            <!-- Experimental Radio playlist history row -->
+            <div id="src-exp-radio-row" style="display:none" class="flex flex-wrap items-center gap-2">
+                <select id="exp-radio-snapshot"
+                    class="flex-1 min-w-[240px] bg-discord-darker border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                    <option value="">Loading stream playlists…</option>
+                </select>
+                <button id="btn-exp-radio-load"
+                    class="px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50">
+                    Load stream
+                </button>
+                <span id="exp-radio-status" class="text-gray-500 text-xs"></span>
+            </div>
             <!-- Discord channel row -->
             <div id="src-channel-row" class="flex-col gap-2" style="display:none">
                 <div class="flex flex-wrap gap-2 mb-2">
@@ -647,6 +662,8 @@ var _ytPendingId = null;
 var hlsPlayer = null;
 var PARTY_SONGS = [];   // raw party playlist entries from DB
 var PARTY_FILTER = 'all'; // 'all' | 'remaining' | 'heard'
+var EXP_RADIO_SNAPSHOTS_LOADED = false;
+var EXP_RADIO_ACTIVE_SNAPSHOT = '';
 function switchSource(src){
     CURRENT_SOURCE = src;
     var on = 'px-3 py-1 rounded-md font-medium transition-colors text-xs bg-discord-blurple text-white';
@@ -654,9 +671,11 @@ function switchSource(src){
     document.getElementById('src-playlist-row').style.display  = src==='playlist' ? '' : 'none';
     document.getElementById('src-channel-row').style.display   = src==='channel'  ? 'flex' : 'none';
     var _pr = document.getElementById('src-party-row'); if(_pr) _pr.style.display = src==='party' ? '' : 'none';
+    document.getElementById('src-exp-radio-row').style.display = src==='exp-radio' ? 'flex' : 'none';
     document.getElementById('src-playlist-btn').className = src==='playlist' ? on : off;
     document.getElementById('src-channel-btn').className  = src==='channel'  ? on : off;
     var _pb = document.getElementById('src-party-btn'); if(_pb) _pb.className = src==='party' ? on : off;
+    document.getElementById('src-exp-radio-btn').className = src==='exp-radio' ? on : off;
     // Party-specific UI
     var isParty = src === 'party';
     document.getElementById('si-table-wrap').style.display = isParty ? 'none' : '';
@@ -664,8 +683,108 @@ function switchSource(src){
     document.getElementById('party-tabs').style.display    = isParty ? '' : 'none';
     if(!isParty){ ARTIST_FILTER=''; var sel=document.getElementById('dc-artist'); if(sel) sel.value=''; }
     if(isParty) loadPartyPlaylist();
+    if(src === 'exp-radio') loadExpRadioSnapshots();
     updateSunoInfoReactionVisibility(CUR >= 0 ? SONGS[CUR] : null);
     try { localStorage.setItem('suno-info-source', src); } catch(e){}
+}
+
+document.getElementById('btn-exp-radio-load').addEventListener('click', loadExpRadioPlaylist);
+document.getElementById('exp-radio-snapshot').addEventListener('change', loadExpRadioPlaylist);
+
+function expRadioSnapshotLabel(snapshot){
+    var date = snapshot.created_at
+        ? new Date(snapshot.created_at * 1000).toLocaleString([], {
+            year:'numeric', month:'2-digit', day:'2-digit',
+            hour:'2-digit', minute:'2-digit'
+        })
+        : 'Unknown date';
+    var source = snapshot.source
+        ? snapshot.source.charAt(0).toUpperCase() + snapshot.source.slice(1)
+        : 'Playlist';
+    var kind = snapshot.scheduled ? 'Scheduled' : 'Manual';
+    return date + ' · ' + kind + ' · ' + source + ' · ' + snapshot.song_count + ' songs';
+}
+
+async function loadExpRadioSnapshots(){
+    var select = document.getElementById('exp-radio-snapshot');
+    if(EXP_RADIO_SNAPSHOTS_LOADED){
+        if(CURRENT_SOURCE === 'exp-radio' &&
+           EXP_RADIO_ACTIVE_SNAPSHOT !== select.value) loadExpRadioPlaylist();
+        return;
+    }
+    var status = document.getElementById('exp-radio-status');
+    status.textContent = 'Loading history…';
+    try {
+        var r = await fetch('/api/suno-info/exp-radio-playlists');
+        var data = await r.json();
+        if(!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+        var snapshots = data.snapshots || [];
+        if(!snapshots.length){
+            select.innerHTML = '<option value="">No stream playlists available</option>';
+            status.textContent = '';
+            return;
+        }
+        select.innerHTML = snapshots.map(function(snapshot){
+            return '<option value="' + esc(snapshot.id) + '">' +
+                esc(expRadioSnapshotLabel(snapshot)) + '</option>';
+        }).join('');
+        EXP_RADIO_SNAPSHOTS_LOADED = true;
+        status.textContent = snapshots.length + ' stream playlist' + (snapshots.length===1?'':'s');
+        if(CURRENT_SOURCE === 'exp-radio') await loadExpRadioPlaylist();
+    } catch(e){
+        status.textContent = 'History failed: ' + e.message;
+    }
+}
+
+async function loadExpRadioPlaylist(){
+    var select = document.getElementById('exp-radio-snapshot');
+    var snapshotId = select.value;
+    if(!snapshotId) return;
+    var btn = document.getElementById('btn-exp-radio-load');
+    var status = document.getElementById('exp-radio-status');
+    btn.disabled = true;
+    btn.textContent = 'Loading…';
+    setStatus('Loading Experimental Radio playlist…');
+    document.getElementById('songs-tbody').innerHTML =
+        '<tr><td colspan="4" class="si-loading">Loading Experimental Radio playlist…</td></tr>';
+    try {
+        var r = await fetch('/api/suno-info/exp-radio-playlists?snapshot=' + encodeURIComponent(snapshotId));
+        var data = await r.json();
+        if(!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+        if(CURRENT_SOURCE !== 'exp-radio') return;
+        SONGS = [];
+        (data.urls || []).forEach(function(url){
+            var match = String(url).match(SUNO_UUID_RE);
+            if(!match) return;
+            SONGS.push({
+                uuid: match[1],
+                type: 'suno',
+                title: match[1],
+                artist: '',
+                suno_url: url,
+                source_url: url,
+                _is_hook: /\/hook\//.test(url)
+            });
+        });
+        CUR = -1;
+        EXP_RADIO_ACTIVE_SNAPSHOT = snapshotId;
+        PLAYED_SET.clear();
+        updateSunoInfoReactionVisibility(null);
+        if(SHUFFLE) buildShuffle();
+        document.getElementById('playlist-name').textContent = '— Exp. Radio · ' +
+            (data.created_at ? new Date(data.created_at * 1000).toLocaleDateString() : 'Stream');
+        document.getElementById('song-count').textContent = SONGS.length + ' songs';
+        setStatus(SONGS.length + ' loaded');
+        renderTable();
+        prefetchCovers();
+        status.textContent = SONGS.length + ' songs loaded';
+    } catch(e){
+        renderError(e.message || String(e));
+        status.textContent = 'Playlist failed: ' + e.message;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Load stream';
+    }
 }
 
 function updateSunoInfoReactionVisibility(song){
@@ -2641,7 +2760,8 @@ function syncTheaterFromState(){
     }
     // Restore source tab (playlist vs discord channel vs party playlist)
     var lastSrc = localStorage.getItem('suno-info-source');
-    if(lastSrc === 'channel' || (lastSrc === 'party' && HAS_PARTY)) switchSource(lastSrc);
+    if(lastSrc === 'channel' || lastSrc === 'exp-radio' ||
+       (lastSrc === 'party' && HAS_PARTY)) switchSource(lastSrc);
     // Restore shuffle state
     if(localStorage.getItem('suno-info-shuffle') === '1') toggleShuffle();
 

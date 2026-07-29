@@ -8335,6 +8335,90 @@ def create_app(db: Database, bot=None) -> Quart:
                 "warning": thread_error,
             })
 
+    @app.route("/api/suno-info/exp-radio-playlists")
+    @permission_required('suno_info')
+    async def api_suno_info_exp_radio_playlists():
+        """List or load historical Experimental Radio playlist snapshots."""
+        import json
+        from quart import jsonify
+
+        legacy_keys = {
+            "legacy-scheduled": "exp_radio_last_scheduled_playlist_snapshot",
+            "legacy-latest": "exp_radio_last_playlist_snapshot",
+        }
+
+        async def _legacy_snapshot(snapshot_ref: str) -> dict | None:
+            key = legacy_keys.get(snapshot_ref)
+            if not key:
+                return None
+            raw = await db.get_setting(key, "")
+            if not raw:
+                return None
+            try:
+                payload = json.loads(raw)
+            except (TypeError, ValueError):
+                return None
+            urls = [
+                str(url).strip()
+                for url in (payload.get("urls") or [])
+                if url and str(url).strip()
+            ]
+            return {
+                "id": snapshot_ref,
+                "created_at": float(payload.get("created_at") or 0),
+                "source": str(payload.get("source") or ""),
+                "scheduled": bool(payload.get("scheduled")),
+                "song_count": len(urls),
+                "urls": urls,
+            }
+
+        snapshot_ref = (request.args.get("snapshot") or "").strip()
+        if snapshot_ref:
+            snapshot = None
+            if snapshot_ref.startswith("db-") and snapshot_ref[3:].isdigit():
+                snapshot = await db.get_exp_radio_playlist_snapshot(int(snapshot_ref[3:]))
+                if snapshot:
+                    snapshot["id"] = snapshot_ref
+            elif snapshot_ref in legacy_keys:
+                snapshot = await _legacy_snapshot(snapshot_ref)
+            if not snapshot:
+                return jsonify({"error": "Playlist snapshot not found"}), 404
+            return jsonify(snapshot)
+
+        stored = await db.get_exp_radio_playlist_snapshots(limit=100)
+        snapshots = [
+            {
+                "id": f"db-{row['id']}",
+                "created_at": float(row.get("created_at") or 0),
+                "source": row.get("source") or "",
+                "scheduled": bool(row.get("scheduled")),
+                "song_count": int(row.get("song_count") or 0),
+            }
+            for row in stored
+        ]
+        known = {
+            (
+                int(item["created_at"]), item["source"],
+                item["scheduled"], item["song_count"],
+            )
+            for item in snapshots
+        }
+        for legacy_ref in ("legacy-scheduled", "legacy-latest"):
+            legacy = await _legacy_snapshot(legacy_ref)
+            if not legacy:
+                continue
+            identity = (
+                int(legacy["created_at"]), legacy["source"],
+                legacy["scheduled"], legacy["song_count"],
+            )
+            if identity in known:
+                continue
+            legacy.pop("urls", None)
+            snapshots.append(legacy)
+            known.add(identity)
+        snapshots.sort(key=lambda item: item["created_at"], reverse=True)
+        return jsonify({"snapshots": snapshots})
+
     @app.route("/api/suno-info/playlist")
     @permission_required('suno_info')
     async def api_suno_info_playlist():

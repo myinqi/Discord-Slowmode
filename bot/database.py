@@ -297,6 +297,77 @@ class Database:
         """)
         await self.db.commit()
 
+        # Historical playlists built by the Experimental Radio stream manager.
+        await self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS exp_radio_playlist_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at REAL NOT NULL,
+                source TEXT NOT NULL DEFAULT '',
+                scheduled INTEGER NOT NULL DEFAULT 0,
+                song_count INTEGER NOT NULL DEFAULT 0,
+                urls_json TEXT NOT NULL DEFAULT '[]'
+            );
+            CREATE INDEX IF NOT EXISTS idx_exp_radio_playlist_snapshots_created
+                ON exp_radio_playlist_snapshots(created_at DESC);
+        """)
+        await self.db.commit()
+
+        # Preserve the currently available legacy snapshots before their
+        # settings are overwritten by the next stream start.
+        async with self.db.execute(
+            "SELECT value FROM settings WHERE key = ?",
+            ("migration_exp_radio_playlist_snapshots_v1",),
+        ) as cursor:
+            snapshots_migrated = await cursor.fetchone()
+        if not snapshots_migrated:
+            import json
+
+            migrated_identities = set()
+            for legacy_key in (
+                "exp_radio_last_scheduled_playlist_snapshot",
+                "exp_radio_last_playlist_snapshot",
+            ):
+                async with self.db.execute(
+                    "SELECT value FROM settings WHERE key = ?", (legacy_key,)
+                ) as cursor:
+                    row = await cursor.fetchone()
+                if not row or not row[0]:
+                    continue
+                try:
+                    payload = json.loads(row[0])
+                    urls = tuple(
+                        str(url).strip()
+                        for url in (payload.get("urls") or [])
+                        if url and str(url).strip()
+                    )
+                    identity = (
+                        int(payload.get("created_at") or 0),
+                        str(payload.get("source") or ""),
+                        bool(payload.get("scheduled")),
+                        urls,
+                    )
+                except (TypeError, ValueError):
+                    continue
+                if not urls or identity in migrated_identities:
+                    continue
+                await self.db.execute(
+                    """
+                    INSERT INTO exp_radio_playlist_snapshots
+                        (created_at, source, scheduled, song_count, urls_json)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        identity[0], identity[1], 1 if identity[2] else 0,
+                        len(urls), json.dumps(list(urls)),
+                    ),
+                )
+                migrated_identities.add(identity)
+            await self.db.execute(
+                "INSERT INTO settings (key, value) VALUES (?, '1')",
+                ("migration_exp_radio_playlist_snapshots_v1",),
+            )
+            await self.db.commit()
+
         # Add image_url column to party_playlist if missing
         async with self.db.execute("PRAGMA table_info(party_playlist)") as cursor:
             pp_columns = [row[1] async for row in cursor]
@@ -822,6 +893,68 @@ class Database:
             (key, value),
         )
         await self.db.commit()
+
+    async def save_exp_radio_playlist_snapshot(
+        self,
+        *,
+        created_at: float,
+        source: str,
+        scheduled: bool,
+        urls: list[str],
+    ) -> int:
+        import json
+
+        clean_urls = [str(url).strip() for url in urls if url and str(url).strip()]
+        cursor = await self.db.execute(
+            """
+            INSERT INTO exp_radio_playlist_snapshots
+                (created_at, source, scheduled, song_count, urls_json)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                float(created_at),
+                str(source or ""),
+                1 if scheduled else 0,
+                len(clean_urls),
+                json.dumps(clean_urls),
+            ),
+        )
+        await self.db.commit()
+        return int(cursor.lastrowid)
+
+    async def get_exp_radio_playlist_snapshots(self, limit: int = 50) -> list[dict]:
+        limit = max(1, min(int(limit), 200))
+        async with self.db.execute(
+            """
+            SELECT id, created_at, source, scheduled, song_count
+            FROM exp_radio_playlist_snapshots
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def get_exp_radio_playlist_snapshot(self, snapshot_id: int) -> Optional[dict]:
+        import json
+
+        async with self.db.execute(
+            """
+            SELECT id, created_at, source, scheduled, song_count, urls_json
+            FROM exp_radio_playlist_snapshots
+            WHERE id = ?
+            """,
+            (int(snapshot_id),),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            return None
+        snapshot = dict(row)
+        try:
+            snapshot["urls"] = json.loads(snapshot.pop("urls_json") or "[]")
+        except (TypeError, ValueError):
+            snapshot["urls"] = []
+        return snapshot
 
     async def add_auto_translate_usage(
         self,

@@ -515,6 +515,12 @@ class ExpStreamManager:
             "urls": urls,
         }
         try:
+            await self.db.save_exp_radio_playlist_snapshot(
+                created_at=payload["created_at"],
+                source=source,
+                scheduled=scheduled,
+                urls=urls,
+            )
             await self.db.set_setting("exp_radio_last_playlist_snapshot", json.dumps(payload))
             if scheduled:
                 await self.db.set_setting("exp_radio_last_scheduled_playlist_snapshot", json.dumps(payload))
