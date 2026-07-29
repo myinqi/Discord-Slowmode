@@ -385,6 +385,9 @@ def create_app(db: Database, bot=None) -> Quart:
     def _player_discord_callback_url() -> str:
         return f"{_public_web_url()}/player/discord/callback"
 
+    def _public_player_discord_callback_url() -> str:
+        return f"{_public_web_url()}/public/player/discord/callback"
+
     async def _player_discord_oauth_credentials() -> tuple[str, str]:
         from config import Config
         client_id = (
@@ -728,6 +731,7 @@ def create_app(db: Database, bot=None) -> Quart:
                                      player_discord_client_id=player_discord_client_id,
                                      player_discord_secret_configured=player_discord_secret_configured,
                                      player_discord_callback_url=_player_discord_callback_url(),
+                                     public_player_discord_callback_url=_public_player_discord_callback_url(),
                                      all_text_channels=all_text_channels,
                                      monitored_channels=monitored,
                                      available_output_channels=available_output_channels,
@@ -1884,7 +1888,150 @@ def create_app(db: Database, bot=None) -> Quart:
     # --- Public player (no login required) ---
     @app.route("/public/player")
     async def player_public():
-        return await render_template("player_public.html", channels=await _get_player_channels())
+        client_id, client_secret = await _player_discord_oauth_credentials()
+        return await render_template(
+            "player_public.html",
+            channels=await _get_player_channels(),
+            discord_connection=session.get("public_player_discord"),
+            discord_oauth_ready=bool(client_id and client_secret),
+        )
+
+    @app.route("/public/player/discord/connect")
+    async def public_player_discord_connect():
+        client_id, client_secret = await _player_discord_oauth_credentials()
+        if not client_id or not client_secret:
+            await flash("Discord connection is not configured yet.", "error")
+            return redirect(url_for("player_public"))
+
+        state = secrets.token_urlsafe(32)
+        session["public_player_discord_oauth_state"] = state
+        query = urlencode({
+            "client_id": client_id,
+            "response_type": "code",
+            "redirect_uri": _public_player_discord_callback_url(),
+            "scope": "identify",
+            "state": state,
+            "prompt": "consent",
+        })
+        return redirect(f"https://discord.com/oauth2/authorize?{query}")
+
+    @app.route("/public/player/discord/callback")
+    async def public_player_discord_callback():
+        expected_state = session.pop("public_player_discord_oauth_state", "")
+        returned_state = request.args.get("state", "")
+        if not expected_state or not secrets.compare_digest(expected_state, returned_state):
+            await flash("Discord connection failed: invalid OAuth2 state.", "error")
+            return redirect(url_for("player_public"))
+        if request.args.get("error"):
+            await flash("Discord connection was cancelled.", "error")
+            return redirect(url_for("player_public"))
+
+        code = request.args.get("code", "")
+        client_id, client_secret = await _player_discord_oauth_credentials()
+        if not code or not client_id or not client_secret:
+            await flash("Discord connection failed: incomplete OAuth2 response.", "error")
+            return redirect(url_for("player_public"))
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=15)
+            async with aiohttp.ClientSession(timeout=timeout) as http:
+                async with http.post(
+                    "https://discord.com/api/v10/oauth2/token",
+                    data={
+                        "client_id": client_id,
+                        "client_secret": client_secret,
+                        "grant_type": "authorization_code",
+                        "code": code,
+                        "redirect_uri": _public_player_discord_callback_url(),
+                    },
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                ) as token_response:
+                    token_body = await token_response.text()
+                    try:
+                        import json
+                        token_data = json.loads(token_body)
+                    except (TypeError, ValueError):
+                        token_data = {}
+                    if token_response.status != 200:
+                        error_code = token_data.get("error") or "unknown_error"
+                        error_description = (
+                            token_data.get("error_description")
+                            or token_data.get("message")
+                            or token_body[:200]
+                            or "Discord returned an empty response"
+                        )
+                        raise RuntimeError(
+                            f"token exchange HTTP {token_response.status}: "
+                            f"{error_code}: {error_description}"
+                        )
+
+                access_token = token_data.get("access_token", "")
+                async with http.get(
+                    "https://discord.com/api/v10/users/@me",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                ) as user_response:
+                    user_data = await user_response.json(content_type=None)
+                    if user_response.status != 200:
+                        raise RuntimeError(
+                            user_data.get("message") or "Discord user lookup failed"
+                        )
+        except Exception as exc:
+            print(f"[public-player-oauth] Discord connection failed: {exc}", flush=True)
+            await flash(
+                "Discord rejected the connection. Please try again.",
+                "error",
+            )
+            return redirect(url_for("player_public"))
+
+        discord_user_id = int(user_data["id"])
+        guild = get_guild()
+        member = guild.get_member(discord_user_id) if guild else None
+        if guild and member is None:
+            try:
+                member = await guild.fetch_member(discord_user_id)
+            except Exception:
+                member = None
+        if member is None:
+            await flash(
+                "Discord connection failed: your account is not a member of this server.",
+                "error",
+            )
+            return redirect(url_for("player_public"))
+
+        display_name = re.sub(
+            r"\s+",
+            " ",
+            member.display_name or user_data.get("global_name") or user_data["username"],
+        ).strip()
+        avatar_url = str(member.display_avatar.url) if member.display_avatar else ""
+        session["public_player_discord"] = {
+            "discord_user_id": str(discord_user_id),
+            "discord_username": user_data["username"],
+            "discord_display_name": display_name,
+            "discord_avatar": avatar_url,
+        }
+        await db.add_audit_log(
+            event_type="public_player_discord_connected",
+            user_id=discord_user_id,
+            user_name=display_name,
+            details="Connected through the public Suno Player",
+            actor="public-player",
+        )
+        await flash(f"Discord connected as {display_name}.", "success")
+        return redirect(url_for("player_public"))
+
+    @app.route("/public/player/discord/disconnect", methods=["POST"])
+    async def public_player_discord_disconnect():
+        connection = session.pop("public_player_discord", None)
+        if connection:
+            await db.add_audit_log(
+                event_type="public_player_discord_disconnected",
+                user_id=int(connection["discord_user_id"]),
+                user_name=connection["discord_display_name"],
+                actor="public-player",
+            )
+        await flash("Discord account disconnected from the Player.", "success")
+        return redirect(url_for("player_public"))
 
     @app.route("/public/api/player-songs")
     async def api_player_songs_public():
@@ -2201,6 +2348,24 @@ def create_app(db: Database, bot=None) -> Quart:
             "emojis": emojis,
         })
 
+    @app.route("/public/api/player-discord-status")
+    async def api_public_player_discord_status():
+        from quart import jsonify
+
+        connection = session.get("public_player_discord")
+        emojis = []
+        message_id = request.args.get("message_id", "")
+        if connection and message_id.isdigit():
+            emojis = await db.get_public_player_user_reactions(
+                int(message_id), int(connection["discord_user_id"])
+            )
+        return jsonify({
+            "connected": bool(connection),
+            "display_name": connection.get("discord_display_name") if connection else None,
+            "avatar_url": connection.get("discord_avatar") if connection else None,
+            "emojis": emojis,
+        })
+
     @app.route("/api/player-songs")
     @permission_required('player')
     async def api_player_songs():
@@ -2292,6 +2457,57 @@ def create_app(db: Database, bot=None) -> Quart:
                 "mode": "bot",
                 "active": True,
                 "discord": discord_ok,
+            })
+
+    @app.route("/public/api/player-react", methods=["POST"])
+    async def api_public_player_react():
+        from quart import jsonify
+
+        connection = session.get("public_player_discord")
+        if not connection:
+            return jsonify({"error": "Connect Discord to use reactions"}), 401
+
+        data = await request.get_json(silent=True) or {}
+        message_id = str(data.get("message_id") or "")
+        emoji = data.get("emoji", "")
+        if not message_id.isdigit() or emoji not in PLAYER_REACTION_EMOJIS:
+            return jsonify({"error": "Missing message_id or emoji"}), 400
+
+        message_id_int = int(message_id)
+        song_post = await db.get_song_post_by_message_id(message_id_int)
+        if not song_post:
+            return jsonify({"error": "Unknown song message"}), 404
+
+        lock = app.player_reaction_locks.setdefault(message_id_int, asyncio.Lock())
+        async with lock:
+            discord_user_id = int(connection["discord_user_id"])
+            display_name = connection["discord_display_name"]
+            added = await db.toggle_public_player_song_reaction(
+                message_id=message_id_int,
+                channel_id=int(song_post["channel_id"]),
+                discord_user_id=discord_user_id,
+                discord_display_name=display_name,
+                emoji=emoji,
+            )
+            if added:
+                await db.add_song_reaction(
+                    message_id=message_id_int,
+                    channel_id=int(song_post["channel_id"]),
+                    song_url=song_post["url"],
+                    post_author_id=int(song_post["user_id"]),
+                    reactor_user_id=discord_user_id,
+                    reactor_user_name=display_name,
+                    emoji=emoji,
+                    song_title=song_post.get("song_title"),
+                )
+            thread_ok, thread_error = await _update_player_reaction_summary(song_post)
+            if not thread_ok:
+                print(f"[public-player-react] {thread_error}", flush=True)
+            return jsonify({
+                "ok": True,
+                "active": added,
+                "thread": thread_ok,
+                "warning": thread_error,
             })
 
     @app.route("/api/suno-resolve/<short_id>")

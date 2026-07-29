@@ -248,6 +248,16 @@ class Database:
                 FOREIGN KEY (web_user_id) REFERENCES web_users(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS public_player_song_reactions (
+                message_id INTEGER NOT NULL,
+                channel_id INTEGER NOT NULL,
+                discord_user_id INTEGER NOT NULL,
+                discord_display_name TEXT NOT NULL,
+                emoji TEXT NOT NULL,
+                reacted_at REAL DEFAULT (unixepoch()),
+                PRIMARY KEY (message_id, discord_user_id, emoji)
+            );
+
             CREATE TABLE IF NOT EXISTS player_reaction_threads (
                 message_id INTEGER PRIMARY KEY,
                 channel_id INTEGER NOT NULL,
@@ -259,6 +269,8 @@ class Database:
 
             CREATE INDEX IF NOT EXISTS idx_player_song_reactions_message
                 ON player_song_reactions(message_id, reacted_at);
+            CREATE INDEX IF NOT EXISTS idx_public_player_song_reactions_message
+                ON public_player_song_reactions(message_id, reacted_at);
         """)
         await self.db.commit()
 
@@ -1861,12 +1873,21 @@ class Database:
     async def get_player_song_reactions(self, message_id: int) -> list[dict]:
         async with self.db.execute(
             """
-            SELECT discord_user_id, discord_display_name, emoji, reacted_at
-            FROM player_song_reactions
-            WHERE message_id = ?
+            SELECT discord_user_id, MAX(discord_display_name) AS discord_display_name,
+                   emoji, MAX(reacted_at) AS reacted_at
+            FROM (
+                SELECT discord_user_id, discord_display_name, emoji, reacted_at
+                FROM player_song_reactions
+                WHERE message_id = ?
+                UNION ALL
+                SELECT discord_user_id, discord_display_name, emoji, reacted_at
+                FROM public_player_song_reactions
+                WHERE message_id = ?
+            )
+            GROUP BY discord_user_id, emoji
             ORDER BY reacted_at, discord_display_name COLLATE NOCASE
             """,
-            (message_id,),
+            (message_id, message_id),
         ) as cursor:
             return [dict(row) for row in await cursor.fetchall()]
 
@@ -1876,6 +1897,65 @@ class Database:
         async with self.db.execute(
             """
             SELECT emoji FROM player_song_reactions
+            WHERE message_id = ? AND discord_user_id = ?
+            ORDER BY reacted_at
+            """,
+            (message_id, discord_user_id),
+        ) as cursor:
+            return [row[0] for row in await cursor.fetchall()]
+
+    async def toggle_public_player_song_reaction(
+        self,
+        message_id: int,
+        channel_id: int,
+        discord_user_id: int,
+        discord_display_name: str,
+        emoji: str,
+    ) -> bool:
+        """Toggle a public Player reaction and return True when added."""
+        async with self.db.execute(
+            """
+            SELECT 1 FROM public_player_song_reactions
+            WHERE message_id = ? AND discord_user_id = ? AND emoji = ?
+            """,
+            (message_id, discord_user_id, emoji),
+        ) as cursor:
+            exists = await cursor.fetchone()
+        if exists:
+            await self.db.execute(
+                """
+                DELETE FROM public_player_song_reactions
+                WHERE message_id = ? AND discord_user_id = ? AND emoji = ?
+                """,
+                (message_id, discord_user_id, emoji),
+            )
+            await self.db.commit()
+            return False
+
+        await self.db.execute(
+            """
+            INSERT INTO public_player_song_reactions
+                (message_id, channel_id, discord_user_id,
+                 discord_display_name, emoji)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                message_id,
+                channel_id,
+                discord_user_id,
+                discord_display_name,
+                emoji,
+            ),
+        )
+        await self.db.commit()
+        return True
+
+    async def get_public_player_user_reactions(
+        self, message_id: int, discord_user_id: int
+    ) -> list[str]:
+        async with self.db.execute(
+            """
+            SELECT emoji FROM public_player_song_reactions
             WHERE message_id = ? AND discord_user_id = ?
             ORDER BY reacted_at
             """,

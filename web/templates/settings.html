@@ -89,10 +89,15 @@
                     </div>
                 </div>
                 <div class="mt-4">
-                    <label class="block text-sm font-medium text-gray-300 mb-1">OAuth2 Redirect URL</label>
+                    <label class="block text-sm font-medium text-gray-300 mb-1">Admin Player OAuth2 Redirect URL</label>
                     <input type="text" value="{{ player_discord_callback_url }}" readonly
                         class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-gray-400 font-mono text-sm">
-                    <p class="text-xs text-gray-500 mt-1">Add this exact URL to the OAuth2 Redirects of the same Discord application as Corax.</p>
+                </div>
+                <div class="mt-4">
+                    <label class="block text-sm font-medium text-gray-300 mb-1">Public Player OAuth2 Redirect URL</label>
+                    <input type="text" value="{{ public_player_discord_callback_url }}" readonly
+                        class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-gray-400 font-mono text-sm">
+                    <p class="text-xs text-gray-500 mt-1">Add both exact URLs to the OAuth2 Redirects of the same Discord application as Corax.</p>
                 </div>
             </div>
             <div>
