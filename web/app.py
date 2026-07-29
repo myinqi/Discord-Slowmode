@@ -1735,7 +1735,7 @@ def create_app(db: Database, bot=None) -> Quart:
         )
 
     @app.route("/player/discord/connect")
-    @permission_required('player')
+    @login_required
     async def player_discord_connect():
         client_id, client_secret = await _player_discord_oauth_credentials()
         if not client_id or not client_secret:
@@ -1745,6 +1745,11 @@ def create_app(db: Database, bot=None) -> Quart:
             )
             return redirect(url_for("player"))
 
+        oauth_return = request.args.get("return", "")
+        if oauth_return == "suno_info":
+            session["player_discord_oauth_return"] = "suno_info"
+        else:
+            session.pop("player_discord_oauth_return", None)
         state = secrets.token_urlsafe(32)
         session["player_discord_oauth_state"] = state
         query = urlencode({
@@ -1758,22 +1763,26 @@ def create_app(db: Database, bot=None) -> Quart:
         return redirect(f"https://discord.com/oauth2/authorize?{query}")
 
     @app.route("/player/discord/callback")
-    @permission_required('player')
+    @login_required
     async def player_discord_callback():
+        return_endpoint = session.pop("player_discord_oauth_return", "player")
+        return_target = url_for(
+            "suno_info" if return_endpoint == "suno_info" else "player"
+        )
         expected_state = session.pop("player_discord_oauth_state", "")
         returned_state = request.args.get("state", "")
         if not expected_state or not secrets.compare_digest(expected_state, returned_state):
             await flash("Discord connection failed: invalid OAuth2 state.", "error")
-            return redirect(url_for("player"))
+            return redirect(return_target)
         if request.args.get("error"):
             await flash("Discord connection was cancelled.", "error")
-            return redirect(url_for("player"))
+            return redirect(return_target)
 
         code = request.args.get("code", "")
         client_id, client_secret = await _player_discord_oauth_credentials()
         if not code or not client_id or not client_secret:
             await flash("Discord connection failed: incomplete OAuth2 response.", "error")
-            return redirect(url_for("player"))
+            return redirect(return_target)
 
         try:
             timeout = aiohttp.ClientTimeout(total=15)
@@ -1823,7 +1832,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 "and OAuth2 redirect URL, then try again.",
                 "error",
             )
-            return redirect(url_for("player"))
+            return redirect(return_target)
 
         discord_user_id = int(user_data["id"])
         guild = get_guild()
@@ -1838,7 +1847,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 "Discord connection failed: your account is not a member of this server.",
                 "error",
             )
-            return redirect(url_for("player"))
+            return redirect(return_target)
 
         display_name = re.sub(
             r"\s+",
@@ -1858,7 +1867,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 "This Discord account is already connected to another web user.",
                 "error",
             )
-            return redirect(url_for("player"))
+            return redirect(return_target)
 
         await db.add_audit_log(
             event_type="player_discord_connected",
@@ -1868,11 +1877,13 @@ def create_app(db: Database, bot=None) -> Quart:
             actor=session.get("username", "unknown"),
         )
         await flash(f"Discord connected as {display_name}.", "success")
-        return redirect(url_for("player"))
+        return redirect(return_target)
 
     @app.route("/player/discord/disconnect", methods=["POST"])
-    @permission_required('player')
+    @login_required
     async def player_discord_disconnect():
+        form = await request.form
+        return_endpoint = form.get("return", "")
         connection = await db.get_player_discord_connection(session["user_id"])
         await db.unlink_player_discord_account(session["user_id"])
         if connection:
@@ -1883,7 +1894,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 actor=session.get("username", "unknown"),
             )
         await flash("Discord account disconnected from the Player.", "success")
-        return redirect(url_for("player"))
+        return redirect(url_for("suno_info" if return_endpoint == "suno_info" else "player"))
 
     # --- Public player (no login required) ---
     @app.route("/public/player")
@@ -8249,8 +8260,80 @@ def create_app(db: Database, bot=None) -> Quart:
         try: _perms = _json.loads(_user.get("permissions") or "[]")
         except (ValueError, TypeError): pass
         has_party = bool(_user.get("is_admin")) or "party_playlist" in _perms
+        discord_connection = await db.get_player_discord_connection(session["user_id"])
+        client_id, client_secret = await _player_discord_oauth_credentials()
         return await render_template("suno_info.html",
-            channels=await _get_player_channels(), has_party=has_party)
+            channels=await _get_player_channels(), has_party=has_party,
+            discord_connection=discord_connection,
+            discord_oauth_ready=bool(client_id and client_secret))
+
+    @app.route("/api/suno-info/player-discord-status")
+    @permission_required('suno_info')
+    async def api_suno_info_player_discord_status():
+        from quart import jsonify
+
+        connection = await db.get_player_discord_connection(session["user_id"])
+        message_id = request.args.get("message_id", "")
+        emojis = []
+        if connection and message_id.isdigit():
+            emojis = await db.get_player_user_reactions(
+                int(message_id), int(connection["discord_user_id"])
+            )
+        return jsonify({
+            "connected": bool(connection),
+            "emojis": emojis,
+        })
+
+    @app.route("/api/suno-info/player-react", methods=["POST"])
+    @permission_required('suno_info')
+    async def api_suno_info_player_react():
+        from quart import jsonify
+
+        connection = await db.get_player_discord_connection(session["user_id"])
+        if not connection:
+            return jsonify({"error": "Connect Discord to use reactions"}), 401
+
+        data = await request.get_json(silent=True) or {}
+        message_id = str(data.get("message_id") or "")
+        emoji = data.get("emoji", "")
+        if not message_id.isdigit() or emoji not in PLAYER_REACTION_EMOJIS:
+            return jsonify({"error": "Missing message_id or emoji"}), 400
+
+        message_id_int = int(message_id)
+        song_post = await db.get_song_post_by_message_id(message_id_int)
+        if not song_post:
+            return jsonify({"error": "Unknown song message"}), 404
+
+        lock = app.player_reaction_locks.setdefault(message_id_int, asyncio.Lock())
+        async with lock:
+            added = await db.toggle_player_song_reaction(
+                message_id=message_id_int,
+                channel_id=int(song_post["channel_id"]),
+                web_user_id=session["user_id"],
+                discord_user_id=int(connection["discord_user_id"]),
+                discord_display_name=connection["discord_display_name"],
+                emoji=emoji,
+            )
+            if added:
+                await db.add_song_reaction(
+                    message_id=message_id_int,
+                    channel_id=int(song_post["channel_id"]),
+                    song_url=song_post["url"],
+                    post_author_id=int(song_post["user_id"]),
+                    reactor_user_id=int(connection["discord_user_id"]),
+                    reactor_user_name=connection["discord_display_name"],
+                    emoji=emoji,
+                    song_title=song_post.get("song_title"),
+                )
+            thread_ok, thread_error = await _update_player_reaction_summary(song_post)
+            if not thread_ok:
+                print(f"[suno-info-player-react] {thread_error}", flush=True)
+            return jsonify({
+                "ok": True,
+                "active": added,
+                "thread": thread_ok,
+                "warning": thread_error,
+            })
 
     @app.route("/api/suno-info/playlist")
     @permission_required('suno_info')

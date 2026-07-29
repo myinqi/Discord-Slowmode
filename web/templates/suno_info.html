@@ -64,6 +64,18 @@
     .si-seek-track{flex:1;height:4px;background:#2a2a2e;border-radius:2px;cursor:pointer;position:relative}
     .si-seek-fill{height:100%;background:#5561e4;border-radius:2px;width:0%}
     .si-vol{width:80px;accent-color:#5561e4}
+    .si-discord-link{display:flex;align-items:center;gap:8px;padding-top:8px;border-top:1px solid #2a2a2e;color:#999;font-size:12px}
+    .si-discord-link img{width:26px;height:26px;border-radius:50%;object-fit:cover;background:#222}
+    .si-discord-name{color:#ddd;font-weight:600}
+    .si-discord-action{margin-left:auto;padding:5px 10px;border:1px solid #45405f;border-radius:6px;background:#242033;color:#ddd;font-size:11px;cursor:pointer;text-decoration:none}
+    .si-discord-action:hover{border-color:#6d5cae;color:#fff}
+    .si-discord-action:disabled{opacity:.45;cursor:not-allowed}
+    .si-react-row{display:none;align-items:center;gap:6px;margin-top:9px;padding-top:9px;border-top:1px solid #2a2a2e;flex-wrap:wrap}
+    .si-react-label{color:#777;font-size:11px;margin-right:2px}
+    .si-react-btn{width:34px;height:32px;border:1px solid #34303f;border-radius:16px;background:#19181e;color:#eee;cursor:pointer;font-size:17px;line-height:1;transition:background .15s,border-color .15s,transform .1s}
+    .si-react-btn:hover{border-color:#6d5cae;background:#29223e;transform:translateY(-1px)}
+    .si-react-btn.reacted{border-color:#7c5cff;background:#352663;box-shadow:0 0 0 1px rgba(124,92,255,.25)}
+    .si-react-btn:disabled{opacity:.45;cursor:wait;transform:none}
 
     /* Detail tabs */
     .si-tabs{display:flex;gap:2px;margin-top:12px;border-bottom:1px solid #2a2a2e}
@@ -320,6 +332,24 @@
                         <option value="">All artists</option>
                     </select>
                 </div>
+                <div class="si-discord-link">
+                    {% if discord_connection %}
+                    {% if discord_connection.discord_avatar %}
+                    <img src="{{ discord_connection.discord_avatar }}" alt="">
+                    {% endif %}
+                    <span>Discord: <span class="si-discord-name">{{ discord_connection.discord_display_name }}</span></span>
+                    <form method="post" action="{{ url_for('player_discord_disconnect') }}" class="ml-auto">
+                        <input type="hidden" name="return" value="suno_info">
+                        <button type="submit" class="si-discord-action">Disconnect</button>
+                    </form>
+                    {% elif discord_oauth_ready %}
+                    <span>Connect Discord to react as yourself.</span>
+                    <a href="{{ url_for('player_discord_connect', return='suno_info') }}" class="si-discord-action">Connect Discord</a>
+                    {% else %}
+                    <span>Discord reactions are not configured.</span>
+                    <button type="button" class="si-discord-action" disabled>Not configured</button>
+                    {% endif %}
+                </div>
             </div>
         </div>
         <div class="bg-discord-dark rounded-xl border border-gray-700/50 p-4 si-songs-card">
@@ -442,6 +472,15 @@
                     <span>Stop after current</span>
                 </label>
             </div>
+            {% if discord_connection %}
+            <div id="si-react-row" class="si-react-row" aria-label="Discord reactions">
+                <span class="si-react-label">React as {{ discord_connection.discord_display_name }}:</span>
+                {% for emoji in ['💜', '💯', '👏🏻', '❤️‍🔥', '🫶🏻', '🔥', '👍🏻', '🥰'] %}
+                <button type="button" class="si-react-btn" data-emoji="{{ emoji }}"
+                    onclick="reactToChannelSong(this)" title="React with {{ emoji }}">{{ emoji }}</button>
+                {% endfor %}
+            </div>
+            {% endif %}
         </div>
 
         <!-- Tabs Pane (unten, flex:1) -->
@@ -584,6 +623,8 @@ var SHUFFLE_ORDER = [];   // shuffled SONGS indices
 var PLAYED_SET = new Set(); // indices of played songs
 var HIDE_PLAYED = false;  // hide played songs from table
 var ARTIST_FILTER = '';   // artist name filter (channel mode only)
+var CURRENT_SOURCE = 'playlist';
+var REACTION_STATE_REQUEST = 0;
 var HAS_PARTY = {{ 'true' if has_party else 'false' }};
 var audio = document.getElementById('audio');
 var LY_TEXT = '';         // raw lyrics for the current song (for theater mode)
@@ -607,6 +648,7 @@ var hlsPlayer = null;
 var PARTY_SONGS = [];   // raw party playlist entries from DB
 var PARTY_FILTER = 'all'; // 'all' | 'remaining' | 'heard'
 function switchSource(src){
+    CURRENT_SOURCE = src;
     var on = 'px-3 py-1 rounded-md font-medium transition-colors text-xs bg-discord-blurple text-white';
     var off = 'px-3 py-1 rounded-md font-medium transition-colors text-xs bg-transparent text-gray-400 hover:text-white';
     document.getElementById('src-playlist-row').style.display  = src==='playlist' ? '' : 'none';
@@ -622,7 +664,65 @@ function switchSource(src){
     document.getElementById('party-tabs').style.display    = isParty ? '' : 'none';
     if(!isParty){ ARTIST_FILTER=''; var sel=document.getElementById('dc-artist'); if(sel) sel.value=''; }
     if(isParty) loadPartyPlaylist();
+    updateSunoInfoReactionVisibility(CUR >= 0 ? SONGS[CUR] : null);
     try { localStorage.setItem('suno-info-source', src); } catch(e){}
+}
+
+function updateSunoInfoReactionVisibility(song){
+    var row = document.getElementById('si-react-row');
+    if(!row) return;
+    var meta = song && song._dc_meta;
+    var visible = CURRENT_SOURCE === 'channel' && meta && meta.messageId;
+    row.style.display = visible ? 'flex' : 'none';
+    row.querySelectorAll('.si-react-btn').forEach(function(btn){
+        btn.classList.remove('reacted');
+        btn.disabled = false;
+    });
+    if(visible) loadSunoInfoReactionState(meta.messageId);
+}
+
+async function loadSunoInfoReactionState(messageId){
+    var requestId = ++REACTION_STATE_REQUEST;
+    try {
+        var r = await fetch('/api/suno-info/player-discord-status?message_id=' + encodeURIComponent(messageId));
+        if(!r.ok) return;
+        var data = await r.json();
+        if(requestId !== REACTION_STATE_REQUEST) return;
+        if(CURRENT_SOURCE !== 'channel' || CUR < 0 ||
+           !SONGS[CUR]._dc_meta || String(SONGS[CUR]._dc_meta.messageId) !== String(messageId)) return;
+        var active = new Set(data.emojis || []);
+        document.querySelectorAll('#si-react-row .si-react-btn').forEach(function(btn){
+            btn.classList.toggle('reacted', active.has(btn.dataset.emoji));
+        });
+    } catch(e){}
+}
+
+async function reactToChannelSong(btn){
+    if(CURRENT_SOURCE !== 'channel' || CUR < 0) return;
+    var song = SONGS[CUR];
+    var meta = song && song._dc_meta;
+    if(!meta || !meta.messageId){
+        setStatus('No Discord message is available for this song.');
+        return;
+    }
+    var emoji = btn.dataset.emoji;
+    REACTION_STATE_REQUEST++;
+    btn.disabled = true;
+    try {
+        var r = await fetch('/api/suno-info/player-react', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({message_id: meta.messageId, emoji: emoji})
+        });
+        var data = await r.json();
+        if(!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+        btn.classList.toggle('reacted', !!data.active);
+        setStatus(data.warning ? 'Reaction saved; Discord thread update failed.' : 'Reaction saved.');
+    } catch(e){
+        setStatus('Reaction failed: ' + e.message);
+    } finally {
+        btn.disabled = false;
+    }
 }
 {% if has_party %}
 document.getElementById('btn-reload-party').onclick = loadPartyPlaylist;
@@ -1169,6 +1269,7 @@ async function loadFromChannel(){
             : '— Discord';
         setStatus(SONGS.length + ' loaded');
         CUR = -1; PLAYED_SET.clear();
+        updateSunoInfoReactionVisibility(null);
         if(SHUFFLE) buildShuffle();
         updateArtistOptions();
         renderTable();
@@ -1399,6 +1500,7 @@ async function playIndex(i){
     if(i<0 || i>=SONGS.length) return;
     CUR = i;
     var s = SONGS[i];
+    updateSunoInfoReactionVisibility(s);
     // Highlight row + scroll into view if it's outside the visible area.
     var activeTr = null;
     document.querySelectorAll('#songs-tbody tr').forEach(function(tr,idx){
