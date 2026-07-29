@@ -2214,11 +2214,11 @@ def create_app(db: Database, bot=None) -> Quart:
                 linked_thread = getattr(notice, "thread", None)
                 if linked_thread is not None and linked_thread.id != thread.id:
                     continue
-                await notice.delete(reason="Hide Suno Player reaction thread notice")
+                await notice.delete()
                 return
         except (discord.Forbidden, discord.NotFound):
             pass
-        except discord.HTTPException as exc:
+        except Exception as exc:
             print(f"[player-react] Could not remove thread notice: {exc}", flush=True)
 
     async def _update_player_reaction_summary(song_post: dict) -> tuple[bool, str | None]:
