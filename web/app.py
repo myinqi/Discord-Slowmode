@@ -2045,7 +2045,34 @@ def create_app(db: Database, bot=None) -> Quart:
                 pass
         return jsonify({"missing": [str(m) for m in missing], "ok": True})
 
-    PLAYER_REACTION_EMOJIS = ("💜", "💯", "👏🏻", "❤️‍🔥", "🫶🏻", "🔥")
+    PLAYER_REACTION_EMOJIS = (
+        "💜", "💯", "👏🏻", "❤️‍🔥", "🫶🏻", "🔥", "👍🏻", "🥰"
+    )
+
+    async def _remove_player_thread_notice(channel, thread, created_after: float):
+        """Remove Discord's parent-channel notice for a Player reaction thread."""
+        import discord
+
+        # Discord creates the system message asynchronously, so give it a brief
+        # moment to appear in the parent channel history.
+        await asyncio.sleep(0.5)
+        try:
+            async for notice in channel.history(limit=15):
+                if notice.created_at.timestamp() + 2 < created_after:
+                    break
+                if notice.type != discord.MessageType.thread_created:
+                    continue
+                if not bot.user or notice.author.id != bot.user.id:
+                    continue
+                linked_thread = getattr(notice, "thread", None)
+                if linked_thread is not None and linked_thread.id != thread.id:
+                    continue
+                await notice.delete(reason="Hide Suno Player reaction thread notice")
+                return
+        except (discord.Forbidden, discord.NotFound):
+            pass
+        except discord.HTTPException as exc:
+            print(f"[player-react] Could not remove thread notice: {exc}", flush=True)
 
     async def _update_player_reaction_summary(song_post: dict) -> tuple[bool, str | None]:
         """Create/reuse the song thread and maintain its single summary message."""
@@ -2088,6 +2115,7 @@ def create_app(db: Database, bot=None) -> Quart:
         if thread is None:
             raw_title = (song_post.get("song_title") or "Song").strip()
             clean_title = re.sub(r"\s+", " ", raw_title)[:86]
+            thread_created_at = time.time()
             try:
                 thread = await starter.create_thread(
                     name=f"Reactions · {clean_title}",
@@ -2096,6 +2124,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 )
             except discord.HTTPException as exc:
                 return False, f"Could not create reaction thread: {exc}"
+            await _remove_player_thread_notice(channel, thread, thread_created_at)
 
         if thread.archived:
             try:
