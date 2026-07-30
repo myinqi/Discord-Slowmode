@@ -5728,6 +5728,10 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.set_setting("exp_radio_schedule_days", sched_days)
                 await db.set_setting("exp_radio_schedule_time", sched_time)
                 await db.set_setting("exp_radio_progress_overlay", progress_overlay_en)
+                disclaimer_enabled = "on" if form.get("exp_disclaimer_enabled") else "off"
+                disclaimer_text = (form.get("exp_disclaimer_text") or "").strip()[:2000]
+                await db.set_setting("exp_radio_disclaimer_enabled", disclaimer_enabled)
+                await db.set_setting("exp_radio_disclaimer_text", disclaimer_text)
                 await db.set_setting("exp_radio_ravenveil_early_boost", ravenveil_early_boost_en)
                 active_pl_v = form.get("exp_active_playlist", "submission")
                 if active_pl_v not in ("submission", "admin", "both"):
@@ -5948,6 +5952,8 @@ def create_app(db: Database, bot=None) -> Quart:
         exp_moderation_enabled  = await db.get_setting("exp_radio_moderation_enabled") or "off"
         exp_loop_mode           = await db.get_setting("exp_radio_loop_mode") or "reshuffle"
         exp_progress_overlay    = await db.get_setting("exp_radio_progress_overlay") or "off"
+        exp_disclaimer_enabled  = await db.get_setting("exp_radio_disclaimer_enabled") or "off"
+        exp_disclaimer_text     = await db.get_setting("exp_radio_disclaimer_text") or ""
         exp_ravenveil_early_boost = await db.get_setting("exp_radio_ravenveil_early_boost") or "off"
         exp_max_per_user        = int(await db.get_setting("exp_radio_max_per_user") or "4")
         exp_expiry_days         = int(await db.get_setting("exp_radio_expiry_days") or "14")
@@ -6056,6 +6062,8 @@ def create_app(db: Database, bot=None) -> Quart:
             exp_obs_overlay_fps=exp_obs_overlay_fps,
             exp_loop_rtmp_key=exp_loop_rtmp_key,
             exp_progress_overlay=exp_progress_overlay,
+            exp_disclaimer_enabled=exp_disclaimer_enabled,
+            exp_disclaimer_text=exp_disclaimer_text,
             exp_ravenveil_early_boost=exp_ravenveil_early_boost,
             exp_max_per_user=exp_max_per_user,
             exp_expiry_days=exp_expiry_days,

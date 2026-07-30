@@ -162,6 +162,21 @@
             </div>
             <div class="pt-2 border-t border-gray-700/50 space-y-2">
                 <label class="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" name="exp_disclaimer_enabled"
+                        {% if exp_disclaimer_enabled == 'on' %}checked{% endif %}
+                        class="w-4 h-4 accent-discord-blurple">
+                    <span class="text-white text-sm">Show persistent stream disclaimer</span>
+                </label>
+                <textarea name="exp_disclaimer_text" rows="4" maxlength="2000"
+                    placeholder="AI-generated music and visuals."
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm leading-relaxed resize-y focus:border-discord-blurple focus:outline-none">{{ exp_disclaimer_text }}</textarea>
+                <p class="text-gray-500 text-xs">
+                    Shown continuously in the bottom-right corner above the song progress line.
+                    Line breaks are preserved. Changes apply when the stream video is rebuilt.
+                </p>
+            </div>
+            <div class="pt-2 border-t border-gray-700/50 space-y-2">
+                <label class="flex items-center gap-2 cursor-pointer select-none">
                     <input type="checkbox" name="exp_ravenveil_early_boost"
                         {% if exp_ravenveil_early_boost == 'on' %}checked{% endif %}
                         class="w-4 h-4 accent-discord-blurple">

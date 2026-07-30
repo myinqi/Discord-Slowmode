@@ -759,6 +759,10 @@ class ExpStreamManager:
 
         # Build combined ASS (subtitles + NowPlaying title cards)
         show_progress = (await self.db.get_setting("exp_radio_progress_overlay") or "off") == "on"
+        disclaimer_enabled = (
+            (await self.db.get_setting("exp_radio_disclaimer_enabled") or "off") == "on"
+        )
+        disclaimer_text = (await self.db.get_setting("exp_radio_disclaimer_text") or "").strip()
         progress_total_count = len(songs)
         progress_index_offset = 0
         progress_extra_duration = 0.0
@@ -774,6 +778,8 @@ class ExpStreamManager:
             progress_total_count=progress_total_count,
             progress_index_offset=progress_index_offset,
             progress_extra_duration=progress_extra_duration,
+            disclaimer_enabled=disclaimer_enabled,
+            disclaimer_text=disclaimer_text,
         )
 
         total_dur = sum(s.get("duration") or 300 for s in songs)
@@ -1738,11 +1744,14 @@ class ExpStreamManager:
         progress_total_count: int | None = None,
         progress_index_offset: int = 0,
         progress_extra_duration: float = 0.0,
+        disclaimer_enabled: bool = False,
+        disclaimer_text: str = "",
     ) -> str | None:
         """Merge all per-song ASS files into one with time offsets.
         Adds a NowPlaying title card at the start of each song.
         When show_progress=True also adds a bottom-right card with
-        song duration and playlist position (e.g. '4:33  ·  Song 9/30')."""
+        song duration and playlist position (e.g. '4:33  ·  Song 9/30').
+        An enabled disclaimer remains visible above that progress line."""
         ass_dir = os.path.join(self.exp_radio_dir, "ass")
         out_path = os.path.join(self.exp_radio_dir, "_combined.ass")
 
@@ -1761,7 +1770,9 @@ class ExpStreamManager:
             "Style: NowPlaying,Arial,48,&H00E8C97A,&H000000FF,&H00000000,"
             "&HC8000000,0,0,0,0,100,100,0,0,1,1.5,0.8,7,20,20,14,1\n"
             "Style: Progress,Arial,34,&H00FFFFFF,&H000000FF,&H00000000,"
-            "&HA0000000,0,0,0,0,100,100,0,0,1,1.2,0.5,3,10,30,18,1\n\n"
+            "&HA0000000,0,0,0,0,100,100,0,0,1,1.2,0.5,3,10,30,18,1\n"
+            "Style: Disclaimer,Arial,28,&H00FFFFFF,&H000000FF,&H00000000,"
+            "&HA8000000,0,0,0,0,100,100,0,0,3,1.0,0,3,1050,30,72,1\n\n"
             "[Events]\n"
             "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
         )
@@ -1823,6 +1834,15 @@ class ExpStreamManager:
                         print(f"[exp-stream] ASS read error ({ass_fn}): {e}", flush=True)
 
             offset_cs += dur_cs
+
+        if disclaimer_enabled and disclaimer_text:
+            disclaimer = disclaimer_text.replace("\\", "\\\\")
+            disclaimer = disclaimer.replace("{", "\\{").replace("}", "\\}")
+            disclaimer = disclaimer.replace("\r\n", "\\N").replace("\r", "\\N").replace("\n", "\\N")
+            events.append(
+                f"Dialogue: 3,{_cs_to_ts(0)},{_cs_to_ts(offset_cs)},Disclaimer,,0,0,0,,"
+                f"{{\\fad(300,300)}}{disclaimer}"
+            )
 
         try:
             with open(out_path, "w", encoding="utf-8") as f:
