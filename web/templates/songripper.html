@@ -23,7 +23,15 @@
                 </button>
             </div>
             <div class="mt-5 pt-4 border-t border-gray-700/40">
-                <p class="text-gray-500 text-[11px] mb-2">Tesla-Coil Export · Mono · zweistufiges Rechtecksignal</p>
+                <p class="text-gray-500 text-[11px] mb-2">Tesla-Coil Export · Mono · Rechtecksignal mit Dead Zone</p>
+                <div class="flex items-center gap-3 mb-3">
+                    <label for="songripper-square-threshold" class="text-gray-500 text-[11px] whitespace-nowrap">Threshold</label>
+                    <input id="songripper-square-threshold" type="range" min="0" max="50" step="1" value="10"
+                        oninput="updateSongripperThresholdLabel()"
+                        class="flex-1 h-1 accent-gray-500 cursor-pointer">
+                    <span id="songripper-square-threshold-label" class="w-9 text-right text-gray-400 text-[11px] tabular-nums">10 %</span>
+                </div>
+                <p class="text-gray-600 text-[10px] mb-3">Darunter wird Stille ausgegeben, darüber ±80 % Pegel.</p>
                 <div class="flex flex-col sm:flex-row gap-2">
                     <button type="button" id="songripper-square-wav-btn" onclick="downloadSongripperSquare('wav')" disabled
                         class="flex-1 px-3 py-1.5 border border-gray-700 hover:border-gray-600 disabled:opacity-40 text-gray-500 hover:text-gray-300 rounded-lg text-xs transition-colors">
@@ -85,6 +93,11 @@ function songripperStatus(text) {
 
 function songripperProgress(value) {
     document.getElementById('songripper-progress').style.width = `${value}%`;
+}
+
+function updateSongripperThresholdLabel() {
+    const value = Number(document.getElementById('songripper-square-threshold').value || 0);
+    document.getElementById('songripper-square-threshold-label').textContent = `${value} %`;
 }
 
 function songripperExtractId(raw) {
@@ -196,12 +209,14 @@ async function downloadSongripperSquare(format) {
         return;
     }
     const safeName = songripperSafeName();
+    const thresholdPercent = Number(document.getElementById('songripper-square-threshold').value || 0);
+    const threshold = Math.max(0, Math.min(50, thresholdPercent)) / 100;
     const btn = document.getElementById(`songripper-square-${format}-btn`);
     btn.disabled = true;
-    songripperStatus(`Square-${format.toUpperCase()} wird für die Teslaspule erzeugt...`);
+    songripperStatus(`Square-${format.toUpperCase()} wird erzeugt · Threshold ${thresholdPercent} %...`);
     try {
         const filename = `${safeName}_square-wave.${format}`;
-        const url = `/songripper/download-square?id=${encodeURIComponent(songripperAudioId)}&format=${encodeURIComponent(format)}&filename=${encodeURIComponent(filename)}`;
+        const url = `/songripper/download-square?id=${encodeURIComponent(songripperAudioId)}&format=${encodeURIComponent(format)}&threshold=${encodeURIComponent(threshold)}&filename=${encodeURIComponent(filename)}`;
         const resp = await fetch(url);
         if (!resp.ok) {
             const data = await resp.json().catch(() => ({}));

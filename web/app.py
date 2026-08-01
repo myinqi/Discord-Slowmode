@@ -7615,7 +7615,7 @@ def create_app(db: Database, bot=None) -> Quart:
     @app.route("/songripper/download-square")
     @permission_required('songripper')
     async def songripper_download_square():
-        """Convert Suno audio to a mono, two-level signal for audio interrupters."""
+        """Convert Suno audio to a mono square signal with a configurable dead zone."""
         from quart import Response, jsonify
         import aiohttp, re as _re, tempfile
 
@@ -7623,6 +7623,12 @@ def create_app(db: Database, bot=None) -> Quart:
         output_format = request.args.get("format", "wav").strip().lower()
         if output_format not in {"wav", "mp3"}:
             return jsonify({"error": "Format must be wav or mp3."}), 400
+        try:
+            threshold = float(request.args.get("threshold", "0.10"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "Threshold must be a number between 0 and 0.5."}), 400
+        if not 0.0 <= threshold <= 0.5:
+            return jsonify({"error": "Threshold must be between 0 and 0.5."}), 400
 
         filename = request.args.get("filename", "suno_song_square").strip()
         filename = _re.sub(r"[^a-zA-Z0-9_. -]+", "", filename).strip(" .") or "suno_song_square"
@@ -7663,10 +7669,16 @@ def create_app(db: Database, bot=None) -> Quart:
                     else:
                         return jsonify({"error": f"Audio not available from Suno ({last_status})."}), 502
 
-                # val(0) is first mixed to mono and then mapped strictly to
-                # either -0.8 or +0.8. WAV therefore contains a true two-level
-                # PCM signal; MP3 is provided only for controllers that require it.
-                square_filter = "aformat=channel_layouts=mono,aeval='if(gte(val(0),0),0.8,-0.8)':c=mono"
+                # First mix to mono. Samples inside the configurable dead zone
+                # become zero; all others become either -0.8 or +0.8. This keeps
+                # low-level noise from becoming a full-amplitude interrupter pulse.
+                threshold_text = f"{threshold:.4f}"
+                square_filter = (
+                    "aformat=channel_layouts=mono,"
+                    "aeval='if(lt(abs(val(0)),"
+                    + threshold_text
+                    + "),0,if(gte(val(0),0),0.8,-0.8))':c=mono"
+                )
                 codec_args = (
                     ["-c:a", "pcm_s16le"]
                     if output_format == "wav"
