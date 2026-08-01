@@ -4,7 +4,9 @@ import math
 import random
 import asyncio
 import io
+import os
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 import aiohttp
 import discord
@@ -23,6 +25,153 @@ DEFAULT_REACTION_EMOJIS = ["👍", "❤️", "🔥", "🎵"]
 BERLIN_TZ = ZoneInfo("Europe/Berlin")
 MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 DICE_FACES = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"]
+
+CARD_RARITY_COLORS = {
+    "Common": 0x95A5A6,
+    "Uncommon": 0x57F287,
+    "Rare": 0x3498DB,
+    "Epic": 0x9B59B6,
+    "Legendary": 0xF1C40F,
+}
+
+
+def _collectible_card_image_url(bot, card: dict) -> str | None:
+    filename = str(card.get("image_filename") or "").strip()
+    base_url = str(getattr(bot, "web_url", "") or "").rstrip("/")
+    if not filename or not base_url:
+        return None
+    return f"{base_url}/card-images/{quote(filename)}"
+
+
+def _collectible_card_embed(
+    bot,
+    card: dict,
+    *,
+    owner_name: str | None = None,
+    stats: dict | None = None,
+    page: int | None = None,
+    page_count: int | None = None,
+    draw_user: str | None = None,
+) -> discord.Embed:
+    rarity = card.get("rarity") or "Common"
+    if draw_user:
+        title = f"🃏 {draw_user} drew {card.get('name', 'Unknown Card')}!"
+    else:
+        title = card.get("name") or "Unknown Card"
+    subtitle = str(card.get("subtitle") or "").strip()
+    embed = discord.Embed(
+        title=title,
+        description=subtitle or None,
+        color=CARD_RARITY_COLORS.get(rarity, 0x5865F2),
+    )
+    meta = [f"**{rarity}**"]
+    if card.get("series"):
+        meta.append(str(card["series"]))
+    if card.get("card_number"):
+        meta.append(f"#{card['card_number']}")
+    if card.get("hero_type"):
+        meta.append(str(card["hero_type"]))
+    embed.add_field(name="Card", value=" · ".join(meta), inline=False)
+
+    stat_values = [
+        ("STR", card.get("strength")), ("AGI", card.get("agility")),
+        ("END", card.get("endurance")), ("CHA", card.get("charisma")),
+        ("LUCK", card.get("luck")), ("ATK", card.get("attack")),
+        ("DEF", card.get("defense")),
+    ]
+    if any(int(value or 0) for _, value in stat_values):
+        embed.add_field(
+            name="Stats",
+            value=" · ".join(f"**{label}** {int(value or 0)}" for label, value in stat_values),
+            inline=False,
+        )
+    if card.get("passive_name") or card.get("passive_text"):
+        embed.add_field(
+            name=f"Passive · {card.get('passive_name') or 'Ability'}",
+            value=str(card.get("passive_text") or "No description.")[:1024],
+            inline=False,
+        )
+    if card.get("special_name") or card.get("special_text"):
+        embed.add_field(
+            name=f"Special · {card.get('special_name') or 'Ability'}",
+            value=str(card.get("special_text") or "No description.")[:1024],
+            inline=False,
+        )
+    if card.get("bonus_text"):
+        embed.add_field(name="Bonus", value=str(card["bonus_text"])[:1024], inline=False)
+    if card.get("description"):
+        embed.add_field(name="Lore", value=str(card["description"])[:1024], inline=False)
+    if card.get("quote"):
+        embed.add_field(name="Quote", value=f"*{str(card['quote'])[:1000]}*", inline=False)
+
+    if card.get("quantity") is not None:
+        embed.add_field(name="Owned", value=f"**{int(card['quantity'])}×**", inline=True)
+    if stats:
+        embed.add_field(
+            name="Collection",
+            value=(
+                f"**{stats['unique_cards']} / {stats['available_cards']}** unique\n"
+                f"**{stats['total_cards']}** cards total"
+            ),
+            inline=True,
+        )
+    image_url = _collectible_card_image_url(bot, card)
+    if image_url:
+        embed.set_image(url=image_url)
+    footer = []
+    if owner_name:
+        footer.append(f"{owner_name}'s collection")
+    if page is not None and page_count:
+        footer.append(f"Card {page + 1} of {page_count}")
+    if footer:
+        embed.set_footer(text=" · ".join(footer))
+    return embed
+
+
+class CardCollectionView(discord.ui.View):
+    def __init__(self, bot, cards: list[dict], stats: dict, owner_name: str, viewer_id: int):
+        super().__init__(timeout=600)
+        self.bot = bot
+        self.cards = cards
+        self.stats = stats
+        self.owner_name = owner_name
+        self.viewer_id = viewer_id
+        self.index = 0
+        self._sync_buttons()
+
+    def _sync_buttons(self):
+        self.previous.disabled = self.index <= 0
+        self.next.disabled = self.index >= len(self.cards) - 1
+
+    def build_embed(self) -> discord.Embed:
+        return _collectible_card_embed(
+            self.bot,
+            self.cards[self.index],
+            owner_name=self.owner_name,
+            stats=self.stats,
+            page=self.index,
+            page_count=len(self.cards),
+        )
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.viewer_id:
+            await interaction.response.send_message(
+                "Only the person who opened this collection can browse it.", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(emoji="◀️", label="Previous", style=discord.ButtonStyle.secondary)
+    async def previous(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.index = max(0, self.index - 1)
+        self._sync_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    @discord.ui.button(emoji="▶️", label="Next", style=discord.ButtonStyle.secondary)
+    async def next(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.index = min(len(self.cards) - 1, self.index + 1)
+        self._sync_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
 
 def _dice_grid(value: int) -> str:
@@ -412,6 +561,7 @@ class UserSongsCarouselView(discord.ui.View):
 class CommandsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self._card_draw_lock = asyncio.Lock()
 
     async def _has_command_permission(self, interaction: discord.Interaction) -> bool:
         member = interaction.user
@@ -1740,6 +1890,78 @@ class CommandsCog(commands.Cog):
         embed.timestamp = discord.utils.utcnow()
         await interaction.response.send_message(embed=embed)
 
+    @app_commands.command(name="cards-draw", description="Draw your daily collectible card")
+    async def cards_draw(self, interaction: discord.Interaction):
+        draw_date = datetime.now(BERLIN_TZ).date().isoformat()
+        async with self._card_draw_lock:
+            card, already_drawn = await self.bot.db.draw_collectible_card(
+                user_id=interaction.user.id,
+                user_name=interaction.user.display_name,
+                draw_date=draw_date,
+            )
+
+        if not card:
+            await interaction.response.send_message(
+                "No collectible cards are currently available.", ephemeral=True
+            )
+            return
+        if already_drawn:
+            await interaction.response.send_message(
+                f"You already drew **{card['name']}** today. "
+                "Your next draw is available after midnight (Europe/Berlin).",
+                ephemeral=True,
+            )
+            return
+
+        collection = await self.bot.db.get_collectible_user_collection(interaction.user.id)
+        owned = next((entry for entry in collection if entry["id"] == card["id"]), None)
+        if owned:
+            card["quantity"] = owned["quantity"]
+        embed = _collectible_card_embed(
+            self.bot, card, draw_user=interaction.user.display_name
+        )
+        embed.set_footer(
+            text=f"Daily card draw · {card.get('rarity', 'Common')} · Owned {card.get('quantity', 1)}×"
+        )
+
+        kwargs = {"embed": embed}
+        if not _collectible_card_image_url(self.bot, card):
+            filename = os.path.basename(str(card.get("image_filename") or ""))
+            path = os.path.join(os.path.dirname(self.bot.db.db_path), "card_images", filename)
+            if filename and os.path.isfile(path) and os.path.getsize(path) <= 8 * 1024 * 1024:
+                file = discord.File(path, filename=filename)
+                embed.set_image(url=f"attachment://{filename}")
+                kwargs["file"] = file
+        await interaction.response.send_message(**kwargs)
+
+    @app_commands.command(name="cards-collection", description="Browse your or another member's card collection")
+    @app_commands.describe(user="Member whose collection you want to view (optional)")
+    async def cards_collection(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member | None = None,
+    ):
+        target = user or interaction.user
+        await interaction.response.defer(ephemeral=True)
+        cards = await self.bot.db.get_collectible_user_collection(target.id)
+        if not cards:
+            if target.id == interaction.user.id:
+                message = "Your collection is empty. Use `/cards-draw` to draw your first card."
+            else:
+                message = f"**{target.display_name}** has not collected any cards yet."
+            await interaction.followup.send(message, ephemeral=True)
+            return
+
+        stats = await self.bot.db.get_collectible_user_stats(target.id)
+        view = CardCollectionView(
+            self.bot,
+            cards,
+            stats,
+            target.display_name,
+            interaction.user.id,
+        )
+        await interaction.followup.send(embed=view.build_embed(), view=view, ephemeral=True)
+
     @app_commands.command(name="help", description="Show a list of all available commands")
     async def help_command(self, interaction: discord.Interaction):
         has_admin = await self._has_command_permission(interaction)
@@ -1817,6 +2039,15 @@ class CommandsCog(commands.Cog):
             "**`/help`** — Show this help message"
         )
         embed.add_field(name="🛠️ Utility & Fun", value=utility_cmds, inline=False)
+
+        embed.add_field(
+            name="🃏 Card Collection",
+            value=(
+                "**`/cards-draw`** — Draw one public collectible card each day\n"
+                "**`/cards-collection [@user]`** — Privately browse your or another member's collection"
+            ),
+            inline=False,
+        )
 
         # Context Menu (all users)
         embed.add_field(

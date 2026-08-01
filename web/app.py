@@ -191,6 +191,8 @@ def create_app(db: Database, bot=None) -> Quart:
     app.bot = bot
     branding_dir = os.path.join(os.path.dirname(db.db_path), "branding")
     os.makedirs(branding_dir, exist_ok=True)
+    card_image_dir = os.path.join(os.path.dirname(db.db_path), "card_images")
+    os.makedirs(card_image_dir, exist_ok=True)
     app.scan_status = {"running": False, "progress": "", "result": ""}
     app.title_scan_status = {"running": False, "progress": "", "result": ""}
     app.reaction_scan_status = {"running": False, "progress": "", "result": ""}
@@ -253,6 +255,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('llm', 'Corax Chat (LLM)'),
         ('relic_hunt', "Raven's Nest"),
         ('rpg', 'RPG Adventures'),
+        ('card_collection', 'Card Collection'),
     ]
 
     SIDEBAR_NAV_ITEMS = [
@@ -271,6 +274,7 @@ def create_app(db: Database, bot=None) -> Quart:
         {"key": "polls", "endpoint": "polls", "icon": "📊", "label": "Polls", "perm": "polls"},
         {"key": "quiz", "endpoint": "quiz_admin", "icon": "❓", "label": "Quiz", "perm": "quiz"},
         {"key": "rpg", "endpoint": "rpg_admin", "icon": "🎲", "label": "RPG", "perm": "rpg"},
+        {"key": "card_collection", "endpoint": "card_collection_admin", "icon": "🃏", "label": "Card Collection", "perm": "card_collection"},
         {"key": "radio", "endpoint": "radio_admin", "icon": "📻", "label": "Twitch", "perm": "radio"},
         {"key": "exp_radio", "endpoint": "exp_radio_admin", "icon": "🎙️", "label": "Exp. Radio", "perm": "exp_radio"},
         {"key": "submission_bans", "endpoint": "submission_bans", "icon": "⛔", "label": "Submission Bans", "perm": "submission_bans"},
@@ -302,6 +306,14 @@ def create_app(db: Database, bot=None) -> Quart:
     async def branding_asset(filename):
         from quart import send_from_directory
         return await send_from_directory(branding_dir, filename)
+
+    @app.route("/card-images/<filename>")
+    async def collectible_card_image(filename):
+        from quart import abort, send_from_directory
+        safe_name = os.path.basename(filename)
+        if safe_name != filename:
+            abort(404)
+        return await send_from_directory(card_image_dir, safe_name)
 
     @app.context_processor
     async def inject_sidebar_nav():
@@ -3780,6 +3792,161 @@ def create_app(db: Database, bot=None) -> Quart:
             guild_emojis=guild_emojis,
             entries=entries,
             bot_ready=bool(bot and bot.is_ready() and guild),
+        )
+
+    # --- Card Collection ---
+
+    @app.route("/card-collection", methods=["GET", "POST"])
+    @permission_required('card_collection')
+    async def card_collection_admin():
+        allowed_extensions = {"png", "jpg", "jpeg", "webp"}
+        allowed_rarities = {"Common", "Uncommon", "Rare", "Epic", "Legendary"}
+
+        def number_value(form, key, default=0, minimum=0, maximum=999):
+            try:
+                value = int(form.get(key, default))
+            except (TypeError, ValueError):
+                value = default
+            return max(minimum, min(maximum, value))
+
+        if request.method == "POST":
+            form = await request.form
+            action = form.get("action", "")
+            card_id_raw = form.get("card_id", "").strip()
+            card_id = int(card_id_raw) if card_id_raw.isdigit() else None
+
+            if action == "delete" and card_id:
+                filename = await db.delete_collectible_card(card_id)
+                if filename:
+                    path = os.path.join(card_image_dir, os.path.basename(filename))
+                    if os.path.isfile(path):
+                        os.remove(path)
+                    await db.add_audit_log(
+                        event_type="collectible_card_deleted",
+                        details=f"Card #{card_id} deleted",
+                        actor=session.get("username", "unknown"),
+                    )
+                    await flash("Card deleted.", "success")
+                return redirect(url_for("card_collection_admin"))
+
+            if action == "toggle" and card_id:
+                card = await db.get_collectible_card(card_id)
+                if card:
+                    active = 0 if card.get("active") else 1
+                    await db.save_collectible_card(card_id, active=active)
+                    await flash(
+                        f"Card {'activated' if active else 'deactivated'}.", "success"
+                    )
+                return redirect(url_for("card_collection_admin"))
+
+            if action == "save":
+                existing = await db.get_collectible_card(card_id) if card_id else None
+                if card_id and not existing:
+                    await flash("Card not found.", "error")
+                    return redirect(url_for("card_collection_admin"))
+
+                name = form.get("name", "").strip()[:100]
+                if not name:
+                    await flash("Card name is required.", "error")
+                    return redirect(url_for("card_collection_admin", edit=card_id or ""))
+
+                image_filename = existing.get("image_filename", "") if existing else ""
+                files = await request.files
+                image_file = files.get("image")
+                old_image = image_filename
+                if image_file and image_file.filename:
+                    import uuid
+                    original = image_file.filename.strip()
+                    ext = original.rsplit(".", 1)[-1].lower() if "." in original else ""
+                    if ext not in allowed_extensions:
+                        await flash("Use a PNG, JPEG or WebP card image.", "error")
+                        return redirect(url_for("card_collection_admin", edit=card_id or ""))
+                    stored_ext = "jpg" if ext == "jpeg" else ext
+                    image_filename = f"card_{uuid.uuid4().hex}.{stored_ext}"
+                    image_path = os.path.join(card_image_dir, image_filename)
+                    await image_file.save(image_path)
+                    try:
+                        if os.path.getsize(image_path) > 15 * 1024 * 1024:
+                            raise ValueError("Card image is larger than 15 MB.")
+                        with open(image_path, "rb") as handle:
+                            header = handle.read(16)
+                        valid = (
+                            (stored_ext == "png" and header.startswith(b"\x89PNG\r\n\x1a\n"))
+                            or (stored_ext == "jpg" and header.startswith(b"\xff\xd8\xff"))
+                            or (
+                                stored_ext == "webp"
+                                and header.startswith(b"RIFF")
+                                and header[8:12] == b"WEBP"
+                            )
+                        )
+                        if not valid:
+                            raise ValueError("The uploaded card image is invalid.")
+                    except (OSError, ValueError) as exc:
+                        if os.path.isfile(image_path):
+                            os.remove(image_path)
+                        await flash(str(exc), "error")
+                        return redirect(url_for("card_collection_admin", edit=card_id or ""))
+
+                if not image_filename:
+                    await flash("A card image is required.", "error")
+                    return redirect(url_for("card_collection_admin", edit=card_id or ""))
+
+                rarity = form.get("rarity", "Common")
+                if rarity not in allowed_rarities:
+                    rarity = "Common"
+                try:
+                    draw_weight = max(0.01, min(100000.0, float(form.get("draw_weight", "1"))))
+                except (TypeError, ValueError):
+                    draw_weight = 1.0
+
+                saved_id = await db.save_collectible_card(
+                    card_id,
+                    name=name,
+                    subtitle=form.get("subtitle", "").strip()[:200],
+                    description=form.get("description", "").strip()[:2000],
+                    quote=form.get("quote", "").strip()[:500],
+                    rarity=rarity,
+                    draw_weight=draw_weight,
+                    series=form.get("series", "").strip()[:100],
+                    card_number=form.get("card_number", "").strip()[:30],
+                    hero_type=form.get("hero_type", "").strip()[:100],
+                    strength=number_value(form, "strength"),
+                    agility=number_value(form, "agility"),
+                    endurance=number_value(form, "endurance"),
+                    charisma=number_value(form, "charisma"),
+                    luck=number_value(form, "luck"),
+                    attack=number_value(form, "attack"),
+                    defense=number_value(form, "defense"),
+                    passive_name=form.get("passive_name", "").strip()[:100],
+                    passive_text=form.get("passive_text", "").strip()[:1000],
+                    special_name=form.get("special_name", "").strip()[:100],
+                    special_text=form.get("special_text", "").strip()[:1000],
+                    bonus_text=form.get("bonus_text", "").strip()[:1000],
+                    image_filename=image_filename,
+                    active=1 if form.get("active") else 0,
+                )
+                if old_image and old_image != image_filename:
+                    old_path = os.path.join(card_image_dir, os.path.basename(old_image))
+                    if os.path.isfile(old_path):
+                        os.remove(old_path)
+                await db.add_audit_log(
+                    event_type="collectible_card_saved",
+                    details=f"Card #{saved_id}: {name}",
+                    actor=session.get("username", "unknown"),
+                )
+                await flash("Card saved.", "success")
+                return redirect(url_for("card_collection_admin", edit=saved_id))
+
+        cards = await db.get_collectible_cards(include_inactive=True)
+        edit_raw = request.args.get("edit", "").strip()
+        edit_card = (
+            await db.get_collectible_card(int(edit_raw)) if edit_raw.isdigit() else None
+        )
+        return await render_template(
+            "card_collection.html",
+            cards=cards,
+            edit_card=edit_card,
+            rarities=["Common", "Uncommon", "Rare", "Epic", "Legendary"],
         )
 
     # --- Image Posting ---
