@@ -10,6 +10,12 @@ import bcrypt
 import aiohttp
 from quart import Quart, render_template, request, redirect, url_for, session, flash
 from bot.database import Database
+from bot.exp_radio_files import (
+    cleanup_exp_radio_hook_files,
+    cleanup_exp_radio_song_files,
+    cleanup_orphan_exp_radio_hook_files,
+    exp_radio_hook_cache_path,
+)
 
 SUNO_URL_PATTERN = re.compile(r'https://suno\.com/(?:s|song)/[\w-]+')
 YOUTUBE_URL_RE   = re.compile(
@@ -5011,9 +5017,6 @@ def create_app(db: Database, bot=None) -> Quart:
                         for s in (exp_stream_manager.playlist or [])
                         if s.get("mp3_filename")
                     }
-                mp3_dir   = os.path.join(EXP_RADIO_DIR, "mp3")
-                ass_dir   = os.path.join(EXP_RADIO_DIR, "ass")
-                cover_dir = os.path.join(EXP_RADIO_DIR, "cover_cache")
                 removed_files = 0
                 for s in expired:
                     mp3_fn = s.get("mp3_filename")
@@ -5023,23 +5026,19 @@ def create_app(db: Database, bot=None) -> Quart:
                             f"— still in active stream playlist.", flush=True,
                         )
                         continue
-                    targets = []
-                    if mp3_fn:
-                        targets.append(os.path.join(mp3_dir, mp3_fn))
-                    ass_fn = s.get("ass_filename")
-                    if ass_fn:
-                        targets.append(os.path.join(ass_dir, ass_fn))
-                    uuid = s.get("suno_uuid")
-                    if uuid:
-                        for ext in (".jpg", ".mp4"):
-                            targets.append(os.path.join(cover_dir, f"{uuid}{ext}"))
-                    for p in targets:
-                        if os.path.exists(p):
-                            try:
-                                os.remove(p)
-                                removed_files += 1
-                            except Exception as e:
-                                print(f"[exp-radio] Could not remove {p}: {e}", flush=True)
+                    removed_files += cleanup_exp_radio_song_files(EXP_RADIO_DIR, s)
+
+                # Files retained while FFmpeg was using an expired song are
+                # collected on a later pass once that stream has ended.
+                inactive = await db.get_all_exp_radio_songs(active_only=False)
+                in_use_ids = {
+                    int(s.get("id")) for s in (exp_stream_manager.playlist or [])
+                    if exp_stream_manager.is_running and s.get("id")
+                }
+                for s in inactive:
+                    if s.get("active") or int(s.get("id") or 0) in in_use_ids:
+                        continue
+                    removed_files += cleanup_exp_radio_song_files(EXP_RADIO_DIR, s)
                 if removed_files:
                     print(f"[exp-radio] Removed {removed_files} expired file(s) from disk.", flush=True)
                 channel_id_str = (
@@ -5223,6 +5222,15 @@ def create_app(db: Database, bot=None) -> Quart:
 
     @app.before_serving
     async def start_cleanup_task():
+        active_exp_songs = await db.get_all_exp_radio_songs(active_only=True)
+        orphan_hooks = cleanup_orphan_exp_radio_hook_files(
+            EXP_RADIO_DIR, active_exp_songs
+        )
+        if orphan_hooks:
+            print(
+                f"[exp-radio] Startup cleanup removed {orphan_hooks} orphan Hook file(s).",
+                flush=True,
+            )
         app.radio_cleanup_task = asyncio.create_task(_radio_cleanup_loop())
         app.exp_radio_cleanup_task = asyncio.create_task(_exp_radio_cleanup_loop())
         app.exp_radio_schedule_task = asyncio.create_task(_exp_radio_schedule_loop())
@@ -5390,8 +5398,87 @@ def create_app(db: Database, bot=None) -> Quart:
 
             if action == "delete_song":
                 song_id = int(form.get("song_id", 0))
-                await db.delete_exp_radio_song(song_id)
-                await flash("Song removed.", "success")
+                removed = await db.delete_exp_radio_song(song_id)
+                if removed:
+                    cleanup_exp_radio_song_files(EXP_RADIO_DIR, removed)
+                    await flash("Song and cached media removed.", "success")
+                else:
+                    await flash("Song not found.", "error")
+
+            elif action == "set_hook_video":
+                import bot.exp_stream_manager as _esm
+                from bot.suno_hook import SunoHookError, resolve_suno_hook
+
+                song_id = int(form.get("song_id", 0) or 0)
+                hook_value = (form.get("hook_value") or "").strip()
+                song = await db.get_exp_radio_song(song_id) if song_id else None
+                if _esm.stream_is_live:
+                    await flash("Stop the stream before changing a Hook video.", "error")
+                elif not song or song.get("playlist_source") not in ("submission", "admin"):
+                    await flash("Song not found in the submission or admin playlist.", "error")
+                else:
+                    try:
+                        hook = await resolve_suno_hook(hook_value)
+                        if hook["original_clip_id"].lower() != str(song.get("suno_uuid") or "").lower():
+                            raise SunoHookError(
+                                "This Hook belongs to a different Suno song."
+                            )
+                        candidate = dict(song)
+                        candidate.update(hook)
+                        cached_path = await exp_stream_manager._get_video(
+                            candidate, allow_hook_fallback=False
+                        )
+                        if not cached_path or not os.path.exists(cached_path):
+                            raise SunoHookError("The Hook video could not be downloaded.")
+                        old_hook_id = (song.get("hook_id") or "").strip()
+                        await db.update_exp_radio_song(
+                            song_id,
+                            hook_id=hook["hook_id"],
+                            hook_share_url=hook["hook_share_url"],
+                            hook_video_url=hook["hook_video_url"],
+                        )
+                        if old_hook_id and old_hook_id != hook["hook_id"]:
+                            old_path = exp_radio_hook_cache_path(
+                                EXP_RADIO_DIR, song_id, old_hook_id
+                            )
+                            try:
+                                os.remove(old_path)
+                            except FileNotFoundError:
+                                pass
+                        await flash(
+                            f"Hook video set for “{song.get('title') or song_id}”.",
+                            "success",
+                        )
+                    except SunoHookError as exc:
+                        await flash(str(exc), "error")
+                    except Exception as exc:
+                        print(
+                            f"[exp-radio] Hook setup failed for song #{song_id}: {exc}",
+                            flush=True,
+                        )
+                        await flash("Hook setup failed. Check the server log.", "error")
+
+            elif action == "remove_hook_video":
+                import bot.exp_stream_manager as _esm
+
+                song_id = int(form.get("song_id", 0) or 0)
+                song = await db.get_exp_radio_song(song_id) if song_id else None
+                if _esm.stream_is_live:
+                    await flash("Stop the stream before removing a Hook video.", "error")
+                elif not song:
+                    await flash("Song not found.", "error")
+                else:
+                    await db.update_exp_radio_song(
+                        song_id,
+                        hook_id=None,
+                        hook_share_url=None,
+                        hook_video_url=None,
+                    )
+                    cleanup_exp_radio_hook_files(EXP_RADIO_DIR, song)
+                    await flash(
+                        f"Hook video removed from “{song.get('title') or song_id}”.",
+                        "success",
+                    )
 
             elif action == "add_intro_song":
                 suno_url = (form.get("suno_url") or "").strip()
@@ -5506,7 +5593,12 @@ def create_app(db: Database, bot=None) -> Quart:
                 if _esm.stream_is_live:
                     await flash("Cannot clear the playlist while the stream is live.", "error")
                 else:
+                    removed = await db.get_all_exp_radio_songs(
+                        active_only=True, source="submission"
+                    )
                     count = await db.delete_all_exp_radio_songs(source="submission")
+                    for song in removed:
+                        cleanup_exp_radio_song_files(EXP_RADIO_DIR, song)
                     await flash(f"Playlist cleared — {count} song(s) removed.", "success")
 
             elif action == "delete_all_admin_songs":
@@ -5514,7 +5606,12 @@ def create_app(db: Database, bot=None) -> Quart:
                 if _esm.stream_is_live:
                     await flash("Cannot clear the admin playlist while the stream is live.", "error")
                 else:
+                    removed = await db.get_all_exp_radio_songs(
+                        active_only=True, source="admin"
+                    )
                     count = await db.delete_all_exp_radio_songs(source="admin")
+                    for song in removed:
+                        cleanup_exp_radio_song_files(EXP_RADIO_DIR, song)
                     await flash(f"Admin playlist cleared — {count} song(s) removed.", "success")
 
             elif action == "reanalyze_whisper":
@@ -6424,18 +6521,11 @@ def create_app(db: Database, bot=None) -> Quart:
         s = await db.get_exp_radio_song(song_id)
         if not s:
             return abort(404)
-        uuid = s.get("suno_uuid") or ""
-        if not uuid:
+        # Lazily download + normalize through the stream manager so this
+        # follows the same Hook > regular video priority as the live stream.
+        path = await exp_stream_manager._get_video(s)
+        if not path or not os.path.exists(path):
             return abort(404)
-        path = os.path.join(EXP_RADIO_DIR, "cover_cache", f"{uuid}.mp4")
-        if not os.path.exists(path):
-            # Lazily download + normalize through the stream manager so the
-            # preview matches what the stream pipeline will actually use.
-            if not s.get("video_url"):
-                return abort(404)
-            await exp_stream_manager._get_video(s)
-            if not os.path.exists(path):
-                return abort(404)
         return await send_file(path, mimetype="video/mp4")
 
     @app.route("/exp-radio/stream/log")

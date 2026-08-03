@@ -18,6 +18,10 @@ import random
 import time
 from collections import deque
 
+from bot.exp_radio_files import (
+    cleanup_exp_radio_song_files,
+    exp_radio_hook_cache_path,
+)
 from bot.twitch_bot import TwitchBot
 
 _RTMP_BASE  = "rtmps://live.twitch.tv:443/app/"
@@ -566,6 +570,20 @@ class ExpStreamManager:
         if self._twitch_chat:
             await self._twitch_chat.stop()
             self._twitch_chat = None
+        # Expired/deleted rows may have stayed on disk while FFmpeg held them
+        # open. Once the stream is stopped they are safe to collect.
+        removed_files = 0
+        for playlist_song in self.playlist or []:
+            song_id = playlist_song.get("id")
+            if not song_id:
+                continue
+            stored = await self.db.get_exp_radio_song(int(song_id))
+            if stored and not stored.get("active"):
+                removed_files += cleanup_exp_radio_song_files(
+                    self.exp_radio_dir, stored
+                )
+        if removed_files:
+            self._log(f"Post-stream cleanup removed {removed_files} inactive file(s).")
         self._log("Stopped.")
         return {"ok": True}
 
@@ -1396,22 +1414,46 @@ class ExpStreamManager:
             self._log(f"Cover download error ({uuid}): {e}", "error")
         return None
 
-    async def _get_video(self, song: dict) -> str | None:
-        """Download Suno 9:16 video (MP4) to local cache. Returns local path or None."""
+    async def _get_video(
+        self, song: dict, *, allow_hook_fallback: bool = True
+    ) -> str | None:
+        """Download the Hook override or regular Suno video to local cache."""
         import aiohttp
-        video_url = song.get("video_url")
+        hook_id = (song.get("hook_id") or "").strip()
+        video_url = song.get("hook_video_url") if hook_id else song.get("video_url")
         if not video_url:
+            if hook_id and allow_hook_fallback:
+                fallback_song = dict(song)
+                fallback_song.update(hook_id=None, hook_video_url=None)
+                return await self._get_video(fallback_song)
             return None
         uuid      = song.get("suno_uuid") or ""
         cache_dir = os.path.join(self.exp_radio_dir, "cover_cache")
         os.makedirs(cache_dir, exist_ok=True)
-        dest = os.path.join(cache_dir, f"{uuid}.mp4")
+        if hook_id:
+            dest = exp_radio_hook_cache_path(
+                self.exp_radio_dir, song.get("id") or uuid, hook_id
+            )
+            media_label = f"Hook {hook_id}"
+        else:
+            dest = os.path.join(cache_dir, f"{uuid}.mp4")
+            media_label = f"video {uuid}"
         if os.path.exists(dest):
             # Idempotent re-check: files cached before the normaliser was
             # introduced (or in a previous, looser version of it) may still
             # exceed 720px on a side. The check is ffprobe-cheap and
             # early-returns when the file is already compliant.
-            await self._normalize_cover_video(dest)
+            normalized = await self._normalize_cover_video(dest)
+            if hook_id and not normalized:
+                try:
+                    os.remove(dest)
+                except OSError:
+                    pass
+                if allow_hook_fallback:
+                    fallback_song = dict(song)
+                    fallback_song.update(hook_id=None, hook_video_url=None)
+                    return await self._get_video(fallback_song)
+                return None
             return dest
         try:
             async with aiohttp.ClientSession(headers={"User-Agent": _BROWSER_UA}) as sess:
@@ -1419,13 +1461,31 @@ class ExpStreamManager:
                     if r.status == 200:
                         with open(dest, "wb") as f:
                             f.write(await r.read())
-                        self._log(f"Video cached: {uuid}.mp4")
+                        self._log(f"{media_label} cached: {os.path.basename(dest)}")
                         # Normalize immediately so the stream pipeline always
                         # sees lightweight covers (see _normalize_cover_video).
-                        await self._normalize_cover_video(dest)
+                        normalized = await self._normalize_cover_video(dest)
+                        if hook_id and not normalized:
+                            try:
+                                os.remove(dest)
+                            except OSError:
+                                pass
+                            if allow_hook_fallback:
+                                fallback_song = dict(song)
+                                fallback_song.update(hook_id=None, hook_video_url=None)
+                                return await self._get_video(fallback_song)
+                            return None
                         return dest
         except Exception as e:
             self._log(f"Video download error ({uuid}): {e}", "error")
+        if hook_id and allow_hook_fallback:
+            self._log(
+                f"Hook unavailable for {song.get('title') or uuid}; using regular video fallback.",
+                "error",
+            )
+            fallback_song = dict(song)
+            fallback_song.update(hook_id=None, hook_video_url=None)
+            return await self._get_video(fallback_song)
         return None
 
     async def _normalize_cover_video(self, path: str) -> bool:

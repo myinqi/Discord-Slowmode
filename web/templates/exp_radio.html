@@ -874,11 +874,11 @@
                             {% if song.cover_url %}
                             <img src="{{ song.cover_url }}" alt=""
                                 class="w-14 h-14 rounded-lg object-cover bg-gray-800">
-                            {% if song.video_url %}
+                            {% if song.hook_video_url or song.video_url %}
                             <button type="button"
                                 data-preview-song-id="{{ song.id }}"
                                 data-preview-title="{{ song.title or '' }}"
-                                title="Preview the cached cover video"
+                                title="Preview the selected song video"
                                 class="exp-preview-btn absolute inset-0 flex items-center justify-center rounded-lg bg-black/0 hover:bg-black/50 text-white/0 hover:text-white text-xl transition-all">
                                 ▶
                             </button>
@@ -905,6 +905,10 @@
                                 <span class="px-1.5 py-0.5 bg-red-900/50 text-red-300 text-xs rounded" title="Flagged by LLM moderation — needs manual approval">⚠ flagged</span>
                                 {% elif song.moderation_status == 'pending' %}
                                 <span class="px-1.5 py-0.5 bg-yellow-900/40 text-yellow-300 text-xs rounded" title="Moderation pending / needs manual review">⏳ mod pending</span>
+                                {% endif %}
+                                {% if song.hook_id %}
+                                <span class="px-1.5 py-0.5 bg-fuchsia-900/40 text-fuchsia-300 text-xs rounded"
+                                      title="Hook {{ song.hook_id }} is used instead of the regular Suno video">Hook video</span>
                                 {% endif %}
                             </div>
                             <p class="text-gray-400 text-xs mt-0.5">{{ song.artist or '' }}</p>
@@ -953,6 +957,24 @@
                         <!-- Per-song actions -->
                         {% if song.active %}
                         <div class="flex-shrink-0 flex flex-col gap-1">
+                            <button type="button"
+                                onclick='openHookDialog({{ song.id }}, {{ (song.title or "Song")|tojson }}, {{ (song.hook_share_url or song.hook_id or "")|tojson }})'
+                                title="{{ 'Change the Hook video override' if song.hook_id else 'Use a Suno Hook video for this song' }}"
+                                class="px-2.5 py-1.5 bg-fuchsia-600/20 hover:bg-fuchsia-600/40 text-fuchsia-300 rounded-lg text-xs transition-colors whitespace-nowrap">
+                                {{ 'Change Hook' if song.hook_id else 'Use Hook Video' }}
+                            </button>
+                            {% if song.hook_id %}
+                            <form method="POST" class="inline"
+                                  onsubmit="return confirm('Remove the Hook video and return to the regular Suno video or cover?');">
+                                <input type="hidden" name="action" value="remove_hook_video">
+                                <input type="hidden" name="song_id" value="{{ song.id }}">
+                                <button type="submit"
+                                    title="Remove the Hook video override"
+                                    class="w-full px-2.5 py-1.5 bg-gray-700/40 hover:bg-red-900/40 text-gray-400 hover:text-red-300 rounded-lg text-xs transition-colors">
+                                    Remove Hook
+                                </button>
+                            </form>
+                            {% endif %}
                             <form method="POST" class="inline">
                                 <input type="hidden" name="action" value="rescrape_metadata_one">
                                 <input type="hidden" name="song_id" value="{{ song.id }}">
@@ -1077,6 +1099,9 @@
                             {% endif %}
                             <span class="text-white text-sm font-medium truncate">{{ song.title or '⏳ Processing…' }}</span>
                             {% if song.artist %}<span class="text-gray-400 text-xs truncate">— {{ song.artist }}</span>{% endif %}
+                            {% if song.hook_id %}
+                            <span class="px-1.5 py-0.5 bg-fuchsia-900/40 text-fuchsia-300 text-xs rounded">Hook video</span>
+                            {% endif %}
                         </div>
                         <div class="flex items-center gap-3 mt-0.5 flex-wrap">
                             <span class="text-gray-600 text-xs">#{{ song.id }}</span>
@@ -1087,7 +1112,29 @@
                                 class="text-discord-blurple hover:text-blue-400 text-xs transition-colors">Suno ↗</a>
                         </div>
                     </div>
-                    <div class="flex items-center gap-1.5 flex-shrink-0">
+                    <div class="flex items-center gap-1.5 flex-shrink-0 flex-wrap justify-end max-w-md">
+                        {% if song.hook_video_url or song.video_url %}
+                        <button type="button"
+                            data-preview-song-id="{{ song.id }}"
+                            data-preview-title="{{ song.title or '' }}"
+                            title="Preview the selected song video"
+                            class="exp-preview-btn px-2.5 py-1.5 bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 rounded-lg text-xs transition-colors">▶</button>
+                        {% endif %}
+                        <button type="button"
+                            onclick='openHookDialog({{ song.id }}, {{ (song.title or "Song")|tojson }}, {{ (song.hook_share_url or song.hook_id or "")|tojson }})'
+                            title="{{ 'Change the Hook video override' if song.hook_id else 'Use a Suno Hook video for this song' }}"
+                            class="px-2.5 py-1.5 bg-fuchsia-600/20 hover:bg-fuchsia-600/40 text-fuchsia-300 rounded-lg text-xs transition-colors whitespace-nowrap">
+                            {{ 'Change Hook' if song.hook_id else 'Use Hook Video' }}
+                        </button>
+                        {% if song.hook_id %}
+                        <form method="POST" class="inline"
+                              onsubmit="return confirm('Remove the Hook video and return to the regular Suno video or cover?');">
+                            <input type="hidden" name="action" value="remove_hook_video">
+                            <input type="hidden" name="song_id" value="{{ song.id }}">
+                            <button type="submit" title="Remove Hook video"
+                                class="px-2.5 py-1.5 bg-gray-700/40 hover:bg-red-900/40 text-gray-400 hover:text-red-300 rounded-lg text-xs transition-colors">✕ Hook</button>
+                        </form>
+                        {% endif %}
                         {% if song.analysis_status != 'done' and not status.running %}
                         <form method="POST" class="inline">
                             <input type="hidden" name="action" value="reanalyze_whisper_one">
@@ -1202,7 +1249,53 @@
     </div>
 </div>
 
+<dialog id="hook-video-dialog"
+        class="w-full max-w-lg rounded-xl border border-fuchsia-500/40 bg-discord-dark p-0 text-gray-200 shadow-2xl backdrop:bg-black/70">
+    <form method="POST">
+        <input type="hidden" name="action" value="set_hook_video">
+        <input type="hidden" name="song_id" id="hook-song-id">
+        <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between gap-4">
+            <div class="min-w-0">
+                <h3 class="text-white font-semibold">Use Hook Video</h3>
+                <p id="hook-song-title" class="text-gray-500 text-xs mt-0.5 truncate"></p>
+            </div>
+            <button type="button" onclick="closeHookDialog()"
+                    class="w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:text-white hover:bg-gray-700"
+                    title="Close">✕</button>
+        </div>
+        <div class="p-5">
+            <label for="hook-value" class="block text-gray-300 text-sm font-medium mb-1.5">Suno Hook ID or share link</label>
+            <input id="hook-value" name="hook_value" required autocomplete="off"
+                   placeholder="https://suno.com/s/... or Hook UUID"
+                   class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm placeholder-gray-500 focus:border-fuchsia-500 focus:outline-none">
+            <p class="text-gray-500 text-xs mt-2">The Hook must belong to this song. It will loop silently for the full song duration.</p>
+        </div>
+        <div class="px-5 py-4 border-t border-gray-700/50 flex justify-end gap-2">
+            <button type="button" onclick="closeHookDialog()"
+                    class="px-4 py-2 bg-gray-700/60 hover:bg-gray-700 text-gray-300 rounded-lg text-sm">Cancel</button>
+            <button type="submit"
+                    class="px-4 py-2 bg-fuchsia-600 hover:bg-fuchsia-500 text-white rounded-lg text-sm font-medium">Save &amp; cache Hook</button>
+        </div>
+    </form>
+</dialog>
+
 <script>
+function openHookDialog(songId, title, currentValue) {
+    const dialog = document.getElementById('hook-video-dialog');
+    document.getElementById('hook-song-id').value = songId;
+    document.getElementById('hook-song-title').textContent = title;
+    document.getElementById('hook-value').value = currentValue || '';
+    dialog.showModal();
+    setTimeout(() => document.getElementById('hook-value').focus(), 0);
+}
+
+function closeHookDialog() {
+    document.getElementById('hook-video-dialog').close();
+}
+
+document.getElementById('hook-video-dialog')?.addEventListener('click', function(event) {
+    if (event.target === this) closeHookDialog();
+});
 let _expPollTimer = null;
 
 async function expStreamAction(action) {

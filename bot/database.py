@@ -746,6 +746,9 @@ class Database:
                 mp3_filename TEXT,
                 cover_url TEXT,
                 video_url TEXT,
+                hook_id TEXT,
+                hook_share_url TEXT,
+                hook_video_url TEXT,
                 title TEXT,
                 artist TEXT,
                 duration REAL,
@@ -806,6 +809,20 @@ class Database:
             await self.db.commit()
         except Exception:
             pass  # column already exists
+
+        # Optional per-song Suno Hook override for the stream video inset.
+        for col, definition in [
+            ("hook_id", "TEXT"),
+            ("hook_share_url", "TEXT"),
+            ("hook_video_url", "TEXT"),
+        ]:
+            try:
+                await self.db.execute(
+                    f"ALTER TABLE exp_radio_songs ADD COLUMN {col} {definition}"
+                )
+                await self.db.commit()
+            except Exception:
+                pass  # column already exists
 
         # Add DC-player filter columns (migration for existing installs)
         for col, definition in [
@@ -3797,6 +3814,7 @@ class Database:
         """Generic field update for exp_radio_songs."""
         allowed = {
             "mp3_filename", "cover_url", "video_url", "title", "artist",
+            "hook_id", "hook_share_url", "hook_video_url",
             "duration", "lyrics", "word_timestamps", "ass_filename",
             "analysis_status", "active", "playlist_source",
             "moderation_status", "moderation_reason", "moderation_at",

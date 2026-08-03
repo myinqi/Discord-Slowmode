@@ -13,6 +13,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot.exp_radio_files import cleanup_exp_radio_song_files
+
 SUNO_URL_PATTERN = re.compile(r'https://suno\.com/(?:s|song)/[\w-]+')
 YOUTUBE_URL_RE   = re.compile(
     r'(?:https?://)?(?:www\.)?(?:youtu\.be/|youtube\.com/(?:watch\?v=|embed/|v/|shorts/))'
@@ -2375,6 +2377,7 @@ class ExpRadioSubmitModal(discord.ui.Modal, title="Submit to Experimental Radio"
                     ephemeral=True,
                 )
                 return
+            cleanup_exp_radio_song_files(self.bot.exp_radio_dir, replaced_song)
 
         web_url = self.bot.web_url
         if web_url:
@@ -2437,6 +2440,7 @@ class ExpRadioDeleteView(discord.ui.View):
         song_id = int(interaction.data["values"][0])
         data = await self.bot.db.delete_exp_radio_song(song_id)
         if data:
+            cleanup_exp_radio_song_files(self.bot.exp_radio_dir, data)
             title = data.get("title") or f"#{song_id}"
             await interaction.response.edit_message(
                 content=f"🗑️ **{title}** has been removed from the Experimental Radio.",
