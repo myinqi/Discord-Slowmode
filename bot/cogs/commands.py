@@ -13,7 +13,11 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot.exp_radio_files import cleanup_exp_radio_song_files
+from bot.exp_radio_files import (
+    cleanup_exp_radio_hook_files,
+    cleanup_exp_radio_song_files,
+    exp_radio_hook_cache_path,
+)
 
 SUNO_URL_PATTERN = re.compile(r'https://suno\.com/(?:s|song)/[\w-]+')
 YOUTUBE_URL_RE   = re.compile(
@@ -2062,8 +2066,10 @@ class CommandsCog(commands.Cog):
         embed.add_field(
             name="🎙️ Experimental Radio",
             value=(
-                "**`/twitch-submit`** — Submit a Suno song to the Experimental Radio\n"
-                "**`/twitch-replace`** — Replace your oldest Experimental Radio submission\n"
+                "**`/twitch-submit`** — Submit a Suno song, optionally with a Hook video\n"
+                "**`/twitch-replace`** — Replace your oldest submission, optionally with a Hook video\n"
+                "**`/twitch-hook <hook>`** — Add or change the Hook video on your submission\n"
+                "**`/twitch-hook-remove`** — Remove the Hook video from your submission\n"
                 "**`/twitch-delete`** — Remove one of your Experimental Radio submissions\n"
                 "**`/twitch-playlist`** — Show the Experimental Radio playlist"
             ),
@@ -2143,6 +2149,80 @@ class CommandsCog(commands.Cog):
         await interaction.followup.send(
             "**Your Experimental Radio submissions:**\n" + "\n".join(lines) + "\n\nSelect a song to delete:",
             view=view, ephemeral=True,
+        )
+
+    @app_commands.command(name="twitch-hook", description="Add or change the Hook video on your radio submission")
+    @app_commands.describe(hook_video="Suno Hook ID or Hook share link")
+    async def exp_radio_hook(self, interaction: discord.Interaction, hook_video: str):
+        await interaction.response.defer(ephemeral=True)
+        if _exp_radio_hook_changes_locked():
+            await interaction.followup.send(
+                "❌ Hook videos cannot be changed while the Experimental Radio stream is live.",
+                ephemeral=True,
+            )
+            return
+        songs = await self.bot.db.get_exp_radio_songs_by_user(interaction.user.id)
+        if not songs:
+            await interaction.followup.send(
+                "You have no active Experimental Radio submissions.", ephemeral=True
+            )
+            return
+        if len(songs) == 1:
+            try:
+                hook = await _set_exp_radio_hook(self.bot, songs[0], hook_video)
+            except Exception as exc:
+                await interaction.followup.send(f"❌ {exc}", ephemeral=True)
+                return
+            await interaction.followup.send(
+                f"✅ Hook video set for **{songs[0].get('title') or 'your submission'}** "
+                f"(`{hook['hook_id']}`).",
+                ephemeral=True,
+            )
+            return
+        await interaction.followup.send(
+            "Select the submission that should use this Hook video:",
+            view=ExpRadioHookSongSelectView(
+                self.bot, songs, interaction.user.id, hook_value=hook_video
+            ),
+            ephemeral=True,
+        )
+
+    @app_commands.command(name="twitch-hook-remove", description="Remove the Hook video from your radio submission")
+    async def exp_radio_hook_remove(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        if _exp_radio_hook_changes_locked():
+            await interaction.followup.send(
+                "❌ Hook videos cannot be changed while the Experimental Radio stream is live.",
+                ephemeral=True,
+            )
+            return
+        songs = [
+            song
+            for song in await self.bot.db.get_exp_radio_songs_by_user(interaction.user.id)
+            if song.get("hook_id")
+        ]
+        if not songs:
+            await interaction.followup.send(
+                "None of your active submissions has a Hook video.", ephemeral=True
+            )
+            return
+        if len(songs) == 1:
+            try:
+                await _remove_exp_radio_hook(self.bot, songs[0])
+            except Exception as exc:
+                await interaction.followup.send(f"❌ {exc}", ephemeral=True)
+                return
+            await interaction.followup.send(
+                f"✅ Hook video removed from **{songs[0].get('title') or 'your submission'}**.",
+                ephemeral=True,
+            )
+            return
+        await interaction.followup.send(
+            "Select the submission whose Hook video should be removed:",
+            view=ExpRadioHookSongSelectView(
+                self.bot, songs, interaction.user.id, remove=True
+            ),
+            ephemeral=True,
         )
 
     @app_commands.command(name="twitch-playlist", description="Show the current Experimental Radio playlist")
@@ -2244,6 +2324,92 @@ def _exp_terms_display(limit: int, expiry_days: int) -> str:
     )
 
 
+def _exp_radio_hook_changes_locked() -> bool:
+    import bot.exp_stream_manager as exp_stream
+
+    return bool(exp_stream.stream_is_live)
+
+
+async def _set_exp_radio_hook(
+    bot,
+    song: dict,
+    hook_value: str,
+    *,
+    resolved_hook: dict | None = None,
+    source_uuid: str | None = None,
+) -> dict:
+    """Validate, cache, and persist one Hook without touching another song."""
+    from bot.suno_hook import HOOK_ID_RE, SunoHookError, resolve_suno_hook
+
+    if _exp_radio_hook_changes_locked():
+        raise SunoHookError(
+            "Hook videos cannot be changed while the Experimental Radio stream is live."
+        )
+    if song.get("playlist_source") != "submission":
+        raise SunoHookError("Only your submission playlist songs can be changed.")
+
+    hook = resolved_hook or await resolve_suno_hook(hook_value)
+    expected_uuid = str(source_uuid or song.get("suno_uuid") or "").lower()
+    if not HOOK_ID_RE.fullmatch(expected_uuid):
+        from bot.exp_radio_worker import scrape_suno
+
+        meta = await scrape_suno(str(song.get("suno_uuid") or ""))
+        expected_uuid = str(meta.get("real_uuid") or "").lower()
+    if not expected_uuid:
+        raise SunoHookError("The submitted Suno song could not be resolved.")
+    if hook["original_clip_id"].lower() != expected_uuid:
+        raise SunoHookError("This Hook belongs to a different Suno song.")
+
+    manager = getattr(bot, "exp_stream_manager", None)
+    if manager is None:
+        raise SunoHookError("The Experimental Radio manager is unavailable.")
+    candidate = dict(song)
+    candidate.update(hook)
+    cached_path = await manager._get_video(candidate, allow_hook_fallback=False)
+    if not cached_path or not os.path.exists(cached_path):
+        raise SunoHookError("The Hook video could not be downloaded.")
+
+    old_hook_id = str(song.get("hook_id") or "").strip()
+    try:
+        await bot.db.update_exp_radio_song(
+            song["id"],
+            hook_id=hook["hook_id"],
+            hook_share_url=hook["hook_share_url"],
+            hook_video_url=hook["hook_video_url"],
+        )
+    except Exception:
+        if old_hook_id != hook["hook_id"]:
+            try:
+                os.remove(
+                    exp_radio_hook_cache_path(
+                        bot.exp_radio_dir, song["id"], hook["hook_id"]
+                    )
+                )
+            except FileNotFoundError:
+                pass
+        raise
+
+    if old_hook_id and old_hook_id != hook["hook_id"]:
+        try:
+            os.remove(
+                exp_radio_hook_cache_path(bot.exp_radio_dir, song["id"], old_hook_id)
+            )
+        except FileNotFoundError:
+            pass
+    return hook
+
+
+async def _remove_exp_radio_hook(bot, song: dict) -> None:
+    if _exp_radio_hook_changes_locked():
+        raise RuntimeError(
+            "Hook videos cannot be changed while the Experimental Radio stream is live."
+        )
+    await bot.db.update_exp_radio_song(
+        song["id"], hook_id=None, hook_share_url=None, hook_video_url=None
+    )
+    cleanup_exp_radio_hook_files(bot.exp_radio_dir, song)
+
+
 class ExpRadioTermsView(discord.ui.View):
     def __init__(self, bot, replace: bool = False):
         super().__init__(timeout=120)
@@ -2270,6 +2436,12 @@ class ExpRadioSubmitModal(discord.ui.Modal, title="Submit to Experimental Radio"
     url = discord.ui.TextInput(
         label="Suno Song URL",
         placeholder="https://suno.com/s/… or https://suno.com/song/…",
+        max_length=250,
+    )
+    hook_video = discord.ui.TextInput(
+        label="Suno Hook ID or share link (optional)",
+        placeholder="Leave empty to use the normal song video or cover",
+        required=False,
         max_length=250,
     )
 
@@ -2331,6 +2503,35 @@ class ExpRadioSubmitModal(discord.ui.Modal, title="Submit to Experimental Radio"
             await interaction.followup.send("❌ Could not extract song ID from URL.", ephemeral=True)
             return
         suno_uuid = m.group(1)
+        hook_value = self.hook_video.value.strip()
+        resolved_hook = None
+        resolved_suno_uuid = suno_uuid
+        if hook_value:
+            from bot.exp_radio_worker import scrape_suno
+            from bot.suno_hook import SunoHookError, resolve_suno_hook
+
+            try:
+                resolved_hook = await resolve_suno_hook(hook_value)
+                meta = await scrape_suno(suno_uuid)
+                resolved_suno_uuid = str(meta.get("real_uuid") or "")
+                if not resolved_suno_uuid:
+                    raise SunoHookError("The submitted Suno song could not be resolved.")
+                if resolved_hook["original_clip_id"].lower() != resolved_suno_uuid.lower():
+                    raise SunoHookError("This Hook belongs to a different Suno song.")
+            except SunoHookError as exc:
+                await interaction.followup.send(f"❌ {exc}", ephemeral=True)
+                return
+            except Exception as exc:
+                print(
+                    f"[exp-radio] Submission Hook validation failed: {exc}",
+                    flush=True,
+                )
+                await interaction.followup.send(
+                    "❌ Suno could not validate the Hook video right now. "
+                    "Please try again in a moment.",
+                    ephemeral=True,
+                )
+                return
 
         existing_songs = await self.bot.db.get_exp_radio_songs_by_user(interaction.user.id)
         # get_exp_radio_songs_by_user returns newest first, so the last row is
@@ -2352,18 +2553,39 @@ class ExpRadioSubmitModal(discord.ui.Modal, title="Submit to Experimental Radio"
             expiry_days = 14
         rights_declaration = _exp_rights_declaration(expiry_days)
         rights_hash = hashlib.sha256(
-            f"{rights_declaration}|{interaction.user.id}|{raw_url}|{suno_uuid}".encode()
+            f"{rights_declaration}|{interaction.user.id}|{raw_url}|{resolved_suno_uuid}".encode()
         ).hexdigest()
 
         song_id, upload_token = await self.bot.db.add_exp_radio_song(
             user_id=interaction.user.id,
             user_name=str(interaction.user),
             suno_url=raw_url,
-            suno_uuid=suno_uuid,
+            suno_uuid=resolved_suno_uuid,
             rights_declaration=rights_declaration,
             rights_hash=rights_hash,
             expiry_days=expiry_days,
         )
+
+        if resolved_hook:
+            new_song = await self.bot.db.get_exp_radio_song(song_id)
+            try:
+                await _set_exp_radio_hook(
+                    self.bot,
+                    new_song,
+                    hook_value,
+                    resolved_hook=resolved_hook,
+                    source_uuid=resolved_suno_uuid,
+                )
+            except Exception as exc:
+                removed = await self.bot.db.delete_exp_radio_song(song_id)
+                if removed:
+                    cleanup_exp_radio_song_files(self.bot.exp_radio_dir, removed)
+                await interaction.followup.send(
+                    f"❌ The Hook video could not be attached: {exc}\n"
+                    "Your existing submission was kept.",
+                    ephemeral=True,
+                )
+                return
 
         replaced_song = None
         if replace_target:
@@ -2371,7 +2593,9 @@ class ExpRadioSubmitModal(discord.ui.Modal, title="Submit to Experimental Radio"
             if not replaced_song:
                 # Keep the operation all-or-nothing from the user's point of
                 # view if the old row unexpectedly disappeared meanwhile.
-                await self.bot.db.delete_exp_radio_song(song_id)
+                removed = await self.bot.db.delete_exp_radio_song(song_id)
+                if removed:
+                    cleanup_exp_radio_song_files(self.bot.exp_radio_dir, removed)
                 await interaction.followup.send(
                     "❌ The previous submission could not be replaced. Your existing song was kept.",
                     ephemeral=True,
@@ -2397,6 +2621,8 @@ class ExpRadioSubmitModal(discord.ui.Modal, title="Submit to Experimental Radio"
                 color=0xf5a623,
             )
             footer = f"Song #{song_id} registered • expires in {expiry_days} days"
+            if resolved_hook:
+                footer += " • Hook video attached"
             if replaced_song:
                 replaced_title = replaced_song.get("title") or f"Song #{replaced_song['id']}"
                 footer += f" • replaced {replaced_title}"
@@ -2416,6 +2642,75 @@ class ExpRadioSubmitModal(discord.ui.Modal, title="Submit to Experimental Radio"
             )
 
         # Pipeline is triggered by the upload endpoint once the MP3 arrives
+
+
+class ExpRadioHookSongSelectView(discord.ui.View):
+    def __init__(
+        self,
+        bot,
+        songs: list[dict],
+        owner_id: int,
+        *,
+        hook_value: str = "",
+        remove: bool = False,
+    ):
+        super().__init__(timeout=120)
+        self.bot = bot
+        self.owner_id = int(owner_id)
+        self.hook_value = hook_value
+        self.remove = remove
+        select = discord.ui.Select(
+            placeholder="Select one of your submissions…",
+            options=[
+                discord.SelectOption(
+                    label=(song.get("title") or f"Song #{song['id']}")[:100],
+                    description=(song.get("artist") or song.get("suno_url") or "")[:100],
+                    value=str(song["id"]),
+                )
+                for song in songs[:25]
+            ],
+        )
+        select.callback = self._select
+        self.add_item(select)
+
+    async def _select(self, interaction: discord.Interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                "This selection belongs to another user.", ephemeral=True
+            )
+            return
+        await interaction.response.defer()
+        if _exp_radio_hook_changes_locked():
+            await interaction.edit_original_response(
+                content="❌ Hook videos cannot be changed while the stream is live.",
+                view=None,
+            )
+            return
+        song_id = int(interaction.data["values"][0])
+        song = await self.bot.db.get_exp_radio_song(song_id)
+        if (
+            not song
+            or not song.get("active")
+            or int(song.get("user_id") or 0) != self.owner_id
+            or song.get("playlist_source") != "submission"
+        ):
+            await interaction.edit_original_response(
+                content="❌ Submission not found or no longer active.", view=None
+            )
+            return
+        try:
+            if self.remove:
+                await _remove_exp_radio_hook(self.bot, song)
+                message = f"✅ Hook video removed from **{song.get('title') or 'your submission'}**."
+            else:
+                hook = await _set_exp_radio_hook(self.bot, song, self.hook_value)
+                message = (
+                    f"✅ Hook video set for **{song.get('title') or 'your submission'}** "
+                    f"(`{hook['hook_id']}`)."
+                )
+        except Exception as exc:
+            message = f"❌ {exc}"
+        await interaction.edit_original_response(content=message, view=None)
 
 
 class ExpRadioDeleteView(discord.ui.View):
