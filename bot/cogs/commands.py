@@ -2021,7 +2021,8 @@ class CommandsCog(commands.Cog):
             name="🎂 Birthday Calendar",
             value=(
                 "**`/birthday-set <day> <month> [year]`** — Save or update your birthday\n"
-                "**`/birthday-remove`** — Remove your saved birthday"
+                "**`/birthday-remove`** — Remove your saved birthday\n"
+                "**`/birthdays [month] [private]`** — Show the server birthday calendar"
             ),
             inline=False,
         )

@@ -1,5 +1,6 @@
 import asyncio
 import calendar
+import time
 from datetime import date
 from zoneinfo import ZoneInfo
 
@@ -24,10 +25,85 @@ def next_birthday(day: int, month: int, today: date) -> date:
     return occurrence
 
 
+class BirthdayCalendarView(discord.ui.View):
+    def __init__(
+        self,
+        entries: list[dict],
+        *,
+        viewer_id: int,
+        title: str,
+    ):
+        super().__init__(timeout=600)
+        self.entries = entries
+        self.viewer_id = viewer_id
+        self.title = title
+        self.page = 0
+        self.page_size = 10
+        self.page_count = max(1, (len(entries) + self.page_size - 1) // self.page_size)
+        self._sync_buttons()
+
+    def _sync_buttons(self):
+        self.previous.disabled = self.page == 0
+        self.next.disabled = self.page >= self.page_count - 1
+
+    def build_embed(self) -> discord.Embed:
+        start = self.page * self.page_size
+        page_entries = self.entries[start:start + self.page_size]
+        lines = []
+        for birthday in page_entries:
+            days_until = birthday["days_until"]
+            if days_until == 0:
+                distance = "today"
+            elif days_until == 1:
+                distance = "tomorrow"
+            else:
+                distance = f"in {days_until} days"
+            lines.append(
+                f"🎂 **{birthday['next_date'].strftime('%d %B')}** — "
+                f"<@{birthday['user_id']}> · {distance}"
+            )
+
+        embed = discord.Embed(
+            title=f"🎂 {self.title}",
+            description="\n".join(lines),
+            color=0x9B59B6,
+        )
+        embed.set_footer(
+            text=(
+                f"Page {self.page + 1} of {self.page_count} · "
+                "Use /birthday-set to join the calendar"
+            )
+        )
+        return embed
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.viewer_id:
+            await interaction.response.send_message(
+                "Only the person who opened this calendar can change pages.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def _change_page(self, interaction: discord.Interaction, direction: int):
+        self.page = max(0, min(self.page_count - 1, self.page + direction))
+        self._sync_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    @discord.ui.button(label="Previous", emoji="◀", style=discord.ButtonStyle.secondary)
+    async def previous(self, interaction: discord.Interaction, _button: discord.ui.Button):
+        await self._change_page(interaction, -1)
+
+    @discord.ui.button(label="Next", emoji="▶", style=discord.ButtonStyle.secondary)
+    async def next(self, interaction: discord.Interaction, _button: discord.ui.Button):
+        await self._change_page(interaction, 1)
+
+
 class BirthdayCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self._notification_lock = asyncio.Lock()
+        self._calendar_cooldowns: dict[int, float] = {}
         self.birthday_notifications.start()
 
     def cog_unload(self):
@@ -89,6 +165,93 @@ class BirthdayCog(commands.Cog):
             else "You do not have a saved birthday."
         )
         await interaction.response.send_message(message, ephemeral=True)
+
+    @app_commands.command(
+        name="birthdays",
+        description="Show the server birthday calendar",
+    )
+    @app_commands.describe(
+        month="Show upcoming birthdays, all birthdays, or one month",
+        private="Show the calendar only to you",
+    )
+    @app_commands.choices(month=[
+        app_commands.Choice(name="Upcoming", value="upcoming"),
+        app_commands.Choice(name="All", value="all"),
+        app_commands.Choice(name="January", value="1"),
+        app_commands.Choice(name="February", value="2"),
+        app_commands.Choice(name="March", value="3"),
+        app_commands.Choice(name="April", value="4"),
+        app_commands.Choice(name="May", value="5"),
+        app_commands.Choice(name="June", value="6"),
+        app_commands.Choice(name="July", value="7"),
+        app_commands.Choice(name="August", value="8"),
+        app_commands.Choice(name="September", value="9"),
+        app_commands.Choice(name="October", value="10"),
+        app_commands.Choice(name="November", value="11"),
+        app_commands.Choice(name="December", value="12"),
+    ])
+    async def birthdays(
+        self,
+        interaction: discord.Interaction,
+        month: str = "upcoming",
+        private: bool = False,
+    ):
+        now = time.monotonic()
+        cooldown_until = self._calendar_cooldowns.get(interaction.user.id, 0.0)
+        if not private and now < cooldown_until:
+            wait_seconds = max(1, int(cooldown_until - now + 0.999))
+            await interaction.response.send_message(
+                f"Please wait {wait_seconds} seconds before posting the calendar again.",
+                ephemeral=True,
+            )
+            return
+
+        today = discord.utils.utcnow().astimezone(BERLIN_TZ).date()
+        entries = await self.bot.db.get_birthdays()
+        for birthday in entries:
+            occurrence = next_birthday(
+                int(birthday["birth_day"]),
+                int(birthday["birth_month"]),
+                today,
+            )
+            birthday["next_date"] = occurrence
+            birthday["days_until"] = (occurrence - today).days
+
+        if month.isdigit():
+            selected_month = int(month)
+            entries = [
+                birthday for birthday in entries
+                if int(birthday["birth_month"]) == selected_month
+            ]
+            entries.sort(key=lambda birthday: (birthday["birth_day"], birthday["display_name"].lower()))
+            title = f"Birthdays in {calendar.month_name[selected_month]}"
+        else:
+            entries.sort(key=lambda birthday: (birthday["days_until"], birthday["display_name"].lower()))
+            if month == "upcoming":
+                entries = entries[:10]
+                title = "Upcoming Birthdays"
+            else:
+                title = "Server Birthday Calendar"
+
+        if not entries:
+            await interaction.response.send_message(
+                "No birthdays were found for this selection.", ephemeral=True
+            )
+            return
+
+        view = BirthdayCalendarView(
+            entries,
+            viewer_id=interaction.user.id,
+            title=title,
+        )
+        if not private:
+            self._calendar_cooldowns[interaction.user.id] = now + 30.0
+        await interaction.response.send_message(
+            embed=view.build_embed(),
+            view=view,
+            ephemeral=private,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     @tasks.loop(minutes=30)
     async def birthday_notifications(self):
