@@ -263,6 +263,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('rpg', 'RPG Adventures'),
         ('card_collection', 'Card Collection'),
         ('birthday_calendar', 'Birthday Calendar'),
+        ('reminders', 'Reminders'),
     ]
 
     SIDEBAR_NAV_ITEMS = [
@@ -283,6 +284,7 @@ def create_app(db: Database, bot=None) -> Quart:
         {"key": "rpg", "endpoint": "rpg_admin", "icon": "🎲", "label": "RPG", "perm": "rpg"},
         {"key": "card_collection", "endpoint": "card_collection_admin", "icon": "🃏", "label": "Card Collection", "perm": "card_collection"},
         {"key": "birthday_calendar", "endpoint": "birthday_calendar_admin", "icon": "🎂", "label": "Birthday Calendar", "perm": "birthday_calendar"},
+        {"key": "reminders", "endpoint": "reminders_admin", "icon": "⏰", "label": "Reminders", "perm": "reminders"},
         {"key": "radio", "endpoint": "radio_admin", "icon": "📻", "label": "Twitch", "perm": "radio"},
         {"key": "exp_radio", "endpoint": "exp_radio_admin", "icon": "🎙️", "label": "Exp. Radio", "perm": "exp_radio"},
         {"key": "submission_bans", "endpoint": "submission_bans", "icon": "⛔", "label": "Submission Bans", "perm": "submission_bans"},
@@ -4100,6 +4102,113 @@ def create_app(db: Database, bot=None) -> Quart:
             notification_channel_id=await db.get_setting(
                 "birthday_notification_channel_id"
             ),
+        )
+
+    # --- Personal Reminders ---
+
+    @app.route("/reminders", methods=["GET", "POST"])
+    @permission_required("reminders")
+    async def reminders_admin():
+        from datetime import datetime
+        from bot.reminder_schedule import (
+            BERLIN_TZ,
+            RECURRENCE_LABELS,
+            ensure_future_recurrence,
+            parse_reminder_datetime,
+            reminder_datetime_from_timestamp,
+        )
+
+        if request.method == "POST":
+            form = await request.form
+            action = form.get("action", "")
+            reminder_id_raw = form.get("reminder_id", "").strip()
+            if not reminder_id_raw.isdigit():
+                await flash("Reminder not found.", "error")
+                return redirect(url_for("reminders_admin"))
+            reminder_id = int(reminder_id_raw)
+
+            if action == "delete":
+                if await db.delete_reminder(reminder_id):
+                    await db.add_audit_log(
+                        event_type="reminder_deleted",
+                        details=f"Reminder #{reminder_id} deleted",
+                        actor=session.get("username", "unknown"),
+                    )
+                    await flash("Reminder deleted.", "success")
+                return redirect(url_for("reminders_admin"))
+
+            if action == "edit":
+                reminder = await db.get_reminder(reminder_id)
+                if not reminder:
+                    await flash("Reminder not found.", "error")
+                    return redirect(url_for("reminders_admin"))
+                reminder_text = form.get("reminder_text", "").strip()[:1000]
+                recurrence = form.get("recurrence", "once")
+                active = bool(form.get("active"))
+                if not reminder_text:
+                    await flash("Reminder text is required.", "error")
+                    return redirect(url_for("reminders_admin"))
+                if recurrence not in RECURRENCE_LABELS:
+                    recurrence = "once"
+                try:
+                    scheduled = parse_reminder_datetime(
+                        form.get("run_date", ""),
+                        form.get("run_time", ""),
+                    )
+                    if active:
+                        scheduled = ensure_future_recurrence(
+                            scheduled,
+                            recurrence,
+                            now=datetime.now(BERLIN_TZ),
+                        )
+                except ValueError as exc:
+                    await flash(str(exc), "error")
+                    return redirect(url_for("reminders_admin"))
+
+                await db.update_reminder(
+                    reminder_id,
+                    reminder_text=reminder_text,
+                    next_run_at=scheduled.timestamp(),
+                    recurrence=recurrence,
+                    anchor_day=scheduled.day,
+                    active=active,
+                )
+                await db.add_audit_log(
+                    event_type="reminder_updated",
+                    user_id=reminder["user_id"],
+                    details=f"Reminder #{reminder_id} updated",
+                    actor=session.get("username", "unknown"),
+                )
+                await flash("Reminder updated.", "success")
+                return redirect(url_for("reminders_admin"))
+
+        reminders = await db.get_reminders(include_inactive=True)
+        for reminder in reminders:
+            reminder["next_run"] = reminder_datetime_from_timestamp(
+                reminder["next_run_at"]
+            )
+            reminder["recurrence_label"] = RECURRENCE_LABELS.get(
+                reminder["recurrence"], reminder["recurrence"]
+            )
+        stats = {
+            "total": len(reminders),
+            "active": sum(1 for reminder in reminders if reminder["active"]),
+            "recurring": sum(
+                1
+                for reminder in reminders
+                if reminder["active"] and reminder["recurrence"] != "once"
+            ),
+            "errors": sum(
+                1
+                for reminder in reminders
+                if reminder["active"] and reminder.get("last_error")
+            ),
+        }
+        return await render_template(
+            "reminders.html",
+            reminders=reminders,
+            recurrence_labels=RECURRENCE_LABELS,
+            stats=stats,
         )
 
     # --- Image Posting ---

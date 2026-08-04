@@ -2027,6 +2027,15 @@ class CommandsCog(commands.Cog):
             inline=False,
         )
 
+        embed.add_field(
+            name="⏰ Personal Reminders",
+            value=(
+                "**`/reminder-set <text> <date> <time> [repeat]`** — Create a personal DM reminder\n"
+                "**`/reminder-delete <reminder>`** — Delete one of your reminders"
+            ),
+            inline=False,
+        )
+
         # Context Menu (all users)
         embed.add_field(
             name="📋 Context Menu (Right-click a message)",

@@ -170,6 +170,26 @@ class Database:
                 PRIMARY KEY (user_id, occurrence_date, notice_type),
                 FOREIGN KEY (user_id) REFERENCES birthdays(user_id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS reminders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                user_name TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                reminder_text TEXT NOT NULL,
+                next_run_at REAL NOT NULL,
+                recurrence TEXT NOT NULL DEFAULT 'once',
+                anchor_day INTEGER NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1,
+                processing_at REAL,
+                last_attempt_at REAL,
+                last_sent_at REAL,
+                last_error TEXT DEFAULT '',
+                created_at REAL DEFAULT (unixepoch()),
+                updated_at REAL DEFAULT (unixepoch())
+            );
+            CREATE INDEX IF NOT EXISTS idx_reminders_due
+                ON reminders(active, next_run_at);
         """)
         await self.db.commit()
         await self._run_migrations()
@@ -262,6 +282,30 @@ class Database:
             await self.db.execute(
                 "INSERT INTO settings (key, value) VALUES (?, 'done')",
                 (birthday_sidebar_migration,),
+            )
+            await self.db.commit()
+
+        reminder_sidebar_migration = "migration_sidebar_reminders_v1"
+        async with self.db.execute(
+            "SELECT value FROM settings WHERE key = ?", (reminder_sidebar_migration,)
+        ) as cursor:
+            reminder_sidebar_migrated = await cursor.fetchone()
+        if not reminder_sidebar_migrated:
+            async with self.db.execute(
+                "SELECT value FROM settings WHERE key = 'sidebar_visible_items'"
+            ) as cursor:
+                sidebar_row = await cursor.fetchone()
+            if sidebar_row and sidebar_row[0] and sidebar_row[0] != "__none__":
+                visible_items = [item for item in sidebar_row[0].split(",") if item]
+                if "reminders" not in visible_items:
+                    visible_items.append("reminders")
+                    await self.db.execute(
+                        "UPDATE settings SET value = ? WHERE key = 'sidebar_visible_items'",
+                        (",".join(visible_items),),
+                    )
+            await self.db.execute(
+                "INSERT INTO settings (key, value) VALUES (?, 'done')",
+                (reminder_sidebar_migration,),
             )
             await self.db.commit()
 
@@ -1287,6 +1331,185 @@ class Database:
             VALUES (?, ?, ?)
             """,
             (int(user_id), occurrence_date, notice_type),
+        )
+        await self.db.commit()
+
+    # --- Personal Reminders ---
+
+    async def create_reminder(
+        self,
+        *,
+        user_id: int,
+        user_name: str,
+        display_name: str,
+        reminder_text: str,
+        next_run_at: float,
+        recurrence: str,
+        anchor_day: int,
+    ) -> int:
+        cursor = await self.db.execute(
+            """
+            INSERT INTO reminders
+                (user_id, user_name, display_name, reminder_text,
+                 next_run_at, recurrence, anchor_day)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(user_id),
+                str(user_name)[:100],
+                str(display_name)[:100],
+                str(reminder_text)[:1000],
+                float(next_run_at),
+                recurrence,
+                int(anchor_day),
+            ),
+        )
+        await self.db.commit()
+        return int(cursor.lastrowid)
+
+    async def get_reminder(self, reminder_id: int) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM reminders WHERE id = ?", (int(reminder_id),)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_reminders(self, *, include_inactive: bool = True) -> list[dict]:
+        where = "" if include_inactive else "WHERE active = 1"
+        async with self.db.execute(
+            f"""
+            SELECT * FROM reminders
+            {where}
+            ORDER BY active DESC, next_run_at, display_name COLLATE NOCASE
+            """
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def get_user_reminders(
+        self, user_id: int, *, include_inactive: bool = False
+    ) -> list[dict]:
+        active_filter = "" if include_inactive else "AND active = 1"
+        async with self.db.execute(
+            f"""
+            SELECT * FROM reminders
+            WHERE user_id = ? {active_filter}
+            ORDER BY next_run_at
+            """,
+            (int(user_id),),
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def update_reminder(
+        self,
+        reminder_id: int,
+        *,
+        reminder_text: str,
+        next_run_at: float,
+        recurrence: str,
+        anchor_day: int,
+        active: bool,
+    ) -> bool:
+        cursor = await self.db.execute(
+            """
+            UPDATE reminders SET
+                reminder_text = ?, next_run_at = ?, recurrence = ?,
+                anchor_day = ?, active = ?, processing_at = NULL,
+                last_attempt_at = NULL, last_error = '', updated_at = unixepoch()
+            WHERE id = ?
+            """,
+            (
+                str(reminder_text)[:1000],
+                float(next_run_at),
+                recurrence,
+                int(anchor_day),
+                1 if active else 0,
+                int(reminder_id),
+            ),
+        )
+        await self.db.commit()
+        return cursor.rowcount > 0
+
+    async def delete_reminder(self, reminder_id: int, *, user_id: Optional[int] = None) -> bool:
+        if user_id is None:
+            cursor = await self.db.execute(
+                "DELETE FROM reminders WHERE id = ?", (int(reminder_id),)
+            )
+        else:
+            cursor = await self.db.execute(
+                "DELETE FROM reminders WHERE id = ? AND user_id = ?",
+                (int(reminder_id), int(user_id)),
+            )
+        await self.db.commit()
+        return cursor.rowcount > 0
+
+    async def claim_due_reminders(
+        self, *, now_timestamp: float, limit: int = 100
+    ) -> list[dict]:
+        stale_processing = float(now_timestamp) - 600.0
+        retry_before = float(now_timestamp) - 3600.0
+        async with self.db.execute(
+            """
+            SELECT * FROM reminders
+            WHERE active = 1
+              AND next_run_at <= ?
+              AND (processing_at IS NULL OR processing_at < ?)
+              AND (last_attempt_at IS NULL OR last_attempt_at < ?)
+            ORDER BY next_run_at
+            LIMIT ?
+            """,
+            (float(now_timestamp), stale_processing, retry_before, int(limit)),
+        ) as cursor:
+            candidates = [dict(row) for row in await cursor.fetchall()]
+
+        claimed = []
+        for reminder in candidates:
+            cursor = await self.db.execute(
+                """
+                UPDATE reminders SET processing_at = ?
+                WHERE id = ? AND active = 1
+                  AND (processing_at IS NULL OR processing_at < ?)
+                """,
+                (float(now_timestamp), int(reminder["id"]), stale_processing),
+            )
+            if cursor.rowcount > 0:
+                claimed.append(reminder)
+        await self.db.commit()
+        return claimed
+
+    async def complete_reminder(
+        self,
+        reminder_id: int,
+        *,
+        sent_at: float,
+        next_run_at: Optional[float],
+    ):
+        await self.db.execute(
+            """
+            UPDATE reminders SET
+                active = ?, next_run_at = COALESCE(?, next_run_at),
+                processing_at = NULL, last_attempt_at = ?, last_sent_at = ?,
+                last_error = '', updated_at = unixepoch()
+            WHERE id = ?
+            """,
+            (
+                1 if next_run_at is not None else 0,
+                float(next_run_at) if next_run_at is not None else None,
+                float(sent_at),
+                float(sent_at),
+                int(reminder_id),
+            ),
+        )
+        await self.db.commit()
+
+    async def fail_reminder(self, reminder_id: int, *, attempted_at: float, error: str):
+        await self.db.execute(
+            """
+            UPDATE reminders SET
+                processing_at = NULL, last_attempt_at = ?, last_error = ?,
+                updated_at = unixepoch()
+            WHERE id = ?
+            """,
+            (float(attempted_at), str(error)[:500], int(reminder_id)),
         )
         await self.db.commit()
 
