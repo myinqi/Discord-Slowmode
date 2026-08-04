@@ -261,7 +261,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('llm', 'Corax Chat (LLM)'),
         ('relic_hunt', "Raven's Nest"),
         ('rpg', 'RPG Adventures'),
-        ('card_collection', 'Card Collection'),
+        ('card_collection', 'Card Game'),
     ]
 
     SIDEBAR_NAV_ITEMS = [
@@ -280,7 +280,7 @@ def create_app(db: Database, bot=None) -> Quart:
         {"key": "polls", "endpoint": "polls", "icon": "📊", "label": "Polls", "perm": "polls"},
         {"key": "quiz", "endpoint": "quiz_admin", "icon": "❓", "label": "Quiz", "perm": "quiz"},
         {"key": "rpg", "endpoint": "rpg_admin", "icon": "🎲", "label": "RPG", "perm": "rpg"},
-        {"key": "card_collection", "endpoint": "card_collection_admin", "icon": "🃏", "label": "Card Collection", "perm": "card_collection"},
+        {"key": "card_collection", "endpoint": "card_collection_admin", "icon": "🃏", "label": "Card Game", "perm": "card_collection"},
         {"key": "radio", "endpoint": "radio_admin", "icon": "📻", "label": "Twitch", "perm": "radio"},
         {"key": "exp_radio", "endpoint": "exp_radio_admin", "icon": "🎙️", "label": "Exp. Radio", "perm": "exp_radio"},
         {"key": "submission_bans", "endpoint": "submission_bans", "icon": "⛔", "label": "Submission Bans", "perm": "submission_bans"},
@@ -3805,8 +3805,12 @@ def create_app(db: Database, bot=None) -> Quart:
     @app.route("/card-collection", methods=["GET", "POST"])
     @permission_required('card_collection')
     async def card_collection_admin():
+        import json as _json
+        import uuid
+
         allowed_extensions = {"png", "jpg", "jpeg", "webp"}
         allowed_rarities = {"Common", "Uncommon", "Rare", "Epic", "Legendary"}
+        allowed_card_types = {"Hero", "Action", "Equipment", "Event", "Trigger"}
 
         def number_value(form, key, default=0, minimum=0, maximum=999):
             try:
@@ -3845,6 +3849,154 @@ def create_app(db: Database, bot=None) -> Quart:
                     )
                 return redirect(url_for("card_collection_admin"))
 
+            if action == "delete_deck":
+                deck_id = number_value(form, "deck_id", 0)
+                if deck_id:
+                    deleted = await db.delete_collectible_starter_deck(deck_id)
+                    if deleted:
+                        await flash("Starter deck deleted.", "success")
+                    else:
+                        await flash(
+                            "This starter deck has already been claimed and cannot be deleted. "
+                            "Deactivate it instead.",
+                            "error",
+                        )
+                return redirect(url_for("card_collection_admin", tab="decks"))
+
+            if action == "toggle_deck":
+                deck_id = number_value(form, "deck_id", 0)
+                deck = await db.get_collectible_starter_deck(deck_id) if deck_id else None
+                if deck:
+                    await db.save_collectible_starter_deck(
+                        deck_id,
+                        name=deck["name"],
+                        description=deck.get("description") or "",
+                        hero_card_id=deck.get("hero_card_id"),
+                        active=0 if deck.get("active") else 1,
+                        position=int(deck.get("position") or 0),
+                        cards=[
+                            (int(card["id"]), int(card["quantity"]))
+                            for card in deck.get("cards") or []
+                        ],
+                    )
+                    await flash(
+                        f"Starter deck {'activated' if not deck.get('active') else 'deactivated'}.",
+                        "success",
+                    )
+                return redirect(url_for("card_collection_admin", tab="decks"))
+
+            if action == "save_deck":
+                deck_id = number_value(form, "deck_id", 0) or None
+                existing_deck = (
+                    await db.get_collectible_starter_deck(deck_id) if deck_id else None
+                )
+                if deck_id and not existing_deck:
+                    await flash("Starter deck not found.", "error")
+                    return redirect(url_for("card_collection_admin", tab="decks"))
+                name = form.get("deck_name", "").strip()[:100]
+                hero_id = number_value(form, "hero_card_id", 0) or None
+                hero = await db.get_collectible_card(hero_id) if hero_id else None
+                if not name:
+                    await flash("Starter deck name is required.", "error")
+                    return redirect(url_for("card_collection_admin", tab="decks", edit_deck=deck_id or ""))
+                if not hero or hero.get("card_type") != "Hero":
+                    await flash("Select a Hero card for the starter deck.", "error")
+                    return redirect(url_for("card_collection_admin", tab="decks", edit_deck=deck_id or ""))
+
+                deck_cards = []
+                all_cards = await db.get_collectible_cards(include_inactive=True)
+                for item in all_cards:
+                    quantity = number_value(form, f"card_qty_{item['id']}", 0, 0, 99)
+                    if quantity and item.get("card_type") != "Hero":
+                        deck_cards.append((int(item["id"]), quantity))
+                if not deck_cards:
+                    await flash("Add at least one non-Hero card to the starter deck.", "error")
+                    return redirect(url_for("card_collection_admin", tab="decks", edit_deck=deck_id or ""))
+
+                saved_deck_id = await db.save_collectible_starter_deck(
+                    deck_id,
+                    name=name,
+                    description=form.get("deck_description", "").strip()[:1000],
+                    hero_card_id=hero_id,
+                    active=1 if form.get("deck_active") else 0,
+                    position=number_value(form, "deck_position", 0, 0, 999),
+                    cards=deck_cards,
+                )
+                await db.add_audit_log(
+                    event_type="collectible_starter_deck_saved",
+                    details=f"Starter deck #{saved_deck_id}: {name}",
+                    actor=session.get("username", "unknown"),
+                )
+                await flash("Starter deck saved.", "success")
+                return redirect(
+                    url_for("card_collection_admin", tab="decks", edit_deck=saved_deck_id)
+                )
+
+            if action == "import_cards":
+                raw_json = form.get("cards_json", "").strip()
+                files = await request.files
+                import_file = files.get("cards_json_file")
+                if import_file and import_file.filename:
+                    try:
+                        file_data = import_file.read()
+                        if hasattr(file_data, "__await__"):
+                            file_data = await file_data
+                        raw_json = file_data.decode("utf-8")
+                    except (AttributeError, TypeError, UnicodeDecodeError, OSError):
+                        await flash("The uploaded JSON file could not be read.", "error")
+                        return redirect(url_for("card_collection_admin", tab="import"))
+                try:
+                    payload = _json.loads(raw_json)
+                except (_json.JSONDecodeError, TypeError) as exc:
+                    await flash(f"Invalid card JSON: {exc}", "error")
+                    return redirect(url_for("card_collection_admin", tab="import"))
+                if not isinstance(payload, list):
+                    await flash("Card JSON must contain a list of cards.", "error")
+                    return redirect(url_for("card_collection_admin", tab="import"))
+
+                imported = 0
+                for raw_card in payload[:500]:
+                    if not isinstance(raw_card, dict):
+                        continue
+                    external_key = re.sub(
+                        r"[^a-z0-9_]+", "_", str(raw_card.get("id") or "").lower()
+                    ).strip("_")[:100]
+                    name = str(raw_card.get("name") or "").strip()[:100]
+                    card_type = str(raw_card.get("type") or "Action").title()
+                    if not external_key or not name or card_type not in allowed_card_types:
+                        continue
+                    existing = await db.get_collectible_card_by_external_key(external_key)
+                    image_filename = (existing or {}).get("image_filename") or ""
+                    rarity = str(raw_card.get("rarity") or "Common").title()
+                    if rarity not in allowed_rarities:
+                        rarity = "Common"
+                    await db.save_collectible_card(
+                        existing.get("id") if existing else None,
+                        external_key=external_key,
+                        name=name,
+                        card_type=card_type,
+                        deck_affinity=str(raw_card.get("deck") or "Global")[:100],
+                        rarity=rarity,
+                        attack=number_value(raw_card, "attack"),
+                        armor=number_value(raw_card, "armor"),
+                        health=number_value(raw_card, "health"),
+                        image_filename=image_filename,
+                        active=int(bool(image_filename) and bool((existing or {}).get("active", 1))),
+                        effects=raw_card.get("effects") if isinstance(raw_card.get("effects"), list) else [],
+                    )
+                    imported += 1
+                await db.add_audit_log(
+                    event_type="collectible_cards_imported",
+                    details=f"Imported or updated {imported} card definitions",
+                    actor=session.get("username", "unknown"),
+                )
+                await flash(
+                    f"Imported or updated {imported} card definitions. "
+                    "Cards without images remain inactive.",
+                    "success",
+                )
+                return redirect(url_for("card_collection_admin", tab="cards"))
+
             if action == "save":
                 existing = await db.get_collectible_card(card_id) if card_id else None
                 if card_id and not existing:
@@ -3861,7 +4013,6 @@ def create_app(db: Database, bot=None) -> Quart:
                 image_file = files.get("image")
                 old_image = image_filename
                 if image_file and image_file.filename:
-                    import uuid
                     original = image_file.filename.strip()
                     ext = original.rsplit(".", 1)[-1].lower() if "." in original else ""
                     if ext not in allowed_extensions:
@@ -3905,9 +4056,69 @@ def create_app(db: Database, bot=None) -> Quart:
                 except (TypeError, ValueError):
                     draw_weight = 1.0
 
+                card_type = form.get("card_type", "Action").title()
+                if card_type not in allowed_card_types:
+                    card_type = "Action"
+                external_key = re.sub(
+                    r"[^a-z0-9_]+",
+                    "_",
+                    (form.get("external_key") or name).strip().lower(),
+                ).strip("_")[:100]
+                duplicate = await db.get_collectible_card_by_external_key(external_key)
+                if duplicate and int(duplicate["id"]) != int(card_id or 0):
+                    await flash("Card ID is already used by another card.", "error")
+                    return redirect(url_for("card_collection_admin", edit=card_id or ""))
+
+                try:
+                    effects = _json.loads(form.get("effects_json", "[]"))
+                    if not isinstance(effects, list) or len(effects) > 20:
+                        raise ValueError("A card can contain up to 20 effects.")
+                    normalized_effects = []
+                    for effect in effects:
+                        if not isinstance(effect, dict):
+                            raise ValueError("Every effect must be an object.")
+                        trigger = effect.get("trigger") or {}
+                        conditions = effect.get("conditions") or []
+                        actions = effect.get("actions") or []
+                        if not isinstance(conditions, list) or len(conditions) > 20:
+                            raise ValueError("An effect can contain up to 20 conditions.")
+                        if not isinstance(actions, list) or not actions or len(actions) > 20:
+                            raise ValueError("Every effect needs between 1 and 20 actions.")
+                        normalized_effects.append({
+                            "trigger": {
+                                "triggerType": str(trigger.get("triggerType") or "OnCardPlayed")[:60],
+                                "source": str(trigger.get("source") or "Self")[:30],
+                            },
+                            "conditions": [
+                                {
+                                    "conditionType": str(c.get("conditionType") or "CardFamily")[:60],
+                                    "operator": str(c.get("operator") or "Is")[:30],
+                                    "value": str(c.get("value") or "")[:200],
+                                }
+                                for c in conditions if isinstance(c, dict)
+                            ],
+                            "actions": [
+                                {
+                                    "actionType": str(a.get("actionType") or "Attack")[:60],
+                                    "target": str(a.get("target") or "Self")[:30],
+                                    "value": max(-9999, min(9999, float(a.get("value") or 0))),
+                                    "duration": max(0, min(999, int(a.get("duration") or 0))),
+                                }
+                                for a in actions if isinstance(a, dict)
+                            ],
+                        })
+                    effects = normalized_effects
+                except (ValueError, TypeError, _json.JSONDecodeError) as exc:
+                    await flash(f"Invalid effect configuration: {exc}", "error")
+                    return redirect(url_for("card_collection_admin", edit=card_id or ""))
+
                 saved_id = await db.save_collectible_card(
                     card_id,
+                    external_key=external_key,
                     name=name,
+                    card_type=card_type,
+                    card_family=form.get("card_family", "").strip()[:100],
+                    deck_affinity=form.get("deck_affinity", "Global").strip()[:100] or "Global",
                     subtitle=form.get("subtitle", "").strip()[:200],
                     description=form.get("description", "").strip()[:2000],
                     quote=form.get("quote", "").strip()[:500],
@@ -3923,13 +4134,16 @@ def create_app(db: Database, bot=None) -> Quart:
                     luck=number_value(form, "luck"),
                     attack=number_value(form, "attack"),
                     defense=number_value(form, "defense"),
-                    passive_name=form.get("passive_name", "").strip()[:100],
-                    passive_text=form.get("passive_text", "").strip()[:1000],
-                    special_name=form.get("special_name", "").strip()[:100],
-                    special_text=form.get("special_text", "").strip()[:1000],
-                    bonus_text=form.get("bonus_text", "").strip()[:1000],
+                    health=number_value(form, "health"),
+                    armor=number_value(form, "armor"),
+                    passive_name=str((existing or {}).get("passive_name") or "")[:100],
+                    passive_text=str((existing or {}).get("passive_text") or "")[:1000],
+                    special_name=str((existing or {}).get("special_name") or "")[:100],
+                    special_text=str((existing or {}).get("special_text") or "")[:1000],
+                    bonus_text=str((existing or {}).get("bonus_text") or "")[:1000],
                     image_filename=image_filename,
                     active=1 if form.get("active") else 0,
+                    effects=effects,
                 )
                 if old_image and old_image != image_filename:
                     old_path = os.path.join(card_image_dir, os.path.basename(old_image))
@@ -3948,11 +4162,27 @@ def create_app(db: Database, bot=None) -> Quart:
         edit_card = (
             await db.get_collectible_card(int(edit_raw)) if edit_raw.isdigit() else None
         )
+        decks = await db.get_collectible_starter_decks(include_inactive=True)
+        edit_deck_raw = request.args.get("edit_deck", "").strip()
+        edit_deck = (
+            await db.get_collectible_starter_deck(int(edit_deck_raw))
+            if edit_deck_raw.isdigit() else None
+        )
         return await render_template(
             "card_collection.html",
             cards=cards,
             edit_card=edit_card,
+            starter_decks=decks,
+            edit_deck=edit_deck,
+            active_tab=request.args.get("tab", "cards"),
             rarities=["Common", "Uncommon", "Rare", "Epic", "Legendary"],
+            card_types=["Hero", "Action", "Equipment", "Event", "Trigger"],
+            trigger_types=["OnCardPlayed", "OnTurnStart", "OnTurnEnd", "OnAttack", "OnDamaged", "OnHeroDamaged", "OnHeal", "OnEquip", "BeforeAction", "AfterActionResolved", "Passive"],
+            sources=["Self", "Opponent", "Any", "Passive"],
+            condition_types=["CardFamily", "CardName", "ActionType", "DamageDealt", "OpponentHP", "SelfHP", "SelfArmor", "OpponentArmor", "HeroAttack", "OpponentBleeding", "OpponentStunned", "HasEquipment", "IsEventActive"],
+            operators=["Is", "IsNot", "Contains", "GreaterThan", "LessThan", "GreaterOrEqual", "LessOrEqual", "=", "<", ">", "<=", ">="],
+            action_types=["Attack", "Heal", "Bleeding", "ApplyBleeding", "Stun", "ModifyHeroAttack", "ModifyAttack", "ModifyHeroArmor", "ApplyArmor", "DestroyEquipment", "DestroyRandomEquipmentOrGainAttack", "DrawCard", "DiscardCard", "DestroySelf"],
+            targets=["Self", "Opponent", "Both", "CurrentAction"],
         )
 
     # --- Image Posting ---

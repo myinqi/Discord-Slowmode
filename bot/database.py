@@ -939,8 +939,109 @@ class Database:
                 ON collectible_user_cards(user_id);
             CREATE INDEX IF NOT EXISTS idx_collectible_draws_card
                 ON collectible_card_draws(card_id);
+
+            CREATE TABLE IF NOT EXISTS collectible_card_effects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                card_id INTEGER NOT NULL,
+                position INTEGER NOT NULL DEFAULT 0,
+                trigger_type TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'Self',
+                FOREIGN KEY (card_id) REFERENCES collectible_cards(id)
+                    ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS collectible_card_conditions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                effect_id INTEGER NOT NULL,
+                position INTEGER NOT NULL DEFAULT 0,
+                condition_type TEXT NOT NULL,
+                operator TEXT NOT NULL DEFAULT 'Is',
+                value TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY (effect_id) REFERENCES collectible_card_effects(id)
+                    ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS collectible_card_actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                effect_id INTEGER NOT NULL,
+                position INTEGER NOT NULL DEFAULT 0,
+                action_type TEXT NOT NULL,
+                target TEXT NOT NULL DEFAULT 'Self',
+                value REAL NOT NULL DEFAULT 0,
+                duration INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (effect_id) REFERENCES collectible_card_effects(id)
+                    ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS collectible_starter_decks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                hero_card_id INTEGER,
+                active INTEGER NOT NULL DEFAULT 1,
+                position INTEGER NOT NULL DEFAULT 0,
+                created_at REAL DEFAULT (unixepoch()),
+                updated_at REAL DEFAULT (unixepoch()),
+                FOREIGN KEY (hero_card_id) REFERENCES collectible_cards(id)
+                    ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS collectible_starter_deck_cards (
+                deck_id INTEGER NOT NULL,
+                card_id INTEGER NOT NULL,
+                quantity INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY (deck_id, card_id),
+                FOREIGN KEY (deck_id) REFERENCES collectible_starter_decks(id)
+                    ON DELETE CASCADE,
+                FOREIGN KEY (card_id) REFERENCES collectible_cards(id)
+                    ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS collectible_user_starter_decks (
+                user_id INTEGER PRIMARY KEY,
+                user_name TEXT NOT NULL,
+                deck_id INTEGER NOT NULL,
+                claimed_at REAL DEFAULT (unixepoch()),
+                FOREIGN KEY (deck_id) REFERENCES collectible_starter_decks(id)
+                    ON DELETE RESTRICT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_card_effects_card
+                ON collectible_card_effects(card_id, position);
+            CREATE INDEX IF NOT EXISTS idx_card_conditions_effect
+                ON collectible_card_conditions(effect_id, position);
+            CREATE INDEX IF NOT EXISTS idx_card_actions_effect
+                ON collectible_card_actions(effect_id, position);
+            CREATE INDEX IF NOT EXISTS idx_starter_decks_active
+                ON collectible_starter_decks(active, position);
         """)
         await self.db.commit()
+
+        for col, definition in [
+            ("external_key", "TEXT DEFAULT ''"),
+            ("card_type", "TEXT NOT NULL DEFAULT 'Action'"),
+            ("card_family", "TEXT DEFAULT ''"),
+            ("deck_affinity", "TEXT DEFAULT 'Global'"),
+            ("health", "INTEGER NOT NULL DEFAULT 0"),
+            ("armor", "INTEGER NOT NULL DEFAULT 0"),
+        ]:
+            try:
+                await self.db.execute(
+                    f"ALTER TABLE collectible_cards ADD COLUMN {col} {definition}"
+                )
+                await self.db.commit()
+            except Exception:
+                pass
+        try:
+            await self.db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_collectible_cards_external_key "
+                "ON collectible_cards(external_key) WHERE external_key <> ''"
+            )
+            await self.db.commit()
+        except aiosqlite.IntegrityError:
+            # Existing installations may contain manually duplicated IDs. The
+            # editor still prevents new duplicates until they are cleaned up.
+            await self.db.rollback()
 
     # --- Collectible Cards ---
 
@@ -970,35 +1071,110 @@ class Database:
             "SELECT * FROM collectible_cards WHERE id = ?", (int(card_id),)
         ) as cursor:
             row = await cursor.fetchone()
-            return dict(row) if row else None
+            card = dict(row) if row else None
+        if card:
+            card["effects"] = await self.get_collectible_card_effects(int(card_id))
+        return card
 
-    async def save_collectible_card(self, card_id: Optional[int] = None, **fields) -> int:
+    async def get_collectible_card_effects(self, card_id: int) -> list[dict]:
+        async with self.db.execute(
+            "SELECT * FROM collectible_card_effects WHERE card_id = ? "
+            "ORDER BY position, id",
+            (int(card_id),),
+        ) as cursor:
+            effects = [dict(row) for row in await cursor.fetchall()]
+        for effect in effects:
+            async with self.db.execute(
+                "SELECT condition_type, operator, value "
+                "FROM collectible_card_conditions WHERE effect_id = ? "
+                "ORDER BY position, id",
+                (effect["id"],),
+            ) as cursor:
+                effect["conditions"] = [dict(row) for row in await cursor.fetchall()]
+            async with self.db.execute(
+                "SELECT action_type, target, value, duration "
+                "FROM collectible_card_actions WHERE effect_id = ? "
+                "ORDER BY position, id",
+                (effect["id"],),
+            ) as cursor:
+                effect["actions"] = [dict(row) for row in await cursor.fetchall()]
+        return effects
+
+    async def save_collectible_card(
+        self, card_id: Optional[int] = None, *, effects: Optional[list[dict]] = None,
+        **fields,
+    ) -> int:
         allowed = {
             "name", "subtitle", "description", "quote", "rarity", "draw_weight",
             "series", "card_number", "hero_type", "strength", "agility",
             "endurance", "charisma", "luck", "attack", "defense",
             "passive_name", "passive_text", "special_name", "special_text",
-            "bonus_text", "image_filename", "active",
+            "bonus_text", "image_filename", "active", "external_key", "card_type",
+            "card_family", "deck_affinity", "health", "armor",
         }
         clean = {key: value for key, value in fields.items() if key in allowed}
         if card_id:
-            if not clean:
-                return int(card_id)
-            columns = ", ".join(f"{key} = ?" for key in clean)
-            await self.db.execute(
-                f"UPDATE collectible_cards SET {columns}, updated_at = unixepoch() WHERE id = ?",
-                (*clean.values(), int(card_id)),
+            if clean:
+                columns = ", ".join(f"{key} = ?" for key in clean)
+                await self.db.execute(
+                    f"UPDATE collectible_cards SET {columns}, updated_at = unixepoch() WHERE id = ?",
+                    (*clean.values(), int(card_id)),
+                )
+            saved_id = int(card_id)
+        else:
+            cursor = await self.db.execute(
+                f"INSERT INTO collectible_cards ({', '.join(clean)}) "
+                f"VALUES ({', '.join('?' for _ in clean)})",
+                tuple(clean.values()),
             )
-            await self.db.commit()
-            return int(card_id)
+            saved_id = int(cursor.lastrowid)
 
-        cursor = await self.db.execute(
-            f"INSERT INTO collectible_cards ({', '.join(clean)}) "
-            f"VALUES ({', '.join('?' for _ in clean)})",
-            tuple(clean.values()),
-        )
+        if effects is not None:
+            await self.db.execute(
+                "DELETE FROM collectible_card_effects WHERE card_id = ?", (saved_id,)
+            )
+            for effect_pos, effect in enumerate(effects):
+                trigger = effect.get("trigger") or {}
+                effect_cursor = await self.db.execute(
+                    "INSERT INTO collectible_card_effects "
+                    "(card_id, position, trigger_type, source) VALUES (?, ?, ?, ?)",
+                    (
+                        saved_id,
+                        effect_pos,
+                        str(trigger.get("triggerType") or "OnCardPlayed"),
+                        str(trigger.get("source") or "Self"),
+                    ),
+                )
+                effect_id = int(effect_cursor.lastrowid)
+                for condition_pos, condition in enumerate(effect.get("conditions") or []):
+                    await self.db.execute(
+                        "INSERT INTO collectible_card_conditions "
+                        "(effect_id, position, condition_type, operator, value) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (
+                            effect_id,
+                            condition_pos,
+                            str(condition.get("conditionType") or "CardFamily"),
+                            str(condition.get("operator") or "Is"),
+                            str(condition.get("value") or ""),
+                        ),
+                    )
+                for action_pos, action in enumerate(effect.get("actions") or []):
+                    await self.db.execute(
+                        "INSERT INTO collectible_card_actions "
+                        "(effect_id, position, action_type, target, value, duration) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (
+                            effect_id,
+                            action_pos,
+                            str(action.get("actionType") or "Attack"),
+                            str(action.get("target") or "Self"),
+                            float(action.get("value") or 0),
+                            int(action.get("duration") or 0),
+                        ),
+                    )
         await self.db.commit()
-        return int(cursor.lastrowid)
+        return saved_id
 
     async def delete_collectible_card(self, card_id: int) -> Optional[str]:
         card = await self.get_collectible_card(card_id)
@@ -1108,6 +1284,204 @@ class Database:
             "total_cards": int(owned["total_cards"] or 0),
             "available_cards": int(available["available_cards"] or 0),
         }
+
+    async def get_collectible_card_by_external_key(self, external_key: str) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM collectible_cards WHERE external_key = ? LIMIT 1",
+            (str(external_key).strip(),),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            return None
+        card = dict(row)
+        card["effects"] = await self.get_collectible_card_effects(card["id"])
+        return card
+
+    async def get_collectible_starter_decks(
+        self, *, include_inactive: bool = True
+    ) -> list[dict]:
+        where = "" if include_inactive else "WHERE d.active = 1"
+        async with self.db.execute(
+            f"""
+            SELECT d.*, h.name AS hero_name, h.image_filename AS hero_image_filename,
+                   COALESCE((
+                       SELECT SUM(dc.quantity)
+                       FROM collectible_starter_deck_cards dc
+                       WHERE dc.deck_id = d.id
+                   ), 0) AS card_count,
+                   (SELECT COUNT(*) FROM collectible_user_starter_decks ud
+                    WHERE ud.deck_id = d.id) AS claimed_count
+            FROM collectible_starter_decks d
+            LEFT JOIN collectible_cards h ON h.id = d.hero_card_id
+            {where}
+            ORDER BY d.position, d.name COLLATE NOCASE
+            """
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def get_collectible_starter_deck(self, deck_id: int) -> Optional[dict]:
+        async with self.db.execute(
+            """
+            SELECT d.*, h.name AS hero_name, h.image_filename AS hero_image_filename
+            FROM collectible_starter_decks d
+            LEFT JOIN collectible_cards h ON h.id = d.hero_card_id
+            WHERE d.id = ?
+            """,
+            (int(deck_id),),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            return None
+        deck = dict(row)
+        async with self.db.execute(
+            """
+            SELECT c.*, dc.quantity
+            FROM collectible_starter_deck_cards dc
+            JOIN collectible_cards c ON c.id = dc.card_id
+            WHERE dc.deck_id = ?
+            ORDER BY c.card_type = 'Hero' DESC, c.name COLLATE NOCASE
+            """,
+            (int(deck_id),),
+        ) as cursor:
+            deck["cards"] = [dict(card) for card in await cursor.fetchall()]
+        deck["card_count"] = sum(int(card["quantity"]) for card in deck["cards"])
+        return deck
+
+    async def save_collectible_starter_deck(
+        self,
+        deck_id: Optional[int] = None,
+        *,
+        name: str,
+        description: str = "",
+        hero_card_id: Optional[int] = None,
+        active: int = 1,
+        position: int = 0,
+        cards: Optional[list[tuple[int, int]]] = None,
+    ) -> int:
+        if deck_id:
+            await self.db.execute(
+                """
+                UPDATE collectible_starter_decks
+                SET name = ?, description = ?, hero_card_id = ?, active = ?,
+                    position = ?, updated_at = unixepoch()
+                WHERE id = ?
+                """,
+                (
+                    name,
+                    description,
+                    hero_card_id,
+                    int(bool(active)),
+                    int(position),
+                    int(deck_id),
+                ),
+            )
+            saved_id = int(deck_id)
+        else:
+            cursor = await self.db.execute(
+                """
+                INSERT INTO collectible_starter_decks
+                    (name, description, hero_card_id, active, position)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (name, description, hero_card_id, int(bool(active)), int(position)),
+            )
+            saved_id = int(cursor.lastrowid)
+
+        if cards is not None:
+            await self.db.execute(
+                "DELETE FROM collectible_starter_deck_cards WHERE deck_id = ?",
+                (saved_id,),
+            )
+            for card_id, quantity in cards:
+                if int(quantity) <= 0 or int(card_id) == int(hero_card_id or 0):
+                    continue
+                await self.db.execute(
+                    """
+                    INSERT INTO collectible_starter_deck_cards
+                        (deck_id, card_id, quantity)
+                    VALUES (?, ?, ?)
+                    """,
+                    (saved_id, int(card_id), max(1, min(99, int(quantity)))),
+                )
+        await self.db.commit()
+        return saved_id
+
+    async def delete_collectible_starter_deck(self, deck_id: int) -> bool:
+        try:
+            cursor = await self.db.execute(
+                "DELETE FROM collectible_starter_decks WHERE id = ?", (int(deck_id),)
+            )
+            await self.db.commit()
+            return bool(cursor.rowcount)
+        except aiosqlite.IntegrityError:
+            await self.db.rollback()
+            return False
+
+    async def get_collectible_user_starter_deck(self, user_id: int) -> Optional[dict]:
+        async with self.db.execute(
+            """
+            SELECT ud.user_id, ud.user_name, ud.claimed_at,
+                   d.id AS deck_id, d.name, d.description,
+                   d.hero_card_id, h.name AS hero_name,
+                   h.image_filename AS hero_image_filename
+            FROM collectible_user_starter_decks ud
+            JOIN collectible_starter_decks d ON d.id = ud.deck_id
+            LEFT JOIN collectible_cards h ON h.id = d.hero_card_id
+            WHERE ud.user_id = ?
+            """,
+            (int(user_id),),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def claim_collectible_starter_deck(
+        self, *, user_id: int, user_name: str, deck_id: int
+    ) -> tuple[Optional[dict], bool]:
+        """Grant one configured starter deck atomically. Returns (deck, already_claimed)."""
+        existing = await self.get_collectible_user_starter_deck(user_id)
+        if existing:
+            return existing, True
+        deck = await self.get_collectible_starter_deck(deck_id)
+        if not deck or not deck.get("active"):
+            return None, False
+
+        grants: dict[int, int] = {}
+        if deck.get("hero_card_id"):
+            grants[int(deck["hero_card_id"])] = 1
+        for card in deck.get("cards") or []:
+            card_id = int(card["id"])
+            grants[card_id] = grants.get(card_id, 0) + max(1, int(card["quantity"]))
+
+        try:
+            await self.db.execute("BEGIN IMMEDIATE")
+            await self.db.execute(
+                """
+                INSERT INTO collectible_user_starter_decks
+                    (user_id, user_name, deck_id)
+                VALUES (?, ?, ?)
+                """,
+                (int(user_id), user_name, int(deck_id)),
+            )
+            for card_id, quantity in grants.items():
+                await self.db.execute(
+                    """
+                    INSERT INTO collectible_user_cards (user_id, card_id, quantity)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(user_id, card_id) DO UPDATE SET
+                        quantity = quantity + excluded.quantity,
+                        last_obtained_at = unixepoch()
+                    """,
+                    (int(user_id), card_id, quantity),
+                )
+            await self.db.commit()
+        except aiosqlite.IntegrityError:
+            await self.db.rollback()
+            existing = await self.get_collectible_user_starter_deck(user_id)
+            return existing, bool(existing)
+        except Exception:
+            await self.db.rollback()
+            raise
+        return deck, False
 
     # --- Channel Moderation ---
 

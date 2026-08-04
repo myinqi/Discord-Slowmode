@@ -1,184 +1,319 @@
 {% extends "base.html" %}
-{% block title %}Card Collection{% endblock %}
+{% block title %}Card Game{% endblock %}
 {% block content %}
 {% set card = edit_card or {} %}
-<div class="flex flex-wrap items-end justify-between gap-4 mb-6">
+{% set deck = edit_deck or {} %}
+{% set deck_quantities = {} %}
+{% if edit_deck %}
+    {% for entry in edit_deck.cards %}
+        {% set _ = deck_quantities.update({entry.id|string: entry.quantity}) %}
+    {% endfor %}
+{% endif %}
+
+<div class="flex flex-wrap items-end justify-between gap-4 mb-5">
     <div>
-        <h2 class="text-2xl font-bold text-white">Card Collection</h2>
-        <p class="text-gray-400 text-sm mt-1">Manage collectible cards used by the daily Discord draw.</p>
+        <h2 class="text-2xl font-bold text-white">Card Game</h2>
+        <p class="text-gray-400 text-sm mt-1">Manage collectible cards, executable effects and player starter decks.</p>
     </div>
-    {% if edit_card %}
-    <a href="{{ url_for('card_collection_admin') }}"
-       class="px-4 py-2 bg-discord-lighter hover:bg-gray-600 text-gray-200 rounded-lg text-sm transition-colors">
-        Add new card
-    </a>
-    {% endif %}
+    <div class="text-sm text-gray-400">
+        <span class="text-white font-semibold">{{ cards|length }}</span> cards ·
+        <span class="text-white font-semibold">{{ starter_decks|length }}</span> starter decks
+    </div>
 </div>
 
-<div class="grid grid-cols-1 xl:grid-cols-[minmax(420px,0.9fr)_minmax(520px,1.4fr)] gap-6 items-start">
-    <section class="bg-discord-dark rounded-lg border border-gray-700/50">
-        <div class="px-5 py-4 border-b border-gray-700/50">
-            <h3 class="text-white font-semibold">{% if edit_card %}Edit {{ edit_card.name }}{% else %}Create card{% endif %}</h3>
-        </div>
-        <form method="POST" enctype="multipart/form-data" class="p-5 space-y-5">
-            <input type="hidden" name="action" value="save">
-            {% if edit_card %}<input type="hidden" name="card_id" value="{{ edit_card.id }}">{% endif %}
+<nav class="inline-flex gap-1 p-1 bg-discord-dark border border-gray-700/60 rounded-lg mb-6" aria-label="Card game sections">
+    <a href="{{ url_for('card_collection_admin', tab='cards') }}"
+       class="px-4 py-2 rounded-md text-sm font-medium {% if active_tab == 'cards' %}bg-discord-blurple text-white{% else %}text-gray-400 hover:text-white{% endif %}">Cards</a>
+    <a href="{{ url_for('card_collection_admin', tab='decks') }}"
+       class="px-4 py-2 rounded-md text-sm font-medium {% if active_tab == 'decks' %}bg-discord-blurple text-white{% else %}text-gray-400 hover:text-white{% endif %}">Starter Decks</a>
+    <a href="{{ url_for('card_collection_admin', tab='import') }}"
+       class="px-4 py-2 rounded-md text-sm font-medium {% if active_tab == 'import' %}bg-discord-blurple text-white{% else %}text-gray-400 hover:text-white{% endif %}">JSON Import</a>
+</nav>
 
-            <div class="grid sm:grid-cols-2 gap-4">
-                <div>
-                    <label class="block text-xs text-gray-400 mb-1">Name *</label>
-                    <input name="name" required maxlength="100" value="{{ card.get('name', '') }}"
-                           class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple">
-                </div>
-                <div>
-                    <label class="block text-xs text-gray-400 mb-1">Subtitle</label>
-                    <input name="subtitle" maxlength="200" value="{{ card.get('subtitle', '') }}"
-                           class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple">
-                </div>
-                <div>
-                    <label class="block text-xs text-gray-400 mb-1">Series</label>
-                    <input name="series" maxlength="100" value="{{ card.get('series', '') }}" placeholder="Core Set"
-                           class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple">
-                </div>
-                <div>
-                    <label class="block text-xs text-gray-400 mb-1">Card number</label>
-                    <input name="card_number" maxlength="30" value="{{ card.get('card_number', '') }}" placeholder="001/100"
-                           class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple">
-                </div>
-                <div>
-                    <label class="block text-xs text-gray-400 mb-1">Hero type</label>
-                    <input name="hero_type" maxlength="100" value="{{ card.get('hero_type', '') }}" placeholder="Leader, Spellweaver"
-                           class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple">
-                </div>
-                <div class="grid grid-cols-2 gap-3">
-                    <div>
-                        <label class="block text-xs text-gray-400 mb-1">Rarity</label>
-                        <select name="rarity" class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple">
-                            {% for rarity in rarities %}
-                            <option value="{{ rarity }}" {% if card.get('rarity', 'Common') == rarity %}selected{% endif %}>{{ rarity }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div>
-                        <label class="block text-xs text-gray-400 mb-1">Draw weight</label>
-                        <input type="number" name="draw_weight" min="0.01" max="100000" step="0.01" value="{{ card.get('draw_weight', 1) }}"
-                               class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple">
-                        <p class="text-xs text-gray-500 mt-1">Higher values are drawn more often.</p>
-                    </div>
-                </div>
-            </div>
-
+{% if active_tab == 'decks' %}
+<div class="grid grid-cols-1 xl:grid-cols-[minmax(520px,1.35fr)_minmax(340px,0.65fr)] gap-6 items-start">
+    <section class="bg-discord-dark border border-gray-700/50 rounded-lg">
+        <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between gap-3">
             <div>
-                <label class="block text-xs text-gray-400 mb-1">Card image {% if not edit_card %}*{% endif %}</label>
-                <input type="file" name="image" {% if not edit_card %}required{% endif %} accept="image/png,image/jpeg,image/webp"
-                       class="w-full text-gray-400 text-sm file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-discord-blurple file:text-white hover:file:bg-discord-blurple/80 file:cursor-pointer">
-                <p class="text-xs text-gray-500 mt-1">PNG, JPEG or WebP, up to 15 MB. Leave empty while editing to keep the current image.</p>
+                <h3 class="text-white font-semibold">{% if edit_deck %}Edit {{ edit_deck.name }}{% else %}Build a starter deck{% endif %}</h3>
+                <p class="text-xs text-gray-500 mt-1">A player may claim exactly one active starter deck.</p>
             </div>
-
-            <div class="grid grid-cols-4 sm:grid-cols-7 gap-3">
-                {% for key, label in [('strength','STR'), ('agility','AGI'), ('endurance','END'), ('charisma','CHA'), ('luck','LUCK'), ('attack','ATK'), ('defense','DEF')] %}
+            {% if edit_deck %}
+            <a href="{{ url_for('card_collection_admin', tab='decks') }}" class="px-3 py-2 bg-discord-lighter hover:bg-gray-600 text-sm text-gray-200 rounded-md">New deck</a>
+            {% endif %}
+        </div>
+        <form method="POST" class="p-5 space-y-5">
+            <input type="hidden" name="action" value="save_deck">
+            {% if edit_deck %}<input type="hidden" name="deck_id" value="{{ edit_deck.id }}">{% endif %}
+            <div class="grid md:grid-cols-2 gap-4">
                 <div>
-                    <label class="block text-xs text-gray-400 mb-1">{{ label }}</label>
-                    <input type="number" name="{{ key }}" min="0" max="999" value="{{ card.get(key, 0) }}"
-                           class="w-full px-2 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white text-center focus:outline-none focus:border-discord-blurple">
-                </div>
-                {% endfor %}
-            </div>
-
-            <div class="space-y-4">
-                <div>
-                    <label class="block text-xs text-gray-400 mb-1">Quote</label>
-                    <textarea name="quote" rows="2" maxlength="500" class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white resize-y focus:outline-none focus:border-discord-blurple">{{ card.get('quote', '') }}</textarea>
+                    <label class="block text-xs text-gray-400 mb-1">Deck name *</label>
+                    <input name="deck_name" required maxlength="100" value="{{ deck.get('name', '') }}" placeholder="Tarja Starter Deck"
+                           class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-md text-white focus:outline-none focus:border-discord-blurple">
                 </div>
                 <div>
+                    <label class="block text-xs text-gray-400 mb-1">Hero *</label>
+                    <select name="hero_card_id" required class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-md text-white focus:outline-none focus:border-discord-blurple">
+                        <option value="">Select a Hero</option>
+                        {% for item in cards if item.card_type == 'Hero' %}
+                        <option value="{{ item.id }}" {% if deck.get('hero_card_id') == item.id %}selected{% endif %}>{{ item.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="md:col-span-2">
                     <label class="block text-xs text-gray-400 mb-1">Description</label>
-                    <textarea name="description" rows="3" maxlength="2000" class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white resize-y focus:outline-none focus:border-discord-blurple">{{ card.get('description', '') }}</textarea>
-                </div>
-                <div class="grid sm:grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-xs text-gray-400 mb-1">Passive ability</label>
-                        <input name="passive_name" maxlength="100" value="{{ card.get('passive_name', '') }}" placeholder="Ability name"
-                               class="w-full px-3 py-2 mb-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple">
-                        <textarea name="passive_text" rows="3" maxlength="1000" placeholder="Ability description" class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white resize-y focus:outline-none focus:border-discord-blurple">{{ card.get('passive_text', '') }}</textarea>
-                    </div>
-                    <div>
-                        <label class="block text-xs text-gray-400 mb-1">Special ability</label>
-                        <input name="special_name" maxlength="100" value="{{ card.get('special_name', '') }}" placeholder="Ability name"
-                               class="w-full px-3 py-2 mb-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple">
-                        <textarea name="special_text" rows="3" maxlength="1000" placeholder="Ability description" class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white resize-y focus:outline-none focus:border-discord-blurple">{{ card.get('special_text', '') }}</textarea>
-                    </div>
+                    <textarea name="deck_description" rows="2" maxlength="1000" placeholder="The identity and play style of this deck."
+                              class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-md text-white resize-y focus:outline-none focus:border-discord-blurple">{{ deck.get('description', '') }}</textarea>
                 </div>
                 <div>
-                    <label class="block text-xs text-gray-400 mb-1">Special bonus</label>
-                    <textarea name="bonus_text" rows="2" maxlength="1000" class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white resize-y focus:outline-none focus:border-discord-blurple">{{ card.get('bonus_text', '') }}</textarea>
+                    <label class="block text-xs text-gray-400 mb-1">Display order</label>
+                    <input type="number" name="deck_position" min="0" max="999" value="{{ deck.get('position', 0) }}"
+                           class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-md text-white focus:outline-none focus:border-discord-blurple">
                 </div>
+                <label class="flex items-end gap-2 pb-2 text-sm text-gray-300 cursor-pointer">
+                    <input type="checkbox" name="deck_active" value="1" {% if deck.get('active', 1) %}checked{% endif %}
+                           class="w-4 h-4 rounded bg-discord-darker border-gray-600 text-discord-blurple focus:ring-discord-blurple">
+                    Available to players
+                </label>
             </div>
 
-            <div class="flex flex-wrap items-center justify-between gap-4 pt-2">
-                <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
-                    <input type="checkbox" name="active" value="1" {% if card.get('active', 1) %}checked{% endif %}
-                           class="w-4 h-4 rounded bg-discord-darker border-gray-600 text-discord-blurple focus:ring-discord-blurple">
-                    Available in daily draws
-                </label>
-                <button type="submit" class="px-5 py-2.5 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg font-medium transition-colors">
-                    Save card
-                </button>
+            <div class="border-t border-gray-700/50 pt-5">
+                <div class="flex flex-wrap items-end justify-between gap-3 mb-3">
+                    <div>
+                        <h4 class="text-white font-medium">Deck cards</h4>
+                        <p class="text-xs text-gray-500">Set the number of copies. The selected Hero is granted automatically.</p>
+                    </div>
+                    <input id="deck-card-filter" type="search" placeholder="Filter cards"
+                           class="w-56 px-3 py-2 bg-discord-darker border border-gray-700 rounded-md text-sm text-white focus:outline-none focus:border-discord-blurple">
+                </div>
+                <div class="grid sm:grid-cols-2 2xl:grid-cols-3 gap-2 max-h-[560px] overflow-y-auto pr-1" id="deck-card-list">
+                    {% for item in cards if item.card_type != 'Hero' %}
+                    <label class="deck-card-row grid grid-cols-[44px_minmax(0,1fr)_68px] items-center gap-3 p-2 bg-discord-darker border border-gray-700/50 rounded-md" data-search="{{ (item.name ~ ' ' ~ item.card_type ~ ' ' ~ item.card_family ~ ' ' ~ item.deck_affinity)|lower }}">
+                        <div class="w-11 h-14 bg-black rounded overflow-hidden">
+                            {% if item.image_filename %}<img src="{{ url_for('collectible_card_image', filename=item.image_filename) }}" alt="" class="w-full h-full object-cover">{% endif %}
+                        </div>
+                        <span class="min-w-0">
+                            <strong class="block text-sm text-gray-200 truncate">{{ item.name }}</strong>
+                            <span class="block text-xs text-gray-500 truncate">{{ item.card_type }} · {{ item.rarity }}</span>
+                        </span>
+                        <input type="number" name="card_qty_{{ item.id }}" min="0" max="99" value="{{ deck_quantities.get(item.id|string, 0) }}" aria-label="Copies of {{ item.name }}"
+                               class="w-full px-2 py-2 bg-discord-dark border border-gray-600 rounded-md text-white text-center focus:outline-none focus:border-discord-blurple">
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="flex justify-end">
+                <button class="px-5 py-2.5 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-md font-medium">Save starter deck</button>
             </div>
         </form>
     </section>
 
-    <section class="bg-discord-dark rounded-lg border border-gray-700/50">
-        <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between gap-3">
-            <div>
-                <h3 class="text-white font-semibold">Card library</h3>
-                <p class="text-gray-500 text-xs mt-1">{{ cards|length }} card{% if cards|length != 1 %}s{% endif %}</p>
+    <section class="space-y-3">
+        {% for item in starter_decks %}
+        <article class="bg-discord-dark border border-gray-700/50 rounded-lg p-4 {% if not item.active %}opacity-60{% endif %}">
+            <div class="flex gap-3">
+                <div class="w-16 h-20 bg-black rounded-md overflow-hidden shrink-0">
+                    {% if item.hero_image_filename %}<img src="{{ url_for('collectible_card_image', filename=item.hero_image_filename) }}" alt="" class="w-full h-full object-cover">{% endif %}
+                </div>
+                <div class="min-w-0 flex-1">
+                    <div class="flex items-start justify-between gap-2">
+                        <h4 class="text-white font-semibold truncate">{{ item.name }}</h4>
+                        <span class="text-xs {% if item.active %}text-green-300{% else %}text-gray-500{% endif %}">{{ 'Active' if item.active else 'Inactive' }}</span>
+                    </div>
+                    <p class="text-xs text-gray-400 mt-1">{{ item.hero_name or 'No Hero' }} · {{ item.card_count }} deck cards + Hero</p>
+                    <p class="text-xs text-gray-500 mt-1">Claimed by {{ item.claimed_count }} player{% if item.claimed_count != 1 %}s{% endif %}</p>
+                </div>
             </div>
-        </div>
-        {% if cards %}
-        <div class="p-5 grid sm:grid-cols-2 gap-4">
-            {% for item in cards %}
-            <article class="bg-discord-darker border border-gray-700/50 rounded-lg overflow-hidden {% if not item.active %}opacity-60{% endif %}">
-                <div class="aspect-[2/3] bg-black flex items-center justify-center">
-                    <img src="{{ url_for('collectible_card_image', filename=item.image_filename) }}" alt="{{ item.name }}" class="w-full h-full object-contain">
-                </div>
-                <div class="p-4">
-                    <div class="flex items-start justify-between gap-3">
-                        <div class="min-w-0">
-                            <h4 class="text-white font-semibold truncate">{{ item.name }}</h4>
-                            <p class="text-xs text-gray-400 truncate">{{ item.subtitle or item.hero_type or 'No subtitle' }}</p>
-                        </div>
-                        <span class="text-xs px-2 py-1 rounded bg-discord-blurple/20 text-blue-300 shrink-0">{{ item.rarity }}</span>
-                    </div>
-                    <div class="grid grid-cols-3 gap-2 mt-3 text-xs text-gray-400">
-                        <span>Weight <strong class="text-gray-200">{{ item.draw_weight }}</strong></span>
-                        <span>Owned <strong class="text-gray-200">{{ item.total_owned }}</strong></span>
-                        <span>Draws <strong class="text-gray-200">{{ item.total_draws }}</strong></span>
-                    </div>
-                    <div class="flex items-center gap-2 mt-4">
-                        <a href="{{ url_for('card_collection_admin', edit=item.id) }}" class="flex-1 text-center px-3 py-2 bg-discord-lighter hover:bg-gray-600 text-gray-200 rounded-lg text-sm transition-colors">Edit</a>
-                        <form method="POST">
-                            <input type="hidden" name="action" value="toggle">
-                            <input type="hidden" name="card_id" value="{{ item.id }}">
-                            <button class="px-3 py-2 bg-discord-lighter hover:bg-gray-600 text-gray-300 rounded-lg text-sm transition-colors" title="{% if item.active %}Deactivate{% else %}Activate{% endif %}">
-                                {% if item.active %}Pause{% else %}Activate{% endif %}
-                            </button>
-                        </form>
-                        <form method="POST" onsubmit="return confirm('Delete {{ item.name|e }} and remove it from every user collection?');">
-                            <input type="hidden" name="action" value="delete">
-                            <input type="hidden" name="card_id" value="{{ item.id }}">
-                            <button class="px-3 py-2 bg-discord-red/20 hover:bg-discord-red/40 text-red-300 rounded-lg text-sm transition-colors" title="Delete card">Delete</button>
-                        </form>
-                    </div>
-                </div>
-            </article>
-            {% endfor %}
-        </div>
+            <div class="flex gap-2 mt-4">
+                <a href="{{ url_for('card_collection_admin', tab='decks', edit_deck=item.id) }}" class="flex-1 text-center px-3 py-2 bg-discord-lighter hover:bg-gray-600 text-gray-200 rounded-md text-sm">Edit</a>
+                <form method="POST"><input type="hidden" name="action" value="toggle_deck"><input type="hidden" name="deck_id" value="{{ item.id }}"><button class="px-3 py-2 bg-discord-lighter hover:bg-gray-600 text-gray-300 rounded-md text-sm">{{ 'Pause' if item.active else 'Activate' }}</button></form>
+                <form method="POST" onsubmit="return confirm('Delete this starter deck?');"><input type="hidden" name="action" value="delete_deck"><input type="hidden" name="deck_id" value="{{ item.id }}"><button class="px-3 py-2 bg-red-900/30 hover:bg-red-900/50 text-red-300 rounded-md text-sm">Delete</button></form>
+            </div>
+        </article>
         {% else %}
-        <div class="p-10 text-center">
-            <p class="text-gray-400">No cards have been created yet.</p>
-            <p class="text-gray-500 text-sm mt-1">Create the first card using the form.</p>
-        </div>
-        {% endif %}
+        <div class="bg-discord-dark border border-gray-700/50 rounded-lg p-8 text-center text-gray-400">No starter decks configured yet.</div>
+        {% endfor %}
     </section>
 </div>
+
+{% elif active_tab == 'import' %}
+<section class="max-w-4xl bg-discord-dark border border-gray-700/50 rounded-lg">
+    <div class="px-5 py-4 border-b border-gray-700/50">
+        <h3 class="text-white font-semibold">Import card definitions</h3>
+        <p class="text-xs text-gray-500 mt-1">Imports the prototype format into SQLite. Matching card IDs are updated.</p>
+    </div>
+    <form method="POST" enctype="multipart/form-data" class="p-5 space-y-5">
+        <input type="hidden" name="action" value="import_cards">
+        <div>
+            <label class="block text-xs text-gray-400 mb-1">JSON file</label>
+            <input type="file" name="cards_json_file" accept="application/json,.json"
+                   class="w-full text-gray-400 text-sm file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-discord-blurple file:text-white hover:file:bg-discord-blurple/80 file:cursor-pointer">
+        </div>
+        <div class="flex items-center gap-3 text-xs text-gray-600"><span class="h-px bg-gray-700 flex-1"></span>or paste JSON<span class="h-px bg-gray-700 flex-1"></span></div>
+        <textarea name="cards_json" rows="18" spellcheck="false" placeholder='[{"id":"raven_strike","name":"Raven Strike",...}]'
+                  class="w-full px-3 py-3 bg-discord-darker border border-gray-700 rounded-md text-gray-200 font-mono text-sm resize-y focus:outline-none focus:border-discord-blurple"></textarea>
+        <div class="bg-discord-darker border border-gray-700/50 rounded-md p-4 text-sm text-gray-400">
+            Imported definitions are stored in the database. New cards remain unavailable for daily draws until a card image is uploaded and the card is activated.
+        </div>
+        <div class="flex justify-end"><button class="px-5 py-2.5 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-md font-medium">Import into database</button></div>
+    </form>
+</section>
+
+{% else %}
+<div class="grid grid-cols-1 2xl:grid-cols-[minmax(620px,1.5fr)_minmax(360px,0.6fr)] gap-6 items-start">
+    <section class="bg-discord-dark border border-gray-700/50 rounded-lg">
+        <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between gap-3">
+            <div>
+                <h3 class="text-white font-semibold">{% if edit_card %}Edit {{ edit_card.name }}{% else %}Create card{% endif %}</h3>
+                <p class="text-xs text-gray-500 mt-1">Card data and executable rules are stored in SQLite.</p>
+            </div>
+            {% if edit_card %}<a href="{{ url_for('card_collection_admin', tab='cards') }}" class="px-3 py-2 bg-discord-lighter hover:bg-gray-600 text-sm text-gray-200 rounded-md">New card</a>{% endif %}
+        </div>
+        <form id="card-form" method="POST" enctype="multipart/form-data" class="p-5 space-y-6">
+            <input type="hidden" name="action" value="save">
+            <input type="hidden" name="effects_json" id="effects-json" value="[]">
+            {% if edit_card %}<input type="hidden" name="card_id" value="{{ edit_card.id }}">{% endif %}
+
+            <fieldset>
+                <legend class="text-xs font-semibold uppercase tracking-wide text-purple-300 mb-3">Basic information</legend>
+                <div class="grid md:grid-cols-2 gap-4">
+                    <div><label class="block text-xs text-gray-400 mb-1">Name *</label><input name="name" required maxlength="100" value="{{ card.get('name', '') }}" class="field"></div>
+                    <div><label class="block text-xs text-gray-400 mb-1">Card ID *</label><input name="external_key" required maxlength="100" value="{{ card.get('external_key', '') }}" placeholder="raven_strike" class="field font-mono"><p class="text-xs text-gray-600 mt-1">Stable engine identifier; lowercase letters, numbers and underscores.</p></div>
+                    <div><label class="block text-xs text-gray-400 mb-1">Subtitle</label><input name="subtitle" maxlength="200" value="{{ card.get('subtitle', '') }}" class="field"></div>
+                    <div><label class="block text-xs text-gray-400 mb-1">Series</label><input name="series" maxlength="100" value="{{ card.get('series', '') }}" placeholder="Core Set" class="field"></div>
+                    <div><label class="block text-xs text-gray-400 mb-1">Card type *</label><select name="card_type" class="field">{% for value in card_types %}<option {% if card.get('card_type', 'Action') == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></div>
+                    <div><label class="block text-xs text-gray-400 mb-1">Card family</label><input name="card_family" maxlength="100" value="{{ card.get('card_family', '') }}" placeholder="Raven" class="field"></div>
+                    <div><label class="block text-xs text-gray-400 mb-1">Deck affinity</label><input name="deck_affinity" maxlength="100" value="{{ card.get('deck_affinity', 'Global') }}" placeholder="Tarja or Global" class="field"></div>
+                    <div><label class="block text-xs text-gray-400 mb-1">Hero type</label><input name="hero_type" maxlength="100" value="{{ card.get('hero_type', '') }}" placeholder="Leader, Spellweaver" class="field"></div>
+                    <div><label class="block text-xs text-gray-400 mb-1">Card number</label><input name="card_number" maxlength="30" value="{{ card.get('card_number', '') }}" placeholder="003/100" class="field"></div>
+                    <div class="grid grid-cols-2 gap-3"><div><label class="block text-xs text-gray-400 mb-1">Rarity</label><select name="rarity" class="field">{% for value in rarities %}<option {% if card.get('rarity', 'Common') == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></div><div><label class="block text-xs text-gray-400 mb-1">Draw weight</label><input type="number" name="draw_weight" min="0.01" max="100000" step="0.01" value="{{ card.get('draw_weight', 1) }}" class="field"></div></div>
+                </div>
+            </fieldset>
+
+            <fieldset class="border-t border-gray-700/50 pt-5">
+                <legend class="text-xs font-semibold uppercase tracking-wide text-purple-300 mb-3">Artwork and text</legend>
+                <div class="grid md:grid-cols-2 gap-4">
+                    <div><label class="block text-xs text-gray-400 mb-1">Card image {% if not edit_card %}*{% endif %}</label><input type="file" name="image" {% if not edit_card %}required{% endif %} accept="image/png,image/jpeg,image/webp" class="w-full text-gray-400 text-sm file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:bg-discord-blurple file:text-white"><p class="text-xs text-gray-600 mt-1">PNG, JPEG or WebP, up to 15 MB.</p></div>
+                    <div><label class="block text-xs text-gray-400 mb-1">Quote</label><textarea name="quote" rows="3" maxlength="500" class="field resize-y">{{ card.get('quote', '') }}</textarea></div>
+                    <div class="md:col-span-2"><label class="block text-xs text-gray-400 mb-1">Description</label><textarea name="description" rows="3" maxlength="2000" class="field resize-y">{{ card.get('description', '') }}</textarea></div>
+                </div>
+            </fieldset>
+
+            <fieldset class="border-t border-gray-700/50 pt-5">
+                <legend class="text-xs font-semibold uppercase tracking-wide text-purple-300 mb-3">Combat values</legend>
+                <div class="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-9 gap-3">
+                    {% for key, label in [('health','HP'), ('armor','Armor'), ('attack','ATK'), ('defense','DEF'), ('strength','STR'), ('agility','AGI'), ('endurance','END'), ('charisma','CHA'), ('luck','Luck')] %}
+                    <div><label class="block text-xs text-gray-400 mb-1">{{ label }}</label><input type="number" name="{{ key }}" min="0" max="999" value="{{ card.get(key, 0) }}" class="field text-center px-2"></div>
+                    {% endfor %}
+                </div>
+            </fieldset>
+
+            <fieldset class="border-t border-gray-700/50 pt-5">
+                <div class="flex items-center justify-between gap-3 mb-3">
+                    <div><legend class="text-xs font-semibold uppercase tracking-wide text-purple-300">Effects and rules</legend><p class="text-xs text-gray-500 mt-1">Conditions are AND-linked. Actions execute from top to bottom.</p></div>
+                    <button type="button" id="add-effect" class="px-3 py-2 bg-purple-900/50 hover:bg-purple-800/60 text-purple-200 rounded-md text-sm">+ Add effect</button>
+                </div>
+                <div id="effects-editor" class="space-y-3"></div>
+            </fieldset>
+
+            <div class="flex flex-wrap items-center justify-between gap-4 border-t border-gray-700/50 pt-5">
+                <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer"><input type="checkbox" name="active" value="1" {% if card.get('active', 1) %}checked{% endif %} class="w-4 h-4 rounded bg-discord-darker border-gray-600 text-discord-blurple focus:ring-discord-blurple">Available in daily draws</label>
+                <button class="px-5 py-2.5 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-md font-medium">Save card</button>
+            </div>
+        </form>
+    </section>
+
+    <aside class="space-y-4 2xl:sticky 2xl:top-5">
+        {% if card.image_filename %}
+        <div class="bg-black border border-gray-700/50 rounded-lg overflow-hidden"><img src="{{ url_for('collectible_card_image', filename=card.image_filename) }}" alt="{{ card.name }}" class="w-full max-h-[680px] object-contain"></div>
+        {% endif %}
+        <section class="bg-discord-dark border border-gray-700/50 rounded-lg">
+            <div class="px-4 py-3 border-b border-gray-700/50"><h3 class="text-white font-semibold">Card library</h3></div>
+            <div class="p-3 space-y-2 max-h-[680px] overflow-y-auto">
+                {% for item in cards %}
+                <article class="grid grid-cols-[48px_minmax(0,1fr)] gap-3 p-2 bg-discord-darker border border-gray-700/50 rounded-md {% if not item.active %}opacity-55{% endif %}">
+                    <div class="w-12 h-16 bg-black rounded overflow-hidden">{% if item.image_filename %}<img src="{{ url_for('collectible_card_image', filename=item.image_filename) }}" alt="" class="w-full h-full object-cover">{% endif %}</div>
+                    <div class="min-w-0"><div class="flex items-start justify-between gap-2"><h4 class="text-sm text-white font-medium truncate">{{ item.name }}</h4><span class="text-[11px] text-purple-300 shrink-0">{{ item.rarity }}</span></div><p class="text-xs text-gray-500 truncate">{{ item.card_type }} · {{ item.deck_affinity }}</p><p class="text-xs text-gray-600 mt-1">Owned {{ item.total_owned }} · Draws {{ item.total_draws }}</p><div class="flex gap-2 mt-2"><a href="{{ url_for('card_collection_admin', tab='cards', edit=item.id) }}" class="text-xs text-blue-300 hover:text-blue-200">Edit</a><form method="POST"><input type="hidden" name="action" value="toggle"><input type="hidden" name="card_id" value="{{ item.id }}"><button class="text-xs text-gray-400 hover:text-white">{{ 'Pause' if item.active else 'Activate' }}</button></form><form method="POST" onsubmit="return confirm('Delete {{ item.name|e }} from all collections and starter decks?');"><input type="hidden" name="action" value="delete"><input type="hidden" name="card_id" value="{{ item.id }}"><button class="text-xs text-red-400 hover:text-red-300">Delete</button></form></div></div>
+                </article>
+                {% else %}<p class="p-5 text-center text-gray-500">No cards created yet.</p>{% endfor %}
+            </div>
+        </section>
+    </aside>
+</div>
+{% endif %}
+
+<style>
+.field { width:100%; padding:.5rem .75rem; background:#1e1f22; border:1px solid rgb(55 65 81); border-radius:.375rem; color:white; outline:none; }
+.field:focus { border-color:#5865f2; }
+</style>
+
+{% if active_tab == 'cards' %}
+<script>
+const effectOptions = {
+    triggers: {{ trigger_types|tojson }}, sources: {{ sources|tojson }},
+    conditions: {{ condition_types|tojson }}, operators: {{ operators|tojson }},
+    actions: {{ action_types|tojson }}, targets: {{ targets|tojson }}
+};
+let effects = {{ (edit_card.effects if edit_card else [])|tojson }};
+const editor = document.getElementById('effects-editor');
+const esc = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+const options = (items, selected) => items.map(v => `<option value="${esc(v)}" ${String(v)===String(selected)?'selected':''}>${esc(v)}</option>`).join('');
+
+function normalizeEffect(raw={}) {
+    const trigger = raw.trigger || {triggerType: raw.trigger_type, source: raw.source};
+    return {
+        trigger: {triggerType: trigger.triggerType || 'OnCardPlayed', source: trigger.source || 'Self'},
+        conditions: (raw.conditions || []).map(c => ({conditionType:c.conditionType || c.condition_type || 'CardFamily', operator:c.operator || 'Is', value:c.value ?? ''})),
+        actions: (raw.actions || []).map(a => ({actionType:a.actionType || a.action_type || 'Attack', target:a.target || 'Opponent', value:a.value ?? 0, duration:a.duration ?? 0}))
+    };
+}
+effects = effects.map(normalizeEffect);
+
+function renderEffects() {
+    editor.innerHTML = effects.map((effect, ei) => `
+        <section class="effect-panel bg-discord-darker border border-gray-700/60 rounded-md p-4" data-effect="${ei}">
+            <div class="flex items-center justify-between gap-3 mb-4"><h4 class="text-sm font-semibold text-purple-300">Effect #${ei+1}</h4><button type="button" data-action="remove-effect" class="text-xs text-red-400 hover:text-red-300">Remove</button></div>
+            <div class="grid sm:grid-cols-2 gap-3">
+                <div><label class="block text-xs text-gray-500 mb-1">Trigger</label><select class="field effect-trigger">${options(effectOptions.triggers,effect.trigger.triggerType)}</select></div>
+                <div><label class="block text-xs text-gray-500 mb-1">Source</label><select class="field effect-source">${options(effectOptions.sources,effect.trigger.source)}</select></div>
+            </div>
+            <div class="mt-4"><div class="flex items-center justify-between mb-2"><h5 class="text-xs font-semibold text-green-300">Conditions <span class="font-normal text-gray-600">all must be true</span></h5><button type="button" data-action="add-condition" class="text-xs text-green-300">+ Add condition</button></div><div class="condition-list space-y-2">${effect.conditions.map((c,ci)=>`
+                <div class="condition-row grid sm:grid-cols-[1fr_.7fr_1fr_auto] gap-2 items-end" data-condition="${ci}"><select class="field condition-type">${options(effectOptions.conditions,c.conditionType)}</select><select class="field condition-operator">${options(effectOptions.operators,c.operator)}</select><input class="field condition-value" value="${esc(c.value)}" placeholder="Value"><button type="button" data-action="remove-condition" class="h-10 px-3 text-red-400 hover:text-red-300" title="Remove condition">×</button></div>`).join('')}</div></div>
+            <div class="mt-4"><div class="flex items-center justify-between mb-2"><h5 class="text-xs font-semibold text-orange-300">Actions <span class="font-normal text-gray-600">executed in order</span></h5><button type="button" data-action="add-action" class="text-xs text-orange-300">+ Add action</button></div><div class="action-list space-y-2">${effect.actions.map((a,ai)=>`
+                <div class="action-row grid sm:grid-cols-[1.2fr_.8fr_.55fr_.55fr_auto] gap-2 items-end" data-action-index="${ai}"><select class="field action-type">${options(effectOptions.actions,a.actionType)}</select><select class="field action-target">${options(effectOptions.targets,a.target)}</select><input type="number" step="any" class="field action-value" value="${esc(a.value)}" title="Value"><input type="number" min="0" class="field action-duration" value="${esc(a.duration)}" title="Duration"><button type="button" data-action="remove-action" class="h-10 px-3 text-red-400 hover:text-red-300" title="Remove action">×</button></div>`).join('')}</div></div>
+        </section>`).join('');
+    if (!effects.length) editor.innerHTML = '<div class="border border-dashed border-gray-700 rounded-md p-6 text-center text-sm text-gray-500">No effects configured. Cards may exist without an effect while the game engine is still being built.</div>';
+}
+
+function syncFromDom() {
+    effects = [...editor.querySelectorAll('.effect-panel')].map(panel => ({
+        trigger:{triggerType:panel.querySelector('.effect-trigger').value,source:panel.querySelector('.effect-source').value},
+        conditions:[...panel.querySelectorAll('.condition-row')].map(row=>({conditionType:row.querySelector('.condition-type').value,operator:row.querySelector('.condition-operator').value,value:row.querySelector('.condition-value').value})),
+        actions:[...panel.querySelectorAll('.action-row')].map(row=>({actionType:row.querySelector('.action-type').value,target:row.querySelector('.action-target').value,value:Number(row.querySelector('.action-value').value||0),duration:Number(row.querySelector('.action-duration').value||0)}))
+    }));
+}
+editor.addEventListener('click', event => {
+    const button = event.target.closest('button[data-action]'); if (!button) return;
+    syncFromDom(); const panel = button.closest('.effect-panel'); const ei = panel ? Number(panel.dataset.effect) : -1;
+    if (button.dataset.action==='remove-effect') effects.splice(ei,1);
+    if (button.dataset.action==='add-condition') effects[ei].conditions.push({conditionType:'CardFamily',operator:'Is',value:''});
+    if (button.dataset.action==='remove-condition') effects[ei].conditions.splice(Number(button.closest('.condition-row').dataset.condition),1);
+    if (button.dataset.action==='add-action') effects[ei].actions.push({actionType:'Attack',target:'Opponent',value:1,duration:0});
+    if (button.dataset.action==='remove-action') effects[ei].actions.splice(Number(button.closest('.action-row').dataset.actionIndex),1);
+    renderEffects();
+});
+document.getElementById('add-effect').addEventListener('click',()=>{syncFromDom();effects.push(normalizeEffect({actions:[{actionType:'Attack',target:'Opponent',value:1,duration:0}]}));renderEffects();});
+document.getElementById('card-form').addEventListener('submit',()=>{syncFromDom();document.getElementById('effects-json').value=JSON.stringify(effects);});
+renderEffects();
+</script>
+{% endif %}
+{% if active_tab == 'decks' %}
+<script>
+const deckFilter = document.getElementById('deck-card-filter');
+if (deckFilter) deckFilter.addEventListener('input', () => {
+    const query = deckFilter.value.trim().toLowerCase();
+    document.querySelectorAll('.deck-card-row').forEach(row => row.hidden = query && !row.dataset.search.includes(query));
+});
+</script>
+{% endif %}
 {% endblock %}
