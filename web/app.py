@@ -3808,13 +3808,37 @@ def create_app(db: Database, bot=None) -> Quart:
         import uuid
 
         allowed_extensions = {"png", "jpg", "jpeg", "webp"}
-        allowed_rarities = {"Common", "Uncommon", "Rare", "Epic", "Legendary"}
+        rarities = ["Common", "Uncommon", "Rare", "Epic", "Legendary"]
+        allowed_rarities = set(rarities)
 
         if request.method == "POST":
             form = await request.form
             action = form.get("action", "")
             card_id_raw = form.get("card_id", "").strip()
             card_id = int(card_id_raw) if card_id_raw.isdigit() else None
+
+            if action == "save_rarity_weights":
+                weights = {}
+                for rarity in rarities:
+                    try:
+                        weights[rarity] = max(
+                            0.01,
+                            min(
+                                1_000_000.0,
+                                float(form.get(f"rarity_weight_{rarity.lower()}", "")),
+                            ),
+                        )
+                    except (TypeError, ValueError):
+                        await flash(f"Enter a valid positive weight for {rarity}.", "error")
+                        return redirect(url_for("card_collection_admin"))
+                await db.save_collectible_rarity_weights(weights)
+                await db.add_audit_log(
+                    event_type="collectible_rarity_weights_saved",
+                    details="Card rarity base weights updated",
+                    actor=session.get("username", "unknown"),
+                )
+                await flash("Rarity weights saved.", "success")
+                return redirect(url_for("card_collection_admin"))
 
             if action == "delete" and card_id:
                 filename = await db.delete_collectible_card(card_id)
@@ -3923,6 +3947,24 @@ def create_app(db: Database, bot=None) -> Quart:
                 return redirect(url_for("card_collection_admin", edit=saved_id))
 
         cards = await db.get_collectible_cards(include_inactive=True)
+        rarity_weights = await db.get_collectible_rarity_weights()
+        total_effective_weight = sum(
+            max(0.0, float(card.get("draw_weight") or 0))
+            * rarity_weights.get(card.get("rarity"), 1.0)
+            for card in cards
+            if card.get("active")
+        )
+        for card in cards:
+            effective_weight = (
+                max(0.0, float(card.get("draw_weight") or 0))
+                * rarity_weights.get(card.get("rarity"), 1.0)
+            )
+            card["effective_weight"] = effective_weight
+            card["draw_probability"] = (
+                effective_weight / total_effective_weight * 100.0
+                if card.get("active") and total_effective_weight > 0
+                else 0.0
+            )
         edit_raw = request.args.get("edit", "").strip()
         edit_card = (
             await db.get_collectible_card(int(edit_raw)) if edit_raw.isdigit() else None
@@ -3931,7 +3973,8 @@ def create_app(db: Database, bot=None) -> Quart:
             "card_collection.html",
             cards=cards,
             edit_card=edit_card,
-            rarities=["Common", "Uncommon", "Rare", "Epic", "Legendary"],
+            rarities=rarities,
+            rarity_weights=rarity_weights,
         )
 
     # --- Image Posting ---

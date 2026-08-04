@@ -8,12 +8,17 @@
         <h2 class="text-2xl font-bold text-white">Card Collection</h2>
         <p class="text-gray-400 text-sm mt-1">Manage the cards available in the daily Discord draw.</p>
     </div>
-    {% if edit_card %}
-    <a href="{{ url_for('card_collection_admin') }}"
-       class="px-4 py-2 bg-discord-lighter hover:bg-gray-600 text-gray-200 rounded-md text-sm">
-        Add new card
-    </a>
-    {% endif %}
+    <div class="flex items-center gap-2">
+        <button type="button" id="open-rarity-settings"
+                class="w-10 h-10 inline-flex items-center justify-center bg-discord-lighter hover:bg-gray-600 text-gray-200 rounded-md text-xl"
+                title="Rarity settings" aria-label="Open rarity settings">&#9881;</button>
+        {% if edit_card %}
+        <a href="{{ url_for('card_collection_admin') }}"
+           class="px-4 py-2 bg-discord-lighter hover:bg-gray-600 text-gray-200 rounded-md text-sm">
+            Add new card
+        </a>
+        {% endif %}
+    </div>
 </div>
 
 <div class="grid grid-cols-1 xl:grid-cols-[minmax(390px,0.75fr)_minmax(540px,1.25fr)] gap-6 items-start">
@@ -99,8 +104,10 @@
                         </div>
                         <span class="text-xs px-2 py-1 rounded bg-discord-blurple/20 text-purple-200 shrink-0">{{ item.rarity }}</span>
                     </div>
-                    <div class="grid grid-cols-3 gap-2 mt-3 text-xs text-gray-400">
-                        <span>Weight<br><strong class="text-gray-200">{{ item.draw_weight }}</strong></span>
+                    <div class="grid grid-cols-3 gap-3 mt-3 text-xs text-gray-400">
+                        <span>Card<br><strong class="text-gray-200">{{ item.draw_weight }}</strong></span>
+                        <span>Effective<br><strong class="text-gray-200">{{ item.effective_weight|round(2) }}</strong></span>
+                        <span>Chance<br><strong class="text-gray-200">{% if item.draw_probability > 0 and item.draw_probability < 0.01 %}&lt;0.01%{% else %}{{ '%.2f'|format(item.draw_probability) }}%{% endif %}</strong></span>
                         <span>Owned<br><strong class="text-gray-200">{{ item.total_owned }}</strong></span>
                         <span>Draws<br><strong class="text-gray-200">{{ item.total_draws }}</strong></span>
                     </div>
@@ -131,8 +138,70 @@
     </section>
 </div>
 
+<div id="rarity-settings-modal" class="hidden fixed inset-0 z-50 items-center justify-center p-4">
+    <button type="button" data-close-rarity-settings
+            class="absolute inset-0 bg-black/70 cursor-default" aria-label="Close rarity settings"></button>
+    <section role="dialog" aria-modal="true" aria-labelledby="rarity-settings-title"
+             class="relative w-full max-w-lg bg-discord-dark border border-gray-700 rounded-lg shadow-2xl">
+        <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between gap-4">
+            <div>
+                <h3 id="rarity-settings-title" class="text-white font-semibold">Rarity weights</h3>
+                <p class="text-xs text-gray-500 mt-1">Set the base likelihood for every rarity.</p>
+            </div>
+            <button type="button" data-close-rarity-settings
+                    class="w-9 h-9 inline-flex items-center justify-center bg-discord-lighter hover:bg-gray-600 text-gray-300 rounded-md text-xl"
+                    title="Close" aria-label="Close rarity settings">&times;</button>
+        </div>
+        <form method="POST" class="p-5 space-y-5">
+            <input type="hidden" name="action" value="save_rarity_weights">
+            <div class="grid grid-cols-2 gap-4">
+                {% for rarity in rarities %}
+                <div>
+                    <label class="block text-xs text-gray-400 mb-1" for="rarity-weight-{{ rarity|lower }}">{{ rarity }}</label>
+                    <input id="rarity-weight-{{ rarity|lower }}" type="number"
+                           name="rarity_weight_{{ rarity|lower }}" min="0.01" max="1000000" step="0.01"
+                           value="{{ rarity_weights.get(rarity, 1) }}" class="field" required>
+                </div>
+                {% endfor %}
+            </div>
+            <div class="bg-discord-darker border border-gray-700/50 rounded-md p-4 text-sm text-gray-300 space-y-2">
+                <p><strong class="text-white">Effective card weight</strong> = rarity base weight &times; card draw weight.</p>
+                <p class="text-gray-400">A card's draw chance is its effective weight divided by the total effective weight of all active cards. Lower rarity weights make those cards harder to draw.</p>
+            </div>
+            <div class="flex justify-end gap-2">
+                <button type="button" data-close-rarity-settings
+                        class="px-4 py-2 bg-discord-lighter hover:bg-gray-600 text-gray-200 rounded-md">Cancel</button>
+                <button type="submit"
+                        class="px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-md font-medium">Save settings</button>
+            </div>
+        </form>
+    </section>
+</div>
+
 <style>
 .field { width:100%; padding:.5rem .75rem; background:#1e1f22; border:1px solid rgb(55 65 81); border-radius:.375rem; color:white; outline:none; }
 .field:focus { border-color:#5865f2; }
 </style>
+<script>
+(() => {
+    const modal = document.getElementById('rarity-settings-modal');
+    const openButton = document.getElementById('open-rarity-settings');
+    const closeButtons = modal.querySelectorAll('[data-close-rarity-settings]');
+    const openModal = () => {
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+        modal.querySelector('input[type="number"]')?.focus();
+    };
+    const closeModal = () => {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+        openButton.focus();
+    };
+    openButton.addEventListener('click', openModal);
+    closeButtons.forEach(button => button.addEventListener('click', closeModal));
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && !modal.classList.contains('hidden')) closeModal();
+    });
+})();
+</script>
 {% endblock %}

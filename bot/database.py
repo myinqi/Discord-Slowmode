@@ -1,8 +1,20 @@
 import aiosqlite
+import json
+import math
 import os
 import random
 import time
 from typing import Optional
+
+
+DEFAULT_COLLECTIBLE_RARITY_WEIGHTS = {
+    "Common": 100.0,
+    "Uncommon": 40.0,
+    "Rare": 15.0,
+    "Epic": 5.0,
+    "Legendary": 1.0,
+}
+COLLECTIBLE_RARITY_WEIGHTS_SETTING = "collectible_card_rarity_weights"
 
 
 class Database:
@@ -1008,6 +1020,36 @@ class Database:
         await self.db.commit()
         return card.get("image_filename")
 
+    @staticmethod
+    def _normalize_collectible_rarity_weights(weights: Optional[dict] = None) -> dict[str, float]:
+        supplied = weights if isinstance(weights, dict) else {}
+        normalized = {}
+        for rarity, default in DEFAULT_COLLECTIBLE_RARITY_WEIGHTS.items():
+            try:
+                value = float(supplied.get(rarity, default))
+            except (TypeError, ValueError):
+                value = default
+            if not math.isfinite(value) or value <= 0:
+                value = default
+            normalized[rarity] = min(value, 1_000_000.0)
+        return normalized
+
+    async def get_collectible_rarity_weights(self) -> dict[str, float]:
+        raw = await self.get_setting(COLLECTIBLE_RARITY_WEIGHTS_SETTING, "")
+        try:
+            saved = json.loads(raw) if raw else {}
+        except (TypeError, json.JSONDecodeError):
+            saved = {}
+        return self._normalize_collectible_rarity_weights(saved)
+
+    async def save_collectible_rarity_weights(self, weights: dict) -> dict[str, float]:
+        normalized = self._normalize_collectible_rarity_weights(weights)
+        await self.set_setting(
+            COLLECTIBLE_RARITY_WEIGHTS_SETTING,
+            json.dumps(normalized, separators=(",", ":")),
+        )
+        return normalized
+
     async def draw_collectible_card(
         self, *, user_id: int, user_name: str, draw_date: str
     ) -> tuple[Optional[dict], bool]:
@@ -1032,7 +1074,12 @@ class Database:
         if not cards:
             return None, False
 
-        weights = [max(0.0, float(card.get("draw_weight") or 0)) for card in cards]
+        rarity_weights = await self.get_collectible_rarity_weights()
+        weights = [
+            max(0.0, float(card.get("draw_weight") or 0))
+            * rarity_weights.get(card.get("rarity"), 1.0)
+            for card in cards
+        ]
         if not any(weights):
             weights = [1.0] * len(cards)
         card = random.choices(cards, weights=weights, k=1)[0]
