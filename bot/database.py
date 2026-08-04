@@ -945,6 +945,7 @@ class Database:
                 quote TEXT DEFAULT '',
                 rarity TEXT NOT NULL DEFAULT 'Common',
                 draw_weight REAL NOT NULL DEFAULT 1.0,
+                deck TEXT DEFAULT '',
                 series TEXT DEFAULT '',
                 card_number TEXT DEFAULT '',
                 hero_type TEXT DEFAULT '',
@@ -999,6 +1000,14 @@ class Database:
         """)
         await self.db.commit()
 
+        async with self.db.execute("PRAGMA table_info(collectible_cards)") as cursor:
+            collectible_columns = {row[1] async for row in cursor}
+        if "deck" not in collectible_columns:
+            await self.db.execute(
+                "ALTER TABLE collectible_cards ADD COLUMN deck TEXT DEFAULT ''"
+            )
+            await self.db.commit()
+
     # --- Collectible Cards ---
 
     async def get_collectible_cards(self, *, include_inactive: bool = True) -> list[dict]:
@@ -1033,7 +1042,7 @@ class Database:
         self, card_id: Optional[int] = None, **fields,
     ) -> int:
         allowed = {
-            "name", "rarity", "draw_weight", "image_filename", "active",
+            "name", "rarity", "draw_weight", "deck", "image_filename", "active",
         }
         clean = {key: value for key, value in fields.items() if key in allowed}
         if card_id:

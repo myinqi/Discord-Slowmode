@@ -56,6 +56,14 @@
             </div>
 
             <div>
+                <label class="block text-xs text-gray-400 mb-1">Deck</label>
+                <input name="deck" maxlength="100" value="{{ card.get('deck', '') }}"
+                       placeholder="Optional deck name"
+                       class="field">
+                <p class="text-xs text-gray-500 mt-1">Reserved for a future deck system. It does not affect daily draws.</p>
+            </div>
+
+            <div>
                 <label class="block text-xs text-gray-400 mb-1">Card image {% if not edit_card %}*{% endif %}</label>
                 <input type="file" name="image" {% if not edit_card %}required{% endif %}
                        accept="image/png,image/jpeg,image/webp"
@@ -100,7 +108,7 @@
                     <div class="flex items-start justify-between gap-3">
                         <div class="min-w-0">
                             <h4 class="text-white font-semibold truncate">{{ item.name }}</h4>
-                            <p class="text-xs text-gray-500 truncate">Collectible card</p>
+                            <p class="text-xs text-gray-500 truncate">{% if item.deck %}Deck: {{ item.deck }}{% else %}No deck assigned{% endif %}</p>
                         </div>
                         <span class="text-xs px-2 py-1 rounded bg-discord-blurple/20 text-purple-200 shrink-0">{{ item.rarity }}</span>
                     </div>

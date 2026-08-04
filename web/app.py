@@ -3933,6 +3933,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     name=name,
                     rarity=rarity,
                     draw_weight=draw_weight,
+                    deck=form.get("deck", "").strip()[:100],
                     image_filename=image_filename,
                     active=1 if form.get("active") else 0,
                 )

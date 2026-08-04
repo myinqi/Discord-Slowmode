@@ -284,7 +284,7 @@ class BirthdayCog(commands.Cog):
                 try:
                     await channel.send(
                         message,
-                        allowed_mentions=discord.AllowedMentions(users=True),
+                        allowed_mentions=discord.AllowedMentions.none(),
                     )
                 except (discord.HTTPException, discord.Forbidden):
                     continue
