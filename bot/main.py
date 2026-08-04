@@ -29,6 +29,7 @@ class SlowmodeBot(commands.Bot):
         await self.load_extension("bot.cogs.auto_translate")
         await self.load_extension("bot.cogs.quiz")
         await self.load_extension("bot.cogs.rpg")
+        await self.load_extension("bot.cogs.birthdays")
 
         if self.config.GUILD_ID:
             guild = discord.Object(id=self.config.GUILD_ID)

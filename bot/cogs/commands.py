@@ -2017,6 +2017,15 @@ class CommandsCog(commands.Cog):
             inline=False,
         )
 
+        embed.add_field(
+            name="🎂 Birthday Calendar",
+            value=(
+                "**`/birthday-set <day> <month> [year]`** — Save or update your birthday\n"
+                "**`/birthday-remove`** — Remove your saved birthday"
+            ),
+            inline=False,
+        )
+
         # Context Menu (all users)
         embed.add_field(
             name="📋 Context Menu (Right-click a message)",

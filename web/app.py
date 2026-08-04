@@ -262,6 +262,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('relic_hunt', "Raven's Nest"),
         ('rpg', 'RPG Adventures'),
         ('card_collection', 'Card Collection'),
+        ('birthday_calendar', 'Birthday Calendar'),
     ]
 
     SIDEBAR_NAV_ITEMS = [
@@ -281,6 +282,7 @@ def create_app(db: Database, bot=None) -> Quart:
         {"key": "quiz", "endpoint": "quiz_admin", "icon": "❓", "label": "Quiz", "perm": "quiz"},
         {"key": "rpg", "endpoint": "rpg_admin", "icon": "🎲", "label": "RPG", "perm": "rpg"},
         {"key": "card_collection", "endpoint": "card_collection_admin", "icon": "🃏", "label": "Card Collection", "perm": "card_collection"},
+        {"key": "birthday_calendar", "endpoint": "birthday_calendar_admin", "icon": "🎂", "label": "Birthday Calendar", "perm": "birthday_calendar"},
         {"key": "radio", "endpoint": "radio_admin", "icon": "📻", "label": "Twitch", "perm": "radio"},
         {"key": "exp_radio", "endpoint": "exp_radio_admin", "icon": "🎙️", "label": "Exp. Radio", "perm": "exp_radio"},
         {"key": "submission_bans", "endpoint": "submission_bans", "icon": "⛔", "label": "Submission Bans", "perm": "submission_bans"},
@@ -3975,6 +3977,128 @@ def create_app(db: Database, bot=None) -> Quart:
             edit_card=edit_card,
             rarities=rarities,
             rarity_weights=rarity_weights,
+        )
+
+    # --- Birthday Calendar ---
+
+    @app.route("/birthday-calendar", methods=["GET", "POST"])
+    @permission_required("birthday_calendar")
+    async def birthday_calendar_admin():
+        from datetime import date, datetime
+        from zoneinfo import ZoneInfo
+        from bot.cogs.birthdays import next_birthday
+
+        guild = get_guild()
+        text_channels = []
+        if guild:
+            text_channels = sorted(
+                ({"id": channel.id, "name": channel.name} for channel in guild.text_channels),
+                key=lambda channel: channel["name"].lower(),
+            )
+
+        if request.method == "POST":
+            form = await request.form
+            action = form.get("action", "")
+
+            if action == "save_settings":
+                channel_id = form.get("notification_channel_id", "").strip()
+                known_channels = {str(channel["id"]) for channel in text_channels}
+                if channel_id and channel_id not in known_channels:
+                    await flash("Select a valid notification channel.", "error")
+                else:
+                    await db.set_setting("birthday_notification_channel_id", channel_id)
+                    await db.add_audit_log(
+                        event_type="birthday_settings_saved",
+                        details=f"Notification channel: {channel_id or 'disabled'}",
+                        actor=session.get("username", "unknown"),
+                    )
+                    await flash("Birthday notification settings saved.", "success")
+                return redirect(url_for("birthday_calendar_admin"))
+
+            user_id_raw = form.get("user_id", "").strip()
+            if not user_id_raw.isdigit():
+                await flash("Birthday record not found.", "error")
+                return redirect(url_for("birthday_calendar_admin"))
+            user_id = int(user_id_raw)
+
+            if action == "delete":
+                if await db.delete_birthday(user_id):
+                    await db.add_audit_log(
+                        event_type="birthday_deleted",
+                        user_id=user_id,
+                        details="Birthday removed by administrator",
+                        actor=session.get("username", "unknown"),
+                    )
+                    await flash("Birthday removed.", "success")
+                return redirect(url_for("birthday_calendar_admin"))
+
+            if action == "edit":
+                birthday = await db.get_birthday(user_id)
+                if not birthday:
+                    await flash("Birthday record not found.", "error")
+                    return redirect(url_for("birthday_calendar_admin"))
+                try:
+                    day = int(form.get("birth_day", ""))
+                    month = int(form.get("birth_month", ""))
+                    year_raw = form.get("birth_year", "").strip()
+                    year = int(year_raw) if year_raw else None
+                    current_year = datetime.now(ZoneInfo("Europe/Berlin")).year
+                    if year is not None and not 1900 <= year <= current_year:
+                        raise ValueError
+                    date(year or 2000, month, day)
+                except (TypeError, ValueError):
+                    await flash("Enter a valid birthday.", "error")
+                    return redirect(url_for("birthday_calendar_admin"))
+
+                await db.save_birthday(
+                    user_id=user_id,
+                    user_name=form.get("user_name", birthday["user_name"]).strip()[:100]
+                    or birthday["user_name"],
+                    display_name=form.get(
+                        "display_name", birthday["display_name"]
+                    ).strip()[:100]
+                    or birthday["display_name"],
+                    birth_day=day,
+                    birth_month=month,
+                    birth_year=year,
+                )
+                await db.add_audit_log(
+                    event_type="birthday_updated",
+                    user_id=user_id,
+                    details=f"Birthday set to {day:02d}.{month:02d}.",
+                    actor=session.get("username", "unknown"),
+                )
+                await flash("Birthday updated.", "success")
+                return redirect(url_for("birthday_calendar_admin"))
+
+        today = datetime.now(ZoneInfo("Europe/Berlin")).date()
+        birthdays = await db.get_birthdays()
+        for birthday in birthdays:
+            occurrence = next_birthday(
+                birthday["birth_day"], birthday["birth_month"], today
+            )
+            birthday["next_date"] = occurrence
+            birthday["days_until"] = (occurrence - today).days
+            birthday["turning_age"] = (
+                occurrence.year - birthday["birth_year"]
+                if birthday.get("birth_year")
+                else None
+            )
+        birthdays.sort(
+            key=lambda birthday: (
+                birthday["days_until"], birthday["display_name"].lower()
+            )
+        )
+
+        return await render_template(
+            "birthday_calendar.html",
+            birthdays=birthdays,
+            upcoming=birthdays[:6],
+            text_channels=text_channels,
+            current_year=today.year,
+            notification_channel_id=await db.get_setting(
+                "birthday_notification_channel_id"
+            ),
         )
 
     # --- Image Posting ---

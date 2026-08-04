@@ -150,6 +150,26 @@ class Database:
             );
             CREATE INDEX IF NOT EXISTS idx_exp_radio_submission_bans_remaining
                 ON exp_radio_submission_bans(streams_remaining);
+
+            CREATE TABLE IF NOT EXISTS birthdays (
+                user_id INTEGER PRIMARY KEY,
+                user_name TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                birth_day INTEGER NOT NULL CHECK (birth_day BETWEEN 1 AND 31),
+                birth_month INTEGER NOT NULL CHECK (birth_month BETWEEN 1 AND 12),
+                birth_year INTEGER,
+                created_at REAL DEFAULT (unixepoch()),
+                updated_at REAL DEFAULT (unixepoch())
+            );
+
+            CREATE TABLE IF NOT EXISTS birthday_notifications (
+                user_id INTEGER NOT NULL,
+                occurrence_date TEXT NOT NULL,
+                notice_type TEXT NOT NULL,
+                sent_at REAL DEFAULT (unixepoch()),
+                PRIMARY KEY (user_id, occurrence_date, notice_type),
+                FOREIGN KEY (user_id) REFERENCES birthdays(user_id) ON DELETE CASCADE
+            );
         """)
         await self.db.commit()
         await self._run_migrations()
@@ -218,6 +238,30 @@ class Database:
             await self.db.execute(
                 "INSERT INTO settings (key, value) VALUES (?, 'done')",
                 (card_sidebar_migration,),
+            )
+            await self.db.commit()
+
+        birthday_sidebar_migration = "migration_sidebar_birthday_calendar_v1"
+        async with self.db.execute(
+            "SELECT value FROM settings WHERE key = ?", (birthday_sidebar_migration,)
+        ) as cursor:
+            birthday_sidebar_migrated = await cursor.fetchone()
+        if not birthday_sidebar_migrated:
+            async with self.db.execute(
+                "SELECT value FROM settings WHERE key = 'sidebar_visible_items'"
+            ) as cursor:
+                sidebar_row = await cursor.fetchone()
+            if sidebar_row and sidebar_row[0] and sidebar_row[0] != "__none__":
+                visible_items = [item for item in sidebar_row[0].split(",") if item]
+                if "birthday_calendar" not in visible_items:
+                    visible_items.append("birthday_calendar")
+                    await self.db.execute(
+                        "UPDATE settings SET value = ? WHERE key = 'sidebar_visible_items'",
+                        (",".join(visible_items),),
+                    )
+            await self.db.execute(
+                "INSERT INTO settings (key, value) VALUES (?, 'done')",
+                (birthday_sidebar_migration,),
             )
             await self.db.commit()
 
@@ -1155,6 +1199,87 @@ class Database:
             "total_cards": int(owned["total_cards"] or 0),
             "available_cards": int(available["available_cards"] or 0),
         }
+
+    # --- Birthday Calendar ---
+
+    async def save_birthday(
+        self,
+        *,
+        user_id: int,
+        user_name: str,
+        display_name: str,
+        birth_day: int,
+        birth_month: int,
+        birth_year: Optional[int] = None,
+    ):
+        await self.db.execute(
+            """
+            INSERT INTO birthdays
+                (user_id, user_name, display_name, birth_day, birth_month, birth_year)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                user_name = excluded.user_name,
+                display_name = excluded.display_name,
+                birth_day = excluded.birth_day,
+                birth_month = excluded.birth_month,
+                birth_year = excluded.birth_year,
+                updated_at = unixepoch()
+            """,
+            (
+                int(user_id),
+                str(user_name)[:100],
+                str(display_name)[:100],
+                int(birth_day),
+                int(birth_month),
+                int(birth_year) if birth_year is not None else None,
+            ),
+        )
+        await self.db.commit()
+
+    async def get_birthday(self, user_id: int) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM birthdays WHERE user_id = ?", (int(user_id),)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_birthdays(self) -> list[dict]:
+        async with self.db.execute(
+            "SELECT * FROM birthdays ORDER BY birth_month, birth_day, display_name COLLATE NOCASE"
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def delete_birthday(self, user_id: int) -> bool:
+        cursor = await self.db.execute(
+            "DELETE FROM birthdays WHERE user_id = ?", (int(user_id),)
+        )
+        await self.db.commit()
+        return cursor.rowcount > 0
+
+    async def has_birthday_notification(
+        self, *, user_id: int, occurrence_date: str, notice_type: str
+    ) -> bool:
+        async with self.db.execute(
+            """
+            SELECT 1 FROM birthday_notifications
+            WHERE user_id = ? AND occurrence_date = ? AND notice_type = ?
+            """,
+            (int(user_id), occurrence_date, notice_type),
+        ) as cursor:
+            return await cursor.fetchone() is not None
+
+    async def mark_birthday_notification(
+        self, *, user_id: int, occurrence_date: str, notice_type: str
+    ):
+        await self.db.execute(
+            """
+            INSERT OR IGNORE INTO birthday_notifications
+                (user_id, occurrence_date, notice_type)
+            VALUES (?, ?, ?)
+            """,
+            (int(user_id), occurrence_date, notice_type),
+        )
+        await self.db.commit()
 
     # --- Channel Moderation ---
 
