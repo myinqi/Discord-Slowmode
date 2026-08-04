@@ -70,79 +70,16 @@ def _collectible_card_embed(
         description=subtitle or None,
         color=CARD_RARITY_COLORS.get(rarity, 0x5865F2),
     )
-    meta = [f"**{rarity}**"]
-    if card.get("card_type"):
-        meta.append(str(card["card_type"]))
-    if card.get("deck_affinity"):
-        meta.append(f"Deck: {card['deck_affinity']}")
-    if card.get("card_family"):
-        meta.append(f"Family: {card['card_family']}")
-    if card.get("series"):
-        meta.append(str(card["series"]))
-    if card.get("card_number"):
-        meta.append(f"#{card['card_number']}")
-    if card.get("hero_type"):
-        meta.append(str(card["hero_type"]))
-    embed.add_field(name="Card", value=" · ".join(meta), inline=False)
-
-    stat_values = [
-        ("STR", card.get("strength")), ("AGI", card.get("agility")),
-        ("END", card.get("endurance")), ("CHA", card.get("charisma")),
-        ("LUCK", card.get("luck")), ("ATK", card.get("attack")),
-        ("DEF", card.get("defense")), ("HP", card.get("health")),
-        ("ARM", card.get("armor")),
-    ]
-    if any(int(value or 0) for _, value in stat_values):
-        embed.add_field(
-            name="Stats",
-            value=" · ".join(f"**{label}** {int(value or 0)}" for label, value in stat_values),
-            inline=False,
-        )
-    if card.get("passive_name") or card.get("passive_text"):
-        embed.add_field(
-            name=f"Passive · {card.get('passive_name') or 'Ability'}",
-            value=str(card.get("passive_text") or "No description.")[:1024],
-            inline=False,
-        )
-    if card.get("special_name") or card.get("special_text"):
-        embed.add_field(
-            name=f"Special · {card.get('special_name') or 'Ability'}",
-            value=str(card.get("special_text") or "No description.")[:1024],
-            inline=False,
-        )
-    if card.get("bonus_text"):
-        embed.add_field(name="Bonus", value=str(card["bonus_text"])[:1024], inline=False)
-    if card.get("description"):
-        embed.add_field(name="Lore", value=str(card["description"])[:1024], inline=False)
-    if card.get("quote"):
-        embed.add_field(name="Quote", value=f"*{str(card['quote'])[:1000]}*", inline=False)
-
-    effects = card.get("effects") or []
-    if effects:
-        lines = []
-        for index, effect in enumerate(effects[:5], 1):
-            trigger = effect.get("trigger_type") or (effect.get("trigger") or {}).get("triggerType") or "Trigger"
-            source = effect.get("source") or (effect.get("trigger") or {}).get("source") or "Self"
-            actions = effect.get("actions") or []
-            action_text = ", ".join(
-                f"{action.get('action_type') or action.get('actionType')} {action.get('value', 0):g} → {action.get('target', 'Self')}"
-                for action in actions[:4]
-            )
-            lines.append(f"**{index}. {trigger}** by {source}" + (f" · {action_text}" if action_text else ""))
-        embed.add_field(name="Effects", value="\n".join(lines)[:1024], inline=False)
+    embed.add_field(name="Rarity", value=f"**{rarity}**", inline=False)
 
     if card.get("quantity") is not None:
         embed.add_field(name="Owned", value=f"**{int(card['quantity'])}×**", inline=True)
     if stats:
-        starter_line = ""
-        if stats.get("starter_deck"):
-            starter_line = f"\nStarter: **{stats['starter_deck']}**"
         embed.add_field(
             name="Collection",
             value=(
                 f"**{stats['unique_cards']} / {stats['available_cards']}** unique\n"
                 f"**{stats['total_cards']}** cards total"
-                f"{starter_line}"
             ),
             inline=True,
         )
@@ -204,109 +141,6 @@ class CardCollectionView(discord.ui.View):
         self._sync_buttons()
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
-
-def _starter_deck_embed(bot, deck: dict, *, claimed: bool = False) -> discord.Embed:
-    deck = deck or {}
-    title = f"Starter Deck · {deck.get('name', 'Unknown Deck')}"
-    if claimed:
-        title = f"✅ {deck.get('name', 'Starter Deck')} claimed"
-    embed = discord.Embed(
-        title=title,
-        description=str(deck.get("description") or "Choose this deck as the foundation of your collection."),
-        color=0x9B59B6,
-    )
-    if deck.get("hero_name"):
-        embed.add_field(name="Hero", value=f"**{deck['hero_name']}**", inline=False)
-    cards = deck.get("cards") or []
-    if cards:
-        card_lines = [f"**{int(card.get('quantity') or 1)}×** {card.get('name', 'Unknown Card')}" for card in cards]
-        embed.add_field(name="Cards", value="\n".join(card_lines)[:1024], inline=False)
-    total = 1 + sum(int(card.get("quantity") or 1) for card in cards)
-    embed.set_footer(text=f"{total} cards including the Hero · This choice is permanent")
-    image_url = _collectible_card_image_url(
-        bot,
-        {"image_filename": deck.get("hero_image_filename")},
-    )
-    if image_url:
-        embed.set_thumbnail(url=image_url)
-    return embed
-
-
-class StarterDeckSelect(discord.ui.Select):
-    def __init__(self, decks: list[dict]):
-        options = [
-            discord.SelectOption(
-                label=str(deck.get("name") or "Starter Deck")[:100],
-                description=(str(deck.get("hero_name") or "No Hero configured"))[:100],
-                value=str(deck["id"]),
-            )
-            for deck in decks[:25]
-        ]
-        super().__init__(
-            placeholder="Choose a starter deck",
-            min_values=1,
-            max_values=1,
-            options=options,
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-        view = self.view
-        view.selected_id = int(self.values[0])
-        view.confirm.disabled = False
-        deck = await view.bot.db.get_collectible_starter_deck(view.selected_id)
-        await interaction.response.edit_message(
-            embed=_starter_deck_embed(view.bot, deck),
-            view=view,
-        )
-
-
-class StarterDeckClaimView(discord.ui.View):
-    def __init__(self, bot, decks: list[dict], user: discord.abc.User):
-        super().__init__(timeout=600)
-        self.bot = bot
-        self.user = user
-        self.selected_id: int | None = None
-        self.add_item(StarterDeckSelect(decks))
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.user.id:
-            await interaction.response.send_message(
-                "Only the player who opened this menu can choose a starter deck.",
-                ephemeral=True,
-            )
-            return False
-        return True
-
-    @discord.ui.button(label="Claim starter deck", emoji="🃏", style=discord.ButtonStyle.success, disabled=True)
-    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self.selected_id:
-            await interaction.response.send_message("Choose a starter deck first.", ephemeral=True)
-            return
-        deck, already_claimed = await self.bot.db.claim_collectible_starter_deck(
-            user_id=interaction.user.id,
-            user_name=interaction.user.display_name,
-            deck_id=self.selected_id,
-        )
-        if already_claimed:
-            await interaction.response.edit_message(
-                content=f"You already chose **{deck.get('name', 'a starter deck')}**.",
-                embed=None,
-                view=None,
-            )
-            self.stop()
-            return
-        if not deck:
-            await interaction.response.send_message(
-                "That starter deck is no longer available. Run `/cards-start` again.",
-                ephemeral=True,
-            )
-            return
-        await interaction.response.edit_message(
-            content="Your collection has been created. You can now use `/cards-draw` every day.",
-            embed=_starter_deck_embed(self.bot, deck, claimed=True),
-            view=None,
-        )
-        self.stop()
 
 def _dice_grid(value: int) -> str:
     patterns = {
@@ -2024,51 +1858,8 @@ class CommandsCog(commands.Cog):
         embed.timestamp = discord.utils.utcnow()
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="cards-start", description="Choose your permanent starter deck")
-    async def cards_start(self, interaction: discord.Interaction):
-        current = await self.bot.db.get_collectible_user_starter_deck(interaction.user.id)
-        if current:
-            await interaction.response.send_message(
-                f"You already chose **{current['name']}** with **{current.get('hero_name') or 'its Hero'}**.",
-                ephemeral=True,
-            )
-            return
-
-        decks = await self.bot.db.get_collectible_starter_decks(include_inactive=False)
-        if not decks:
-            await interaction.response.send_message(
-                "No starter decks are currently available.", ephemeral=True
-            )
-            return
-
-        first_deck = await self.bot.db.get_collectible_starter_deck(decks[0]["id"])
-        view = StarterDeckClaimView(self.bot, decks, interaction.user)
-        await interaction.response.send_message(
-            content=(
-                "Choose the deck that will begin your collection. "
-                "You can inspect every deck before confirming; the final choice is permanent."
-            ),
-            embed=_starter_deck_embed(self.bot, first_deck),
-            view=view,
-            ephemeral=True,
-        )
-
     @app_commands.command(name="cards-draw", description="Draw your daily collectible card")
     async def cards_draw(self, interaction: discord.Interaction):
-        starter_decks = await self.bot.db.get_collectible_starter_decks(
-            include_inactive=False
-        )
-        if starter_decks:
-            starter = await self.bot.db.get_collectible_user_starter_deck(
-                interaction.user.id
-            )
-            if not starter:
-                await interaction.response.send_message(
-                    "Choose your starter deck with `/cards-start` before drawing daily cards.",
-                    ephemeral=True,
-                )
-                return
-
         draw_date = datetime.now(BERLIN_TZ).date().isoformat()
         async with self._card_draw_lock:
             card, already_drawn = await self.bot.db.draw_collectible_card(
@@ -2123,23 +1914,13 @@ class CommandsCog(commands.Cog):
         cards = await self.bot.db.get_collectible_user_collection(target.id)
         if not cards:
             if target.id == interaction.user.id:
-                active_decks = await self.bot.db.get_collectible_starter_decks(
-                    include_inactive=False
-                )
-                message = (
-                    "Your collection is empty. Use `/cards-start` to choose your starter deck."
-                    if active_decks
-                    else "Your collection is empty. Use `/cards-draw` to draw your first card."
-                )
+                message = "Your collection is empty. Use `/cards-draw` to draw your first card."
             else:
                 message = f"**{target.display_name}** has not collected any cards yet."
             await interaction.followup.send(message, ephemeral=True)
             return
 
         stats = await self.bot.db.get_collectible_user_stats(target.id)
-        starter = await self.bot.db.get_collectible_user_starter_deck(target.id)
-        if starter:
-            stats["starter_deck"] = starter["name"]
         view = CardCollectionView(
             self.bot,
             cards,
@@ -2230,7 +2011,6 @@ class CommandsCog(commands.Cog):
         embed.add_field(
             name="🃏 Card Collection",
             value=(
-                "**`/cards-start`** — Privately choose your permanent starter deck\n"
                 "**`/cards-draw`** — Draw one public collectible card each day\n"
                 "**`/cards-collection [@user]`** — Privately browse your or another member's collection"
             ),
