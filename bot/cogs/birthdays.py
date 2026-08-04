@@ -1,6 +1,5 @@
 import asyncio
 import calendar
-import time
 from datetime import date
 from zoneinfo import ZoneInfo
 
@@ -103,7 +102,6 @@ class BirthdayCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self._notification_lock = asyncio.Lock()
-        self._calendar_cooldowns: dict[int, float] = {}
         self.birthday_notifications.start()
 
     def cog_unload(self):
@@ -172,7 +170,6 @@ class BirthdayCog(commands.Cog):
     )
     @app_commands.describe(
         month="Show upcoming birthdays, all birthdays, or one month",
-        private="Show the calendar only to you",
     )
     @app_commands.choices(month=[
         app_commands.Choice(name="Upcoming", value="upcoming"),
@@ -194,18 +191,7 @@ class BirthdayCog(commands.Cog):
         self,
         interaction: discord.Interaction,
         month: str = "upcoming",
-        private: bool = False,
     ):
-        now = time.monotonic()
-        cooldown_until = self._calendar_cooldowns.get(interaction.user.id, 0.0)
-        if not private and now < cooldown_until:
-            wait_seconds = max(1, int(cooldown_until - now + 0.999))
-            await interaction.response.send_message(
-                f"Please wait {wait_seconds} seconds before posting the calendar again.",
-                ephemeral=True,
-            )
-            return
-
         today = discord.utils.utcnow().astimezone(BERLIN_TZ).date()
         entries = await self.bot.db.get_birthdays()
         for birthday in entries:
@@ -244,12 +230,10 @@ class BirthdayCog(commands.Cog):
             viewer_id=interaction.user.id,
             title=title,
         )
-        if not private:
-            self._calendar_cooldowns[interaction.user.id] = now + 30.0
         await interaction.response.send_message(
             embed=view.build_embed(),
             view=view,
-            ephemeral=private,
+            ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
