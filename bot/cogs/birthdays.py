@@ -57,9 +57,14 @@ class BirthdayCalendarView(discord.ui.View):
                 distance = "tomorrow"
             else:
                 distance = f"in {days_until} days"
+            display_name = discord.utils.escape_mentions(
+                discord.utils.escape_markdown(
+                    str(birthday.get("calendar_name") or birthday["display_name"])
+                )
+            )
             lines.append(
                 f"🎂 **{birthday['next_date'].strftime('%d %B')}** — "
-                f"<@{birthday['user_id']}> · {distance}"
+                f"{display_name} · {distance}"
             )
 
         embed = discord.Embed(
@@ -195,6 +200,14 @@ class BirthdayCog(commands.Cog):
         today = discord.utils.utcnow().astimezone(BERLIN_TZ).date()
         entries = await self.bot.db.get_birthdays()
         for birthday in entries:
+            member = (
+                interaction.guild.get_member(int(birthday["user_id"]))
+                if interaction.guild
+                else None
+            )
+            birthday["calendar_name"] = (
+                member.display_name if member else birthday["display_name"]
+            )
             occurrence = next_birthday(
                 int(birthday["birth_day"]),
                 int(birthday["birth_month"]),
