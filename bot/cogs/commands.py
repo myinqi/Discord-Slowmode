@@ -765,6 +765,14 @@ class CommandsCog(commands.Cog):
     async def random_song(
         self, interaction: discord.Interaction, input_channel: discord.TextChannel = None
     ):
+        enabled = await self.bot.db.get_setting("listening_party_enabled") or "1"
+        if enabled != "1":
+            await interaction.response.send_message(
+                "The Listening Party Random Song feature is currently disabled.",
+                ephemeral=True,
+            )
+            return
+
         await interaction.response.defer(ephemeral=False)
 
         try:

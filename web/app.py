@@ -555,6 +555,20 @@ def create_app(db: Database, bot=None) -> Quart:
                 await flash("Default bot icon restored.", "success")
                 return redirect(url_for("settings"))
 
+            if action == "lp_toggle":
+                lp_enabled = "1" if form.get("listening_party_enabled") else "0"
+                await db.set_setting("listening_party_enabled", lp_enabled)
+                await db.add_audit_log(
+                    event_type="listening_party_toggled",
+                    details=f"Random Song Listening Party {'enabled' if lp_enabled == '1' else 'disabled'}",
+                    actor=session.get("username", "unknown"),
+                )
+                await flash(
+                    f"Listening Party Random Song feature {'enabled' if lp_enabled == '1' else 'disabled'}.",
+                    "success",
+                )
+                return redirect(url_for("settings"))
+
             if action == "lp_add":
                 input_channel_id = form.get("input_channel_id", "").strip()
                 output_channel_id = form.get("output_channel_id", "").strip()
@@ -730,6 +744,9 @@ def create_app(db: Database, bot=None) -> Quart:
                 if gch:
                     ch["channel_name"] = gch.name
         # Listening party configs
+        listening_party_enabled = (
+            await db.get_setting("listening_party_enabled") or "1"
+        )
         lp_configs = await db.get_listening_party_configs()
         available_output_channels = []
         if guild:
@@ -757,6 +774,7 @@ def create_app(db: Database, bot=None) -> Quart:
                                      all_text_channels=all_text_channels,
                                      monitored_channels=monitored,
                                      available_output_channels=available_output_channels,
+                                     listening_party_enabled=listening_party_enabled,
                                      lp_configs=lp_configs)
 
     @app.route("/welcome", methods=["GET", "POST"])
@@ -4826,6 +4844,8 @@ def create_app(db: Database, bot=None) -> Quart:
                 upload_enabled = "1" if form.get("upload_enabled") else "0"
                 shuffle = "1" if form.get("shuffle") else "0"
                 stream_name = form.get("stream_name", "").strip()[:100] or "Twitch Radio"
+                disclaimer_enabled = "on" if form.get("disclaimer_enabled") else "off"
+                disclaimer_text = (form.get("disclaimer_text") or "").strip()[:2000]
                 try:
                     max_per_user = min(25, max(1, int(form.get("max_per_user", "3"))))
                 except (TypeError, ValueError):
@@ -4849,6 +4869,8 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.set_setting("radio_upload_enabled", upload_enabled)
                 await db.set_setting("radio_shuffle", shuffle)
                 await db.set_setting("radio_stream_name", stream_name)
+                await db.set_setting("radio_disclaimer_enabled", disclaimer_enabled)
+                await db.set_setting("radio_disclaimer_text", disclaimer_text)
                 await db.set_setting("radio_max_per_user", str(max_per_user))
                 await db.set_setting("radio_max_duration_seconds", str(max_duration_sec))
                 await db.set_setting("radio_expiry_channel_id", expiry_ch)
@@ -4993,6 +5015,8 @@ def create_app(db: Database, bot=None) -> Quart:
         stream_url = await db.get_setting("radio_stream_url") or ""
         upload_enabled = await db.get_setting("radio_upload_enabled") or "1"
         stream_name = await db.get_setting("radio_stream_name") or "Twitch Radio"
+        disclaimer_enabled = await db.get_setting("radio_disclaimer_enabled") or "off"
+        disclaimer_text = await db.get_setting("radio_disclaimer_text") or ""
         try:
             max_per_user = max(1, int(await db.get_setting("radio_max_per_user") or "3"))
         except (TypeError, ValueError):
@@ -5043,6 +5067,8 @@ def create_app(db: Database, bot=None) -> Quart:
             songs=songs, masked_key=masked_key, stream_url=stream_url,
             upload_enabled=upload_enabled, bg_filename=bg_filename, bg_type=bg_type,
             stream_name=stream_name, max_per_user=max_per_user,
+            disclaimer_enabled=disclaimer_enabled,
+            disclaimer_text=disclaimer_text,
             max_duration_minutes=max_duration_sec / 60,
             text_channels=text_channels,
             expiry_channel_id=expiry_channel_id,

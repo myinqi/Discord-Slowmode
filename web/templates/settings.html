@@ -155,11 +155,38 @@
 
 <!-- Listening Party Config -->
 <div class="bg-discord-dark rounded-xl border border-gray-700/50 mt-6">
-    <div class="px-5 py-4 border-b border-gray-700/50">
-        <h3 class="text-white font-semibold">Listening Party — Random Song Config</h3>
-        <p class="text-gray-400 text-xs mt-1">Define an input channel (monitored) to scan for Suno songs and an output channel for <code class="text-gray-300">/random-song</code>.</p>
+    <div class="px-5 py-4 border-b border-gray-700/50 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <div class="flex items-center gap-2">
+                <h3 class="text-white font-semibold">Listening Party — Random Song Config</h3>
+                {% if listening_party_enabled == '1' %}
+                <span class="px-2 py-0.5 rounded text-xs bg-green-900/50 text-green-300">Enabled</span>
+                {% else %}
+                <span class="px-2 py-0.5 rounded text-xs bg-red-900/50 text-red-300">Disabled</span>
+                {% endif %}
+            </div>
+            <p class="text-gray-400 text-xs mt-1">Define an input channel (monitored) to scan for Suno songs and an output channel for <code class="text-gray-300">/random-song</code>.</p>
+        </div>
+        <form method="POST" class="flex items-center gap-3 shrink-0">
+            <input type="hidden" name="action" value="lp_toggle">
+            <label class="flex items-center gap-2 cursor-pointer select-none text-sm text-gray-300">
+                <input type="checkbox" name="listening_party_enabled" value="1"
+                    {% if listening_party_enabled == '1' %}checked{% endif %}
+                    class="w-4 h-4 rounded bg-discord-darker border-gray-600 text-discord-blurple focus:ring-discord-blurple">
+                Enable feature
+            </label>
+            <button type="submit"
+                class="px-4 py-2 bg-discord-lighter hover:bg-gray-600 text-gray-200 rounded-lg text-sm transition-colors">
+                Save
+            </button>
+        </form>
     </div>
     <div class="p-5">
+        {% if listening_party_enabled != '1' %}
+        <div class="mb-5 px-4 py-3 rounded-lg border border-yellow-700/50 bg-yellow-950/20 text-yellow-200 text-sm">
+            The feature is disabled. Existing channel configurations are preserved, but <code>/random-song</code> cannot be used.
+        </div>
+        {% endif %}
         <form method="POST" class="flex flex-wrap items-end gap-4 mb-5">
             <input type="hidden" name="action" value="lp_add">
             <div class="flex-1 min-w-[180px]">

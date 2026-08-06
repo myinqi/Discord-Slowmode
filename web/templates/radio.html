@@ -90,6 +90,21 @@
                             <span class="text-gray-300 text-sm">Shuffle playback</span>
                         </label>
                     </div>
+                    <div class="space-y-2 pt-2 border-t border-gray-700/50">
+                        <label class="flex items-center gap-2 cursor-pointer select-none">
+                            <input type="checkbox" name="disclaimer_enabled"
+                                {% if disclaimer_enabled == 'on' %}checked{% endif %}
+                                class="w-4 h-4 accent-discord-blurple">
+                            <span class="text-white text-sm">Show persistent stream disclaimer</span>
+                        </label>
+                        <textarea name="disclaimer_text" rows="4" maxlength="2000"
+                            placeholder="AI-generated content (video and audio)."
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm leading-relaxed resize-y focus:border-discord-blurple focus:outline-none">{{ disclaimer_text }}</textarea>
+                        <p class="text-gray-500 text-xs">
+                            Shown continuously in the bottom-left corner above the Now Playing line.
+                            Line breaks are preserved. Changes apply when the stream video is rebuilt.
+                        </p>
+                    </div>
                     <div>
                         <label class="block text-gray-400 text-xs mb-1">Background (image or video)</label>
                         <input type="file" name="background" accept="image/*,video/mp4,video/webm"

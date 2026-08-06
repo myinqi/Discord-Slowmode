@@ -490,6 +490,7 @@ class StreamManager:
         self._last_announced_at = 0.0
         self._suno_dl_dir = None  # temp dir for downloaded Suno playlist songs
         self._header_path = None  # playlist title overlay file
+        self._disclaimer_path = None
         self._loading = False  # guard against concurrent start() calls
         self._video_url_cache = {}   # uuid -> video_url str | None
         self._visual_meta_cache = {} # uuid -> video, cover and resolved Suno UUID
@@ -892,10 +893,12 @@ class StreamManager:
         self._overlay_path = os.path.join(self._temp_dir, "nowplaying.txt")
         self._lyrics_path = os.path.join(self._temp_dir, "lyrics.txt")
         self._header_path = os.path.join(self._temp_dir, "header.txt")
+        self._disclaimer_path = os.path.join(self._temp_dir, "disclaimer.txt")
         with open(self._lyrics_path, "w", encoding="utf-8") as f:
             f.write(" ")
         # Write playlist title header
         await self._write_header()
+        await self._write_disclaimer()
         # Song-Video PiP: prepare clips in background so stream starts immediately.
         # Works for both suno_playlist (uuid) and submissions (suno_url from DB).
         if (await self.db.get_setting("radio_song_pip_enabled") or "off") == "on":
@@ -1217,6 +1220,24 @@ class StreamManager:
         except Exception as e:
             print(f"[radio] Header write error: {e}")
 
+    async def _write_disclaimer(self):
+        """Write the optional persistent disclaimer used by FFmpeg drawtext."""
+        enabled = (await self.db.get_setting("radio_disclaimer_enabled") or "off") == "on"
+        text = (await self.db.get_setting("radio_disclaimer_text") or "").strip()
+        if not enabled:
+            text = ""
+        # Keep intentional line breaks while removing unsupported control glyphs.
+        text = "\n".join(_normalize_text(line) for line in text.splitlines())
+        try:
+            tmp = self._disclaimer_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            os.replace(tmp, self._disclaimer_path)
+            if text:
+                print("[radio] Persistent disclaimer enabled")
+        except Exception as e:
+            print(f"[radio] Disclaimer write error: {e}")
+
     def _write_overlay(self, song: dict):
         # Transliterate exotic decorations so artist names like "꧁༺ Tαɾʝα ༻꧂"
         # render as something legible instead of being aggressively stripped.
@@ -1325,6 +1346,22 @@ class StreamManager:
             f":borderw=3:bordercolor=black"
             f":x=(w-text_w)/2:y=30"
         )
+        disclaimer_enabled = (
+            (await self.db.get_setting("radio_disclaimer_enabled") or "off") == "on"
+        )
+        disclaimer_text = (await self.db.get_setting("radio_disclaimer_text") or "").strip()
+        disclaimer = None
+        if disclaimer_enabled and disclaimer_text:
+            disclaimer = (
+                f"drawtext=font='{font}'"
+                f":textfile='{self._disclaimer_path}'"
+                f":expansion=none"
+                f":fontsize=28:fontcolor=white:line_spacing=5"
+                f":borderw=2:bordercolor=black@0.9"
+                f":box=1:boxcolor=black@0.55:boxborderw=12"
+                f":fix_bounds=1"
+                f":x=40:y=h-text_h-100"
+            )
 
         # --- Song-Video PiP (second overlay) ---------------------------------
         song_pip_input_idx = None
@@ -1393,7 +1430,9 @@ class StreamManager:
             )
             overlays.append((song_pip_input_idx, sw, sh, sox, soy))
 
-        text_filters = f"{header},{now_playing},{lyrics_box},{lyrics}"
+        text_filters = ",".join(
+            filter(None, (header, now_playing, lyrics_box, lyrics, disclaimer))
+        )
 
         if overlays:
             # Chain overlays: bg → pip0 → [pip1 →] drawtext → [vout]
