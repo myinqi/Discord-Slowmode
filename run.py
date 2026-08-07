@@ -1,5 +1,7 @@
 import asyncio
 import bcrypt
+import json
+import os
 from config import Config
 from bot.database import Database
 from bot.main import SlowmodeBot
@@ -17,10 +19,39 @@ async def init_admin(db: Database):
         print(f"Initial admin user '{Config.ADMIN_USERNAME}' created.")
 
 
+async def record_completed_database_restore(db: Database):
+    """Record a completed restore in the database that was just activated."""
+    data_dir = os.path.dirname(os.path.abspath(db.db_path))
+    marker_path = os.path.join(data_dir, "database-restore-pending.json")
+    if not os.path.isfile(marker_path):
+        return
+
+    try:
+        with open(marker_path, "r", encoding="utf-8") as handle:
+            marker = json.load(handle)
+        await db.add_audit_log(
+            event_type="database_restored",
+            details=(
+                "Database restored successfully; pre-restore safety backup: "
+                f"{marker.get('safety_backup', 'unknown')}"
+            ),
+            actor=marker.get("actor", "unknown"),
+        )
+        print("[backup] Database restore completed successfully.", flush=True)
+    except Exception as exc:
+        print(f"[backup] Could not record completed database restore: {exc}", flush=True)
+    finally:
+        try:
+            os.remove(marker_path)
+        except OSError:
+            pass
+
+
 async def main():
     db = Database(Config.DATABASE_PATH)
     await db.connect()
     await init_admin(db)
+    await record_completed_database_restore(db)
 
     # Store guild_id setting if not yet set
     if Config.GUILD_ID:

@@ -497,6 +497,9 @@ class StreamManager:
         self._song_pip_paths = {}    # uuid -> path to loop-trimmed pip clip
         self._song_pip_concat_path = None
         self._song_pip_ready = False  # True only after ALL clips are prepared
+        self._repeat_playlist = True
+        self._playlist_repeats = _PLAYLIST_REPEATS
+        self._single_pass_duration = 0.0
 
     async def get_status(self) -> dict:
         return {
@@ -551,20 +554,12 @@ class StreamManager:
         return entries
 
     async def _probe_duration(self, filepath: str) -> float:
-        """Get audio duration in seconds via ffprobe."""
-        try:
-            import json as _json
-            proc = await asyncio.create_subprocess_exec(
-                "ffprobe", "-v", "quiet", "-print_format", "json",
-                "-show_format", filepath,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await proc.communicate()
-            if proc.returncode == 0:
-                info = _json.loads(stdout)
-                return float(info.get("format", {}).get("duration", 180))
-        except Exception:
-            pass
+        """Measure playable audio instead of trusting faulty MP3 headers."""
+        from bot.audio_utils import get_decoded_audio_duration
+
+        duration = await get_decoded_audio_duration(filepath)
+        if duration > 0:
+            return duration
         return 180
 
     async def _fetch_visual_meta(self, suno_url: str) -> dict:
@@ -695,10 +690,13 @@ class StreamManager:
             if os.path.exists(dst):
                 return True
             proc = await asyncio.create_subprocess_exec(
-                "ffmpeg", "-y", "-i", src,
+                "ffmpeg", "-y", "-stream_loop", "-1", "-i", src,
+                "-t", "10.000",
                 "-vf", _NORM_VF,
                 "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-                "-r", "24", "-an", dst,
+                "-r", "24", "-vsync", "cfr", "-g", "240", "-bf", "0",
+                "-video_track_timescale", "12288", "-movflags", "+faststart",
+                "-an", dst,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
@@ -708,7 +706,7 @@ class StreamManager:
         # 2) Try Suno video clip (~10 s) — download then normalize
         if video_url:
             raw_path = os.path.join(vid_cache_dir, f"raw_vid_{key}.mp4")
-            norm_path = os.path.join(vid_cache_dir, f"norm_{_NW}x{_NH}_{key}.mp4")
+            norm_path = os.path.join(vid_cache_dir, f"norm_v2_{_NW}x{_NH}_{key}.mp4")
             if os.path.exists(norm_path):
                 self._song_pip_paths[key] = norm_path
                 print(f"[radio] Song PiP ready (video): {key}")
@@ -724,7 +722,7 @@ class StreamManager:
             f"https://cdn1.suno.ai/image_large_{suno_uuid}.jpeg" if suno_uuid else None
         )
         cover_path = os.path.join(vid_cache_dir, f"cover_{key}.jpg")
-        cover_vid = os.path.join(vid_cache_dir, f"cover_{_NW}x{_NH}_{key}.mp4")
+        cover_vid = os.path.join(vid_cache_dir, f"cover_v2_{_NW}x{_NH}_{key}.mp4")
         if os.path.exists(cover_vid):
             self._song_pip_paths[key] = cover_vid
             print(f"[radio] Song PiP ready (cached cover): {key}")
@@ -736,6 +734,8 @@ class StreamManager:
                 "-t", "10", "-r", "24",
                 "-vf", _NORM_VF,
                 "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+                "-vsync", "cfr", "-g", "240", "-bf", "0",
+                "-video_track_timescale", "12288", "-movflags", "+faststart",
                 "-an", cover_vid,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
@@ -747,12 +747,14 @@ class StreamManager:
                 return cover_vid
 
         # 4) Last resort: 10 s black frame (encode once, reuse)
-        black_vid = os.path.join(vid_cache_dir, f"black_{_NW}x{_NH}.mp4")
+        black_vid = os.path.join(vid_cache_dir, f"black_v2_{_NW}x{_NH}.mp4")
         if not os.path.exists(black_vid):
             proc = await asyncio.create_subprocess_exec(
                 "ffmpeg", "-y",
                 "-f", "lavfi", "-i", f"color=c=black:s={_NW}x{_NH}:r=24:d=10",
                 "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+                "-g", "240", "-bf", "0",
+                "-video_track_timescale", "12288", "-movflags", "+faststart",
                 "-an", black_vid,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
@@ -816,13 +818,14 @@ class StreamManager:
 
     def _build_song_pip_concat(self) -> str | None:
         """Build a video concat file for the song-pip track.
-        All clips are normalized to 480x854 / 24 fps / PTS-from-0, so the
-        concat 'duration' directive gives exact per-song sync."""
+        All clips are normalized to 720x1280, exactly 10 s, 24 fps and
+        PTS-from-0. Partial repetitions use outpoint as well as duration so
+        FFmpeg trims packets instead of only shifting the next timestamp."""
         _CLIP_DUR = 10.0  # normalized clips are always ~10 s
         n = len(self.playlist)
         path = os.path.join(self._temp_dir, "song_pip.txt")
         with open(path, "w") as f:
-            for rep in range(_PLAYLIST_REPEATS):
+            for rep in range(self._playlist_repeats):
                 for i in range(n):
                     idx = (self._concat_start + i) % n
                     song = self.playlist[idx]
@@ -832,12 +835,15 @@ class StreamManager:
                         continue
                     safe = clip.replace("'", "'\\''")
                     song_dur = max(5.0, float(song.get("duration") or 180))
-                    full = int(song_dur / _CLIP_DUR)
+                    full = int(song_dur // _CLIP_DUR)
                     remainder = song_dur - full * _CLIP_DUR
                     for _ in range(full):
                         f.write(f"file '{safe}'\n")
+                        f.write(f"duration {_CLIP_DUR:.3f}\n")
                     if remainder > 0.05:
                         f.write(f"file '{safe}'\n")
+                        f.write("inpoint 0.000\n")
+                        f.write(f"outpoint {remainder:.3f}\n")
                         f.write(f"duration {remainder:.3f}\n")
         self._song_pip_concat_path = path
         return path
@@ -883,6 +889,14 @@ class StreamManager:
         shuffle = (await self.db.get_setting("radio_shuffle") or "0") == "1"
         if shuffle:
             random.shuffle(self.playlist)
+        self._repeat_playlist = (
+            await self.db.get_setting("radio_repeat_playlist") or "1"
+        ) == "1"
+        self._playlist_repeats = _PLAYLIST_REPEATS if self._repeat_playlist else 1
+        print(
+            "[radio] Playlist end behavior: "
+            + ("repeat" if self._repeat_playlist else "stop stream")
+        )
         self._font_path = await self._resolve_font()
         # Clean up any orphaned temp dirs from previous crashed sessions
         import glob as _glob
@@ -984,6 +998,10 @@ class StreamManager:
                 t.cancel()
         self._tasks = []
         self._concat_start = self.current_index
+        self._single_pass_duration = sum(
+            max(1.0, float(song.get("duration") or 180.0))
+            for song in self.playlist
+        )
         # Write initial overlay but leave current_song=None so tracker
         # detects first song as a change (triggers lyrics + chat post)
         self._write_overlay(self.playlist[self.current_index])
@@ -1197,7 +1215,7 @@ class StreamManager:
         else:
             base_dir = self.radio_dir
         with open(path, "w") as f:
-            for _ in range(_PLAYLIST_REPEATS):
+            for _ in range(self._playlist_repeats):
                 for i in range(n):
                     idx = (self._concat_start + i) % n
                     audio = os.path.join(base_dir, self.playlist[idx]["filename"])
@@ -1495,9 +1513,9 @@ class StreamManager:
             s = self.playlist[idx]
             durations.append(s.get("duration", 180))
             ordered.append(s)
-        # Build cumulative boundary list for the full concat (50 repeats)
+        # Build cumulative boundaries for the configured number of passes.
         boundaries = []
-        for _ in range(_PLAYLIST_REPEATS):
+        for _ in range(self._playlist_repeats):
             for dur in durations:
                 prev = boundaries[-1] if boundaries else 0.0
                 boundaries.append(prev + dur)
@@ -1587,6 +1605,47 @@ class StreamManager:
             if self.is_running:
                 print(f"[radio] Encoder exited (code {code})")
                 self._process = None
+                elapsed = time.monotonic() - self._start_time if self._start_time else 0.0
+                completed_once = (
+                    not self._repeat_playlist
+                    and (
+                        code == 0
+                        or elapsed >= max(0.0, self._single_pass_duration - 5.0)
+                    )
+                )
+                if completed_once:
+                    print("[radio] Playlist completed; stopping stream as configured.")
+                    self.is_running = False
+                    self.current_song = None
+                    self._chat_announcement_token += 1
+                    if (
+                        self._chat_announcement_task
+                        and not self._chat_announcement_task.done()
+                    ):
+                        self._chat_announcement_task.cancel()
+                        try:
+                            await self._chat_announcement_task
+                        except asyncio.CancelledError:
+                            pass
+                    self._chat_announcement_task = None
+                    current_task = asyncio.current_task()
+                    other_tasks = [
+                        task for task in self._tasks
+                        if task is not current_task and not task.done()
+                    ]
+                    for task in other_tasks:
+                        task.cancel()
+                    for task in other_tasks:
+                        try:
+                            await task
+                        except asyncio.CancelledError:
+                            pass
+                    self._tasks = []
+                    if self._twitch_chat:
+                        await self._twitch_chat.stop()
+                        self._twitch_chat = None
+                    self._cleanup_temp()
+                    return
                 # Exponential backoff for restarts
                 delay = getattr(self, "_restart_delay", 5)
                 retries = getattr(self, "_restart_retries", 0)

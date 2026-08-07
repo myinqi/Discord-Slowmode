@@ -89,6 +89,16 @@
                                 class="w-4 h-4 rounded border-gray-600 bg-discord-darker text-discord-blurple focus:ring-discord-blurple">
                             <span class="text-gray-300 text-sm">Shuffle playback</span>
                         </label>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" name="repeat_playlist" value="1"
+                                {% if repeat_playlist == '1' %}checked{% endif %}
+                                class="w-4 h-4 rounded border-gray-600 bg-discord-darker text-discord-blurple focus:ring-discord-blurple">
+                            <span class="text-gray-300 text-sm">Repeat playlist after the final song</span>
+                        </label>
+                        <p class="text-gray-500 text-xs">
+                            When disabled, the Twitch stream ends automatically after one complete playlist pass.
+                            Changes apply on the next stream start.
+                        </p>
                     </div>
                     <div class="space-y-2 pt-2 border-t border-gray-700/50">
                         <label class="flex items-center gap-2 cursor-pointer select-none">

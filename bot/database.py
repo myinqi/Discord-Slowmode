@@ -3,6 +3,7 @@ import json
 import math
 import os
 import random
+import sqlite3
 import time
 from typing import Optional
 
@@ -33,6 +34,17 @@ class Database:
     async def close(self):
         if self.db:
             await self.db.close()
+
+    async def backup_to(self, destination: str) -> None:
+        """Create a transactionally consistent online SQLite backup."""
+        if not self.db:
+            raise RuntimeError("Database connection is not open.")
+        os.makedirs(os.path.dirname(os.path.abspath(destination)), exist_ok=True)
+        target = sqlite3.connect(destination, check_same_thread=False)
+        try:
+            await self.db.backup(target)
+        finally:
+            target.close()
 
     async def _create_tables(self):
         await self.db.executescript("""

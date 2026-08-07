@@ -1,309 +1,405 @@
-# Discord Slowmode Bot
+# Corax Discord Bot
 
-Ein modularer Discord-Bot, der benutzerdefinierte Cooldowns pro Kanal durchsetzt. Inklusive Web-Interface zur Konfiguration, Audit-Log, Benutzerverwaltung und Slash-Commands.
+Corax is a modular Discord community bot with a permission-aware web administration panel. The project started as a channel slowmode manager and has grown into a collection of tools for Discord moderation, Suno music communities, Twitch radio streams, translations, community games, reminders, and media management.
 
----
+The application uses Discord.py, Quart, SQLite, FFmpeg, Caddy, and an optional local Ollama service. It is designed to run through Docker Compose.
 
-## Funktionen
+## Highlights
 
-- **Kanal-Cooldowns**: Pro Kanal einstellbar (1–2880 Minuten / 48 Stunden), oder Kanäle ohne Cooldown zur späteren Erweiterung
-- **Rollenausnahmen**: Bestimmte Rollen können vom Cooldown ausgenommen werden
-- **Slash-Commands**: Konfiguration direkt aus Discord heraus (nur für berechtigte Rollen + Serverbesitzer)
-- **Web-Interface**: Vollständiges Admin-Panel mit Discord-ähnlichem Design
-- **Benutzerverwaltung**: Mehrere Admin-Benutzer, Passwort-Management
-- **Audit-Log**: Alle Aktionen werden protokolliert und sind im Web-Interface einsehbar
-- **DM-Benachrichtigung**: Betroffene Nutzer erhalten eine Nachricht mit verbleibender Wartezeit
-- **Docker-Support**: Einfaches Deployment mit Docker Compose
-- **Modular**: Erweiterbar durch das discord.py Cog-System
+- Per-channel cooldowns with role exemptions and moderator controls
+- Multi-user web administration with granular page permissions and audit logging
+- Suno song discovery, statistics, playlist players, reactions, and promotion tools
+- Two independent Twitch radio managers with Suno submissions and stream overlays
+- Twitch EventSub alerts posted directly to Twitch chat
+- Automatic chat translation through Google Translate, Ollama, OpenAI, or DeepL
+- Raven's Nest: Relic Hunt with the Hrafnathorp village extension
+- Collectible cards with weighted daily draws and private collection browsing
+- Birthday calendar and personal one-time or recurring reminders
+- Polls, quizzes, reaction roles, image posting, RPG adventures, and moderation tools
 
----
+## Requirements
 
-## Voraussetzungen
+- Docker Engine with Docker Compose
+- A Discord application and bot token
+- A Discord server where the bot can register slash commands
+- A public HTTPS hostname for Discord Player OAuth and Twitch OAuth callbacks
+- Twitch credentials when using either radio manager or Twitch Alerts
+- Optional OpenAI and DeepL API keys for their translation engines
 
-- **Docker** und **Docker Compose** auf dem Server installiert
-- Ein **Discord Bot Token** (siehe unten)
+FFmpeg is installed inside the application image. The Dockerfile intentionally uses **Python 3.12 on Debian 12 Bookworm** to retain the stable FFmpeg version used by the radio streams.
 
----
+## Discord Application Setup
 
-## Schritt 1: Discord Bot erstellen
+1. Create an application in the [Discord Developer Portal](https://discord.com/developers/applications).
+2. Create or reset the bot token on the **Bot** page.
+3. Enable these privileged gateway intents:
+   - **Server Members Intent**
+   - **Message Content Intent**
+4. Invite the bot with the `bot` and `applications.commands` scopes.
+5. Grant the permissions required by the enabled features. The usual set includes:
+   - View Channels
+   - Send Messages
+   - Embed Links
+   - Attach Files
+   - Read Message History
+   - Add Reactions
+   - Manage Messages
+   - Create Public Threads and Send Messages in Threads
+   - Manage Roles when reaction roles are used
 
-1. Gehe zu [https://discord.com/developers/applications](https://discord.com/developers/applications)
-2. Klicke auf **„New Application"** und vergib einen Namen
-3. Gehe zu **„Bot"** in der linken Seitenleiste
-4. Klicke auf **„Reset Token"** und kopiere den Token — **diesen sicher aufbewahren!**
-5. Aktiviere unter **„Privileged Gateway Intents“** folgende Intents:
-   - ✅ **SERVER MEMBERS INTENT** (Zugriff auf Servermitglieder-Informationen)
-   - ✅ **MESSAGE CONTENT INTENT** (Zugriff auf Nachrichteninhalte)
-6. Gehe zu **„OAuth2“ → „URL Generator“**:
-   - **Anwendungsbereiche (Scopes)**: `bot`, `applications.commands`
-   - **Bot-Berechtigungen**: `Nachrichten senden`, `Nachrichten verwalten`, `Nachrichtenverlauf lesen`, `Kanäle ansehen`, `Rollen verwalten`, `Reaktionen hinzufügen`
-7. Kopiere die generierte URL und öffne sie im Browser, um den Bot auf deinen Server einzuladen
+For Suno Player identity linking, add these exact OAuth2 redirects for your hostname:
 
----
-
-## Schritt 2: Server-ID herausfinden
-
-1. Öffne Discord und gehe zu **Einstellungen → Erweitert → Entwicklermodus aktivieren**
-2. Rechtsklick auf deinen Server → **„Server-ID kopieren"**
-
----
-
-## Schritt 3: Konfiguration
-
-1. Repository klonen oder die Dateien auf den Server kopieren:
-
-```bash
-git clone <repository-url> slowmode-bot
-cd slowmode-bot
+```text
+https://your-domain.example/player/discord/callback
+https://your-domain.example/public/player/discord/callback
 ```
 
-2. `.env`-Datei erstellen:
+The Client ID and Client Secret can be supplied through `.env` or managed from the Settings page.
+
+## Configuration
+
+Create the environment file:
 
 ```bash
 cp .env.example .env
 ```
 
-3. `.env`-Datei bearbeiten:
+Core variables:
 
-```bash
-nano .env
-```
+| Variable | Purpose |
+|---|---|
+| `DISCORD_TOKEN` | Discord bot token |
+| `DISCORD_CLIENT_ID` | Discord application Client ID used as the Player OAuth fallback |
+| `DISCORD_CLIENT_SECRET` | Discord application Client Secret used as the Player OAuth fallback |
+| `GUILD_ID` | Discord server ID used for guild command synchronization |
+| `WEB_HOST` | Quart bind address, normally `0.0.0.0` |
+| `WEB_PORT` | Internal web port, normally `5000` |
+| `SECRET_KEY` | Random secret used to protect web sessions |
+| `ADMIN_USERNAME` | Initial Admin UI username |
+| `ADMIN_PASSWORD` | Initial password, used only when the first account is created |
+| `DATABASE_PATH` | SQLite database path |
+| `BOT_NAME` | Initial web display name |
 
-Folgende Werte anpassen:
+The Compose stack additionally configures the internal Ollama URL, model name, public web URL, Hugging Face cache, and `Europe/Berlin` timezone.
 
-| Variable | Beschreibung | Beispiel |
-|---|---|---|
-| `DISCORD_TOKEN` | Bot-Token aus Schritt 1 | `MTIz...abc` |
-| `GUILD_ID` | Server-ID aus Schritt 2 | `123456789012345678` |
-| `SECRET_KEY` | Zufälliger String für Session-Verschlüsselung | `mein-geheimer-schluessel-123` |
-| `ADMIN_USERNAME` | Benutzername für den ersten Admin | `admin` |
-| `ADMIN_PASSWORD` | Initialpasswort (muss beim ersten Login geändert werden) | `changeme` |
-| `WEB_PORT` | Port für das Web-Interface | `5000` |
-| `BOT_NAME` | Anzeigename des Bots | `Slowmode Bot` |
+## Deployment
 
-> **Wichtig:** Das Initialpasswort (`ADMIN_PASSWORD`) wird nur beim allerersten Start verwendet, um den Admin-Account zu erstellen. Es muss danach über das Web-Interface geändert werden.
-
----
-
-## Schritt 4: Bot starten
-
-Bot im Hintergrund (detached) starten:
+Build and start the complete stack:
 
 ```bash
 docker compose up -d --build
 ```
 
-> Das `-d` Flag steht für **detached** — der Bot läuft im Hintergrund und blockiert das Terminal nicht.
-
-Logs prüfen:
+Update only the application container after pulling changes:
 
 ```bash
-docker compose logs -f
+git pull
+docker compose up -d --build slowmode-bot
 ```
 
-Bot stoppen:
+Inspect logs:
+
+```bash
+docker compose logs -f slowmode-bot
+```
+
+Stop the stack:
 
 ```bash
 docker compose down
 ```
 
----
+Docker Compose runs three services:
 
-## Schritt 5: Erstes Login im Web-Interface
+- `slowmode-bot`: Discord bot, background workers, FFmpeg stream managers, and Quart Admin UI
+- `slowmode-caddy`: HTTPS reverse proxy
+- `slowmode-ollama`: isolated local LLM service
 
-1. Öffne im Browser: `http://<server-ip>:5000`
-2. Melde dich mit den in der `.env` konfigurierten Zugangsdaten an
-3. Du wirst aufgefordert, das Passwort zu ändern — **dies ist verpflichtend**
-4. Nach der Passwortänderung gelangst du zum Dashboard
+SQLite data, uploaded assets, model caches, and Ollama data are stored in named Docker volumes. The Admin UI is reached through Caddy over HTTPS; port `5000` is not published directly by the provided Compose file.
 
----
+## Administration Panel
 
-## Web-Interface Übersicht
+The first login uses `ADMIN_USERNAME` and `ADMIN_PASSWORD`. The initial administrator must change the password before using the panel.
 
-### Dashboard
-Übersicht über Bot-Status, verbundener Server, überwachte Kanäle und Audit-Statistiken.
+Each web user has an independent permission set. Navigation visibility can also be configured globally without removing the underlying permissions. Dashboard and Settings remain reachable so administrators cannot hide all management access accidentally.
 
-### Channels (Kanäle)
-- Kanäle hinzufügen (Dropdown wenn Bot verbunden, sonst manuelle ID-Eingabe)
-- Cooldown pro Kanal einstellen (0–2880 Minuten, 0 = kein Cooldown)
-- Aktive Cooldowns pro Kanal einsehen mit Reset-Button pro Nutzer
-- Kanäle aktivieren/deaktivieren
-- Kanäle entfernen
+### Core Administration
 
-### Roles (Rollen)
-- **Exempt Roles**: Rollen, die vom Cooldown ausgenommen sind
-- **Command Roles**: Rollen, die Slash-Commands nutzen dürfen (Serverbesitzer können immer)
+- **Dashboard**: bot connection state, guild information, monitored channels, and activity overview
+- **Channels**: monitored channel configuration, cooldown duration, active timers, enable state, and resets
+- **Roles**: cooldown exemptions and roles allowed to use administrative slash commands
+- **Users**: Admin UI accounts, passwords, and page permissions
+- **Welcome**: configurable welcome behavior
+- **Audit Log**: searchable record of administrative and bot actions
+- **Settings**: bot name and icon, guild, Player OAuth, menu visibility, Listening Party settings, database/full-data backup and validated restore, and general integration settings
 
-### Users (Benutzer)
-- Weitere Admin-Benutzer für das Web-Interface erstellen
-- Passwörter zurücksetzen
-- Benutzer löschen
+### Moderation and Automation
 
-### Audit Log
-Protokoll aller Aktionen: gelöschte Nachrichten, Konfigurationsänderungen, Benutzerverwaltung.
+- **Channel Moderation**: configurable moderation rules for selected channels
+- **Executioner**: administrative cleanup tools
+- **Submission Bans**: block selected Discord users from `/twitch-submit` and `/twitch-replace` for a defined number of Experimental Radio streams
+- **Reaction Roles**: role assignment through Discord reactions
+- **Auto Translate**: monitored channel, target languages, skip markers, and output formatting
+  - Google Translate
+  - Local Ollama LLM
+  - ChatGPT through the OpenAI API, including a daily token limit
+  - DeepL Free or Pro API
+  - Separate messages or one combined multilingual response
+  - Monthly request, character, and token usage statistics
+
+### Suno and Community Tools
+
+- **Suno Player**: Admin and public players with filtering, shuffle, audio visualization, lyrics, covers, and Discord-linked reactions
+- **Player Reactions**: linked users react under their own Discord display name; Corax maintains one summary message in a song thread
+- **Suno Playlist Player**: plays Suno playlists, Discord channel songs, party playlists, and historical Experimental Radio playlists
+- **Suno Promotion**: maintains profiles and reliably resolves recent non-pinned Suno songs
+- **Suno Analyzer**: resolves song metadata and related Suno information
+- **Songripper**: downloads Suno audio as MP3 or WAV; MP3 output is re-encoded to repair misleading duration headers
+- **Playlist Search**: indexes and searches playlist links from configured Discord channels
+- **Song, User, and Reaction Stats**: historical scans, filters, leaderboards, charts, reaction breakdowns, and data maintenance
+- **Image Posting**: categorized image library used by `/imageposting`
+- **Polls and Quiz**: poll management, configurable quiz categories, questions, scoring, and highscores
 
 ### Listening Party
-- Input-Kanal (muss ein überwachter Kanal sein) und Output-Kanal definieren
-- Zeitraum in Stunden konfigurieren (wie weit zurück nach Songs gesucht wird)
-- Per `/random-song` Slash-Command wird ein zufälliger Suno-Song aus dem Zeitraum in den Output-Kanal gepostet
-- Unterstützte URL-Formate: `https://suno.com/s/...` und `https://suno.com/song/...`
-- **Party Playlist**: User können bis zu 2 Songs per `/party-submit` einreichen
-- `/party` Karussell zum Durchhören aller eingereichten Songs mit "Listen", "Heard" und "Next" Buttons
-- Songs werden als "gehört" markiert und aus der aktiven Liste entfernt
-- `/party-reset` zum Zurücksetzen der Playlist (nur Admin/Mod/Owner)
-- **Web-Interface** ("Party Playlist" Seite):
-  - Songs per Suno-URL einreichen (Titel wird automatisch ausgelesen)
-  - Komplette Playlist mit Thumbnails, Status-Filter (All/Remaining/Heard), Fortschrittsbalken
-  - "Now Playing" Player-Card mit Listen-Link und Heard-Button
-  - Songs einzeln löschen oder komplette Playlist zurücksetzen
 
-### Playlist Search
-- Kanäle definieren, in denen Suno-Playlist-Links gepostet werden
-- Nutzer können mit `/find-list <Suchbegriff>` nach Playlists suchen
-- Ergebnisse werden nur dem suchenden Nutzer angezeigt (ephemeral)
-- Unterstütztes URL-Format: `https://suno.com/playlist/...`
+Two related workflows are available:
 
-### Song Stats
-- Übersicht über gepostete Songs pro überwachtem Kanal
-- Aufschlüsselung nach Jahr, Monat, Woche und Tag mit Balkendiagrammen
-- Filter nach einzelnem Kanal oder alle Kanäle zusammen
-- "Scan History" Button zum Importieren aller bisherigen Song-Posts aus der Kanalhistorie
-- "Delete All Songs" Button zum Zurücksetzen aller Song-Daten (mit Bestätigungsdialog)
-- Neue Songs werden automatisch in Echtzeit erfasst (inkl. Songtitel aus Embed)
+1. **Random Song** scans a configured input channel for recent Suno links and posts a random result to an output channel. It can be globally disabled in Settings; when disabled, `/random-song` is blocked while channel configurations are preserved.
+2. **Party Playlist** accepts Suno or YouTube submissions, tracks heard songs, and provides a private Discord carousel plus a web-based playlist view.
 
-### User Stats
-- Leaderboard: Rangliste aller Nutzer nach Anzahl geposteter Songs
-- Detailansicht pro User: Songs gesamt, Songs pro Kanal, Durchschnitt pro Woche/Monat
-- Aktivste Wochentage und Top Posting Days
-- Zeitraum: Erster und letzter Post, Anzahl aktiver Wochen
-- "Delete All Song Data" Button zum Zurücksetzen (mit Bestätigungsdialog)
-- Auch per `/user-stats` Slash-Command verfügbar
+The maximum number of Party Playlist submissions per member is configurable.
 
-### Reaction Stats
-- Live-Tracking aller Emoji-Reaktionen auf Song-Posts in überwachten Kanälen
-- Kanalfilter: Auswahl einzelner Kanäle oder alle zusammen
-- Zentraler Zeitfilter (Today, 7d, 30d, 90d, All) für Summary Cards und Most Reacted Songs
-- Summary: Gesamtreaktionen, Unique Reactors, Songs mit Reaktionen, Durchschnitt pro Song
-- Top Emojis: Beliebteste Emojis mit Balkendiagramm (immer All-Time)
-- Top Reactors: Wer reagiert am meisten (immer All-Time)
-- Most Appreciated Artists: Wessen Songs bekommen die meisten Reaktionen (immer All-Time)
-- Most Reacted Songs: Meistbewertete Songs mit Titel + Interpret + Links, gefiltert nach Posting-Datum
-- "Scan Reactions" Button zum Importieren aller Reaktionen aus der Kanalhistorie (optimiert: bereits gescannte Nachrichten werden übersprungen)
-- "Refresh Titles" Button zum Nachholen von Songtiteln aus Discord-Embeds
-- "Delete All Reactions" Button zum Zurücksetzen aller Reaktionsdaten (mit Bestätigungsdialog)
+### Card Collection
 
-### Image Posting
-- Kategorien anlegen und verwalten (erstellen/löschen)
-- Bilder hochladen mit Titel (max. 30 Zeichen), Beschreibung (max. 400 Zeichen) und Kategorie
-- Unterstützte Formate: PNG, JPEG, GIF, WebP
-- Galerie-Ansicht mit Kategorie-Filter
-- Bilder einzeln löschen oder ganze Kategorien (inkl. aller Bilder) entfernen
-- Über `/imageposting` Slash-Command im Discord-Kanal posten
+Administrators create collectible cards with an image, name, optional deck label, rarity, draw weight, and availability state. Users receive one public draw per day and privately browse their own or another member's collection.
 
-### Suno Web Player
-- Öffentlicher Player unter `/public/player` — kein Login erforderlich
-- Alle geposteten Songs abspielen mit Shuffle, Auto-Next, Lyrics und Cover-Anzeige
-- Hide Played: Bereits gehörte Songs ausblenden
-- Suno-Artist-Name und Discord-Username werden angezeigt
-- Player-URL wird im Settings-Bereich konfiguriert und per `/player` Slash-Command im Discord gepostet
+Duplicate cards are stored as quantities. Draw probability uses the configured rarity base weight multiplied by the card's individual draw weight. The Admin UI displays the resulting probability for every available card.
 
-### Settings (Einstellungen)
-- Bot-Name ändern
-- Guild-ID ändern (erfordert Neustart)
-- Player URL: Öffentliche URL zum Suno Web Player (für `/player` Command)
+### Birthday Calendar and Reminders
 
----
+- Members can save or remove only their own birthday.
+- `/birthdays` privately shows upcoming, complete, or month-specific calendars.
+- The Admin UI can edit all entries and configure reminder messages two days before and on the birthday.
+- Automated birthday notices suppress user pings.
+- Personal reminders can be one-time, daily, weekly, or monthly and are delivered by DM.
+- Members can delete only their own reminders; administrators can manage all reminders in the web panel.
 
-## Slash-Commands
+## Twitch Radio
 
-| Command | Beschreibung |
-|---|---|
-| `/cooldown-set #kanal 120` | Cooldown für einen Kanal setzen (in Minuten, 0–2880) |
-| `/cooldown-info #kanal` | Aktuelle Konfiguration eines Kanals anzeigen |
-| `/cooldown-reset @user [#kanal]` | Cooldown eines Nutzers zurücksetzen |
-| `/cooldown-clear [#kanal]` | Alle Cooldowns in einem/allen Kanal/Kanälen löschen |
-| `/cooldown-toggle #kanal true/false` | Monitoring für einen Kanal ein-/ausschalten |
-| `/random-song [#input-kanal]` | Zufälligen Suno-Song aus dem Input-Kanal posten |
-| `/find-list <Suchbegriff>` | Suno-Playlists nach Interpret/Keyword durchsuchen (nur für dich sichtbar) |
-| `/song-stats [#kanal]` | Song-Posting-Statistiken anzeigen (nur für dich sichtbar) |
-| `/user-stats [@user]` | User-Statistiken anzeigen — Songs gesamt, pro Kanal, Durchschnitte (nur für dich sichtbar) |
-| `/user-score` | Song-Highscore/Leaderboard öffentlich im Kanal posten |
-| `/find-song [@user] [title]` | Song suchen: mit User+Titel, nur User (zufällig), nur Titel, oder komplett zufällig (nur für dich sichtbar) |
-| `/talk [translate] <text>` | Bot spricht im Kanal: *<username> says: <text>* (optional mit Übersetzung) |
-| `/translate <to> <text>` | Text übersetzen (nur für dich sichtbar) |
-| `/dice` | Roll two D6 dice and show the result in a polished embed |
-| `/top <period>` | Most Reacted Songs Top 10 mit Titel, Interpret, Reaktionen und Cover (nur für dich sichtbar) |
-| `/new` | Karussell-Modus: Songs der letzten 2 Tage einzeln durchblättern, auf die du noch nicht reagiert hast — mit dynamischen Emoji-Buttons (deine meistgenutzten), Skip, und "Im Kanal öffnen" Jump-Link (nur für dich sichtbar) |
-| `/imageposting <kategorie> [titel]` | Bild aus der Bibliothek im Kanal posten: Kategorie (Pflicht) + Titel (optional, sonst zufällig). Autocomplete für beide Parameter. Postet erst das Bild, dann die Beschreibung (sichtbar für alle) |
-| `/party` | Karussell-Modus: Eingereichte Party-Songs einzeln durchhören mit Listen-Link, Heard-Button und Next-Button (nur für dich sichtbar) |
-| `/party-submit <url>` | Suno-Song zur Listening-Party-Playlist einreichen (max. 2 pro User, nur für dich sichtbar) |
-| `/party-songs` | Eigene eingereichte Songs anzeigen mit Status und ID (nur für dich sichtbar) |
-| `/party-remove <song_id>` | Eigenen Song aus der Playlist entfernen (ID aus `/party-songs`, nur für dich sichtbar) |
-| `/party-list` | Alle eingereichten Songs aller User auflisten (nur für dich sichtbar) |
-| `/party-reset` | Party-Playlist zurücksetzen — nur für Admin/Mod/Owner |
-| `/player` | Link zum Suno Web Player im Kanal posten (URL wird in Settings konfiguriert) |
-| `/help` | Übersicht aller verfügbaren Commands anzeigen (nur für dich sichtbar) |
+The project contains two independent radio managers. They share parts of the Twitch integration but cannot run at the same time. The classic radio is additionally blocked on configured Experimental Radio stream days.
 
-> Cooldown- und Toggle-Commands können nur von Serverbesitzern und Mitgliedern mit einer **Command Role** genutzt werden. `/party-reset` erfordert ebenfalls Command-Berechtigung. Alle anderen Commands sind für **alle** Servermitglieder verfügbar.
+### Classic Twitch Radio
 
-### /new Karussell-Details
+- Public Suno submission form with configurable stream name
+- Automatic MP3 download from Suno
+- Configurable submissions per Suno user and maximum playable duration
+- Decoded-audio duration validation to handle broken MP3 headers
+- Optional shuffled playback
+- Background image or looped background video
+- Configurable lyrics box and scrolling cleaned Suno lyrics
+- Local or RTMP picture-in-picture input
+- Song video PiP with cover fallback
+- Configurable persistent multi-line disclaimer rendered in the bottom-left corner
+- Twitch OAuth chat bot and delayed Now Playing announcements
+- Song expiry notifications that include the configured stream name
+- Stable 2000 kbps H.264 Twitch output
 
-Der `/new`-Command zeigt ungehörte Songs **einen nach dem anderen** im Karussell-Modus:
+### Experimental Radio
 
-- **Emoji-Buttons** (Row 1): Dynamisch aus deinen meistverwendeten Emojis, Fallback: 👍 ❤️ 🔥 🎵
-- **Skip-Button**: Überspringt den Song nur für diese Session — beim nächsten `/new` taucht er wieder auf
-- **"Im Kanal öffnen"**: Jump-Link zum Original-Post im Song-Kanal, um dort selbst zu reagieren
-- Emoji-Klick speichert die Reaktion in der Datenbank unter deiner User-ID → Song verschwindet aus zukünftigen `/new`-Aufrufen
-- Songs ohne bisherige Reaktionen werden ebenfalls angezeigt
-- Timeout: 10 Minuten Inaktivität
+- Discord submission, replacement, deletion, and playlist commands
+- Two-step consent and server-side Suno audio transfer
+- Real decoded duration validation at submission and stream-build time
+- Separate submission and admin playlists plus intro and outro material
+- Expiry handling, consent records, moderation state, cover normalization, and manual duration checks
+- Whisper transcription, timestamps, lyrics preparation, and ASS subtitle overlays
+- Optional Suno Hook videos supplied by administrators or submitters
+- Hook video cleanup when a song expires, is deleted, or is replaced
+- Configurable Song Video PiP, progress display, persistent bottom-right disclaimer, and early-play boost
+- Manual, safe-stop, and scheduled stream controls with live logs
+- Current-song status and Suno links in the Admin UI
+- Historical stream snapshots used by `/twitch-to-suno` and the Suno Playlist Player
 
----
+## Twitch Alerts
 
-## Architektur
+Twitch Alerts uses EventSub and can post customizable messages directly into Twitch chat for:
 
+- New followers
+- New subscriptions
+- Resubscription messages
+- Gift subscriptions
+- Bits and cheers
+- Incoming raids
+- Subscription streak and milestone notifications when Twitch supplies them
+
+Event reception uses the broadcaster account while chat output can use the separate Corax bot account. The Admin UI shows feature, EventSub, chat sender, event account, scope, and subscription status. Twitch-native emotes can be used by writing their exact emote name, provided the sending account has access to them.
+
+## Raven's Nest: Relic Hunt
+
+Raven's Nest is a Twitch chat collection game backed by SQLite. It includes relic rarity, points, XP, ranks, daily rewards, combining, a community ritual, a phrase puzzle, custom commands, configurable game access, and the Hrafnathorp village extension.
+
+Viewer commands:
+
+```text
+!raven !nest !items !top !rank !daily !ritual !combine
+!village !entertain !teach !trade !invest !nextVillage
+!phrase !solve !relichelp
 ```
-discord-slowmode-bot/
+
+Village investments consume Shinies. Completed village rewards are summarized into a single chat message to avoid flooding the channel.
+
+## Slash Commands
+
+Commands shown by Discord depend on command synchronization and permissions. Commands marked as administrative require the server owner or a configured Command Role.
+
+### Cooldowns and Moderation
+
+| Command | Description |
+|---|---|
+| `/cooldown-set` | Set a channel cooldown from 0 to 2880 minutes (admin) |
+| `/cooldown-info` | Show a channel's cooldown configuration |
+| `/cooldown-reset` | Reset a member's cooldown (admin) |
+| `/cooldown-clear` | Clear channel cooldown state (admin) |
+| `/cooldown-toggle` | Enable or disable monitoring (admin) |
+| `/timer` | Privately show the caller's active cooldown timers |
+
+### Songs and Listening Parties
+
+| Command | Description |
+|---|---|
+| `/random-song` | Pick from a configured recent-song input channel; blocked when the feature is disabled |
+| `/find-list` | Search indexed Suno playlists |
+| `/find-song` | Find a song by member, title, or random selection |
+| `/find-usersongs` | Browse a member's recent songs in a private carousel |
+| `/song-stats` | Show song posting statistics |
+| `/user-stats` | Show statistics for a member |
+| `/user-score` | Post the song contribution leaderboard |
+| `/top` | Privately show the most reacted songs for a period |
+| `/new` | Browse recent songs the caller has not reacted to |
+| `/party-submit` | Submit a Suno or YouTube song to the Party Playlist |
+| `/party-songs` | View the caller's Party Playlist submissions |
+| `/party-remove` | Remove one of the caller's submissions |
+| `/party-list` | Privately list all Party Playlist submissions |
+| `/party` | Open the unheard-song carousel |
+| `/party-reset` | Reset the Party Playlist (admin) |
+| `/player` | Post the configured public Suno Player link |
+
+### Experimental Radio
+
+| Command | Description |
+|---|---|
+| `/twitch-submit` | Start a new Experimental Radio submission, optionally with a Hook video |
+| `/twitch-replace` | Validate a new song and replace the caller's oldest active submission |
+| `/twitch-delete` | Delete one of the caller's active submissions |
+| `/twitch-hook` | Add or replace a Hook video on an active submission |
+| `/twitch-hook-remove` | Remove a Hook video from an active submission |
+| `/twitch-playlist` | Privately show the current submission playlist |
+| `/twitch-to-suno` | Return Suno URLs from the running or most recent stream snapshot |
+
+### Community and Utilities
+
+| Command | Description |
+|---|---|
+| `/cards-draw` | Publicly draw one collectible card per day |
+| `/cards-collection` | Privately browse the caller's or another member's collection |
+| `/birthday-set` | Save or update the caller's birthday |
+| `/birthday-remove` | Remove the caller's birthday |
+| `/birthdays` | Privately browse the server birthday calendar |
+| `/reminder-set` | Create a one-time, daily, weekly, or monthly DM reminder |
+| `/reminder-delete` | Delete one of the caller's reminders |
+| `/quiz` | Post a random configured quiz question |
+| `/quiz-highscore` | Privately show the quiz top ten |
+| `/poll-create` | Create a poll |
+| `/poll-edit` | Edit an existing poll |
+| `/imageposting` | Post an image from the configured library |
+| `/talk` | Ask the bot to post text, optionally translated |
+| `/translate` | Privately translate text |
+| `/dice` | Roll configurable W6, W10, or W20 dice |
+| `/help` | Privately show the in-Discord command overview |
+
+The message context action **Translate Message** translates an existing Discord message.
+
+### RPG Adventures
+
+The `/rpg` command group provides character and party-based adventures:
+
+```text
+/rpg classes
+/rpg create
+/rpg sheet
+/rpg delete-character
+/rpg party-create
+/rpg party-join
+/rpg party-leave
+/rpg party-list
+/rpg party-status
+/rpg adventures
+/rpg start
+/rpg scene
+/rpg choose
+/rpg say
+/rpg attack
+/rpg ability
+/rpg status
+```
+
+## Architecture
+
+```text
+Discord-Slowmode/
 ├── bot/
-│   ├── main.py              # Bot-Klasse und Initialisierung
-│   ├── database.py          # SQLite Datenbankmanager (async)
-│   └── cogs/
-│       ├── slowmode.py      # Cooldown-Überwachung (on_message)
-│       └── commands.py      # Slash-Commands
+│   ├── main.py                 Discord bot initialization and cog loading
+│   ├── database.py             Async SQLite schema, migrations, and repositories
+│   ├── stream_manager.py       Classic Twitch Radio FFmpeg manager
+│   ├── exp_stream_manager.py   Experimental Radio scheduler and FFmpeg manager
+│   ├── exp_radio_worker.py     Suno download, metadata, transcription, and analysis jobs
+│   ├── twitch_bot.py           Twitch OAuth and rate-limited chat sender
+│   ├── twitch_event_alerts.py  Twitch EventSub listener
+│   ├── relic_hunt.py           Raven's Nest game logic
+│   ├── rpg_engine.py           RPG rules and models
+│   └── cogs/                   Discord listeners and slash-command modules
 ├── web/
-│   ├── app.py               # Quart Web-Server (alle Routen)
-│   └── templates/           # HTML Templates (Jinja2 + TailwindCSS)
-├── config.py                # Konfiguration aus Umgebungsvariablen
-├── run.py                   # Startet Bot + Web-Server gleichzeitig
-├── Dockerfile
-├── docker-compose.yml
-└── .env.example
+│   ├── app.py                  Quart routes, APIs, OAuth callbacks, and Admin UI logic
+│   ├── templates/              Jinja2 templates
+│   └── static/                 Static branding assets
+├── data/                       Runtime data in non-container development
+├── config.py                   Environment configuration
+├── run.py                      Starts Discord and Quart together
+├── Dockerfile                  Debian 12 application image
+├── docker-compose.yml          Bot, Caddy, Ollama, and persistent volumes
+└── Caddyfile                   HTTPS reverse proxy configuration
 ```
 
-### Erweiterbarkeit
+Database migrations run automatically during startup. Feature settings and sensitive integration credentials saved through the Admin UI are stored in SQLite; the database and uploaded runtime files must therefore be backed up together.
 
-Der Bot verwendet das **Cog-System** von discord.py. Neue Funktionen können als eigene Cogs unter `bot/cogs/` hinzugefügt werden:
+### Admin Backups
 
-1. Neue Datei erstellen: `bot/cogs/mein_feature.py`
-2. Cog-Klasse mit `commands.Cog` erstellen
-3. In `bot/main.py` laden: `await self.load_extension("bot.cogs.mein_feature")`
+Settings provides two online exports while Corax remains available:
 
----
+- **Database Backup** creates a transactionally consistent SQLite file.
+- **Full Data Archive** packages that SQLite snapshot together with persistent uploaded assets. Rebuildable model caches and previous restore safety copies are omitted.
 
-## Fehlerbehebung
+Database restore accepts the SQLite export, runs an integrity and schema check, and requires the confirmation text `RESTORE`. Both radio streams must be stopped. Before replacing the active database, Corax stores a safety copy in `data/restore_backups/` and keeps the five newest copies. The process then exits cleanly so the Docker `unless-stopped` policy starts it with the restored database.
 
-| Problem | Lösung |
+## Troubleshooting
+
+| Problem | Check |
 |---|---|
-| Bot kommt nicht online | `DISCORD_TOKEN` und `GUILD_ID` in `.env` prüfen |
-| Slash-Commands erscheinen nicht | Bot neu einladen mit `applications.commands` Scope |
-| Nachrichten werden nicht gelöscht | Bot benötigt die Permission `Manage Messages` |
-| Web-Interface nicht erreichbar | Firewall-Port 5000 freigeben, `WEB_HOST=0.0.0.0` prüfen |
-| „Must change password"-Schleife | Mit dem Initial-Passwort einloggen und neues Passwort setzen |
+| Bot is offline | Validate `DISCORD_TOKEN`, guild access, and container logs |
+| Slash commands are missing | Confirm the `applications.commands` scope, `GUILD_ID`, and command synchronization logs |
+| Messages cannot be managed | Grant Manage Messages and verify the bot's role position |
+| Player OAuth returns `invalid_client` | Ensure Client ID and Client Secret belong to the same Discord application and rebuild after changing `.env` |
+| OAuth reports a redirect mismatch | Add the exact HTTPS callback shown in Settings to the provider application |
+| Twitch Alerts are connected to only some events | Re-authorize the broadcaster with all displayed scopes, then restart the listener |
+| Twitch chat returns HTTP 429 | Inspect the sender queue and Twitch rate-limit logs |
+| Stream duration differs from the audible song | Run the decoded-duration check; Suno MP3 headers can contain incorrect duration metadata |
+| Admin UI is unavailable | Check Caddy and bot logs, DNS, HTTPS certificates, and the internal `slowmode-bot:5000` connection |
 
----
+## Security and Operations
 
-## Sicherheitshinweise
-
-- **`.env`-Datei niemals in Git committen** — sie enthält den Bot-Token!
-- `SECRET_KEY` sollte ein langer, zufälliger String sein
-- Für Produktivbetrieb: Web-Interface hinter einem Reverse-Proxy (z.B. nginx) mit HTTPS betreiben
-- Regelmäßig Passwörter ändern
+- Never commit `.env`, API keys, OAuth secrets, refresh tokens, stream keys, or the SQLite database.
+- Use a long random `SECRET_KEY`.
+- Keep the Admin UI behind HTTPS.
+- Grant only the Admin UI permissions each account requires.
+- Back up the `bot-data` Docker volume regularly.
+- Treat database backups as sensitive because settings may contain integration credentials.
+- Test radio and OAuth changes on the server where the production network and provider callbacks are available.

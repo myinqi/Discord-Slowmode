@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Database Restore{% endblock %}
+{% block content %}
+<div class="max-w-2xl mx-auto mt-12 bg-discord-dark rounded-xl border border-gray-700/50 p-8 text-center">
+    <div class="w-12 h-12 mx-auto mb-5 rounded-full border-4 border-gray-700 border-t-discord-blurple animate-spin"></div>
+    <h2 class="text-2xl font-bold text-white">Restoring database</h2>
+    <p class="text-gray-300 mt-3">The backup passed validation. Corax is replacing the database and restarting now.</p>
+    <p class="text-sm text-gray-500 mt-2">Safety backup: <code class="text-gray-400">{{ safety_backup }}</code></p>
+    <p id="restore-status" class="text-sm text-gray-400 mt-6">Waiting for the Admin UI to return...</p>
+</div>
+<script>
+    (function waitForRestart() {
+        var attempts = 0;
+        var timer = setInterval(async function () {
+            attempts += 1;
+            try {
+                var response = await fetch("{{ url_for('settings') }}", {
+                    method: "GET",
+                    cache: "no-store",
+                    credentials: "same-origin"
+                });
+                if (response.ok) {
+                    clearInterval(timer);
+                    window.location.replace("{{ url_for('settings') }}");
+                    return;
+                }
+            } catch (error) {
+                // A short connection failure is expected while Docker restarts Corax.
+            }
+            if (attempts >= 40) {
+                clearInterval(timer);
+                document.getElementById("restore-status").textContent =
+                    "Corax is taking longer than expected. Reload this page in a moment.";
+            }
+        }, 3000);
+    })();
+</script>
+{% endblock %}

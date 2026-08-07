@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import re
 import functools
@@ -10,6 +11,11 @@ import bcrypt
 import aiohttp
 from quart import Quart, render_template, request, redirect, url_for, session, flash
 from bot.database import Database
+from bot.backup import (
+    create_full_data_archive,
+    prune_restore_backups,
+    validate_database_backup,
+)
 from bot.exp_radio_files import (
     cleanup_exp_radio_hook_files,
     cleanup_exp_radio_song_files,
@@ -203,6 +209,7 @@ def create_app(db: Database, bot=None) -> Quart:
     app.title_scan_status = {"running": False, "progress": "", "result": ""}
     app.reaction_scan_status = {"running": False, "progress": "", "result": ""}
     app.cleanup_status = {"running": False, "progress": "", "result": ""}
+    app.database_restore_pending = False
     app.player_reaction_locks = {}
     # Serializes manual starts of both radio managers. The scheduled Exp.
     # Radio start additionally checks the legacy manager before it fires.
@@ -409,6 +416,53 @@ def create_app(db: Database, bot=None) -> Quart:
 
     def _public_player_discord_callback_url() -> str:
         return f"{_public_web_url()}/public/player/discord/callback"
+
+    async def _delete_temp_file_later(path: str, delay: int = 300) -> None:
+        await asyncio.sleep(delay)
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+    async def _apply_database_restore(staged_path: str, marker: dict) -> None:
+        """Quiesce background work, swap the DB, and let Docker restart us."""
+        import contextlib
+
+        await asyncio.sleep(2)
+        try:
+            for task_name in (
+                "radio_cleanup_task",
+                "exp_radio_cleanup_task",
+                "exp_radio_schedule_task",
+            ):
+                task = getattr(app, task_name, None)
+                if task and not task.done():
+                    task.cancel()
+
+            with contextlib.suppress(Exception):
+                await twitch_event_alerts.stop()
+            with contextlib.suppress(Exception):
+                await relic_hunt.stop()
+            if bot and not bot.is_closed():
+                with contextlib.suppress(Exception):
+                    await bot.close()
+
+            await db.close()
+            for sidecar in (db.db_path + "-wal", db.db_path + "-shm"):
+                with contextlib.suppress(OSError):
+                    os.remove(sidecar)
+            os.replace(staged_path, db.db_path)
+            marker_path = os.path.join(
+                os.path.dirname(os.path.abspath(db.db_path)),
+                "database-restore-pending.json",
+            )
+            with open(marker_path, "w", encoding="utf-8") as handle:
+                json.dump(marker, handle)
+            print("[backup] Database restore applied; restarting process.", flush=True)
+            os._exit(0)
+        except Exception as exc:
+            print(f"[backup] Database restore failed during swap: {exc}", flush=True)
+            os._exit(1)
 
     async def _player_discord_oauth_credentials() -> tuple[str, str]:
         from config import Config
@@ -776,6 +830,166 @@ def create_app(db: Database, bot=None) -> Quart:
                                      available_output_channels=available_output_channels,
                                      listening_party_enabled=listening_party_enabled,
                                      lp_configs=lp_configs)
+
+    @app.route("/settings/backup/database")
+    @permission_required("settings")
+    async def settings_backup_database():
+        import tempfile
+        from datetime import datetime, timezone
+        from quart import send_file
+
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        fd, path = tempfile.mkstemp(prefix="corax-db-", suffix=".sqlite3")
+        os.close(fd)
+        try:
+            await db.backup_to(path)
+            await db.add_audit_log(
+                event_type="database_backup_exported",
+                details="Consistent SQLite database backup exported",
+                actor=session.get("username", "unknown"),
+            )
+            asyncio.create_task(_delete_temp_file_later(path))
+            return await send_file(
+                path,
+                mimetype="application/vnd.sqlite3",
+                as_attachment=True,
+                attachment_filename=f"corax-database-{stamp}.sqlite3",
+            )
+        except Exception:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            raise
+
+    @app.route("/settings/backup/full")
+    @permission_required("settings")
+    async def settings_backup_full():
+        import tempfile
+        from datetime import datetime, timezone
+        from quart import send_file
+
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        db_fd, db_snapshot = tempfile.mkstemp(prefix="corax-full-db-", suffix=".sqlite3")
+        zip_fd, archive_path = tempfile.mkstemp(prefix="corax-full-", suffix=".zip")
+        os.close(db_fd)
+        os.close(zip_fd)
+        try:
+            await db.backup_to(db_snapshot)
+            data_dir = os.path.dirname(os.path.abspath(db.db_path))
+            await asyncio.to_thread(
+                create_full_data_archive,
+                data_dir,
+                db.db_path,
+                db_snapshot,
+                archive_path,
+            )
+            await db.add_audit_log(
+                event_type="full_data_backup_exported",
+                details="Full persistent data archive exported",
+                actor=session.get("username", "unknown"),
+            )
+            asyncio.create_task(_delete_temp_file_later(archive_path, delay=900))
+            return await send_file(
+                archive_path,
+                mimetype="application/zip",
+                as_attachment=True,
+                attachment_filename=f"corax-full-data-{stamp}.zip",
+            )
+        except Exception:
+            try:
+                os.remove(archive_path)
+            except OSError:
+                pass
+            raise
+        finally:
+            try:
+                os.remove(db_snapshot)
+            except OSError:
+                pass
+
+    @app.route("/settings/backup/restore", methods=["POST"])
+    @permission_required("settings")
+    async def settings_restore_database():
+        import uuid
+        from datetime import datetime, timezone
+
+        if app.database_restore_pending:
+            await flash("A database restore is already pending.", "error")
+            return redirect(url_for("settings"))
+
+        form = await request.form
+        files = await request.files
+        if (form.get("restore_confirmation") or "").strip() != "RESTORE":
+            await flash("Type RESTORE to confirm the database replacement.", "error")
+            return redirect(url_for("settings"))
+        upload = files.get("database_backup")
+        if not upload or not upload.filename:
+            await flash("Select a SQLite database backup first.", "error")
+            return redirect(url_for("settings"))
+
+        app.database_restore_pending = True
+        if stream_manager.is_running or getattr(stream_manager, "_loading", False):
+            app.database_restore_pending = False
+            await flash("Stop the classic Twitch Radio before restoring a backup.", "error")
+            return redirect(url_for("settings"))
+        if exp_stream_manager.is_running or app.radio_start_lock.locked():
+            app.database_restore_pending = False
+            await flash("Stop the Experimental Radio before restoring a backup.", "error")
+            return redirect(url_for("settings"))
+
+        data_dir = os.path.dirname(os.path.abspath(db.db_path))
+        staging_dir = os.path.join(data_dir, "restore_staging")
+        os.makedirs(staging_dir, exist_ok=True)
+        staged_path = os.path.join(staging_dir, f"restore-{uuid.uuid4().hex}.sqlite3")
+        try:
+            await upload.save(staged_path)
+            validation = await asyncio.to_thread(validate_database_backup, staged_path)
+
+            actor = session.get("username", "unknown")
+            await db.add_audit_log(
+                event_type="database_restore_requested",
+                details=(
+                    f"Validated backup with {validation['tables']} tables and "
+                    f"{validation['size']} bytes"
+                ),
+                actor=actor,
+            )
+
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+            safety_dir = os.path.join(data_dir, "restore_backups")
+            os.makedirs(safety_dir, exist_ok=True)
+            safety_path = os.path.join(safety_dir, f"pre-restore-{stamp}.sqlite3")
+            await db.backup_to(safety_path)
+            prune_restore_backups(safety_dir, keep=5)
+
+            marker = {
+                "restored_at": datetime.now(timezone.utc).isoformat(),
+                "actor": actor,
+                "safety_backup": os.path.relpath(safety_path, data_dir),
+            }
+            page = await render_template(
+                "database_restore_restarting.html",
+                safety_backup=os.path.basename(safety_path),
+            )
+            asyncio.create_task(_apply_database_restore(staged_path, marker))
+            return page
+        except ValueError as exc:
+            app.database_restore_pending = False
+            try:
+                os.remove(staged_path)
+            except OSError:
+                pass
+            await flash(str(exc), "error")
+            return redirect(url_for("settings"))
+        except Exception as exc:
+            app.database_restore_pending = False
+            try:
+                os.remove(staged_path)
+            except OSError:
+                pass
+            await flash(f"Database restore preparation failed: {exc}", "error")
+            return redirect(url_for("settings"))
 
     @app.route("/welcome", methods=["GET", "POST"])
     @permission_required('welcome')
@@ -4843,6 +5057,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 stream_url = form.get("stream_url", "").strip()
                 upload_enabled = "1" if form.get("upload_enabled") else "0"
                 shuffle = "1" if form.get("shuffle") else "0"
+                repeat_playlist = "1" if form.get("repeat_playlist") else "0"
                 stream_name = form.get("stream_name", "").strip()[:100] or "Twitch Radio"
                 disclaimer_enabled = "on" if form.get("disclaimer_enabled") else "off"
                 disclaimer_text = (form.get("disclaimer_text") or "").strip()[:2000]
@@ -4868,6 +5083,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     await db.set_setting("radio_stream_url", stream_url)
                 await db.set_setting("radio_upload_enabled", upload_enabled)
                 await db.set_setting("radio_shuffle", shuffle)
+                await db.set_setting("radio_repeat_playlist", repeat_playlist)
                 await db.set_setting("radio_stream_name", stream_name)
                 await db.set_setting("radio_disclaimer_enabled", disclaimer_enabled)
                 await db.set_setting("radio_disclaimer_text", disclaimer_text)
@@ -5028,6 +5244,7 @@ def create_app(db: Database, bot=None) -> Quart:
         bg_filename = await db.get_setting("radio_background_filename") or ""
         bg_type = await db.get_setting("radio_background_type") or "image"
         shuffle = await db.get_setting("radio_shuffle") or "0"
+        repeat_playlist = await db.get_setting("radio_repeat_playlist") or "1"
 
         guild = get_guild()
         text_channels = []
@@ -5073,6 +5290,7 @@ def create_app(db: Database, bot=None) -> Quart:
             text_channels=text_channels,
             expiry_channel_id=expiry_channel_id,
             shuffle=shuffle,
+            repeat_playlist=repeat_playlist,
             tw_client_id=tw_client_id,
             tw_secret_masked=tw_secret_masked,
             tw_refresh_masked=tw_refresh_masked,
@@ -5205,7 +5423,11 @@ def create_app(db: Database, bot=None) -> Quart:
     async def radio_stream_action(action):
         from quart import jsonify
         if action == "start":
+            if app.database_restore_pending:
+                return jsonify({"ok": False, "error": "A database restore is in progress."}), 409
             async with app.radio_start_lock:
+                if app.database_restore_pending:
+                    return jsonify({"ok": False, "error": "A database restore is in progress."}), 409
                 reason = await _legacy_radio_start_block_reason()
                 if reason:
                     return jsonify({"ok": False, "error": reason, "start_blocked": True}), 409
@@ -5420,7 +5642,12 @@ def create_app(db: Database, bot=None) -> Quart:
                         and now.minute == target_m
                         and cur_min_key != app.exp_schedule_last_fired):
                     app.exp_schedule_last_fired = cur_min_key
-                    if stream_manager.is_running or stream_manager._loading:
+                    if app.database_restore_pending:
+                        log_event(
+                            "Scheduler: database restore in progress — skipping auto-start.",
+                            level="error", prefix="[exp-schedule]",
+                        )
+                    elif stream_manager.is_running or stream_manager._loading:
                         log_event(
                             "Scheduler: legacy Twitch Radio is running or starting — skipping auto-start.",
                             level="error", prefix="[exp-schedule]",
@@ -5444,9 +5671,16 @@ def create_app(db: Database, bot=None) -> Quart:
                                 prefix="[exp-schedule]",
                             )
                             try:
-                                result = await exp_stream_manager.start(
-                                    twitch_key, fresh_cache=True, scheduled=True,
-                                )
+                                async with app.radio_start_lock:
+                                    if app.database_restore_pending:
+                                        result = {
+                                            "ok": False,
+                                            "error": "database restore in progress",
+                                        }
+                                    else:
+                                        result = await exp_stream_manager.start(
+                                            twitch_key, fresh_cache=True, scheduled=True,
+                                        )
                                 if result.get("ok"):
                                     log_event(
                                         f"Scheduler: start accepted with {result.get('song_count')} song(s); waiting for FFmpeg to go live.",
@@ -6764,10 +6998,14 @@ def create_app(db: Database, bot=None) -> Quart:
     async def exp_radio_stream_action(action):
         from quart import jsonify
         if action in ("start", "start_legacy"):
+            if app.database_restore_pending:
+                return jsonify({"ok": False, "error": "A database restore is in progress."}), 409
             twitch_key = await db.get_setting("exp_radio_twitch_key") or ""
             if not twitch_key:
                 return jsonify({"ok": False, "error": "No Twitch stream key configured."}), 400
             async with app.radio_start_lock:
+                if app.database_restore_pending:
+                    return jsonify({"ok": False, "error": "A database restore is in progress."}), 409
                 if stream_manager.is_running or stream_manager._loading:
                     return jsonify({
                         "ok": False,
