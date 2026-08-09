@@ -120,6 +120,8 @@
                 <option value="joined_oldest" {% if sort == 'joined_oldest' %}selected{% endif %}>Joined oldest first</option>
                 <option value="account_newest" {% if sort == 'account_newest' %}selected{% endif %}>Newest accounts first</option>
                 <option value="account_oldest" {% if sort == 'account_oldest' %}selected{% endif %}>Oldest accounts first</option>
+                <option value="activity_newest" {% if sort == 'activity_newest' %}selected{% endif %}>Recently active first</option>
+                <option value="activity_oldest" {% if sort == 'activity_oldest' %}selected{% endif %}>Least recently active first</option>
             </select>
         </div>
         <div class="flex gap-2 md:col-span-2 xl:col-span-5 justify-end">
@@ -133,13 +135,14 @@
 
 <div class="bg-discord-dark rounded-xl border border-gray-700/50 overflow-hidden">
     <div class="overflow-x-auto">
-        <table class="w-full min-w-[1100px] text-left">
+        <table class="w-full min-w-[1300px] text-left">
             <thead class="bg-discord-darker/80 text-gray-400 text-xs uppercase">
                 <tr>
                     <th class="px-4 py-3 font-medium">Member</th>
                     <th class="px-4 py-3 font-medium">Discord ID</th>
                     <th class="px-4 py-3 font-medium">Joined server</th>
                     <th class="px-4 py-3 font-medium">Account created</th>
+                    <th class="px-4 py-3 font-medium">Last interaction</th>
                     <th class="px-4 py-3 font-medium">Roles</th>
                     <th class="px-4 py-3 font-medium">State</th>
                 </tr>
@@ -170,6 +173,25 @@
                         {{ member.created_at.strftime('%d.%m.%Y') }}
                         <span class="block text-gray-600 text-xs">{{ member.created_at.strftime('%H:%M UTC') }}</span>
                     </td>
+                    <td class="px-4 py-3 text-sm whitespace-nowrap">
+                        {% if member.last_activity %}
+                        <span class="text-white font-medium">
+                            {% if member.last_activity.days_ago == 0 %}0 days ago
+                            {% elif member.last_activity.days_ago == 1 %}1 day ago
+                            {% else %}{{ member.last_activity.days_ago }} days ago{% endif %}
+                        </span>
+                        <span class="block text-gray-500 text-xs">
+                            {{ member.last_activity.datetime.strftime('%d.%m.%Y %H:%M UTC') }}
+                        </span>
+                        {% if member.last_activity.channel_name %}
+                        <span class="block text-gray-600 text-xs truncate max-w-[180px]" title="#{{ member.last_activity.channel_name }}">
+                            #{{ member.last_activity.channel_name }}
+                        </span>
+                        {% endif %}
+                        {% else %}
+                        <span class="text-gray-600 text-xs">No activity recorded</span>
+                        {% endif %}
+                    </td>
                     <td class="px-4 py-3 max-w-sm">
                         {% if member.roles %}
                         <div class="flex flex-wrap gap-1">
@@ -195,7 +217,7 @@
                     </td>
                 </tr>
                 {% else %}
-                <tr><td colspan="6" class="px-5 py-12 text-center text-gray-500">No members match the selected filters.</td></tr>
+                <tr><td colspan="7" class="px-5 py-12 text-center text-gray-500">No members match the selected filters.</td></tr>
                 {% endfor %}
             </tbody>
         </table>

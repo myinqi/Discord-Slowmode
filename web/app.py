@@ -531,7 +531,31 @@ def create_app(db: Database, bot=None) -> Quart:
             "role_ids": {role.id for role in roles},
             "role_names": [role.name for role in roles],
             "top_role": roles[0].name if roles else "",
+            "last_activity": None,
         }
+
+    def add_member_directory_activity(
+        rows: list[dict], activity_rows: list[dict]
+    ) -> None:
+        from datetime import datetime, timezone
+
+        now_ts = time.time()
+        activity_by_user = {
+            int(activity["user_id"]): activity
+            for activity in activity_rows
+            if activity.get("user_id") is not None
+        }
+        for row in rows:
+            activity = activity_by_user.get(row["id"])
+            if not activity or activity.get("timestamp") is None:
+                continue
+            timestamp = float(activity["timestamp"])
+            row["last_activity"] = {
+                **activity,
+                "timestamp": timestamp,
+                "datetime": datetime.fromtimestamp(timestamp, tz=timezone.utc),
+                "days_ago": max(0, int((now_ts - timestamp) // 86400)),
+            }
 
     def filter_member_directory_rows(rows: list[dict], args) -> list[dict]:
         query = (args.get("q") or "").strip().casefold()
@@ -551,6 +575,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     [
                         row["display_name"], row["username"], row["global_name"],
                         row["nickname"], str(row["id"]), *row["role_names"],
+                        (row["last_activity"] or {}).get("channel_name", ""),
                     ]
                 ).casefold()
                 if query not in haystack:
@@ -572,6 +597,17 @@ def create_app(db: Database, bot=None) -> Quart:
             filtered.sort(key=lambda row: row["created_at"].timestamp(), reverse=True)
         elif sort_key == "account_oldest":
             filtered.sort(key=lambda row: row["created_at"].timestamp())
+        elif sort_key == "activity_newest":
+            filtered.sort(
+                key=lambda row: (row["last_activity"] or {}).get("timestamp", 0),
+                reverse=True,
+            )
+        elif sort_key == "activity_oldest":
+            filtered.sort(
+                key=lambda row: (
+                    (row["last_activity"] or {}).get("timestamp", distant_future)
+                )
+            )
         else:
             filtered.sort(key=lambda row: (row["display_name"].casefold(), row["id"]))
         return filtered
@@ -1466,6 +1502,7 @@ def create_app(db: Database, bot=None) -> Quart:
         guild = get_guild()
         raw_members, complete = await get_all_guild_members(guild)
         all_rows = [build_member_directory_row(member) for member in raw_members]
+        add_member_directory_activity(all_rows, await db.get_all_user_activity())
         chart_data = build_member_history_charts([], None)
         if guild:
             await db.backfill_discord_member_joins(
@@ -1531,10 +1568,9 @@ def create_app(db: Database, bot=None) -> Quart:
 
         guild = get_guild()
         raw_members, _ = await get_all_guild_members(guild)
-        rows = filter_member_directory_rows(
-            [build_member_directory_row(member) for member in raw_members],
-            request.args,
-        )
+        all_rows = [build_member_directory_row(member) for member in raw_members]
+        add_member_directory_activity(all_rows, await db.get_all_user_activity())
+        rows = filter_member_directory_rows(all_rows, request.args)
 
         def format_dt(value):
             return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC") if value else ""
@@ -1551,7 +1587,8 @@ def create_app(db: Database, bot=None) -> Quart:
             "Display Name", "Username", "Global Name", "Nickname", "Discord User ID",
             "Account Type", "Administrator", "Pending Membership", "Joined Server (UTC)",
             "Account Created (UTC)", "Boosting Since (UTC)", "Timed Out Until (UTC)",
-            "Top Role", "Roles",
+            "Last Interaction (UTC)", "Days Since Last Interaction",
+            "Last Interaction Channel", "Top Role", "Roles",
         ])
         for row in rows:
             writer.writerow([
@@ -1562,6 +1599,15 @@ def create_app(db: Database, bot=None) -> Quart:
                 "Yes" if row["pending"] else "No",
                 format_dt(row["joined_at"]), format_dt(row["created_at"]),
                 format_dt(row["premium_since"]), format_dt(row["timeout_until"]),
+                format_dt(
+                    row["last_activity"]["datetime"]
+                    if row["last_activity"] else None
+                ),
+                row["last_activity"]["days_ago"] if row["last_activity"] else "",
+                csv_safe(
+                    row["last_activity"].get("channel_name", "")
+                    if row["last_activity"] else ""
+                ),
                 csv_safe(row["top_role"]), csv_safe("; ".join(row["role_names"])),
             ])
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")

@@ -2193,6 +2193,15 @@ class Database:
             row = await cursor.fetchone()
             return dict(row) if row else None
 
+    async def get_all_user_activity(self) -> list[dict]:
+        """Return the latest recorded Discord message activity for every user."""
+        async with self.db.execute(
+            "SELECT user_id, user_name, activity_type, summary, channel_id, "
+            "channel_name, timestamp FROM user_activity"
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
     async def record_user_activity(
         self,
         *,
