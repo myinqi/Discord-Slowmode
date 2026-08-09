@@ -241,6 +241,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('channels', 'Channels'),
         ('roles', 'Roles'),
         ('users', 'Users'),
+        ('member_directory', 'Member Directory'),
         ('welcome', 'Welcome'),
         ('party_playlist', 'Party Playlist'),
         ('playlist_search', 'Playlist Search'),
@@ -277,6 +278,7 @@ def create_app(db: Database, bot=None) -> Quart:
         {"key": "channels", "endpoint": "channels", "icon": "📢", "label": "Channels", "perm": "channels"},
         {"key": "roles", "endpoint": "roles", "icon": "🛡️", "label": "Roles", "perm": "roles"},
         {"key": "users", "endpoint": "users", "icon": "👥", "label": "Users", "perm": "users"},
+        {"key": "member_directory", "endpoint": "member_directory", "icon": "📇", "label": "Member Directory", "perm": "member_directory"},
         {"key": "welcome", "endpoint": "welcome", "icon": "👋", "label": "Welcome", "perm": "welcome"},
         {"key": "party_playlist", "endpoint": "party_playlist", "icon": "🎧", "label": "Party Playlist", "perm": "party_playlist"},
         {"key": "playlist_search", "endpoint": "playlist_search", "icon": "🔍", "label": "Playlist Search", "perm": "playlist_search"},
@@ -490,6 +492,89 @@ def create_app(db: Database, bot=None) -> Quart:
             [m for m in members if not getattr(m, "bot", False)],
             key=lambda m: ((m.display_name or m.name or "").casefold(), m.id),
         )
+
+    async def get_all_guild_members(guild):
+        """Return the complete Discord member list, including bot accounts."""
+        if not guild:
+            return [], False
+        members = list(getattr(guild, "members", []) or [])
+        expected = int(getattr(guild, "member_count", 0) or 0)
+        complete = not expected or len(members) >= expected
+        if not complete:
+            try:
+                members = [member async for member in guild.fetch_members(limit=None)]
+                complete = not expected or len(members) >= expected
+            except Exception as exc:
+                print(f"[member-directory] Full member fetch failed: {exc}", flush=True)
+        return members, complete
+
+    def build_member_directory_row(member) -> dict:
+        roles = [role for role in reversed(member.roles[1:])]
+        timeout_until = getattr(member, "timed_out_until", None)
+        if timeout_until is None:
+            timeout_until = getattr(member, "communication_disabled_until", None)
+        return {
+            "id": member.id,
+            "display_name": member.display_name or member.name,
+            "username": member.name,
+            "global_name": getattr(member, "global_name", None) or "",
+            "nickname": member.nick or "",
+            "avatar_url": str(member.display_avatar.url),
+            "is_bot": bool(member.bot),
+            "is_admin": bool(member.guild_permissions.administrator),
+            "pending": bool(getattr(member, "pending", False)),
+            "joined_at": member.joined_at,
+            "created_at": member.created_at,
+            "premium_since": member.premium_since,
+            "timeout_until": timeout_until,
+            "roles": [{"id": role.id, "name": role.name} for role in roles],
+            "role_ids": {role.id for role in roles},
+            "role_names": [role.name for role in roles],
+            "top_role": roles[0].name if roles else "",
+        }
+
+    def filter_member_directory_rows(rows: list[dict], args) -> list[dict]:
+        query = (args.get("q") or "").strip().casefold()
+        kind = (args.get("kind") or "all").strip().lower()
+        role_raw = (args.get("role") or "").strip()
+        role_id = int(role_raw) if role_raw.isdigit() else None
+        filtered = []
+        for row in rows:
+            if kind == "human" and row["is_bot"]:
+                continue
+            if kind == "bot" and not row["is_bot"]:
+                continue
+            if role_id is not None and role_id not in row["role_ids"]:
+                continue
+            if query:
+                haystack = " ".join(
+                    [
+                        row["display_name"], row["username"], row["global_name"],
+                        row["nickname"], str(row["id"]), *row["role_names"],
+                    ]
+                ).casefold()
+                if query not in haystack:
+                    continue
+            filtered.append(row)
+
+        sort_key = (args.get("sort") or "name").strip().lower()
+        distant_future = 253402300799.0
+        if sort_key == "joined_newest":
+            filtered.sort(
+                key=lambda row: row["joined_at"].timestamp() if row["joined_at"] else 0,
+                reverse=True,
+            )
+        elif sort_key == "joined_oldest":
+            filtered.sort(
+                key=lambda row: row["joined_at"].timestamp() if row["joined_at"] else distant_future
+            )
+        elif sort_key == "account_newest":
+            filtered.sort(key=lambda row: row["created_at"].timestamp(), reverse=True)
+        elif sort_key == "account_oldest":
+            filtered.sort(key=lambda row: row["created_at"].timestamp())
+        else:
+            filtered.sort(key=lambda row: (row["display_name"].casefold(), row["id"]))
+        return filtered
 
     def find_latest_cached_message(bot_obj, user_id: int):
         latest = None
@@ -1303,6 +1388,112 @@ def create_app(db: Database, bot=None) -> Quart:
             except (json.JSONDecodeError, TypeError):
                 u["perms"] = []
         return await render_template("users.html", users=user_list, current_user_id=session.get("user_id"), all_permissions=ALL_PERMISSIONS)
+
+    @app.route("/member-directory")
+    @permission_required("member_directory")
+    async def member_directory():
+        import math
+
+        guild = get_guild()
+        raw_members, complete = await get_all_guild_members(guild)
+        all_rows = [build_member_directory_row(member) for member in raw_members]
+        filtered_rows = filter_member_directory_rows(all_rows, request.args)
+
+        try:
+            page = max(1, int(request.args.get("page", "1")))
+        except (TypeError, ValueError):
+            page = 1
+        per_page = 100
+        page_count = max(1, math.ceil(len(filtered_rows) / per_page))
+        page = min(page, page_count)
+        start = (page - 1) * per_page
+        rows = filtered_rows[start:start + per_page]
+
+        roles = []
+        if guild:
+            roles = [
+                {"id": role.id, "name": role.name, "position": role.position}
+                for role in guild.roles
+                if role != guild.default_role
+            ]
+            roles.sort(key=lambda role: (-role["position"], role["name"].casefold()))
+
+        return await render_template(
+            "member_directory.html",
+            guild=guild,
+            members=rows,
+            roles=roles,
+            cache_complete=complete,
+            total_count=len(all_rows),
+            human_count=sum(1 for row in all_rows if not row["is_bot"]),
+            bot_count=sum(1 for row in all_rows if row["is_bot"]),
+            admin_count=sum(1 for row in all_rows if row["is_admin"]),
+            filtered_count=len(filtered_rows),
+            page=page,
+            page_count=page_count,
+            query=(request.args.get("q") or "").strip(),
+            kind=(request.args.get("kind") or "all").strip(),
+            role_filter=(request.args.get("role") or "").strip(),
+            sort=(request.args.get("sort") or "name").strip(),
+        )
+
+    @app.route("/member-directory/export.csv")
+    @permission_required("member_directory")
+    async def member_directory_export():
+        import csv
+        import io
+        from datetime import datetime, timezone
+        from quart import Response
+
+        guild = get_guild()
+        raw_members, _ = await get_all_guild_members(guild)
+        rows = filter_member_directory_rows(
+            [build_member_directory_row(member) for member in raw_members],
+            request.args,
+        )
+
+        def format_dt(value):
+            return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC") if value else ""
+
+        def csv_safe(value):
+            text = str(value or "")
+            if text.startswith(("=", "+", "-", "@", "\t", "\r")):
+                return "'" + text
+            return text
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow([
+            "Display Name", "Username", "Global Name", "Nickname", "Discord User ID",
+            "Account Type", "Administrator", "Pending Membership", "Joined Server (UTC)",
+            "Account Created (UTC)", "Boosting Since (UTC)", "Timed Out Until (UTC)",
+            "Top Role", "Roles",
+        ])
+        for row in rows:
+            writer.writerow([
+                csv_safe(row["display_name"]), csv_safe(row["username"]),
+                csv_safe(row["global_name"]), csv_safe(row["nickname"]),
+                row["id"], "Bot" if row["is_bot"] else "Human",
+                "Yes" if row["is_admin"] else "No",
+                "Yes" if row["pending"] else "No",
+                format_dt(row["joined_at"]), format_dt(row["created_at"]),
+                format_dt(row["premium_since"]), format_dt(row["timeout_until"]),
+                csv_safe(row["top_role"]), csv_safe("; ".join(row["role_names"])),
+            ])
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        await db.add_audit_log(
+            event_type="member_directory_exported",
+            details=f"Exported {len(rows)} Discord member record(s)",
+            actor=session.get("username", "unknown"),
+        )
+        return Response(
+            "\ufeff" + output.getvalue(),
+            content_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition":
+                    f"attachment; filename=discord_members_{timestamp}.csv"
+            },
+        )
 
     @app.route("/executioner", methods=["GET", "POST"])
     @permission_required('executioner')

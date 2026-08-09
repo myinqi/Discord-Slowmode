@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% block title %}Member Directory{% endblock %}
+{% block content %}
+<div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6">
+    <div>
+        <h2 class="text-2xl font-bold text-white">Discord Member Directory</h2>
+        <p class="text-gray-400 text-sm mt-1">
+            Live member data from {{ guild.name if guild else 'the configured Discord server' }}.
+        </p>
+    </div>
+    <a href="{{ url_for('member_directory_export', q=query, kind=kind, role=role_filter, sort=sort) }}"
+        class="inline-flex items-center justify-center gap-2 px-4 py-2 bg-discord-green/20 hover:bg-discord-green/30 border border-green-500/30 text-green-300 rounded-lg text-sm font-medium transition-colors">
+        <span aria-hidden="true">↓</span> Export filtered CSV
+    </a>
+</div>
+
+{% if not guild %}
+<div class="mb-6 px-4 py-3 rounded-lg border border-red-500/40 bg-red-500/10 text-red-200 text-sm">
+    Discord is currently unavailable. Wait until the bot is connected and reload this page.
+</div>
+{% elif not cache_complete %}
+<div class="mb-6 px-4 py-3 rounded-lg border border-yellow-500/40 bg-yellow-500/10 text-yellow-200 text-sm">
+    Discord returned a partial member cache. The list currently contains {{ total_count }} of approximately {{ guild.member_count }} members.
+    Verify that the Server Members Intent is enabled for the bot application.
+</div>
+{% endif %}
+
+<div class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
+    <div class="bg-discord-dark border border-gray-700/50 rounded-lg px-4 py-3">
+        <p class="text-gray-500 text-xs uppercase">Members</p>
+        <p class="text-white text-2xl font-semibold mt-1">{{ total_count }}</p>
+    </div>
+    <div class="bg-discord-dark border border-gray-700/50 rounded-lg px-4 py-3">
+        <p class="text-gray-500 text-xs uppercase">Humans</p>
+        <p class="text-white text-2xl font-semibold mt-1">{{ human_count }}</p>
+    </div>
+    <div class="bg-discord-dark border border-gray-700/50 rounded-lg px-4 py-3">
+        <p class="text-gray-500 text-xs uppercase">Bots</p>
+        <p class="text-white text-2xl font-semibold mt-1">{{ bot_count }}</p>
+    </div>
+    <div class="bg-discord-dark border border-gray-700/50 rounded-lg px-4 py-3">
+        <p class="text-gray-500 text-xs uppercase">Administrators</p>
+        <p class="text-white text-2xl font-semibold mt-1">{{ admin_count }}</p>
+    </div>
+    <div class="bg-discord-dark border border-gray-700/50 rounded-lg px-4 py-3 col-span-2 lg:col-span-1">
+        <p class="text-gray-500 text-xs uppercase">Matches</p>
+        <p class="text-discord-blurple text-2xl font-semibold mt-1">{{ filtered_count }}</p>
+    </div>
+</div>
+
+<div class="bg-discord-dark rounded-xl border border-gray-700/50 mb-6">
+    <form method="GET" class="p-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3 items-end">
+        <div class="xl:col-span-2">
+            <label class="block text-gray-400 text-xs mb-1">Search</label>
+            <input type="search" name="q" value="{{ query }}"
+                placeholder="Name, username, ID or role"
+                class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-discord-blurple">
+        </div>
+        <div>
+            <label class="block text-gray-400 text-xs mb-1">Account type</label>
+            <select name="kind"
+                class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple">
+                <option value="all" {% if kind == 'all' %}selected{% endif %}>All accounts</option>
+                <option value="human" {% if kind == 'human' %}selected{% endif %}>Humans only</option>
+                <option value="bot" {% if kind == 'bot' %}selected{% endif %}>Bots only</option>
+            </select>
+        </div>
+        <div>
+            <label class="block text-gray-400 text-xs mb-1">Role</label>
+            <select name="role"
+                class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple">
+                <option value="">All roles</option>
+                {% for role in roles %}
+                <option value="{{ role.id }}" {% if role.id|string == role_filter %}selected{% endif %}>{{ role.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label class="block text-gray-400 text-xs mb-1">Sort by</label>
+            <select name="sort"
+                class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple">
+                <option value="name" {% if sort == 'name' %}selected{% endif %}>Display name</option>
+                <option value="joined_newest" {% if sort == 'joined_newest' %}selected{% endif %}>Joined newest first</option>
+                <option value="joined_oldest" {% if sort == 'joined_oldest' %}selected{% endif %}>Joined oldest first</option>
+                <option value="account_newest" {% if sort == 'account_newest' %}selected{% endif %}>Newest accounts first</option>
+                <option value="account_oldest" {% if sort == 'account_oldest' %}selected{% endif %}>Oldest accounts first</option>
+            </select>
+        </div>
+        <div class="flex gap-2 md:col-span-2 xl:col-span-5 justify-end">
+            <a href="{{ url_for('member_directory') }}"
+                class="px-4 py-2 bg-gray-700/50 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">Reset</a>
+            <button type="submit"
+                class="px-5 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg text-sm font-medium transition-colors">Apply filters</button>
+        </div>
+    </form>
+</div>
+
+<div class="bg-discord-dark rounded-xl border border-gray-700/50 overflow-hidden">
+    <div class="overflow-x-auto">
+        <table class="w-full min-w-[1100px] text-left">
+            <thead class="bg-discord-darker/80 text-gray-400 text-xs uppercase">
+                <tr>
+                    <th class="px-4 py-3 font-medium">Member</th>
+                    <th class="px-4 py-3 font-medium">Discord ID</th>
+                    <th class="px-4 py-3 font-medium">Joined server</th>
+                    <th class="px-4 py-3 font-medium">Account created</th>
+                    <th class="px-4 py-3 font-medium">Roles</th>
+                    <th class="px-4 py-3 font-medium">State</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-700/40">
+                {% for member in members %}
+                <tr class="hover:bg-white/[0.025] align-top">
+                    <td class="px-4 py-3">
+                        <div class="flex items-center gap-3 min-w-[220px]">
+                            <img src="{{ member.avatar_url }}" alt="" loading="lazy" class="w-10 h-10 rounded-full object-cover shrink-0">
+                            <div class="min-w-0">
+                                <p class="text-white font-medium truncate">{{ member.display_name }}</p>
+                                <p class="text-gray-500 text-xs truncate">@{{ member.username }}</p>
+                                {% if member.nickname and member.nickname != member.display_name %}
+                                <p class="text-gray-600 text-xs truncate">Nickname: {{ member.nickname }}</p>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </td>
+                    <td class="px-4 py-3 text-gray-400 text-xs font-mono select-all">{{ member.id }}</td>
+                    <td class="px-4 py-3 text-gray-300 text-sm whitespace-nowrap">
+                        {% if member.joined_at %}
+                        {{ member.joined_at.strftime('%d.%m.%Y') }}
+                        <span class="block text-gray-600 text-xs">{{ member.joined_at.strftime('%H:%M UTC') }}</span>
+                        {% else %}<span class="text-gray-600">Unknown</span>{% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-gray-300 text-sm whitespace-nowrap">
+                        {{ member.created_at.strftime('%d.%m.%Y') }}
+                        <span class="block text-gray-600 text-xs">{{ member.created_at.strftime('%H:%M UTC') }}</span>
+                    </td>
+                    <td class="px-4 py-3 max-w-sm">
+                        {% if member.roles %}
+                        <div class="flex flex-wrap gap-1">
+                            {% for role in member.roles[:4] %}
+                            <span class="px-2 py-0.5 rounded bg-discord-blurple/15 text-blue-200 text-xs" title="Role ID: {{ role.id }}">{{ role.name }}</span>
+                            {% endfor %}
+                            {% if member.roles|length > 4 %}
+                            <span class="px-2 py-0.5 text-gray-500 text-xs" title="{{ member.role_names[4:]|join(', ') }}">+{{ member.roles|length - 4 }} more</span>
+                            {% endif %}
+                        </div>
+                        {% else %}<span class="text-gray-600 text-xs">No assigned roles</span>{% endif %}
+                    </td>
+                    <td class="px-4 py-3">
+                        <div class="flex flex-wrap gap-1 max-w-[190px]">
+                            <span class="px-2 py-0.5 rounded text-xs {{ 'bg-purple-500/15 text-purple-200' if member.is_bot else 'bg-green-500/15 text-green-200' }}">
+                                {{ 'Bot' if member.is_bot else 'Human' }}
+                            </span>
+                            {% if member.is_admin %}<span class="px-2 py-0.5 rounded bg-red-500/15 text-red-200 text-xs">Administrator</span>{% endif %}
+                            {% if member.premium_since %}<span class="px-2 py-0.5 rounded bg-pink-500/15 text-pink-200 text-xs" title="Since {{ member.premium_since.strftime('%d.%m.%Y') }}">Booster</span>{% endif %}
+                            {% if member.timeout_until %}<span class="px-2 py-0.5 rounded bg-yellow-500/15 text-yellow-200 text-xs" title="Until {{ member.timeout_until.strftime('%d.%m.%Y %H:%M UTC') }}">Timed out</span>{% endif %}
+                            {% if member.pending %}<span class="px-2 py-0.5 rounded bg-gray-500/20 text-gray-300 text-xs">Pending</span>{% endif %}
+                        </div>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="6" class="px-5 py-12 text-center text-gray-500">No members match the selected filters.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% if page_count > 1 %}
+    <div class="px-4 py-3 border-t border-gray-700/50 flex items-center justify-between gap-3">
+        <p class="text-gray-500 text-xs">Page {{ page }} of {{ page_count }} · up to 100 members per page</p>
+        <div class="flex gap-2">
+            {% if page > 1 %}
+            <a href="{{ url_for('member_directory', q=query, kind=kind, role=role_filter, sort=sort, page=page-1) }}"
+                class="px-3 py-1.5 bg-gray-700/50 hover:bg-gray-700 text-gray-300 rounded-lg text-sm">Previous</a>
+            {% endif %}
+            {% if page < page_count %}
+            <a href="{{ url_for('member_directory', q=query, kind=kind, role=role_filter, sort=sort, page=page+1) }}"
+                class="px-3 py-1.5 bg-gray-700/50 hover:bg-gray-700 text-gray-300 rounded-lg text-sm">Next</a>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

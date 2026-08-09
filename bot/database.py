@@ -321,6 +321,31 @@ class Database:
             )
             await self.db.commit()
 
+        member_directory_sidebar_migration = "migration_sidebar_member_directory_v1"
+        async with self.db.execute(
+            "SELECT value FROM settings WHERE key = ?",
+            (member_directory_sidebar_migration,),
+        ) as cursor:
+            member_directory_sidebar_migrated = await cursor.fetchone()
+        if not member_directory_sidebar_migrated:
+            async with self.db.execute(
+                "SELECT value FROM settings WHERE key = 'sidebar_visible_items'"
+            ) as cursor:
+                sidebar_row = await cursor.fetchone()
+            if sidebar_row and sidebar_row[0] and sidebar_row[0] != "__none__":
+                visible_items = [item for item in sidebar_row[0].split(",") if item]
+                if "member_directory" not in visible_items:
+                    visible_items.append("member_directory")
+                    await self.db.execute(
+                        "UPDATE settings SET value = ? WHERE key = 'sidebar_visible_items'",
+                        (",".join(visible_items),),
+                    )
+            await self.db.execute(
+                "INSERT INTO settings (key, value) VALUES (?, 'done')",
+                (member_directory_sidebar_migration,),
+            )
+            await self.db.commit()
+
         # Add message_id column to song_posts if missing
         async with self.db.execute("PRAGMA table_info(song_posts)") as cursor:
             sp_columns = [row[1] async for row in cursor]
