@@ -126,6 +126,19 @@ class Database:
                 actor TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS discord_member_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_key TEXT NOT NULL UNIQUE,
+                guild_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL CHECK(event_type IN ('join', 'leave')),
+                occurred_at REAL NOT NULL,
+                source TEXT NOT NULL DEFAULT 'live'
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_discord_member_events_guild_time
+                ON discord_member_events(guild_id, occurred_at);
+
             CREATE TABLE IF NOT EXISTS user_activity (
                 user_id INTEGER PRIMARY KEY,
                 user_name TEXT,
@@ -1855,6 +1868,67 @@ class Database:
     async def delete_web_user(self, user_id: int):
         await self.db.execute("DELETE FROM web_users WHERE id = ?", (user_id,))
         await self.db.commit()
+
+    # --- Discord Member History ---
+
+    async def backfill_discord_member_joins(
+        self, guild_id: int, members: list[tuple[int, float]]
+    ) -> None:
+        """Seed known join dates without duplicating reconnect/startup events."""
+        rows = []
+        for user_id, joined_at in members:
+            timestamp = float(joined_at)
+            event_key = f"join:{guild_id}:{user_id}:{timestamp:.6f}"
+            rows.append((event_key, guild_id, user_id, "join", timestamp, "backfill"))
+        if rows:
+            await self.db.executemany(
+                """INSERT OR IGNORE INTO discord_member_events
+                   (event_key, guild_id, user_id, event_type, occurred_at, source)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                rows,
+            )
+        tracking_key = f"discord_member_tracking_started_at:{guild_id}"
+        await self.db.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+            (tracking_key, str(time.time())),
+        )
+        await self.db.commit()
+
+    async def record_discord_member_event(
+        self,
+        guild_id: int,
+        user_id: int,
+        event_type: str,
+        occurred_at: float,
+    ) -> None:
+        if event_type not in {"join", "leave"}:
+            raise ValueError("Unsupported Discord member event type")
+        timestamp = float(occurred_at)
+        event_key = f"{event_type}:{guild_id}:{user_id}:{timestamp:.6f}"
+        await self.db.execute(
+            """INSERT OR IGNORE INTO discord_member_events
+               (event_key, guild_id, user_id, event_type, occurred_at, source)
+               VALUES (?, ?, ?, ?, ?, 'live')""",
+            (event_key, guild_id, user_id, event_type, timestamp),
+        )
+        await self.db.commit()
+
+    async def get_discord_member_events(self, guild_id: int) -> list[dict]:
+        async with self.db.execute(
+            """SELECT event_type, occurred_at, source
+               FROM discord_member_events
+               WHERE guild_id = ?
+               ORDER BY occurred_at, id""",
+            (guild_id,),
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def get_discord_member_tracking_started_at(self, guild_id: int) -> float | None:
+        value = await self.get_setting(f"discord_member_tracking_started_at:{guild_id}")
+        try:
+            return float(value) if value else None
+        except (TypeError, ValueError):
+            return None
 
     # --- Monitored Channels ---
 

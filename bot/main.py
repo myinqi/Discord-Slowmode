@@ -44,3 +44,44 @@ class SlowmodeBot(commands.Bot):
         bot_name = await self.db.get_setting("bot_name")
         if not bot_name:
             await self.db.set_setting("bot_name", self.config.BOT_NAME)
+
+        for guild in self.guilds:
+            if self.config.GUILD_ID and guild.id != self.config.GUILD_ID:
+                continue
+            known_joins = [
+                (member.id, member.joined_at.timestamp())
+                for member in guild.members
+                if member.joined_at is not None
+            ]
+            try:
+                await self.db.backfill_discord_member_joins(guild.id, known_joins)
+                print(
+                    f"Member history ready for {guild.name}: "
+                    f"{len(known_joins)} known join date(s)"
+                )
+            except Exception as exc:
+                print(f"Member history backfill failed for {guild.id}: {exc}")
+
+    async def on_member_join(self, member: discord.Member):
+        if self.config.GUILD_ID and member.guild.id != self.config.GUILD_ID:
+            return
+        occurred_at = (member.joined_at or discord.utils.utcnow()).timestamp()
+        try:
+            await self.db.record_discord_member_event(
+                member.guild.id, member.id, "join", occurred_at
+            )
+        except Exception as exc:
+            print(f"Member join history failed for {member.id}: {exc}")
+
+    async def on_member_remove(self, member: discord.Member):
+        if self.config.GUILD_ID and member.guild.id != self.config.GUILD_ID:
+            return
+        try:
+            await self.db.record_discord_member_event(
+                member.guild.id,
+                member.id,
+                "leave",
+                discord.utils.utcnow().timestamp(),
+            )
+        except Exception as exc:
+            print(f"Member leave history failed for {member.id}: {exc}")

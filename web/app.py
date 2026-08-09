@@ -576,6 +576,75 @@ def create_app(db: Database, bot=None) -> Quart:
             filtered.sort(key=lambda row: (row["display_name"].casefold(), row["id"]))
         return filtered
 
+    def build_member_history_charts(
+        events: list[dict], tracking_started_at: float | None
+    ) -> dict:
+        from collections import defaultdict
+        from datetime import datetime, timezone
+
+        monthly = defaultdict(lambda: {"joins": 0, "leaves": 0})
+        yearly = defaultdict(lambda: {"joins": 0, "leaves": 0})
+        for event in events:
+            occurred = datetime.fromtimestamp(event["occurred_at"], tz=timezone.utc)
+            month_key = occurred.strftime("%Y-%m")
+            year_key = occurred.strftime("%Y")
+            field = "joins" if event["event_type"] == "join" else "leaves"
+            monthly[month_key][field] += 1
+            yearly[year_key][field] += 1
+
+        now = datetime.now(timezone.utc)
+
+        def shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
+            absolute = year * 12 + month - 1 + delta
+            return absolute // 12, absolute % 12 + 1
+
+        all_month_keys = sorted(monthly)
+        if all_month_keys:
+            first_year, first_month = map(int, all_month_keys[0].split("-"))
+        else:
+            first_year, first_month = now.year, now.month
+        month_keys = []
+        year, month = first_year, first_month
+        while (year, month) <= (now.year, now.month):
+            month_keys.append(f"{year:04d}-{month:02d}")
+            year, month = shift_month(year, month, 1)
+
+        balance = 0
+        growth_values = []
+        for key in month_keys:
+            balance += monthly[key]["joins"] - monthly[key]["leaves"]
+            growth_values.append(balance)
+
+        growth_limit = 48
+        growth_keys = month_keys[-growth_limit:]
+        growth_values = growth_values[-growth_limit:]
+        monthly_keys = month_keys[-18:]
+        year_keys = sorted(yearly)
+        tracking_label = ""
+        if tracking_started_at:
+            tracking_label = datetime.fromtimestamp(
+                tracking_started_at, tz=timezone.utc
+            ).strftime("%d %B %Y")
+
+        return {
+            "growth": {
+                "labels": growth_keys,
+                "values": growth_values,
+            },
+            "monthly": {
+                "labels": monthly_keys,
+                "joins": [monthly[key]["joins"] for key in monthly_keys],
+                "leaves": [monthly[key]["leaves"] for key in monthly_keys],
+            },
+            "yearly": {
+                "labels": year_keys,
+                "joins": [yearly[key]["joins"] for key in year_keys],
+                "leaves": [yearly[key]["leaves"] for key in year_keys],
+            },
+            "tracked_leaves": sum(1 for event in events if event["event_type"] == "leave"),
+            "tracking_started_label": tracking_label,
+        }
+
     def find_latest_cached_message(bot_obj, user_id: int):
         latest = None
         for message in getattr(bot_obj, "cached_messages", []) or []:
@@ -1397,6 +1466,20 @@ def create_app(db: Database, bot=None) -> Quart:
         guild = get_guild()
         raw_members, complete = await get_all_guild_members(guild)
         all_rows = [build_member_directory_row(member) for member in raw_members]
+        chart_data = build_member_history_charts([], None)
+        if guild:
+            await db.backfill_discord_member_joins(
+                guild.id,
+                [
+                    (member.id, member.joined_at.timestamp())
+                    for member in raw_members
+                    if member.joined_at is not None
+                ],
+            )
+            chart_data = build_member_history_charts(
+                await db.get_discord_member_events(guild.id),
+                await db.get_discord_member_tracking_started_at(guild.id),
+            )
         filtered_rows = filter_member_directory_rows(all_rows, request.args)
 
         try:
@@ -1429,6 +1512,7 @@ def create_app(db: Database, bot=None) -> Quart:
             bot_count=sum(1 for row in all_rows if row["is_bot"]),
             admin_count=sum(1 for row in all_rows if row["is_admin"]),
             filtered_count=len(filtered_rows),
+            chart_data=chart_data,
             page=page,
             page_count=page_count,
             query=(request.args.get("q") or "").strip(),
