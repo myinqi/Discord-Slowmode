@@ -7,22 +7,22 @@
             <span>💿</span>
             Songripper
         </h1>
-        <p class="text-gray-400 text-sm mt-1">Paste a Suno URL and download the audio as MP3 or WAV.</p>
+        <p class="text-gray-400 text-sm mt-1">Download a Suno song or an entire playlist as MP3 or WAV.</p>
     </div>
 
     <div class="bg-discord-dark rounded-xl border border-gray-700/50 overflow-hidden">
         <div class="p-5 border-b border-gray-700/50">
-            <label class="block text-gray-400 text-xs mb-2">Suno song URL or UUID</label>
+            <label class="block text-gray-400 text-xs mb-2">Suno song or playlist URL, share link, or UUID</label>
             <div class="flex flex-col sm:flex-row gap-3">
                 <input type="text" id="songripper-url"
-                    placeholder="https://suno.com/song/... or https://suno.com/s/..."
+                    placeholder="https://suno.com/song/..., https://suno.com/s/..., or https://suno.com/playlist/..."
                     class="flex-1 bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
                 <button type="button" onclick="loadSongripperAudio()"
                     class="px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg text-sm font-semibold transition-colors">
                     Load
                 </button>
             </div>
-            <div class="mt-5 pt-4 border-t border-gray-700/40">
+            <div id="songripper-square-panel" class="mt-5 pt-4 border-t border-gray-700/40">
                 <p class="text-gray-500 text-[11px] mb-2">Tesla coil export · Mono · Square wave with dead zone</p>
                 <div class="flex items-center gap-3 mb-3">
                     <label for="songripper-square-threshold" class="text-gray-500 text-[11px] whitespace-nowrap">Threshold</label>
@@ -61,6 +61,15 @@
             </div>
         </div>
 
+        <div id="songripper-playlist" class="hidden p-5 border-b border-gray-700/50">
+            <div class="flex items-center justify-between gap-3 mb-3">
+                <h3 class="text-white text-sm font-semibold">Playlist tracks</h3>
+                <span id="songripper-playlist-count" class="text-gray-500 text-xs"></span>
+            </div>
+            <ol id="songripper-playlist-tracks"
+                class="max-h-72 overflow-y-auto divide-y divide-gray-700/40 border border-gray-700/50 rounded-lg bg-discord-darker/50"></ol>
+        </div>
+
         <div class="p-5 space-y-4">
             <audio id="songripper-player" controls crossorigin="anonymous"
                 class="w-full rounded-lg accent-discord-blurple"></audio>
@@ -86,6 +95,9 @@ let songripperAudioBytes = null;
 let songripperAudioUrl = '';
 let songripperAudioId = '';
 let songripperSourceExt = 'mp3';
+let songripperMode = 'song';
+let songripperPlaylistUrl = '';
+let songripperPlaylistSongs = [];
 
 function songripperStatus(text) {
     document.getElementById('songripper-status').textContent = text;
@@ -121,15 +133,97 @@ function songripperFormatTime(seconds) {
     return `${m}:${s < 10 ? '0' : ''}${s}`;
 }
 
+function songripperEscape(value) {
+    const div = document.createElement('div');
+    div.textContent = value == null ? '' : String(value);
+    return div.innerHTML;
+}
+
+function songripperIsPlaylist(raw) {
+    return /https?:\/\/(?:www\.)?suno\.com\/playlist\/[a-f0-9-]{36}/i.test((raw || '').trim());
+}
+
+function songripperSetDownloadButtons(mp3Text, wavText, disabled) {
+    const mp3 = document.getElementById('songripper-mp3-btn');
+    const wav = document.getElementById('songripper-wav-btn');
+    mp3.textContent = mp3Text;
+    wav.textContent = wavText;
+    mp3.disabled = disabled;
+    wav.disabled = disabled;
+}
+
+async function loadSongripperPlaylist(url) {
+    songripperMode = 'playlist';
+    songripperPlaylistUrl = url;
+    songripperPlaylistSongs = [];
+    songripperAudioId = '';
+    songripperAudioBuffer = null;
+    songripperAudioBytes = null;
+    songripperProgress(5);
+    songripperStatus('Loading playlist...');
+    songripperSetDownloadButtons('⬇ Download playlist as MP3 (ZIP)', '⬇ Download playlist as WAV (ZIP)', true);
+    document.getElementById('songripper-square-panel').classList.add('hidden');
+    const player = document.getElementById('songripper-player');
+    player.pause();
+    player.removeAttribute('src');
+    player.load();
+    player.classList.add('hidden');
+    document.getElementById('songripper-playlist').classList.add('hidden');
+    document.getElementById('songripper-meta').classList.add('hidden');
+
+    try {
+        const response = await fetch(`/songripper/resolve-playlist?url=${encodeURIComponent(url)}`);
+        const data = await response.json();
+        if (!response.ok || data.error) {
+            throw new Error(data.error || `Playlist loading failed (${response.status}).`);
+        }
+        songripperPlaylistSongs = data.songs || [];
+        document.getElementById('songripper-meta').classList.remove('hidden');
+        document.getElementById('songripper-title').textContent = data.name || 'Suno Playlist';
+        document.getElementById('songripper-author').textContent = `${songripperPlaylistSongs.length} tracks`;
+        const totalDuration = songripperPlaylistSongs.reduce((sum, song) => {
+            const duration = Number(song.duration);
+            return sum + (Number.isFinite(duration) ? duration : 0);
+        }, 0);
+        document.getElementById('songripper-duration').textContent = totalDuration > 0
+            ? `Known duration: ${songripperFormatTime(totalDuration)}`
+            : 'Tracks will be processed sequentially.';
+        document.getElementById('songripper-artwork').classList.add('hidden');
+
+        document.getElementById('songripper-playlist-count').textContent = `${songripperPlaylistSongs.length} tracks`;
+        document.getElementById('songripper-playlist-tracks').innerHTML = songripperPlaylistSongs.map((song, index) => {
+            const title = song.title || song.uuid || 'Untitled';
+            const artist = song.artist ? `<span class="text-gray-500"> · ${songripperEscape(song.artist)}</span>` : '';
+            return `<li class="px-3 py-2 text-sm text-gray-300"><span class="text-gray-600 tabular-nums mr-2">${index + 1}.</span>${songripperEscape(title)}${artist}</li>`;
+        }).join('');
+        document.getElementById('songripper-playlist').classList.remove('hidden');
+        songripperSetDownloadButtons('⬇ Download playlist as MP3 (ZIP)', '⬇ Download playlist as WAV (ZIP)', false);
+        songripperProgress(100);
+        songripperStatus(`Playlist ready: ${songripperPlaylistSongs.length} tracks.`);
+    } catch (err) {
+        songripperProgress(0);
+        songripperStatus(err.message || String(err));
+    }
+}
+
 async function loadSongripperAudio() {
-    const raw = document.getElementById('songripper-url').value;
+    const raw = document.getElementById('songripper-url').value.trim();
+    if (songripperIsPlaylist(raw)) {
+        await loadSongripperPlaylist(raw);
+        return;
+    }
     const id = songripperExtractId(raw);
     if (!id) {
         songripperStatus('Enter a Suno URL or UUID.');
         return;
     }
-    document.getElementById('songripper-mp3-btn').disabled = true;
-    document.getElementById('songripper-wav-btn').disabled = true;
+    songripperMode = 'song';
+    songripperPlaylistUrl = '';
+    songripperPlaylistSongs = [];
+    songripperSetDownloadButtons('⬇ Download MP3', '⬇ Download WAV', true);
+    document.getElementById('songripper-square-panel').classList.remove('hidden');
+    document.getElementById('songripper-player').classList.remove('hidden');
+    document.getElementById('songripper-playlist').classList.add('hidden');
     document.getElementById('songripper-square-wav-btn').disabled = true;
     document.getElementById('songripper-square-mp3-btn').disabled = true;
     songripperMeta = null;
@@ -233,6 +327,10 @@ async function downloadSongripperSquare(format) {
 }
 
 async function downloadSongripperAudio(format) {
+    if (songripperMode === 'playlist') {
+        await downloadSongripperPlaylist(format);
+        return;
+    }
     const safeName = songripperSafeName();
     if (format === 'mp3') {
         if (!songripperAudioId) {
@@ -292,6 +390,55 @@ async function downloadSongripperAudio(format) {
         offset += 2;
     }
     songripperSaveBlob(new Blob([wav], {type: 'audio/wav'}), `${safeName}.wav`);
+}
+
+function songripperWait(milliseconds) {
+    return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+async function downloadSongripperPlaylist(format) {
+    if (!songripperPlaylistUrl || !songripperPlaylistSongs.length) {
+        alert('No playlist loaded.');
+        return;
+    }
+    songripperSetDownloadButtons('Preparing playlist...', 'Preparing playlist...', true);
+    songripperProgress(0);
+    songripperStatus('Starting sequential playlist export...');
+    try {
+        const response = await fetch('/songripper/playlist/prepare', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({url: songripperPlaylistUrl, format: format}),
+        });
+        const start = await response.json();
+        if (!response.ok || start.error) {
+            throw new Error(start.error || `Playlist export failed (${response.status}).`);
+        }
+
+        while (true) {
+            await songripperWait(1000);
+            const statusResponse = await fetch(`/songripper/playlist/status/${encodeURIComponent(start.job_id)}`);
+            const status = await statusResponse.json();
+            if (!statusResponse.ok || status.error) {
+                throw new Error(status.error || `Could not read export status (${statusResponse.status}).`);
+            }
+            songripperProgress(Number(status.percent) || 0);
+            songripperStatus(status.message || 'Processing playlist...');
+            if (status.state === 'error') {
+                throw new Error(status.message || 'Playlist export failed.');
+            }
+            if (status.state === 'ready') {
+                window.location.assign(status.download_url);
+                songripperStatus(`${status.message}. Download started.`);
+                break;
+            }
+        }
+    } catch (err) {
+        songripperProgress(0);
+        songripperStatus(err.message || String(err));
+    } finally {
+        songripperSetDownloadButtons('⬇ Download playlist as MP3 (ZIP)', '⬇ Download playlist as WAV (ZIP)', false);
+    }
 }
 </script>
 {% endblock %}

@@ -221,6 +221,8 @@ def create_app(db: Database, bot=None) -> Quart:
     app.database_restore_pending = False
     app.player_reaction_locks = {}
     app.file_share_lock = asyncio.Lock()
+    app.songripper_playlist_jobs = {}
+    app.songripper_playlist_lock = asyncio.Lock()
     # Serializes manual starts of both radio managers. The scheduled Exp.
     # Radio start additionally checks the legacy manager before it fires.
     app.radio_start_lock = asyncio.Lock()
@@ -8687,6 +8689,310 @@ def create_app(db: Database, bot=None) -> Quart:
     @permission_required('songripper')
     async def songripper():
         return await render_template("songripper.html")
+
+    async def _songripper_playlist_name(url: str) -> str:
+        """Resolve the public playlist title without making it a hard dependency."""
+        import aiohttp
+        import html as _html
+
+        try:
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(
+                    url,
+                    headers={"User-Agent": "Mozilla/5.0 (X11; Linux) AppleWebKit/537.36"},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status != 200:
+                        return ""
+                    page = await resp.text()
+            match = re.search(
+                r'<meta\s+property="og:title"\s+content="([^"]+)"', page
+            ) or re.search(r'<title>([^<]+)</title>', page)
+            if not match:
+                return ""
+            name = _html.unescape(match.group(1).strip())
+            return re.sub(r'\s*[|\-\u2013]\s*Suno\s*$', '', name).strip()
+        except Exception:
+            return ""
+
+    def _songripper_archive_name(value: str, fallback: str) -> str:
+        """Keep international titles while removing unsafe path characters."""
+        value = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', ' ', value or '')
+        value = re.sub(r'\s+', ' ', value).strip(' .')
+        return value[:100] or fallback
+
+    def _cleanup_songripper_playlist_jobs(max_age: int = 6 * 60 * 60) -> None:
+        cutoff = time.time() - max_age
+        for job_id, job in list(app.songripper_playlist_jobs.items()):
+            if job.get("created_at", 0) >= cutoff or job.get("state") in {"queued", "running"}:
+                continue
+            path = job.get("archive_path")
+            if path:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            app.songripper_playlist_jobs.pop(job_id, None)
+
+    async def _run_songripper_playlist_job(job_id: str, url: str, output_format: str) -> None:
+        """Download and convert one playlist at a time, then package it as ZIP."""
+        import aiohttp
+        import shutil
+        import tempfile
+        import zipfile
+        from bot.stream_manager import parse_suno_playlist, resolve_suno_meta
+
+        job = app.songripper_playlist_jobs[job_id]
+        work_dir = tempfile.mkdtemp(prefix="songripper_playlist_work_")
+        archive_fd, archive_path = tempfile.mkstemp(
+            prefix="songripper_playlist_", suffix=".zip"
+        )
+        os.close(archive_fd)
+        job["archive_path"] = archive_path
+
+        try:
+            async with app.songripper_playlist_lock:
+                job.update(state="running", message="Resolving playlist...", percent=1)
+                songs = await parse_suno_playlist(url)
+                if not songs:
+                    raise RuntimeError("No songs were found in this playlist.")
+
+                job["total"] = len(songs)
+                playlist_name = await _songripper_playlist_name(url) or "Suno Playlist"
+                job["playlist_name"] = playlist_name
+                archive_filename = _songripper_archive_name(playlist_name, "Suno Playlist")
+                job["archive_name"] = f"{archive_filename} - {output_format.upper()}.zip"
+
+                await asyncio.to_thread(
+                    lambda: zipfile.ZipFile(archive_path, "w").close()
+                )
+                errors = []
+                used_names = set()
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                }
+
+                async with aiohttp.ClientSession(headers=headers) as sess:
+                    for index, song in enumerate(songs, start=1):
+                        song_uuid = str(song.get("uuid") or "").strip()
+                        title = str(song.get("title") or "").strip()
+                        if not title or title == song_uuid[:12]:
+                            meta = await resolve_suno_meta(song_uuid)
+                            title = str(meta.get("title") or title or song_uuid[:12])
+                        safe_title = _songripper_archive_name(title, song_uuid[:12])
+                        base_name = f"{index:03d} - {safe_title}"
+                        unique_name = base_name
+                        duplicate = 2
+                        while unique_name.casefold() in used_names:
+                            unique_name = f"{base_name} ({duplicate})"
+                            duplicate += 1
+                        used_names.add(unique_name.casefold())
+
+                        job.update(
+                            current=index,
+                            current_title=title,
+                            message=f"Processing {index}/{len(songs)}: {title}",
+                            percent=max(2, int(((index - 1) / len(songs)) * 96)),
+                        )
+                        src_path = os.path.join(work_dir, "source.audio")
+                        out_path = os.path.join(work_dir, f"converted.{output_format}")
+                        for path in (src_path, out_path):
+                            try:
+                                os.remove(path)
+                            except OSError:
+                                pass
+
+                        last_status = None
+                        try:
+                            for ext in ("mp3", "m4a"):
+                                audio_url = f"https://cdn1.suno.ai/{song_uuid}.{ext}"
+                                async with sess.get(
+                                    audio_url,
+                                    timeout=aiohttp.ClientTimeout(total=120),
+                                ) as resp:
+                                    last_status = resp.status
+                                    if resp.status != 200:
+                                        continue
+                                    with open(src_path, "wb") as fh:
+                                        async for chunk in resp.content.iter_chunked(1024 * 256):
+                                            if chunk:
+                                                fh.write(chunk)
+                                    break
+                            else:
+                                raise RuntimeError(f"audio download returned HTTP {last_status}")
+
+                            codec_args = (
+                                ["-c:a", "libmp3lame", "-b:a", "320k", "-write_xing", "1"]
+                                if output_format == "mp3"
+                                else ["-c:a", "pcm_s16le"]
+                            )
+                            proc = await asyncio.create_subprocess_exec(
+                                "ffmpeg", "-y", "-hide_banner", "-v", "error",
+                                "-i", src_path,
+                                "-map", "0:a:0", "-vn",
+                                *codec_args,
+                                out_path,
+                                stdout=asyncio.subprocess.DEVNULL,
+                                stderr=asyncio.subprocess.PIPE,
+                            )
+                            _, err = await proc.communicate()
+                            if proc.returncode != 0 or not os.path.isfile(out_path):
+                                detail = err.decode("utf-8", errors="replace").strip()
+                                raise RuntimeError(detail or "unknown ffmpeg error")
+
+                            archive_member = f"{unique_name}.{output_format}"
+
+                            def add_to_archive():
+                                with zipfile.ZipFile(
+                                    archive_path, "a", compression=zipfile.ZIP_DEFLATED
+                                ) as archive:
+                                    archive.write(out_path, archive_member)
+
+                            await asyncio.to_thread(add_to_archive)
+                            job["completed"] += 1
+                        except Exception as exc:
+                            errors.append(f"{index:03d} - {title}: {exc}")
+                            job["failed"] += 1
+
+                if errors:
+                    error_text = (
+                        "The following playlist tracks could not be exported:\n\n"
+                        + "\n".join(errors)
+                        + "\n"
+                    )
+
+                    def add_error_report():
+                        with zipfile.ZipFile(
+                            archive_path, "a", compression=zipfile.ZIP_DEFLATED
+                        ) as archive:
+                            archive.writestr("EXPORT_ERRORS.txt", error_text)
+
+                    await asyncio.to_thread(add_error_report)
+
+                if not job["completed"]:
+                    raise RuntimeError("Every track failed to download or convert.")
+
+                job.update(
+                    state="ready",
+                    message=(
+                        f"Archive ready: {job['completed']} track(s)"
+                        + (f", {job['failed']} failed" if job["failed"] else "")
+                    ),
+                    percent=100,
+                    download_url=f"/songripper/playlist/download/{job_id}",
+                )
+                job["cleanup_task"] = asyncio.create_task(
+                    _delete_temp_file_later(archive_path, delay=6 * 60 * 60)
+                )
+        except Exception as exc:
+            job.update(state="error", message=str(exc), percent=0)
+            try:
+                os.remove(archive_path)
+            except OSError:
+                pass
+            job["archive_path"] = ""
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+    @app.route("/songripper/resolve-playlist")
+    @permission_required('songripper')
+    async def songripper_resolve_playlist():
+        """Return the ordered contents of a public Suno playlist."""
+        from quart import jsonify
+        from bot.stream_manager import parse_suno_playlist
+
+        url = (request.args.get("url") or "").strip()
+        if not re.search(r'https?://(?:www\.)?suno\.com/playlist/[a-f0-9-]{36}', url, re.I):
+            return jsonify({"error": "Enter a valid Suno playlist URL."}), 400
+        try:
+            songs = await parse_suno_playlist(url)
+            if not songs:
+                return jsonify({"error": "No songs were found in this playlist."}), 404
+            name = await _songripper_playlist_name(url)
+            return jsonify({
+                "name": name or "Suno Playlist",
+                "songs": [
+                    {
+                        "uuid": song.get("uuid"),
+                        "title": song.get("title") or str(song.get("uuid") or "")[:12],
+                        "artist": song.get("artist") or "",
+                        "duration": song.get("duration"),
+                    }
+                    for song in songs
+                ],
+            })
+        except Exception as exc:
+            return jsonify({"error": f"Playlist could not be loaded: {exc}"}), 502
+
+    @app.route("/songripper/playlist/prepare", methods=["POST"])
+    @permission_required('songripper')
+    async def songripper_prepare_playlist():
+        """Start a serial playlist export in the background."""
+        from quart import jsonify
+
+        data = await request.get_json(silent=True) or {}
+        url = str(data.get("url") or "").strip()
+        output_format = str(data.get("format") or "mp3").strip().lower()
+        if not re.search(r'https?://(?:www\.)?suno\.com/playlist/[a-f0-9-]{36}', url, re.I):
+            return jsonify({"error": "Enter a valid Suno playlist URL."}), 400
+        if output_format not in {"mp3", "wav"}:
+            return jsonify({"error": "Format must be MP3 or WAV."}), 400
+
+        _cleanup_songripper_playlist_jobs()
+        job_id = secrets.token_urlsafe(24)
+        app.songripper_playlist_jobs[job_id] = {
+            "created_at": time.time(),
+            "state": "queued",
+            "message": "Waiting for the playlist exporter...",
+            "percent": 0,
+            "current": 0,
+            "total": 0,
+            "completed": 0,
+            "failed": 0,
+            "current_title": "",
+            "archive_path": "",
+            "archive_name": "Suno Playlist.zip",
+            "download_url": "",
+        }
+        app.songripper_playlist_jobs[job_id]["task"] = asyncio.create_task(
+            _run_songripper_playlist_job(job_id, url, output_format)
+        )
+        return jsonify({"job_id": job_id})
+
+    @app.route("/songripper/playlist/status/<job_id>")
+    @permission_required('songripper')
+    async def songripper_playlist_status(job_id):
+        from quart import jsonify
+
+        job = app.songripper_playlist_jobs.get(job_id)
+        if not job:
+            return jsonify({"error": "Playlist export job not found."}), 404
+        return jsonify({
+            key: job.get(key)
+            for key in (
+                "state", "message", "percent", "current", "total",
+                "completed", "failed", "current_title", "download_url",
+            )
+        })
+
+    @app.route("/songripper/playlist/download/<job_id>")
+    @permission_required('songripper')
+    async def songripper_download_playlist(job_id):
+        from quart import jsonify, send_file
+
+        job = app.songripper_playlist_jobs.get(job_id)
+        if not job:
+            return jsonify({"error": "Playlist export job not found."}), 404
+        archive_path = job.get("archive_path")
+        if job.get("state") != "ready" or not archive_path or not os.path.isfile(archive_path):
+            return jsonify({"error": "Playlist archive is not ready."}), 409
+        asyncio.create_task(_delete_temp_file_later(archive_path, delay=900))
+        return await send_file(
+            archive_path,
+            mimetype="application/zip",
+            as_attachment=True,
+            attachment_filename=job.get("archive_name") or "Suno Playlist.zip",
+        )
 
     @app.route("/songripper/resolve")
     @permission_required('songripper')
