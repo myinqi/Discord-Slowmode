@@ -160,7 +160,7 @@ async function loadSongripperPlaylist(url) {
     songripperAudioBuffer = null;
     songripperAudioBytes = null;
     songripperProgress(5);
-    songripperStatus('Loading playlist...');
+    songripperStatus('Loading playlist and resolving track names...');
     songripperSetDownloadButtons('⬇ Download playlist as MP3 (ZIP)', '⬇ Download playlist as WAV (ZIP)', true);
     document.getElementById('songripper-square-panel').classList.add('hidden');
     const player = document.getElementById('songripper-player');

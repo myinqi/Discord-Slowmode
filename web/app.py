@@ -8715,6 +8715,34 @@ def create_app(db: Database, bot=None) -> Quart:
         except Exception:
             return ""
 
+    async def _resolve_songripper_playlist_metadata(songs: list[dict]) -> list[dict]:
+        """Replace playlist UUID placeholders with metadata from each song page."""
+        semaphore = asyncio.Semaphore(5)
+
+        async def resolve_song(song: dict) -> dict:
+            resolved = dict(song)
+            song_uuid = str(song.get("uuid") or "").strip()
+            title = str(song.get("title") or "").strip()
+            artist = str(song.get("artist") or "").strip()
+            title_is_placeholder = (
+                not title
+                or title == song_uuid
+                or title == song_uuid[:12]
+            )
+            if not song_uuid or (not title_is_placeholder and artist):
+                return resolved
+            async with semaphore:
+                meta = await _fetch_suno_meta(song_uuid)
+            if title_is_placeholder and meta.get("title"):
+                resolved["title"] = meta["title"]
+            if not artist and meta.get("artist"):
+                resolved["artist"] = meta["artist"]
+            if meta.get("image_url"):
+                resolved["image_url"] = meta["image_url"]
+            return resolved
+
+        return list(await asyncio.gather(*(resolve_song(song) for song in songs)))
+
     def _songripper_archive_name(value: str, fallback: str) -> str:
         """Keep international titles while removing unsafe path characters."""
         value = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', ' ', value or '')
@@ -8740,7 +8768,7 @@ def create_app(db: Database, bot=None) -> Quart:
         import shutil
         import tempfile
         import zipfile
-        from bot.stream_manager import parse_suno_playlist, resolve_suno_meta
+        from bot.stream_manager import parse_suno_playlist
 
         job = app.songripper_playlist_jobs[job_id]
         work_dir = tempfile.mkdtemp(prefix="songripper_playlist_work_")
@@ -8756,6 +8784,8 @@ def create_app(db: Database, bot=None) -> Quart:
                 songs = await parse_suno_playlist(url)
                 if not songs:
                     raise RuntimeError("No songs were found in this playlist.")
+                job.update(message="Resolving track names...", percent=2)
+                songs = await _resolve_songripper_playlist_metadata(songs)
 
                 job["total"] = len(songs)
                 playlist_name = await _songripper_playlist_name(url) or "Suno Playlist"
@@ -8776,9 +8806,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     for index, song in enumerate(songs, start=1):
                         song_uuid = str(song.get("uuid") or "").strip()
                         title = str(song.get("title") or "").strip()
-                        if not title or title == song_uuid[:12]:
-                            meta = await resolve_suno_meta(song_uuid)
-                            title = str(meta.get("title") or title or song_uuid[:12])
+                        title = title or song_uuid[:12]
                         safe_title = _songripper_archive_name(title, song_uuid[:12])
                         base_name = f"{index:03d} - {safe_title}"
                         unique_name = base_name
@@ -8908,6 +8936,7 @@ def create_app(db: Database, bot=None) -> Quart:
             songs = await parse_suno_playlist(url)
             if not songs:
                 return jsonify({"error": "No songs were found in this playlist."}), 404
+            songs = await _resolve_songripper_playlist_metadata(songs)
             name = await _songripper_playlist_name(url)
             return jsonify({
                 "name": name or "Suno Playlist",
