@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}File Sharing{% endblock %}
+{% block content %}
+<div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6">
+    <div>
+        <h2 class="text-2xl font-bold text-white">File Sharing</h2>
+        <p class="text-gray-400 text-sm mt-1">Receive files through a temporary public upload page.</p>
+    </div>
+    <span class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm font-medium
+        {{ 'border-green-500/30 bg-green-500/10 text-green-300' if enabled else 'border-gray-600 bg-gray-700/30 text-gray-400' }}">
+        <span class="w-2 h-2 rounded-full {{ 'bg-discord-green' if enabled else 'bg-gray-500' }}"></span>
+        {{ 'Enabled' if enabled else 'Disabled' }}
+    </span>
+</div>
+
+<div class="grid grid-cols-1 xl:grid-cols-3 gap-5 mb-6">
+    <section class="xl:col-span-2 bg-discord-dark rounded-xl border border-gray-700/50 p-5">
+        <div class="flex items-start justify-between gap-4">
+            <div>
+                <h3 class="text-white font-semibold">Public upload</h3>
+                <p class="text-gray-500 text-sm mt-1">
+                    Disabling this removes the upload form immediately. Stored files remain available here.
+                </p>
+            </div>
+            <form method="POST">
+                <input type="hidden" name="action" value="set_enabled">
+                <label class="inline-flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox" name="enabled" value="1" class="sr-only peer"
+                        onchange="this.form.submit()" {% if enabled %}checked{% endif %}>
+                    <span class="relative w-11 h-6 rounded-full bg-gray-600 peer-checked:bg-discord-blurple transition-colors
+                        after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:w-5 after:h-5 after:bg-white after:rounded-full after:transition-transform peer-checked:after:translate-x-5"></span>
+                    <span class="text-gray-300 text-sm">Accept uploads</span>
+                </label>
+            </form>
+        </div>
+        <div class="mt-5 flex flex-col sm:flex-row gap-2">
+            <input id="public-upload-url" type="text" readonly value="{{ public_upload_url }}"
+                class="flex-1 min-w-0 px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-gray-300 text-sm font-mono select-all">
+            <button type="button" onclick="copyUploadUrl(this)"
+                class="px-4 py-2 bg-discord-lighter hover:bg-gray-600 text-white rounded-lg text-sm transition-colors">
+                Copy URL
+            </button>
+            <a href="{{ url_for('file_share_upload') }}" target="_blank" rel="noopener"
+                class="px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white text-center rounded-lg text-sm transition-colors">
+                Open page ↗
+            </a>
+        </div>
+    </section>
+
+    <section class="bg-discord-dark rounded-xl border border-gray-700/50 p-5">
+        <p class="text-gray-500 text-xs uppercase">Stored uploads</p>
+        <p class="text-white text-3xl font-semibold mt-2">{{ uploads|length }}</p>
+        <p class="text-gray-400 text-sm mt-2">{{ total_size_label }} total</p>
+        <p class="text-gray-600 text-xs mt-3">Maximum file size: 200 MB</p>
+    </section>
+</div>
+
+<section class="bg-discord-dark rounded-xl border border-gray-700/50 overflow-hidden">
+    <div class="px-5 py-4 border-b border-gray-700/50">
+        <h3 class="text-white font-semibold">Uploaded files</h3>
+    </div>
+    {% if uploads %}
+    <div class="divide-y divide-gray-700/40">
+        {% for upload in uploads %}
+        <div class="p-4 flex flex-col gap-4 lg:flex-row lg:items-center">
+            <div class="flex items-center gap-3 min-w-0 flex-1">
+                <span class="w-10 h-10 shrink-0 rounded-lg bg-discord-blurple/15 text-blue-200 flex items-center justify-center text-lg">📄</span>
+                <div class="min-w-0">
+                    <p class="text-white font-medium break-all">{{ upload.original_filename }}</p>
+                    <p class="text-gray-500 text-xs mt-1">
+                        {{ upload.size_label }} · {{ upload.uploaded_at_label }} · {{ upload.uploader_ip or 'Unknown IP' }}
+                    </p>
+                    {% if not upload.file_exists %}
+                    <p class="text-red-300 text-xs mt-1">The stored file is missing.</p>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="flex gap-2 shrink-0">
+                {% if upload.file_exists %}
+                <a href="{{ url_for('file_sharing_download', upload_id=upload.id) }}"
+                    class="px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg text-sm font-medium transition-colors">
+                    ↓ Download
+                </a>
+                {% endif %}
+                <form method="POST" action="{{ url_for('file_sharing_delete', upload_id=upload.id) }}"
+                    onsubmit="return confirm('Permanently delete this file?');">
+                    <button type="submit"
+                        class="px-4 py-2 bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 text-red-300 rounded-lg text-sm font-medium transition-colors">
+                        Delete
+                    </button>
+                </form>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="px-5 py-14 text-center">
+        <p class="text-gray-500">No files have been uploaded.</p>
+    </div>
+    {% endif %}
+</section>
+
+<script>
+async function copyUploadUrl(button) {
+    const input = document.getElementById('public-upload-url');
+    try {
+        await navigator.clipboard.writeText(input.value);
+    } catch (_) {
+        input.select();
+        document.execCommand('copy');
+    }
+    const oldText = button.textContent;
+    button.textContent = 'Copied';
+    setTimeout(() => { button.textContent = oldText; }, 1400);
+}
+</script>
+{% endblock %}

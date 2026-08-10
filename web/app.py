@@ -191,9 +191,10 @@ def create_app(db: Database, bot=None) -> Quart:
         template_folder="templates",
         static_folder="static",
     )
-    # Allow larger uploads (PiP videos, radio backgrounds). Default is 16 MB.
-    app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024   # 50 MB
-    app.config["BODY_TIMEOUT"]       = 120                # 2 min for slow uplinks
+    # File sharing accepts files up to 200 MiB. The small multipart allowance
+    # keeps a full-size file from being rejected because of form boundaries.
+    app.config["MAX_CONTENT_LENGTH"] = 201 * 1024 * 1024
+    app.config["BODY_TIMEOUT"]       = 600
     # Session cookies: Secure flag so browsers only send them over HTTPS;
     # SameSite=Lax prevents CSRF while keeping normal navigation working.
     app.config["SESSION_COOKIE_SECURE"]   = True
@@ -205,6 +206,14 @@ def create_app(db: Database, bot=None) -> Quart:
     os.makedirs(branding_dir, exist_ok=True)
     card_image_dir = os.path.join(os.path.dirname(db.db_path), "card_images")
     os.makedirs(card_image_dir, exist_ok=True)
+    file_share_dir = os.path.join(os.path.dirname(db.db_path), "file_sharing")
+    os.makedirs(file_share_dir, exist_ok=True)
+    for partial_name in os.listdir(file_share_dir):
+        if partial_name.endswith(".part"):
+            try:
+                os.remove(os.path.join(file_share_dir, partial_name))
+            except OSError:
+                pass
     app.scan_status = {"running": False, "progress": "", "result": ""}
     app.title_scan_status = {"running": False, "progress": "", "result": ""}
     app.reaction_scan_status = {"running": False, "progress": "", "result": ""}
@@ -242,6 +251,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('roles', 'Roles'),
         ('users', 'Users'),
         ('member_directory', 'Member Directory'),
+        ('file_sharing', 'File Sharing'),
         ('welcome', 'Welcome'),
         ('party_playlist', 'Party Playlist'),
         ('playlist_search', 'Playlist Search'),
@@ -279,6 +289,7 @@ def create_app(db: Database, bot=None) -> Quart:
         {"key": "roles", "endpoint": "roles", "icon": "🛡️", "label": "Roles", "perm": "roles"},
         {"key": "users", "endpoint": "users", "icon": "👥", "label": "Users", "perm": "users"},
         {"key": "member_directory", "endpoint": "member_directory", "icon": "📇", "label": "Member Directory", "perm": "member_directory"},
+        {"key": "file_sharing", "endpoint": "file_sharing_admin", "icon": "📦", "label": "File Sharing", "perm": "file_sharing"},
         {"key": "welcome", "endpoint": "welcome", "icon": "👋", "label": "Welcome", "perm": "welcome"},
         {"key": "party_playlist", "endpoint": "party_playlist", "icon": "🎧", "label": "Party Playlist", "perm": "party_playlist"},
         {"key": "playlist_search", "endpoint": "playlist_search", "icon": "🔍", "label": "Playlist Search", "perm": "playlist_search"},
@@ -1624,6 +1635,200 @@ def create_app(db: Database, bot=None) -> Quart:
                     f"attachment; filename=discord_members_{timestamp}.csv"
             },
         )
+
+    # --- File sharing ---
+
+    FILE_SHARE_MAX_BYTES = 200 * 1024 * 1024
+
+    def format_file_share_size(size: int) -> str:
+        value = float(size or 0)
+        for unit in ("B", "KB", "MB", "GB"):
+            if value < 1024 or unit == "GB":
+                precision = 0 if unit == "B" else 1
+                return f"{value:.{precision}f} {unit}"
+            value /= 1024
+        return f"{value:.1f} GB"
+
+    @app.errorhandler(413)
+    async def upload_too_large(_error):
+        if request.path == "/file-share":
+            enabled = await db.get_setting("file_sharing_enabled") == "1"
+            return await render_template(
+                "file_share_upload.html",
+                closed=not enabled,
+                error=(
+                    "The selected file exceeds the 200 MB upload limit."
+                    if enabled else None
+                ),
+            ), 413
+        return "Upload exceeds the 200 MB limit.", 413
+
+    @app.route("/file-share", methods=["GET", "POST"])
+    async def file_share_upload():
+        enabled = await db.get_setting("file_sharing_enabled") == "1"
+        if not enabled:
+            return await render_template("file_share_upload.html", closed=True)
+
+        if request.method == "POST":
+            form = await request.form
+            if (form.get("website") or "").strip():
+                return redirect(url_for("file_share_upload"))
+
+            files = await request.files
+            upload = files.get("shared_file")
+            if not upload or not upload.filename:
+                await flash("Choose a file to upload.", "error")
+                return redirect(url_for("file_share_upload"))
+
+            # A generated storage name prevents path traversal and keeps
+            # uploaded files unreachable except through the protected route.
+            import uuid
+            original_name = os.path.basename(
+                upload.filename.replace("\\", "/")
+            )
+            original_name = "".join(
+                char for char in original_name
+                if ord(char) >= 32 and ord(char) != 127
+            ).strip()
+            if not original_name or original_name in {".", ".."}:
+                await flash("The file name is invalid.", "error")
+                return redirect(url_for("file_share_upload"))
+            original_name = original_name[:240]
+            stored_name = uuid.uuid4().hex
+            temporary_path = os.path.join(file_share_dir, stored_name + ".part")
+            final_path = os.path.join(file_share_dir, stored_name)
+            try:
+                await upload.save(temporary_path)
+                size_bytes = os.path.getsize(temporary_path)
+                if size_bytes <= 0:
+                    raise ValueError("Empty files cannot be uploaded.")
+                if size_bytes > FILE_SHARE_MAX_BYTES:
+                    raise ValueError("The selected file exceeds the 200 MB upload limit.")
+                if await db.get_setting("file_sharing_enabled") != "1":
+                    raise ValueError("File sharing was disabled while the upload was running.")
+
+                os.replace(temporary_path, final_path)
+                forwarded = request.headers.get("X-Forwarded-For", "")
+                uploader_ip = (
+                    forwarded.split(",", 1)[0].strip()
+                    or request.remote_addr
+                    or "unknown"
+                )
+                try:
+                    await db.add_file_share_upload(
+                        original_filename=original_name,
+                        stored_filename=stored_name,
+                        size_bytes=size_bytes,
+                        mime_type=upload.mimetype or "application/octet-stream",
+                        uploader_ip=uploader_ip,
+                    )
+                except Exception:
+                    if os.path.isfile(final_path):
+                        os.remove(final_path)
+                    raise
+            except ValueError as exc:
+                if os.path.isfile(temporary_path):
+                    os.remove(temporary_path)
+                await flash(str(exc), "error")
+                return redirect(url_for("file_share_upload"))
+            except Exception as exc:
+                if os.path.isfile(temporary_path):
+                    os.remove(temporary_path)
+                print(f"[file-sharing] Upload failed: {exc}", flush=True)
+                await flash("The file could not be stored. Please try again.", "error")
+                return redirect(url_for("file_share_upload"))
+
+            await flash(
+                f"{original_name} was uploaded successfully.", "success"
+            )
+            return redirect(url_for("file_share_upload"))
+
+        return await render_template("file_share_upload.html", closed=False)
+
+    @app.route("/file-sharing", methods=["GET", "POST"])
+    @permission_required("file_sharing")
+    async def file_sharing_admin():
+        if request.method == "POST":
+            form = await request.form
+            if form.get("action") == "set_enabled":
+                enabled = form.get("enabled") == "1"
+                await db.set_setting("file_sharing_enabled", "1" if enabled else "0")
+                await db.add_audit_log(
+                    event_type="file_sharing_toggled",
+                    details=f"File sharing {'enabled' if enabled else 'disabled'}",
+                    actor=session.get("username", "unknown"),
+                )
+                await flash(
+                    f"File sharing {'enabled' if enabled else 'disabled'}.",
+                    "success",
+                )
+            return redirect(url_for("file_sharing_admin"))
+
+        uploads = await db.get_file_share_uploads()
+        total_size = 0
+        from datetime import datetime, timezone
+        for upload in uploads:
+            path = os.path.join(
+                file_share_dir, os.path.basename(upload["stored_filename"])
+            )
+            upload["file_exists"] = os.path.isfile(path)
+            upload["size_label"] = format_file_share_size(upload["size_bytes"])
+            upload["uploaded_at_label"] = datetime.fromtimestamp(
+                upload["uploaded_at"], tz=timezone.utc
+            ).strftime("%d.%m.%Y %H:%M UTC")
+            total_size += int(upload["size_bytes"] or 0)
+        return await render_template(
+            "file_sharing.html",
+            enabled=await db.get_setting("file_sharing_enabled") == "1",
+            uploads=uploads,
+            total_size_label=format_file_share_size(total_size),
+            public_upload_url=f"{_public_web_url()}/file-share",
+        )
+
+    @app.route("/file-sharing/<int:upload_id>/download")
+    @permission_required("file_sharing")
+    async def file_sharing_download(upload_id: int):
+        from quart import abort, send_file
+
+        upload = await db.get_file_share_upload(upload_id)
+        if not upload:
+            abort(404)
+        stored_name = os.path.basename(upload["stored_filename"])
+        path = os.path.join(file_share_dir, stored_name)
+        if stored_name != upload["stored_filename"] or not os.path.isfile(path):
+            abort(404)
+        await db.add_audit_log(
+            event_type="file_share_downloaded",
+            details=f"Downloaded file #{upload_id}: {upload['original_filename']}",
+            actor=session.get("username", "unknown"),
+        )
+        return await send_file(
+            path,
+            mimetype="application/octet-stream",
+            as_attachment=True,
+            attachment_filename=upload["original_filename"],
+        )
+
+    @app.route("/file-sharing/<int:upload_id>/delete", methods=["POST"])
+    @permission_required("file_sharing")
+    async def file_sharing_delete(upload_id: int):
+        upload = await db.get_file_share_upload(upload_id)
+        if not upload:
+            await flash("The upload no longer exists.", "error")
+            return redirect(url_for("file_sharing_admin"))
+
+        stored_name = os.path.basename(upload["stored_filename"])
+        path = os.path.join(file_share_dir, stored_name)
+        if stored_name == upload["stored_filename"] and os.path.isfile(path):
+            os.remove(path)
+        await db.delete_file_share_upload(upload_id)
+        await db.add_audit_log(
+            event_type="file_share_deleted",
+            details=f"Deleted file #{upload_id}: {upload['original_filename']}",
+            actor=session.get("username", "unknown"),
+        )
+        await flash(f"{upload['original_filename']} was deleted.", "success")
+        return redirect(url_for("file_sharing_admin"))
 
     @app.route("/executioner", methods=["GET", "POST"])
     @permission_required('executioner')

@@ -149,6 +149,16 @@ class Database:
                 timestamp REAL NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS file_share_uploads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                original_filename TEXT NOT NULL,
+                stored_filename TEXT NOT NULL UNIQUE,
+                size_bytes INTEGER NOT NULL,
+                mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+                uploader_ip TEXT,
+                uploaded_at REAL NOT NULL DEFAULT (unixepoch())
+            );
+
             CREATE TABLE IF NOT EXISTS auto_translate_usage (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 created_at REAL NOT NULL,
@@ -356,6 +366,31 @@ class Database:
             await self.db.execute(
                 "INSERT INTO settings (key, value) VALUES (?, 'done')",
                 (member_directory_sidebar_migration,),
+            )
+            await self.db.commit()
+
+        file_sharing_sidebar_migration = "migration_sidebar_file_sharing_v1"
+        async with self.db.execute(
+            "SELECT value FROM settings WHERE key = ?",
+            (file_sharing_sidebar_migration,),
+        ) as cursor:
+            file_sharing_sidebar_migrated = await cursor.fetchone()
+        if not file_sharing_sidebar_migrated:
+            async with self.db.execute(
+                "SELECT value FROM settings WHERE key = 'sidebar_visible_items'"
+            ) as cursor:
+                sidebar_row = await cursor.fetchone()
+            if sidebar_row and sidebar_row[0] and sidebar_row[0] != "__none__":
+                visible_items = [item for item in sidebar_row[0].split(",") if item]
+                if "file_sharing" not in visible_items:
+                    visible_items.append("file_sharing")
+                    await self.db.execute(
+                        "UPDATE settings SET value = ? WHERE key = 'sidebar_visible_items'",
+                        (",".join(visible_items),),
+                    )
+            await self.db.execute(
+                "INSERT INTO settings (key, value) VALUES (?, 'done')",
+                (file_sharing_sidebar_migration,),
             )
             await self.db.commit()
 
@@ -1617,6 +1652,45 @@ class Database:
             "INSERT INTO settings (key, value) VALUES (?, ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (key, value),
+        )
+        await self.db.commit()
+
+    # --- File sharing ---
+
+    async def add_file_share_upload(
+        self,
+        *,
+        original_filename: str,
+        stored_filename: str,
+        size_bytes: int,
+        mime_type: str,
+        uploader_ip: str = "",
+    ) -> int:
+        cursor = await self.db.execute(
+            "INSERT INTO file_share_uploads "
+            "(original_filename, stored_filename, size_bytes, mime_type, uploader_ip) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (original_filename, stored_filename, size_bytes, mime_type, uploader_ip),
+        )
+        await self.db.commit()
+        return cursor.lastrowid
+
+    async def get_file_share_uploads(self) -> list[dict]:
+        async with self.db.execute(
+            "SELECT * FROM file_share_uploads ORDER BY uploaded_at DESC, id DESC"
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def get_file_share_upload(self, upload_id: int) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM file_share_uploads WHERE id = ?", (upload_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def delete_file_share_upload(self, upload_id: int) -> None:
+        await self.db.execute(
+            "DELETE FROM file_share_uploads WHERE id = ?", (upload_id,)
         )
         await self.db.commit()
 
