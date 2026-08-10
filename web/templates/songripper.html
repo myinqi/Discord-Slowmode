@@ -7,23 +7,23 @@
             <span>💿</span>
             Songripper
         </h1>
-        <p class="text-gray-400 text-sm mt-1">Suno URL rein, Audio als MP3 oder WAV herunterladen.</p>
+        <p class="text-gray-400 text-sm mt-1">Paste a Suno URL and download the audio as MP3 or WAV.</p>
     </div>
 
     <div class="bg-discord-dark rounded-xl border border-gray-700/50 overflow-hidden">
         <div class="p-5 border-b border-gray-700/50">
-            <label class="block text-gray-400 text-xs mb-2">Suno Song URL oder UUID</label>
+            <label class="block text-gray-400 text-xs mb-2">Suno song URL or UUID</label>
             <div class="flex flex-col sm:flex-row gap-3">
                 <input type="text" id="songripper-url"
-                    placeholder="https://suno.com/song/... oder https://suno.com/s/..."
+                    placeholder="https://suno.com/song/... or https://suno.com/s/..."
                     class="flex-1 bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
                 <button type="button" onclick="loadSongripperAudio()"
                     class="px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg text-sm font-semibold transition-colors">
-                    Laden
+                    Load
                 </button>
             </div>
             <div class="mt-5 pt-4 border-t border-gray-700/40">
-                <p class="text-gray-500 text-[11px] mb-2">Tesla-Coil Export · Mono · Rechtecksignal mit Dead Zone</p>
+                <p class="text-gray-500 text-[11px] mb-2">Tesla coil export · Mono · Square wave with dead zone</p>
                 <div class="flex items-center gap-3 mb-3">
                     <label for="songripper-square-threshold" class="text-gray-500 text-[11px] whitespace-nowrap">Threshold</label>
                     <input id="songripper-square-threshold" type="range" min="0" max="50" step="1" value="10"
@@ -31,7 +31,7 @@
                         class="flex-1 h-1 accent-gray-500 cursor-pointer">
                     <span id="songripper-square-threshold-label" class="w-9 text-right text-gray-400 text-[11px] tabular-nums">10 %</span>
                 </div>
-                <p class="text-gray-600 text-[10px] mb-3">Darunter wird Stille ausgegeben, darüber ±80 % Pegel.</p>
+                <p class="text-gray-600 text-[10px] mb-3">Values below the threshold become silence; values above it use a ±80% level.</p>
                 <div class="flex flex-col sm:flex-row gap-2">
                     <button type="button" id="songripper-square-wav-btn" onclick="downloadSongripperSquare('wav')" disabled
                         class="flex-1 px-3 py-1.5 border border-gray-700 hover:border-gray-600 disabled:opacity-40 text-gray-500 hover:text-gray-300 rounded-lg text-xs transition-colors">
@@ -46,7 +46,7 @@
             <div class="mt-3 h-1 bg-discord-darker rounded overflow-hidden">
                 <div id="songripper-progress" class="h-full bg-discord-blurple transition-all" style="width:0%"></div>
             </div>
-            <p id="songripper-status" class="text-gray-500 text-xs mt-2">Bereit.</p>
+            <p id="songripper-status" class="text-gray-500 text-xs mt-2">Ready.</p>
         </div>
 
         <div id="songripper-meta" class="hidden p-5 border-b border-gray-700/50">
@@ -67,11 +67,11 @@
             <div class="flex flex-col sm:flex-row gap-3">
                 <button type="button" id="songripper-mp3-btn" onclick="downloadSongripperAudio('mp3')" disabled
                     class="flex-1 px-4 py-2 bg-green-600/20 hover:bg-green-600/40 disabled:bg-gray-700/30 disabled:text-gray-500 text-green-300 rounded-lg text-sm font-semibold transition-colors">
-                    ⬇ MP3 herunterladen
+                    ⬇ Download MP3
                 </button>
                 <button type="button" id="songripper-wav-btn" onclick="downloadSongripperAudio('wav')" disabled
                     class="flex-1 px-4 py-2 bg-purple-600/20 hover:bg-purple-600/40 disabled:bg-gray-700/30 disabled:text-gray-500 text-purple-300 rounded-lg text-sm font-semibold transition-colors">
-                    ⬇ WAV herunterladen
+                    ⬇ Download WAV
                 </button>
             </div>
         </div>
@@ -125,7 +125,7 @@ async function loadSongripperAudio() {
     const raw = document.getElementById('songripper-url').value;
     const id = songripperExtractId(raw);
     if (!id) {
-        songripperStatus('Bitte eine Suno URL oder UUID eingeben.');
+        songripperStatus('Enter a Suno URL or UUID.');
         return;
     }
     document.getElementById('songripper-mp3-btn').disabled = true;
@@ -137,12 +137,12 @@ async function loadSongripperAudio() {
     songripperAudioBytes = null;
     songripperAudioId = '';
     songripperProgress(5);
-    songripperStatus('Metadaten werden geladen...');
+    songripperStatus('Loading metadata...');
 
     const metaResp = await fetch(`/songripper/resolve?id=${encodeURIComponent(id)}`);
     const meta = await metaResp.json();
     if (!metaResp.ok || meta.error) {
-        songripperStatus(meta.error || 'Suno Song konnte nicht aufgelöst werden.');
+        songripperStatus(meta.error || 'The Suno song could not be resolved.');
         songripperProgress(0);
         return;
     }
@@ -161,18 +161,18 @@ async function loadSongripperAudio() {
     }
 
     songripperProgress(25);
-    songripperStatus('Audio wird geladen...');
+    songripperStatus('Loading audio...');
     songripperAudioUrl = `https://cdn1.suno.ai/${audioId}.mp3`;
     songripperSourceExt = 'mp3';
     let audioResp = await fetch(songripperAudioUrl);
     if (!audioResp.ok) {
         songripperAudioUrl = `https://cdn1.suno.ai/${audioId}.m4a`;
         songripperSourceExt = 'm4a';
-        songripperStatus('MP3 nicht verfügbar, M4A wird geladen...');
+        songripperStatus('MP3 unavailable, loading M4A...');
         audioResp = await fetch(songripperAudioUrl);
     }
     if (!audioResp.ok) {
-        songripperStatus(`Audio nicht verfügbar (${audioResp.status}).`);
+        songripperStatus(`Audio unavailable (${audioResp.status}).`);
         songripperProgress(0);
         return;
     }
@@ -181,16 +181,16 @@ async function loadSongripperAudio() {
     player.src = songripperAudioUrl;
 
     songripperProgress(60);
-    songripperStatus('Audio wird decodiert...');
+    songripperStatus('Decoding audio...');
     if (!songripperAudioCtx) songripperAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
     songripperAudioBuffer = await songripperAudioCtx.decodeAudioData(songripperAudioBytes.slice(0));
-    document.getElementById('songripper-duration').textContent = `Dauer: ${songripperFormatTime(songripperAudioBuffer.duration)}`;
+    document.getElementById('songripper-duration').textContent = `Duration: ${songripperFormatTime(songripperAudioBuffer.duration)}`;
     document.getElementById('songripper-mp3-btn').disabled = false;
     document.getElementById('songripper-wav-btn').disabled = false;
     document.getElementById('songripper-square-wav-btn').disabled = false;
     document.getElementById('songripper-square-mp3-btn').disabled = false;
     songripperProgress(100);
-    songripperStatus('Bereit zum Download.');
+    songripperStatus('Ready to download.');
 }
 
 function songripperSaveBlob(blob, filename) {
@@ -205,7 +205,7 @@ function songripperSaveBlob(blob, filename) {
 
 async function downloadSongripperSquare(format) {
     if (!songripperAudioId) {
-        alert('Kein Audio geladen.');
+        alert('No audio loaded.');
         return;
     }
     const safeName = songripperSafeName();
@@ -213,18 +213,18 @@ async function downloadSongripperSquare(format) {
     const threshold = Math.max(0, Math.min(50, thresholdPercent)) / 100;
     const btn = document.getElementById(`songripper-square-${format}-btn`);
     btn.disabled = true;
-    songripperStatus(`Square-${format.toUpperCase()} wird erzeugt · Threshold ${thresholdPercent} %...`);
+    songripperStatus(`Creating Square ${format.toUpperCase()} · Threshold ${thresholdPercent}%...`);
     try {
         const filename = `${safeName}_square-wave.${format}`;
         const url = `/songripper/download-square?id=${encodeURIComponent(songripperAudioId)}&format=${encodeURIComponent(format)}&threshold=${encodeURIComponent(threshold)}&filename=${encodeURIComponent(filename)}`;
         const resp = await fetch(url);
         if (!resp.ok) {
             const data = await resp.json().catch(() => ({}));
-            throw new Error(data.error || `Square-Wave Export fehlgeschlagen (${resp.status})`);
+            throw new Error(data.error || `Square-wave export failed (${resp.status})`);
         }
         const blob = await resp.blob();
         songripperSaveBlob(blob, filename);
-        songripperStatus(`Square-${format.toUpperCase()} heruntergeladen.`);
+        songripperStatus(`Square ${format.toUpperCase()} downloaded.`);
     } catch (err) {
         songripperStatus(err.message || String(err));
     } finally {
@@ -236,22 +236,22 @@ async function downloadSongripperAudio(format) {
     const safeName = songripperSafeName();
     if (format === 'mp3') {
         if (!songripperAudioId) {
-            alert('Kein Audio geladen.');
+            alert('No audio loaded.');
             return;
         }
         const btn = document.getElementById('songripper-mp3-btn');
         btn.disabled = true;
-        songripperStatus('MP3 wird serverseitig neu codiert...');
+        songripperStatus('Re-encoding MP3 on the server...');
         try {
             const url = `/songripper/download-mp3?id=${encodeURIComponent(songripperAudioId)}&filename=${encodeURIComponent(safeName + '.mp3')}`;
             const resp = await fetch(url);
             if (!resp.ok) {
                 const data = await resp.json().catch(() => ({}));
-                throw new Error(data.error || `Download fehlgeschlagen (${resp.status})`);
+                throw new Error(data.error || `Download failed (${resp.status})`);
             }
             const blob = await resp.blob();
             songripperSaveBlob(blob, `${safeName}.mp3`);
-            songripperStatus('Korrigierte MP3 heruntergeladen.');
+            songripperStatus('Corrected MP3 downloaded.');
         } catch (err) {
             songripperStatus(err.message || String(err));
         } finally {
@@ -261,7 +261,7 @@ async function downloadSongripperAudio(format) {
     }
 
     if (!songripperAudioBuffer) {
-        alert('Kein decodiertes Audio geladen.');
+        alert('No decoded audio loaded.');
         return;
     }
     const samples = songripperAudioBuffer.getChannelData(0);
