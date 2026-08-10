@@ -220,6 +220,7 @@ def create_app(db: Database, bot=None) -> Quart:
     app.cleanup_status = {"running": False, "progress": "", "result": ""}
     app.database_restore_pending = False
     app.player_reaction_locks = {}
+    app.file_share_lock = asyncio.Lock()
     # Serializes manual starts of both radio managers. The scheduled Exp.
     # Radio start additionally checks the legacy manager before it fires.
     app.radio_start_lock = asyncio.Lock()
@@ -1639,6 +1640,7 @@ def create_app(db: Database, bot=None) -> Quart:
     # --- File sharing ---
 
     FILE_SHARE_MAX_BYTES = 200 * 1024 * 1024
+    FILE_SHARE_DEFAULT_LIMIT_GB = 5
 
     def format_file_share_size(size: int) -> str:
         value = float(size or 0)
@@ -1648,6 +1650,25 @@ def create_app(db: Database, bot=None) -> Quart:
                 return f"{value:.{precision}f} {unit}"
             value /= 1024
         return f"{value:.1f} GB"
+
+    def file_share_storage_usage() -> int:
+        total = 0
+        try:
+            with os.scandir(file_share_dir) as entries:
+                for entry in entries:
+                    if entry.is_file(follow_symlinks=False) and not entry.name.endswith(".part"):
+                        total += entry.stat(follow_symlinks=False).st_size
+        except OSError:
+            pass
+        return total
+
+    async def get_file_share_limit_gb() -> int:
+        raw = await db.get_setting("file_sharing_storage_limit_gb")
+        try:
+            value = int(raw or FILE_SHARE_DEFAULT_LIMIT_GB)
+        except (TypeError, ValueError):
+            value = FILE_SHARE_DEFAULT_LIMIT_GB
+        return max(1, min(10, value))
 
     @app.errorhandler(413)
     async def upload_too_large(_error):
@@ -1704,28 +1725,37 @@ def create_app(db: Database, bot=None) -> Quart:
                     raise ValueError("Empty files cannot be uploaded.")
                 if size_bytes > FILE_SHARE_MAX_BYTES:
                     raise ValueError("The selected file exceeds the 200 MB upload limit.")
-                if await db.get_setting("file_sharing_enabled") != "1":
-                    raise ValueError("File sharing was disabled while the upload was running.")
-
-                os.replace(temporary_path, final_path)
                 forwarded = request.headers.get("X-Forwarded-For", "")
                 uploader_ip = (
                     forwarded.split(",", 1)[0].strip()
                     or request.remote_addr
                     or "unknown"
                 )
-                try:
-                    await db.add_file_share_upload(
-                        original_filename=original_name,
-                        stored_filename=stored_name,
-                        size_bytes=size_bytes,
-                        mime_type=upload.mimetype or "application/octet-stream",
-                        uploader_ip=uploader_ip,
-                    )
-                except Exception:
-                    if os.path.isfile(final_path):
-                        os.remove(final_path)
-                    raise
+                async with app.file_share_lock:
+                    if await db.get_setting("file_sharing_enabled") != "1":
+                        raise ValueError(
+                            "File sharing was disabled while the upload was running."
+                        )
+                    storage_limit = await get_file_share_limit_gb() * 1024 ** 3
+                    if file_share_storage_usage() + size_bytes > storage_limit:
+                        raise ValueError(
+                            "The shared storage limit has been reached. "
+                            "Please contact the administrator."
+                        )
+
+                    os.replace(temporary_path, final_path)
+                    try:
+                        await db.add_file_share_upload(
+                            original_filename=original_name,
+                            stored_filename=stored_name,
+                            size_bytes=size_bytes,
+                            mime_type=upload.mimetype or "application/octet-stream",
+                            uploader_ip=uploader_ip,
+                        )
+                    except Exception:
+                        if os.path.isfile(final_path):
+                            os.remove(final_path)
+                        raise
             except ValueError as exc:
                 if os.path.isfile(temporary_path):
                     os.remove(temporary_path)
@@ -1752,7 +1782,10 @@ def create_app(db: Database, bot=None) -> Quart:
             form = await request.form
             if form.get("action") == "set_enabled":
                 enabled = form.get("enabled") == "1"
-                await db.set_setting("file_sharing_enabled", "1" if enabled else "0")
+                async with app.file_share_lock:
+                    await db.set_setting(
+                        "file_sharing_enabled", "1" if enabled else "0"
+                    )
                 await db.add_audit_log(
                     event_type="file_sharing_toggled",
                     details=f"File sharing {'enabled' if enabled else 'disabled'}",
@@ -1762,10 +1795,27 @@ def create_app(db: Database, bot=None) -> Quart:
                     f"File sharing {'enabled' if enabled else 'disabled'}.",
                     "success",
                 )
+            elif form.get("action") == "set_storage_limit":
+                try:
+                    storage_limit_gb = int(form.get("storage_limit_gb", "5"))
+                except (TypeError, ValueError):
+                    storage_limit_gb = FILE_SHARE_DEFAULT_LIMIT_GB
+                storage_limit_gb = max(1, min(10, storage_limit_gb))
+                async with app.file_share_lock:
+                    await db.set_setting(
+                        "file_sharing_storage_limit_gb", str(storage_limit_gb)
+                    )
+                await db.add_audit_log(
+                    event_type="file_sharing_storage_limit_changed",
+                    details=f"File sharing storage limit set to {storage_limit_gb} GB",
+                    actor=session.get("username", "unknown"),
+                )
+                await flash(
+                    f"Storage limit set to {storage_limit_gb} GB.", "success"
+                )
             return redirect(url_for("file_sharing_admin"))
 
         uploads = await db.get_file_share_uploads()
-        total_size = 0
         from datetime import datetime, timezone
         for upload in uploads:
             path = os.path.join(
@@ -1776,12 +1826,21 @@ def create_app(db: Database, bot=None) -> Quart:
             upload["uploaded_at_label"] = datetime.fromtimestamp(
                 upload["uploaded_at"], tz=timezone.utc
             ).strftime("%d.%m.%Y %H:%M UTC")
-            total_size += int(upload["size_bytes"] or 0)
+        storage_limit_gb = await get_file_share_limit_gb()
+        storage_limit_bytes = storage_limit_gb * 1024 ** 3
+        total_size = file_share_storage_usage()
+        storage_remaining = max(0, storage_limit_bytes - total_size)
+        storage_percent = min(
+            100, round((total_size / storage_limit_bytes) * 100, 1)
+        )
         return await render_template(
             "file_sharing.html",
             enabled=await db.get_setting("file_sharing_enabled") == "1",
             uploads=uploads,
             total_size_label=format_file_share_size(total_size),
+            storage_remaining_label=format_file_share_size(storage_remaining),
+            storage_limit_gb=storage_limit_gb,
+            storage_percent=storage_percent,
             public_upload_url=f"{_public_web_url()}/file-share",
         )
 

@@ -48,10 +48,35 @@
     </section>
 
     <section class="bg-discord-dark rounded-xl border border-gray-700/50 p-5">
-        <p class="text-gray-500 text-xs uppercase">Stored uploads</p>
-        <p class="text-white text-3xl font-semibold mt-2">{{ uploads|length }}</p>
-        <p class="text-gray-400 text-sm mt-2">{{ total_size_label }} total</p>
-        <p class="text-gray-600 text-xs mt-3">Maximum file size: 200 MB</p>
+        <div class="flex items-center justify-between gap-3">
+            <div>
+                <p class="text-gray-500 text-xs uppercase">Storage</p>
+                <p class="text-white text-xl font-semibold mt-1">{{ total_size_label }} / {{ storage_limit_gb }} GB</p>
+            </div>
+            <span class="text-gray-500 text-xs">{{ uploads|length }} file{{ '' if uploads|length == 1 else 's' }}</span>
+        </div>
+        <div class="h-2 bg-discord-darker rounded-full overflow-hidden mt-3">
+            <div class="h-full rounded-full {{ 'bg-red-400' if storage_percent >= 90 else 'bg-discord-blurple' }}"
+                style="width: {{ storage_percent }}%"></div>
+        </div>
+        <p class="text-gray-500 text-xs mt-2">{{ storage_remaining_label }} available · {{ storage_percent }}% used</p>
+        <form method="POST" class="mt-4">
+            <input type="hidden" name="action" value="set_storage_limit">
+            <div class="flex items-center justify-between gap-3 mb-2">
+                <label for="storage-limit" class="text-gray-300 text-sm">Storage limit</label>
+                <output id="storage-limit-value" for="storage-limit" class="text-blue-300 text-sm font-medium">{{ storage_limit_gb }} GB</output>
+            </div>
+            <input id="storage-limit" type="range" name="storage_limit_gb" min="1" max="10" step="1"
+                value="{{ storage_limit_gb }}"
+                oninput="document.getElementById('storage-limit-value').value = this.value + ' GB'"
+                class="w-full accent-indigo-500">
+            <div class="flex justify-between text-gray-600 text-xs mt-1"><span>1 GB</span><span>10 GB</span></div>
+            <button type="submit"
+                class="w-full mt-3 px-3 py-2 bg-discord-lighter hover:bg-gray-600 text-white rounded-lg text-sm transition-colors">
+                Save limit
+            </button>
+        </form>
+        <p class="text-gray-600 text-xs mt-3">Maximum size per file: 200 MB</p>
     </section>
 </div>
 
