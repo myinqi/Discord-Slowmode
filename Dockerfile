@@ -9,7 +9,10 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg fontconfig libgomp1 tzdata \
         fonts-noto fonts-noto-mono fonts-noto-cjk fonts-noto-extra \
-    && rm -rf /var/lib/apt/lists/* && fc-cache -f
+        fonts-freefont-otf \
+    && rm -rf /var/lib/apt/lists/* \
+    && fc-cache -f \
+    && test -n "$(fc-match -f '%{file}' ':charset=2728')"
 
 # Install dependencies
 COPY requirements.txt .

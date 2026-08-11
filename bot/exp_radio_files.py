@@ -35,8 +35,30 @@ def cleanup_exp_radio_hook_files(exp_radio_dir: str, song: dict) -> int:
     return removed
 
 
-def cleanup_exp_radio_song_files(exp_radio_dir: str, song: dict) -> int:
-    """Remove all local media generated or downloaded for one song row."""
+def _shared_song_paths(exp_radio_dir: str, song: dict) -> set[str]:
+    """Return paths that can be shared by rows referring to the same song."""
+    paths: set[str] = set()
+    mp3_filename = song.get("mp3_filename")
+    if mp3_filename:
+        paths.add(os.path.abspath(os.path.join(exp_radio_dir, "mp3", mp3_filename)))
+    ass_filename = song.get("ass_filename")
+    if ass_filename:
+        paths.add(os.path.abspath(os.path.join(exp_radio_dir, "ass", ass_filename)))
+    suno_uuid = song.get("suno_uuid")
+    if suno_uuid:
+        for ext in (".jpg", ".mp4"):
+            paths.add(os.path.abspath(
+                os.path.join(exp_radio_dir, "cover_cache", f"{suno_uuid}{ext}")
+            ))
+    return paths
+
+
+def cleanup_exp_radio_song_files(
+    exp_radio_dir: str,
+    song: dict,
+    protected_songs: list[dict] | None = None,
+) -> int:
+    """Remove one row's media unless another active row still references it."""
     targets: list[str] = []
     mp3_filename = song.get("mp3_filename")
     if mp3_filename:
@@ -51,8 +73,14 @@ def cleanup_exp_radio_song_files(exp_radio_dir: str, song: dict) -> int:
                 os.path.join(exp_radio_dir, "cover_cache", f"{suno_uuid}{ext}")
             )
 
+    protected_paths: set[str] = set()
+    for protected_song in protected_songs or []:
+        protected_paths.update(_shared_song_paths(exp_radio_dir, protected_song))
+
     removed = cleanup_exp_radio_hook_files(exp_radio_dir, song)
     for path in targets:
+        if os.path.abspath(path) in protected_paths:
+            continue
         try:
             os.remove(path)
             removed += 1

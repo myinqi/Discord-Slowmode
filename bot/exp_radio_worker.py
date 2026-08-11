@@ -830,7 +830,7 @@ def build_ass(words: list, title: str = "", artist: str = "",
         f"Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,"
         f"BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,"
         f"BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding\n"
-        f"Style: Default,Arial,54,&H00FFFFFF,&H00808080,&H00000000,&HA0000000,"
+        f"Style: Default,Noto Sans,54,&H00FFFFFF,&H00808080,&H00000000,&HA0000000,"
         f"0,0,0,0,100,100,0,0,1,3,1,2,80,80,90,1\n\n"
         f"[Events]\n"
         f"Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n"

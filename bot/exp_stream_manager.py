@@ -105,6 +105,11 @@ def _strip_emoji(text: str) -> str:
     return _EMOJI_STRIP_RE.sub("", text)
 
 
+def _assign_ass_symbol_fonts(text: str) -> str:
+    """Avoid repeated libass font searches for supported decorative glyphs."""
+    return text.replace("✨", r"{\fnFreeSerif}✨{\r}")
+
+
 # ── Module-level Live Log ────────────────────────────────────────────────────
 # Re-exported from bot.live_log so the rest of this file can keep calling
 # log_event() / _LOG_BUFFER unchanged, and other modules (twitch_bot,
@@ -119,6 +124,7 @@ stream_is_live: bool = False
 _PRE_START_LOCK_MINUTES = 60
 _EARLY_SUBMITTER_LOGIN = "t_ravenveil"
 _EARLY_SUBMITTER_WINDOW_SECONDS = 60 * 60
+_NOW_PLAYING_CHAT_DELAY = 15.0
 
 
 def _place_submitter_song_in_early_window(
@@ -388,6 +394,49 @@ class ExpStreamManager:
         active_pl = (await self.db.get_setting("exp_radio_active_playlist")) or "submission"
         pl_source = None if active_pl == "both" else active_pl
         songs = await self.db.get_all_exp_radio_songs(active_only=True, source=pl_source)
+
+        async def _restore_missing_mp3(song: dict) -> bool:
+            """Restore source audio removed while a duplicate row was cleaned up."""
+            filename = song.get("mp3_filename")
+            if not filename:
+                return False
+            mp3_dir = os.path.join(self.exp_radio_dir, "mp3")
+            expected = os.path.join(mp3_dir, filename)
+            if os.path.isfile(expected):
+                return True
+            suno_uuid = (song.get("suno_uuid") or "").strip()
+            if not suno_uuid:
+                self._log(
+                    f"Missing MP3 for {song.get('title') or song.get('id')} and no Suno UUID is available.",
+                    "error",
+                )
+                return False
+            self._log(
+                f"Missing MP3 for {song.get('title') or song.get('id')}; downloading it again."
+            )
+            try:
+                from bot.exp_radio_worker import download_mp3
+                restored = await download_mp3(suno_uuid, mp3_dir)
+                if not restored or not os.path.isfile(restored):
+                    raise RuntimeError("download returned no file")
+                restored_name = os.path.basename(restored)
+                song["mp3_filename"] = restored_name
+                if restored_name != filename:
+                    await self.db.update_exp_radio_song(
+                        int(song["id"]), mp3_filename=restored_name,
+                    )
+                self._log(f"MP3 restored: {song.get('title') or song.get('id')}.")
+                return True
+            except Exception as exc:
+                self._log(
+                    f"Could not restore MP3 for {song.get('title') or song.get('id')}: {exc}",
+                    "error",
+                )
+                return False
+
+        for song in songs:
+            if song.get("analysis_status") == "done" and song.get("mp3_filename"):
+                await _restore_missing_mp3(song)
         # A song is stream-eligible when:
         #   - Whisper analysis completed and the MP3 exists, AND
         #   - Moderation either was never run (NULL — grandfathered before the
@@ -398,10 +447,17 @@ class ExpStreamManager:
             ms = s.get("moderation_status")
             return ms is None or ms in ("passed", "approved")
 
+        def _audio_exists(s: dict) -> bool:
+            filename = s.get("mp3_filename")
+            return bool(
+                filename
+                and os.path.isfile(os.path.join(self.exp_radio_dir, "mp3", filename))
+            )
+
         ready = [
             s for s in songs
             if s.get("analysis_status") == "done"
-            and s.get("mp3_filename")
+            and _audio_exists(s)
             and _mod_ok(s)
         ]
         if not ready:
@@ -410,7 +466,7 @@ class ExpStreamManager:
             return {"ok": False, "error": f"No ready songs in the {pl_label} playlist."}
 
         def _special_ready(s: dict) -> bool:
-            return s.get("analysis_status") == "done" and bool(s.get("mp3_filename"))
+            return s.get("analysis_status") == "done" and _audio_exists(s)
 
         def _pick_special_song(songs: list[dict], selection: str) -> dict | None:
             ready_songs = [s for s in songs if _special_ready(s)]
@@ -434,6 +490,9 @@ class ExpStreamManager:
         intro_enabled = (await self.db.get_setting("exp_radio_intro_enabled")) or "off"
         if intro_enabled == "on":
             intro_songs = await self.db.get_all_exp_radio_songs(active_only=True, source="intro")
+            for song in intro_songs:
+                if song.get("analysis_status") == "done" and song.get("mp3_filename"):
+                    await _restore_missing_mp3(song)
             intro_selection = await self.db.get_setting("exp_radio_intro_selection") or "random"
             intro_song = _pick_special_song(intro_songs, intro_selection)
             if intro_song:
@@ -468,6 +527,9 @@ class ExpStreamManager:
         outro_enabled = (await self.db.get_setting("exp_radio_outro_enabled")) or "off"
         if outro_enabled == "on":
             outro_songs = await self.db.get_all_exp_radio_songs(active_only=True, source="outro")
+            for song in outro_songs:
+                if song.get("analysis_status") == "done" and song.get("mp3_filename"):
+                    await _restore_missing_mp3(song)
             outro_selection = await self.db.get_setting("exp_radio_outro_selection") or "random"
             self._outro_song = _pick_special_song(outro_songs, outro_selection)
             if self._outro_song:
@@ -534,11 +596,20 @@ class ExpStreamManager:
 
     async def wait_until_live(self, timeout: float = 900.0) -> bool:
         """Wait until FFmpeg has actually started after start()."""
-        try:
-            await asyncio.wait_for(self._stream_ready_event.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
-            return False
-        return bool(self.is_running and self._process and self._process.returncode is None)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self._stream_ready_event.is_set():
+                return bool(
+                    self.is_running
+                    and self._process
+                    and self._process.returncode is None
+                )
+            if not self.is_running:
+                return False
+            if self._process and self._process.returncode is not None:
+                return False
+            await asyncio.sleep(0.25)
+        return False
 
     async def stop(self) -> dict:
         self.is_running = False
@@ -574,6 +645,7 @@ class ExpStreamManager:
         # Expired/deleted rows may have stayed on disk while FFmpeg held them
         # open. Once the stream is stopped they are safe to collect.
         removed_files = 0
+        protected_songs = await self.db.get_all_exp_radio_songs(active_only=True)
         for playlist_song in self.playlist or []:
             song_id = playlist_song.get("id")
             if not song_id:
@@ -581,7 +653,7 @@ class ExpStreamManager:
             stored = await self.db.get_exp_radio_song(int(song_id))
             if stored and not stored.get("active"):
                 removed_files += cleanup_exp_radio_song_files(
-                    self.exp_radio_dir, stored
+                    self.exp_radio_dir, stored, protected_songs
                 )
         if removed_files:
             self._log(f"Post-stream cleanup removed {removed_files} inactive file(s).")
@@ -841,12 +913,22 @@ class ExpStreamManager:
             stderr=asyncio.subprocess.PIPE,
             limit=1024 * 1024,
         )
-        self._stream_ready_event.set()
-        self._log("FFmpeg process started; stream is live.")
-        chat_task   = asyncio.create_task(self._post_now_playing_loop(songs))
         stderr_task = asyncio.create_task(self._pipe_ffmpeg_stderr(self._process))
-        announce_task = asyncio.create_task(self._announce_rotation_end(total_dur))
-        if not self._submission_bans_advanced:
+        await asyncio.sleep(2)
+        startup_stable = self._process.returncode is None
+        chat_task = None
+        announce_task = None
+        if startup_stable:
+            self._stream_ready_event.set()
+            self._log("FFmpeg process remained stable for 2 seconds; stream is live.")
+            chat_task = asyncio.create_task(self._post_now_playing_loop(songs))
+            announce_task = asyncio.create_task(self._announce_rotation_end(total_dur))
+        else:
+            self._log(
+                f"FFmpeg failed during startup (exit {self._process.returncode}).",
+                "error",
+            )
+        if startup_stable and not self._submission_bans_advanced:
             self._submission_bans_advanced = True
             try:
                 advanced = await self.db.advance_exp_radio_submission_bans()
@@ -871,16 +953,18 @@ class ExpStreamManager:
         proc = self._process
         await proc.wait()
         rc = proc.returncode
-        chat_task.cancel()
-        announce_task.cancel()
-        try:
-            await chat_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await announce_task
-        except asyncio.CancelledError:
-            pass
+        if chat_task:
+            chat_task.cancel()
+            try:
+                await chat_task
+            except asyncio.CancelledError:
+                pass
+        if announce_task:
+            announce_task.cancel()
+            try:
+                await announce_task
+            except asyncio.CancelledError:
+                pass
         # stderr task ends naturally when EOF — just await it.
         try:
             await stderr_task
@@ -1211,7 +1295,6 @@ class ExpStreamManager:
     async def _post_now_playing_loop(self, songs: list):
         """Post ♪ Now Playing to Twitch chat at each song boundary.
         Also updates current_song and _current_song_end_time for safe_stop."""
-        _POST_DELAY = 10  # seconds after song start before posting
         if not songs:
             return
 
@@ -1257,8 +1340,11 @@ class ExpStreamManager:
                 safe_stop_logged.add(idx)
                 self._log(f"Safe stop: finishing after '{song.get('title','?')}' ({dur}s).")
 
-            post_at = starts[idx] + min(_POST_DELAY, dur)
-            if idx not in posted and out_time + 0.25 >= post_at:
+            # FFmpeg's output clock runs a few seconds ahead of what viewers
+            # hear after RTMP ingest and Twitch player buffering. Posting at
+            # 15s on that clock lands close to 10s after the audible change.
+            post_at = starts[idx] + min(_NOW_PLAYING_CHAT_DELAY, dur)
+            if idx not in posted and out_time >= post_at:
                 posted.add(idx)
                 if self._twitch_chat:
                     title    = song.get("title")  or "Unknown"
@@ -1270,6 +1356,10 @@ class ExpStreamManager:
                     if suno_url:
                         msg += f" | {suno_url}"
                     await self._twitch_chat.send(msg)
+                    self._log(
+                        f"Now Playing chat post: '{title}' at "
+                        f"{elapsed_in_song:.1f}s on the FFmpeg clock."
+                    )
 
             if out_time >= total_duration:
                 break
@@ -1826,13 +1916,13 @@ class ExpStreamManager:
             "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
             "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
             "Alignment, MarginL, MarginR, MarginV, Encoding\n"
-            "Style: Default,Arial,52,&H00FFFFFF,&H000000FF,&H00000000,"
+            "Style: Default,Noto Sans,52,&H00FFFFFF,&H000000FF,&H00000000,"
             "&H80000000,-1,0,0,0,100,100,0,0,1,2.5,1,2,10,10,30,1\n"
-            "Style: NowPlaying,Arial,48,&H00E8C97A,&H000000FF,&H00000000,"
+            "Style: NowPlaying,Noto Sans,48,&H00E8C97A,&H000000FF,&H00000000,"
             "&HC8000000,0,0,0,0,100,100,0,0,1,1.5,0.8,7,20,20,14,1\n"
-            "Style: Progress,Arial,34,&H00FFFFFF,&H000000FF,&H00000000,"
+            "Style: Progress,Noto Sans,34,&H00FFFFFF,&H000000FF,&H00000000,"
             "&HA0000000,0,0,0,0,100,100,0,0,1,1.2,0.5,3,10,30,18,1\n"
-            "Style: Disclaimer,Arial,28,&H00FFFFFF,&H000000FF,&H00000000,"
+            "Style: Disclaimer,Noto Sans,28,&H00FFFFFF,&H000000FF,&H00000000,"
             "&HA8000000,0,0,0,0,100,100,0,0,3,1.0,0,3,1050,30,72,1\n\n"
             "[Events]\n"
             "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
@@ -1909,7 +1999,7 @@ class ExpStreamManager:
             with open(out_path, "w", encoding="utf-8") as f:
                 f.write(header)
                 for e in events:
-                    f.write(e + "\n")
+                    f.write(_assign_ass_symbol_fonts(e) + "\n")
             return out_path
         except Exception as e:
             print(f"[exp-stream] Combined ASS write error: {e}", flush=True)

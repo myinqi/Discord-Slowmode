@@ -6110,6 +6110,7 @@ def create_app(db: Database, bot=None) -> Quart:
                         if s.get("mp3_filename")
                     }
                 removed_files = 0
+                protected_songs = await db.get_all_exp_radio_songs(active_only=True)
                 for s in expired:
                     mp3_fn = s.get("mp3_filename")
                     if mp3_fn and mp3_fn in in_use_mp3:
@@ -6118,7 +6119,9 @@ def create_app(db: Database, bot=None) -> Quart:
                             f"— still in active stream playlist.", flush=True,
                         )
                         continue
-                    removed_files += cleanup_exp_radio_song_files(EXP_RADIO_DIR, s)
+                    removed_files += cleanup_exp_radio_song_files(
+                        EXP_RADIO_DIR, s, protected_songs
+                    )
 
                 # Files retained while FFmpeg was using an expired song are
                 # collected on a later pass once that stream has ended.
@@ -6130,7 +6133,9 @@ def create_app(db: Database, bot=None) -> Quart:
                 for s in inactive:
                     if s.get("active") or int(s.get("id") or 0) in in_use_ids:
                         continue
-                    removed_files += cleanup_exp_radio_song_files(EXP_RADIO_DIR, s)
+                    removed_files += cleanup_exp_radio_song_files(
+                        EXP_RADIO_DIR, s, protected_songs
+                    )
                 if removed_files:
                     print(f"[exp-radio] Removed {removed_files} expired file(s) from disk.", flush=True)
                 channel_id_str = (
@@ -6565,7 +6570,10 @@ def create_app(db: Database, bot=None) -> Quart:
                 song_id = int(form.get("song_id", 0))
                 removed = await db.delete_exp_radio_song(song_id)
                 if removed:
-                    cleanup_exp_radio_song_files(EXP_RADIO_DIR, removed)
+                    protected_songs = await db.get_all_exp_radio_songs(active_only=True)
+                    cleanup_exp_radio_song_files(
+                        EXP_RADIO_DIR, removed, protected_songs
+                    )
                     await flash("Song and cached media removed.", "success")
                 else:
                     await flash("Song not found.", "error")
@@ -6762,8 +6770,11 @@ def create_app(db: Database, bot=None) -> Quart:
                         active_only=True, source="submission"
                     )
                     count = await db.delete_all_exp_radio_songs(source="submission")
+                    protected_songs = await db.get_all_exp_radio_songs(active_only=True)
                     for song in removed:
-                        cleanup_exp_radio_song_files(EXP_RADIO_DIR, song)
+                        cleanup_exp_radio_song_files(
+                            EXP_RADIO_DIR, song, protected_songs
+                        )
                     await flash(f"Playlist cleared — {count} song(s) removed.", "success")
 
             elif action == "delete_all_admin_songs":
@@ -6775,8 +6786,11 @@ def create_app(db: Database, bot=None) -> Quart:
                         active_only=True, source="admin"
                     )
                     count = await db.delete_all_exp_radio_songs(source="admin")
+                    protected_songs = await db.get_all_exp_radio_songs(active_only=True)
                     for song in removed:
-                        cleanup_exp_radio_song_files(EXP_RADIO_DIR, song)
+                        cleanup_exp_radio_song_files(
+                            EXP_RADIO_DIR, song, protected_songs
+                        )
                     await flash(f"Admin playlist cleared — {count} song(s) removed.", "success")
 
             elif action == "reanalyze_whisper":
