@@ -223,12 +223,14 @@
                 </label>
                 <p class="text-gray-500 text-xs">
                     Automatically starts the stream on the selected weekdays
-                    at the time below (server local time). Each scheduled
+                    at the time below (Europe/Berlin). Each scheduled
                     start clears the cover cache and rebuilds audio/ASS from
                     scratch. The stream ends according to the
                     <em>“When the playlist ends”</em> setting above. If a
                     stream is already running at trigger time, the
-                    auto-start is skipped.
+                    occurrence is considered handled. Starts delayed by a
+                    container restart or brief outage are retried for up to
+                    15 minutes.
                 </p>
                 <div class="grid grid-cols-7 gap-1 text-center text-xs">
                     {% for label, idx in [('Mon',0),('Tue',1),('Wed',2),('Thu',3),('Fri',4),('Sat',5),('Sun',6)] %}

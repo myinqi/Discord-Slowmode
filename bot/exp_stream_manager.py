@@ -179,6 +179,7 @@ async def is_submissions_locked(db) -> tuple[bool, str]:
         return True, "stream_live"
 
     from datetime import datetime
+    from zoneinfo import ZoneInfo
     try:
         enabled = await db.get_setting("exp_radio_schedule_enabled") or "off"
         if enabled != "on":
@@ -190,7 +191,7 @@ async def is_submissions_locked(db) -> tuple[bool, str]:
             return False, ""
         h_str, m_str = hhmm.split(":", 1)
         target_h, target_m = int(h_str), int(m_str)
-        now = datetime.now()
+        now = datetime.now(ZoneInfo("Europe/Berlin"))
         if now.weekday() not in days:
             return False, ""
         diff = (target_h * 60 + target_m) - (now.hour * 60 + now.minute)

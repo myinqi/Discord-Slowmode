@@ -5949,7 +5949,8 @@ def create_app(db: Database, bot=None) -> Quart:
             return ""
 
         from datetime import datetime
-        now = datetime.now()
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("Europe/Berlin"))
         if now.weekday() not in days:
             return ""
         schedule_time = (await db.get_setting("exp_radio_schedule_time") or "").strip()
@@ -6192,25 +6193,56 @@ def create_app(db: Database, bot=None) -> Quart:
     async def _exp_radio_schedule_loop():
         """Auto-start the exp_radio stream on configured weekdays + time.
 
-        Wakes every 30s, checks (now.weekday, now.hour:minute) against the
-        admin-saved schedule. Starts the stream with `fresh_cache=True` so a
-        scheduled session always begins with a freshly downloaded cover
-        cache and rebuilt audio/ASS intermediates. We track the last fired
-        unix-minute on `app.exp_schedule_last_fired` to avoid double-firing
-        within the same minute.
+        A 15-minute catch-up window prevents a container restart or briefly
+        busy event loop at the configured minute from losing the scheduled
+        run. Accepted occurrences are persisted so a later process restart
+        cannot fire the same schedule twice.
         """
         from bot.exp_stream_manager import log_event
-        from datetime import datetime
-        app.exp_schedule_last_fired = 0
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+
+        schedule_tz = ZoneInfo("Europe/Berlin")
+        catch_up_seconds = 15 * 60
+        retry_seconds = 60
+        app.exp_schedule_last_attempt_key = ""
+        app.exp_schedule_last_attempt_at = 0.0
+        last_config_signature = None
+        log_event(
+            "Scheduler loop started (Europe/Berlin, 15-minute catch-up window).",
+            prefix="[exp-schedule]",
+        )
         while True:
             try:
                 enabled = await db.get_setting("exp_radio_schedule_enabled") or "off"
+                days_csv = await db.get_setting("exp_radio_schedule_days") or ""
+                hhmm = (await db.get_setting("exp_radio_schedule_time") or "").strip()
+                config_signature = (enabled, days_csv, hhmm)
+                if config_signature != last_config_signature:
+                    last_config_signature = config_signature
+                    if enabled == "on":
+                        day_names = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+                        configured_days = [
+                            day_names[int(day)]
+                            for day in days_csv.split(",")
+                            if day.strip().isdigit() and 0 <= int(day) <= 6
+                        ]
+                        if configured_days and hhmm:
+                            log_event(
+                                f"Scheduler armed: {', '.join(configured_days)} at {hhmm} Europe/Berlin.",
+                                prefix="[exp-schedule]",
+                            )
+                        else:
+                            log_event(
+                                "Scheduler enabled but weekdays or start time are missing.",
+                                level="error", prefix="[exp-schedule]",
+                            )
+                    else:
+                        log_event("Scheduler disabled.", prefix="[exp-schedule]")
                 if enabled != "on":
                     await asyncio.sleep(30)
                     continue
-                days_csv = await db.get_setting("exp_radio_schedule_days") or ""
                 days = {int(d) for d in days_csv.split(",") if d.strip().isdigit()}
-                hhmm = (await db.get_setting("exp_radio_schedule_time") or "").strip()
                 if not days or not hhmm or ":" not in hhmm:
                     await asyncio.sleep(30)
                     continue
@@ -6220,41 +6252,68 @@ def create_app(db: Database, bot=None) -> Quart:
                 except Exception:
                     await asyncio.sleep(30)
                     continue
-                now = datetime.now()  # server-local time
-                cur_min_key = int(now.timestamp() // 60)
-                # Match: today's weekday is in the set AND hh:mm matches AND
-                # we haven't fired in this exact minute yet.
-                if (now.weekday() in days
-                        and now.hour == target_h
-                        and now.minute == target_m
-                        and cur_min_key != app.exp_schedule_last_fired):
-                    app.exp_schedule_last_fired = cur_min_key
+                if not (0 <= target_h <= 23 and 0 <= target_m <= 59):
+                    await asyncio.sleep(30)
+                    continue
+
+                now = datetime.now(schedule_tz)
+                target = now.replace(
+                    hour=target_h, minute=target_m, second=0, microsecond=0,
+                )
+                if target > now:
+                    previous_target = target - timedelta(days=1)
+                    if (now - previous_target).total_seconds() <= catch_up_seconds:
+                        target = previous_target
+                seconds_late = (now - target).total_seconds()
+                occurrence_key = target.strftime("%Y-%m-%dT%H:%M%z")
+                last_handled = (
+                    await db.get_setting("exp_radio_schedule_last_handled") or ""
+                )
+                due = (
+                    target.weekday() in days
+                    and 0 <= seconds_late <= catch_up_seconds
+                    and occurrence_key != last_handled
+                )
+                retry_ready = (
+                    occurrence_key != app.exp_schedule_last_attempt_key
+                    or time.monotonic() - app.exp_schedule_last_attempt_at >= retry_seconds
+                )
+                if due and retry_ready:
+                    app.exp_schedule_last_attempt_key = occurrence_key
+                    app.exp_schedule_last_attempt_at = time.monotonic()
+                    late_note = (
+                        "on time" if seconds_late < 60
+                        else f"{int(seconds_late // 60)} minute(s) late"
+                    )
                     if app.database_restore_pending:
                         log_event(
-                            "Scheduler: database restore in progress — skipping auto-start.",
+                            "Scheduler: database restore in progress - retrying shortly.",
                             level="error", prefix="[exp-schedule]",
                         )
                     elif stream_manager.is_running or stream_manager._loading:
                         log_event(
-                            "Scheduler: legacy Twitch Radio is running or starting — skipping auto-start.",
+                            "Scheduler: legacy Twitch Radio is running or starting - retrying shortly.",
                             level="error", prefix="[exp-schedule]",
                         )
                     elif exp_stream_manager.is_running:
+                        await db.set_setting(
+                            "exp_radio_schedule_last_handled", occurrence_key,
+                        )
                         log_event(
-                            "Scheduler: stream already running \u2014 skipping auto-start.",
+                            "Scheduler: stream already running - scheduled occurrence marked as handled.",
                             prefix="[exp-schedule]",
                         )
                     else:
                         twitch_key = await db.get_setting("exp_radio_twitch_key") or ""
                         if not twitch_key:
                             log_event(
-                                "Scheduler: no Twitch stream key configured \u2014 cannot auto-start.",
+                                "Scheduler: no Twitch stream key configured - retrying shortly.",
                                 level="error", prefix="[exp-schedule]",
                             )
                         else:
                             log_event(
-                                f"Scheduler: triggering auto-start (weekday={now.weekday()}, "
-                                f"time={now.strftime('%H:%M')}) with fresh cache.",
+                                f"Scheduler: triggering auto-start for {target.strftime('%a %H:%M')} "
+                                f"Europe/Berlin ({late_note}) with fresh cache.",
                                 prefix="[exp-schedule]",
                             )
                             try:
@@ -6280,6 +6339,9 @@ def create_app(db: Database, bot=None) -> Quart:
                                             level="error", prefix="[exp-schedule]",
                                         )
                                         continue
+                                    await db.set_setting(
+                                        "exp_radio_schedule_last_handled", occurrence_key,
+                                    )
                                     log_event(
                                         "Scheduler: stream is live; posting Discord announcement.",
                                         prefix="[exp-schedule]",
