@@ -2039,6 +2039,30 @@ def create_app(db: Database, bot=None) -> Quart:
                 + (f" {detail[-300:]}" if detail else "")
             )
 
+    async def _only_grapes_encode_for_web(
+        source_path: str, output_path: str
+    ) -> None:
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-v", "error", "-i", source_path,
+            "-map", "0:v:0", "-map", "0:a:0?",
+            "-vf",
+            "scale='min(1080,iw)':'min(1080,ih)':"
+            "force_original_aspect_ratio=decrease:force_divisible_by=2",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+            "-maxrate", "4M", "-bufsize", "8M", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart",
+            output_path,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _stdout, stderr = await proc.communicate()
+        if proc.returncode != 0 or not os.path.isfile(output_path):
+            detail = stderr.decode(errors="replace").strip()
+            raise ValueError(
+                "The video could not be encoded for web playback."
+                + (f" {detail[-300:]}" if detail else "")
+            )
+
     @app.route("/only-grapes/assets/<filename>")
     async def only_grapes_asset(filename):
         from quart import abort, send_from_directory
@@ -2411,19 +2435,27 @@ def create_app(db: Database, bot=None) -> Quart:
                     try:
                         if filename != video["stored_filename"] or not os.path.isfile(path):
                             raise ValueError("The stored video file is missing.")
-                        await _only_grapes_faststart(path, optimized_path)
+                        await _only_grapes_encode_for_web(path, optimized_path)
                         os.replace(optimized_path, path)
                         await db.update_only_grapes_video_size(
                             video_id, os.path.getsize(path)
                         )
                         await flash(
-                            "Video optimized for web playback without re-encoding.",
+                            "Video encoded and optimized for smoother web playback.",
                             "success",
                         )
                     except ValueError as exc:
                         if os.path.isfile(optimized_path):
                             os.remove(optimized_path)
                         await flash(str(exc), "error")
+                    except Exception as exc:
+                        if os.path.isfile(optimized_path):
+                            os.remove(optimized_path)
+                        print(
+                            f"[only-grapes] Playback optimization failed: {exc}",
+                            flush=True,
+                        )
+                        await flash("The video could not be optimized.", "error")
             elif action == "delete_video":
                 video_id = int(form.get("video_id") or 0)
                 video = await db.get_only_grapes_video(video_id)
