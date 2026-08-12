@@ -215,7 +215,7 @@ def create_app(db: Database, bot=None) -> Quart:
     os.makedirs(only_grapes_video_dir, exist_ok=True)
     os.makedirs(only_grapes_asset_dir, exist_ok=True)
     for partial_name in os.listdir(only_grapes_video_dir):
-        if partial_name.endswith(".part"):
+        if partial_name.endswith((".part", ".optimized.mp4")):
             try:
                 os.remove(os.path.join(only_grapes_video_dir, partial_name))
             except OSError:
@@ -2024,6 +2024,21 @@ def create_app(db: Database, bot=None) -> Quart:
         )
         await proc.communicate()
 
+    async def _only_grapes_faststart(source_path: str, output_path: str) -> None:
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-v", "error", "-i", source_path,
+            "-map", "0", "-c", "copy", "-movflags", "+faststart", output_path,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _stdout, stderr = await proc.communicate()
+        if proc.returncode != 0 or not os.path.isfile(output_path):
+            detail = stderr.decode(errors="replace").strip()
+            raise ValueError(
+                "The MP4 could not be prepared for web playback."
+                + (f" {detail[-300:]}" if detail else "")
+            )
+
     @app.route("/only-grapes/assets/<filename>")
     async def only_grapes_asset(filename):
         from quart import abort, send_from_directory
@@ -2220,6 +2235,17 @@ def create_app(db: Database, bot=None) -> Quart:
             abort(404)
         return await send_file(path, mimetype="video/mp4", conditional=True)
 
+    @app.route("/only-grapes/video/<int:video_id>/played", methods=["POST"])
+    async def only_grapes_video_played(video_id: int):
+        from quart import abort
+        if not await _only_grapes_enabled() or not await _only_grapes_current_user():
+            abort(404)
+        video = await db.get_only_grapes_video(video_id)
+        if not video or not video.get("published"):
+            abort(404)
+        await db.increment_only_grapes_video_play_count(video_id)
+        return "", 204
+
     @app.route("/only-grapes/poster/<int:video_id>")
     async def only_grapes_poster(video_id: int):
         from quart import abort, send_file
@@ -2312,6 +2338,9 @@ def create_app(db: Database, bot=None) -> Quart:
                 else:
                     stored_name = f"{uuid.uuid4().hex}.mp4"
                     temp_path = os.path.join(only_grapes_video_dir, stored_name + ".part")
+                    optimized_path = os.path.join(
+                        only_grapes_video_dir, stored_name + ".optimized.mp4"
+                    )
                     final_path = os.path.join(only_grapes_video_dir, stored_name)
                     try:
                         await upload.save(temp_path)
@@ -2321,7 +2350,10 @@ def create_app(db: Database, bot=None) -> Quart:
                         duration = await _only_grapes_video_duration(temp_path)
                         if duration <= 0:
                             raise ValueError("The uploaded file is not a playable MP4 video.")
-                        os.replace(temp_path, final_path)
+                        await _only_grapes_faststart(temp_path, optimized_path)
+                        os.replace(optimized_path, final_path)
+                        os.remove(temp_path)
+                        size = os.path.getsize(final_path)
                         poster_path = os.path.join(
                             only_grapes_video_dir,
                             os.path.splitext(stored_name)[0] + ".square.jpg",
@@ -2349,10 +2381,14 @@ def create_app(db: Database, bot=None) -> Quart:
                     except ValueError as exc:
                         if os.path.isfile(temp_path):
                             os.remove(temp_path)
+                        if os.path.isfile(optimized_path):
+                            os.remove(optimized_path)
                         await flash(str(exc), "error")
                     except Exception as exc:
                         if os.path.isfile(temp_path):
                             os.remove(temp_path)
+                        if os.path.isfile(optimized_path):
+                            os.remove(optimized_path)
                         print(f"[only-grapes] Video upload failed: {exc}", flush=True)
                         await flash("The video could not be stored.", "error")
             elif action == "update_video":
@@ -2363,6 +2399,31 @@ def create_app(db: Database, bot=None) -> Quart:
                     published=form.get("published") == "1",
                 )
                 await flash("Video updated.", "success")
+            elif action == "optimize_video":
+                video_id = int(form.get("video_id") or 0)
+                video = await db.get_only_grapes_video(video_id)
+                if not video:
+                    await flash("Video not found.", "error")
+                else:
+                    filename = os.path.basename(video["stored_filename"])
+                    path = os.path.join(only_grapes_video_dir, filename)
+                    optimized_path = path + ".optimized.mp4"
+                    try:
+                        if filename != video["stored_filename"] or not os.path.isfile(path):
+                            raise ValueError("The stored video file is missing.")
+                        await _only_grapes_faststart(path, optimized_path)
+                        os.replace(optimized_path, path)
+                        await db.update_only_grapes_video_size(
+                            video_id, os.path.getsize(path)
+                        )
+                        await flash(
+                            "Video optimized for web playback without re-encoding.",
+                            "success",
+                        )
+                    except ValueError as exc:
+                        if os.path.isfile(optimized_path):
+                            os.remove(optimized_path)
+                        await flash(str(exc), "error")
             elif action == "delete_video":
                 video_id = int(form.get("video_id") or 0)
                 video = await db.get_only_grapes_video(video_id)

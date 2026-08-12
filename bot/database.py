@@ -177,6 +177,7 @@ class Database:
                 stored_filename TEXT NOT NULL UNIQUE,
                 size_bytes INTEGER NOT NULL,
                 duration_seconds REAL NOT NULL DEFAULT 0,
+                play_count INTEGER NOT NULL DEFAULT 0,
                 published INTEGER NOT NULL DEFAULT 1,
                 created_at REAL NOT NULL DEFAULT (unixepoch()),
                 updated_at REAL NOT NULL DEFAULT (unixepoch())
@@ -1177,6 +1178,17 @@ class Database:
             )
             await self.db.commit()
 
+        async with self.db.execute(
+            "PRAGMA table_info(only_grapes_videos)"
+        ) as cursor:
+            only_grapes_video_columns = {row[1] async for row in cursor}
+        if "play_count" not in only_grapes_video_columns:
+            await self.db.execute(
+                "ALTER TABLE only_grapes_videos "
+                "ADD COLUMN play_count INTEGER NOT NULL DEFAULT 0"
+            )
+            await self.db.commit()
+
         # Existing installations may have an explicit sidebar selection saved.
         # Add the new module once without overriding later user choices.
         async with self.db.execute(
@@ -1852,6 +1864,24 @@ class Database:
                 title.strip(), description.strip(), 1 if published else 0,
                 time.time(), int(video_id),
             ),
+        )
+        await self.db.commit()
+
+    async def increment_only_grapes_video_play_count(self, video_id: int) -> None:
+        await self.db.execute(
+            "UPDATE only_grapes_videos "
+            "SET play_count = play_count + 1 WHERE id = ? AND published = 1",
+            (int(video_id),),
+        )
+        await self.db.commit()
+
+    async def update_only_grapes_video_size(
+        self, video_id: int, size_bytes: int
+    ) -> None:
+        await self.db.execute(
+            "UPDATE only_grapes_videos SET size_bytes = ?, updated_at = ? "
+            "WHERE id = ?",
+            (int(size_bytes), time.time(), int(video_id)),
         )
         await self.db.commit()
 

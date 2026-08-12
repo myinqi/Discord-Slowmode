@@ -90,9 +90,10 @@
         <div class="flex items-center gap-2">
             <label class="inline-flex items-center gap-2 px-3 py-2 text-gray-300 text-sm"><input type="checkbox" name="published" value="1" {% if video.published %}checked{% endif %}> Published</label>
             <button class="px-4 py-2 bg-discord-lighter hover:bg-gray-600 text-white rounded-lg text-sm">Save</button>
+            <button type="submit" name="action" value="optimize_video" class="px-3 py-2 border border-purple-500/40 bg-purple-500/10 text-purple-200 rounded-lg text-sm" title="Move the MP4 index to the beginning without re-encoding">Optimize playback</button>
             <button type="submit" name="action" value="delete_video" onclick="return confirm('Permanently delete this video?');" class="px-3 py-2 bg-red-500/15 border border-red-500/30 text-red-300 rounded-lg text-sm">Delete</button>
         </div>
-        <p class="lg:col-span-3 text-gray-600 text-xs">{{ video.original_filename }} · {{ video.duration_label }} · {{ video.size_label }}</p>
+        <p class="lg:col-span-3 text-gray-600 text-xs">{{ video.original_filename }} · {{ video.duration_label }} · {{ video.size_label }} · {{ video.play_count or 0 }} play{{ '' if (video.play_count or 0) == 1 else 's' }}</p>
     </form>
     {% endfor %}</div>
     {% else %}<p class="px-5 py-12 text-center text-gray-500">No videos uploaded yet.</p>{% endif %}

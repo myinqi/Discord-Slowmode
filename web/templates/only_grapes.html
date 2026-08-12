@@ -130,7 +130,7 @@
     {% if videos %}<section class="video-grid">
     {% for video in videos %}{% set video_comments = comments_by_video.get(video.id, []) %}
     <article class="video-card" id="video-{{ video.id }}">
-        <video controls preload="metadata" playsinline poster="{{ url_for('only_grapes_poster', video_id=video.id) }}"><source src="{{ url_for('only_grapes_video', video_id=video.id) }}" type="video/mp4"></video>
+        <video controls preload="metadata" playsinline data-play-url="{{ url_for('only_grapes_video_played', video_id=video.id) }}" poster="{{ url_for('only_grapes_poster', video_id=video.id) }}"><source src="{{ url_for('only_grapes_video', video_id=video.id) }}" type="video/mp4"></video>
         <div class="video-info"><h2>{{ video.title }}</h2>{% if video.description %}<p>{{ video.description }}</p>{% endif %}</div>
         <section class="comments" aria-label="Comments for {{ video.title }}">
             <div class="comments-head"><h3>Comments</h3><span class="comment-count">{{ video_comments|length }}</span></div>
@@ -147,6 +147,16 @@
 </div></main>
 {% endif %}
 <footer>{{ content.only_grapes_ai_notice }}</footer>
+{% if page == 'content' %}<script>
+document.querySelectorAll('video[data-play-url]').forEach((video) => {
+    video.addEventListener('playing', () => {
+        if (video.dataset.playCounted === '1') return;
+        video.dataset.playCounted = '1';
+        fetch(video.dataset.playUrl, {method: 'POST', credentials: 'same-origin', keepalive: true})
+            .catch(() => { video.dataset.playCounted = '0'; });
+    });
+});
+</script>{% endif %}
 {% endif %}
 </body>
 </html>
