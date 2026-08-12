@@ -148,8 +148,12 @@
 {% endif %}
 <footer>{{ content.only_grapes_ai_notice }}</footer>
 {% if page == 'content' %}<script>
-document.querySelectorAll('video[data-play-url]').forEach((video) => {
+const grapeVideos = [...document.querySelectorAll('video[data-play-url]')];
+grapeVideos.forEach((video) => {
     video.addEventListener('playing', () => {
+        grapeVideos.forEach((otherVideo) => {
+            if (otherVideo !== video && !otherVideo.paused) otherVideo.pause();
+        });
         if (video.dataset.playCounted === '1') return;
         video.dataset.playCounted = '1';
         fetch(video.dataset.playUrl, {method: 'POST', credentials: 'same-origin', keepalive: true})
