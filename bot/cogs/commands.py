@@ -1900,7 +1900,7 @@ class CommandsCog(commands.Cog):
             text=f"Daily card draw · {card.get('rarity', 'Common')} · Owned {card.get('quantity', 1)}×"
         )
 
-        kwargs = {"embed": embed}
+        kwargs = {"embed": embed, "ephemeral": True}
         if not _collectible_card_image_url(self.bot, card):
             filename = os.path.basename(str(card.get("image_filename") or ""))
             path = os.path.join(os.path.dirname(self.bot.db.db_path), "card_images", filename)
@@ -2019,7 +2019,7 @@ class CommandsCog(commands.Cog):
         embed.add_field(
             name="🃏 Card Collection",
             value=(
-                "**`/cards-draw`** — Draw one public collectible card each day\n"
+                "**`/cards-draw`** — Privately draw one collectible card each day\n"
                 "**`/cards-collection [@user]`** — Privately browse your or another member's collection"
             ),
             inline=False,

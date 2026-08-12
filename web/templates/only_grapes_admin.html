@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}Only Grapes{% endblock %}
+{% block content %}
+<div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6">
+    <div>
+        <h2 class="text-2xl font-bold text-white flex items-center gap-2"><span>🍇</span> Only Grapes</h2>
+        <p class="text-gray-400 text-sm mt-1">Manage the public vineyard site, member content and videos.</p>
+    </div>
+    <div class="flex items-center gap-2">
+        <span class="px-3 py-1.5 rounded-lg border text-sm {{ 'border-green-500/30 bg-green-500/10 text-green-300' if enabled else 'border-gray-600 bg-gray-700/30 text-gray-400' }}">
+            {{ 'Website enabled' if enabled else 'Website disabled' }}
+        </span>
+        <a href="{{ public_url }}" target="_blank" rel="noopener" class="px-4 py-2 bg-discord-blurple hover:bg-indigo-500 text-white rounded-lg text-sm">Open site ↗</a>
+    </div>
+</div>
+
+<form method="POST" class="bg-discord-dark border border-gray-700/50 rounded-lg p-5 mb-6">
+    <input type="hidden" name="action" value="save_content">
+    <div class="flex items-center justify-between gap-5 pb-5 mb-5 border-b border-gray-700/50">
+        <div>
+            <h3 class="text-white font-semibold">Website and page content</h3>
+            <p class="text-gray-500 text-sm mt-1">Disabling the site also blocks registration, login, videos and every public subpage.</p>
+        </div>
+        <label class="inline-flex items-center gap-3 cursor-pointer shrink-0">
+            <input type="checkbox" name="enabled" value="1" class="sr-only peer" {% if enabled %}checked{% endif %}>
+            <span class="relative w-11 h-6 rounded-full bg-gray-600 peer-checked:bg-discord-blurple transition-colors after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:w-5 after:h-5 after:bg-white after:rounded-full after:transition-transform peer-checked:after:translate-x-5"></span>
+            <span class="text-gray-300 text-sm">Enable site</span>
+        </label>
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <label class="block"><span class="text-gray-400 text-xs">Hero eyebrow</span><input name="only_grapes_hero_eyebrow" value="{{ content.only_grapes_hero_eyebrow }}" class="field mt-1"></label>
+        <label class="block"><span class="text-gray-400 text-xs">Hero first line</span><input name="only_grapes_hero_title" value="{{ content.only_grapes_hero_title }}" class="field mt-1"></label>
+        <label class="block lg:col-span-2"><span class="text-gray-400 text-xs">Hero accent line</span><input name="only_grapes_hero_accent" value="{{ content.only_grapes_hero_accent }}" class="field mt-1"></label>
+        <label class="block lg:col-span-2"><span class="text-gray-400 text-xs">Hero introduction</span><textarea name="only_grapes_hero_intro" rows="3" class="field mt-1 resize-y">{{ content.only_grapes_hero_intro }}</textarea></label>
+        {% for key, label in [
+            ('only_grapes_about', 'About'),
+            ('only_grapes_membership', 'Membership'),
+            ('only_grapes_shop', 'Shop'),
+            ('only_grapes_contact', 'Contact')
+        ] %}
+        <div class="border border-gray-700/50 rounded-lg p-4">
+            <h4 class="text-white text-sm font-semibold mb-3">{{ label }} page</h4>
+            <input name="{{ key }}_title" value="{{ content[key + '_title'] }}" class="field mb-3" aria-label="{{ label }} title">
+            <textarea name="{{ key }}_body" rows="4" class="field resize-y" aria-label="{{ label }} body">{{ content[key + '_body'] }}</textarea>
+        </div>
+        {% endfor %}
+        <label class="block lg:col-span-2"><span class="text-gray-400 text-xs">AI transparency notice</span><textarea name="only_grapes_ai_notice" rows="2" class="field mt-1 resize-y">{{ content.only_grapes_ai_notice }}</textarea></label>
+    </div>
+    <button type="submit" class="mt-5 px-5 py-2.5 bg-discord-blurple hover:bg-indigo-500 text-white rounded-lg font-medium">Save website</button>
+</form>
+
+<div class="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-6">
+    <section class="bg-discord-dark border border-gray-700/50 rounded-lg p-5">
+        <h3 class="text-white font-semibold">Hero artwork</h3>
+        <p class="text-gray-500 text-sm mt-1 mb-4">Use a wide JPG, PNG or WebP. The built-in vineyard image remains available as the default.</p>
+        <img src="{{ content.hero_url }}" alt="Current Only Grapes hero" class="w-full aspect-video object-cover rounded-lg border border-gray-700 mb-4">
+        <form method="POST" enctype="multipart/form-data" class="space-y-3">
+            <input type="hidden" name="action" value="upload_hero">
+            <input type="file" name="hero_image" accept="image/jpeg,image/png,image/webp" required class="field file:mr-3 file:px-3 file:py-1.5 file:rounded file:border-0 file:bg-discord-lighter file:text-white">
+            <button class="w-full px-4 py-2 bg-discord-lighter hover:bg-gray-600 text-white rounded-lg text-sm">Upload hero</button>
+        </form>
+        <form method="POST" class="mt-2" onsubmit="return confirm('Restore the built-in hero image?');">
+            <input type="hidden" name="action" value="reset_hero">
+            <button class="w-full px-4 py-2 border border-gray-600 hover:border-gray-500 text-gray-300 rounded-lg text-sm">Restore default</button>
+        </form>
+    </section>
+
+    <section class="xl:col-span-2 bg-discord-dark border border-gray-700/50 rounded-lg p-5">
+        <h3 class="text-white font-semibold">Upload video</h3>
+        <p class="text-gray-500 text-sm mt-1 mb-4">MP4 only, up to 200 MB. Videos are available to registered members when published.</p>
+        <form method="POST" enctype="multipart/form-data" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <input type="hidden" name="action" value="upload_video">
+            <label class="block"><span class="text-gray-400 text-xs">Title *</span><input name="title" required maxlength="200" class="field mt-1"></label>
+            <label class="block"><span class="text-gray-400 text-xs">MP4 file *</span><input type="file" name="video_file" accept="video/mp4,.mp4" required class="field mt-1 file:mr-3 file:px-3 file:py-1.5 file:rounded file:border-0 file:bg-discord-lighter file:text-white"></label>
+            <label class="block md:col-span-2"><span class="text-gray-400 text-xs">Short description</span><textarea name="description" rows="4" maxlength="2000" class="field mt-1 resize-y"></textarea></label>
+            <label class="inline-flex items-center gap-2 text-gray-300 text-sm"><input type="checkbox" name="published" value="1" checked class="w-4 h-4 rounded"> Publish immediately</label>
+            <button class="md:justify-self-end px-5 py-2.5 bg-discord-blurple hover:bg-indigo-500 text-white rounded-lg font-medium">Upload video</button>
+        </form>
+    </section>
+</div>
+
+<section class="bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden">
+    <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between"><h3 class="text-white font-semibold">Video library</h3><span class="text-gray-500 text-xs">{{ videos|length }} video{{ '' if videos|length == 1 else 's' }}</span></div>
+    {% if videos %}<div class="divide-y divide-gray-700/40">
+    {% for video in videos %}
+    <form method="POST" class="p-4 grid grid-cols-1 lg:grid-cols-[1fr_2fr_auto] gap-3 lg:items-end">
+        <input type="hidden" name="action" value="update_video"><input type="hidden" name="video_id" value="{{ video.id }}">
+        <label><span class="text-gray-500 text-xs">Title</span><input name="title" value="{{ video.title }}" class="field mt-1"></label>
+        <label><span class="text-gray-500 text-xs">Description</span><input name="description" value="{{ video.description }}" class="field mt-1"></label>
+        <div class="flex items-center gap-2">
+            <label class="inline-flex items-center gap-2 px-3 py-2 text-gray-300 text-sm"><input type="checkbox" name="published" value="1" {% if video.published %}checked{% endif %}> Published</label>
+            <button class="px-4 py-2 bg-discord-lighter hover:bg-gray-600 text-white rounded-lg text-sm">Save</button>
+            <button type="submit" name="action" value="delete_video" onclick="return confirm('Permanently delete this video?');" class="px-3 py-2 bg-red-500/15 border border-red-500/30 text-red-300 rounded-lg text-sm">Delete</button>
+        </div>
+        <p class="lg:col-span-3 text-gray-600 text-xs">{{ video.original_filename }} · {{ video.duration_label }} · {{ video.size_label }}</p>
+    </form>
+    {% endfor %}</div>
+    {% else %}<p class="px-5 py-12 text-center text-gray-500">No videos uploaded yet.</p>{% endif %}
+</section>
+
+<section class="bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden mt-6">
+    <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between">
+        <div><h3 class="text-white font-semibold">Comment moderation</h3><p class="text-gray-500 text-sm mt-1">Review member comments across all videos.</p></div>
+        <span class="text-gray-500 text-xs">{{ comments|length }} comment{{ '' if comments|length == 1 else 's' }}</span>
+    </div>
+    {% if comments %}<div class="divide-y divide-gray-700/40">
+    {% for comment in comments %}<article class="p-4 flex flex-col md:flex-row md:items-start gap-4">
+        <div class="min-w-0 flex-1">
+            <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+                <strong class="text-white">{{ comment.display_name }}</strong>
+                <span class="text-gray-500">{{ comment.email }}</span>
+                <span class="text-gray-600">on</span>
+                <span class="text-purple-300">{{ comment.video_title }}</span>
+                <time class="text-gray-600">{{ comment.created_label }}</time>
+            </div>
+            <p class="text-gray-300 mt-2 whitespace-pre-wrap break-words">{{ comment.body }}</p>
+        </div>
+        <form method="POST" onsubmit="return confirm('Permanently delete this comment?');">
+            <input type="hidden" name="action" value="delete_comment">
+            <input type="hidden" name="comment_id" value="{{ comment.id }}">
+            <button class="px-3 py-2 bg-red-500/15 border border-red-500/30 text-red-300 rounded-lg text-sm">Delete</button>
+        </form>
+    </article>{% endfor %}
+    </div>{% else %}<p class="px-5 py-12 text-center text-gray-500">No comments have been posted yet.</p>{% endif %}
+</section>
+
+<style>
+.field { width:100%; background:#111214; border:1px solid #3f4147; border-radius:.5rem; padding:.65rem .8rem; color:#e5e7eb; }
+.field:focus { outline:none; border-color:#5865f2; box-shadow:0 0 0 2px rgba(88,101,242,.2); }
+</style>
+{% endblock %}

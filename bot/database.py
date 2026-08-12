@@ -159,6 +159,46 @@ class Database:
                 uploaded_at REAL NOT NULL DEFAULT (unixepoch())
             );
 
+            CREATE TABLE IF NOT EXISTS only_grapes_users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                display_name TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at REAL NOT NULL DEFAULT (unixepoch()),
+                last_login_at REAL
+            );
+
+            CREATE TABLE IF NOT EXISTS only_grapes_videos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                original_filename TEXT NOT NULL,
+                stored_filename TEXT NOT NULL UNIQUE,
+                size_bytes INTEGER NOT NULL,
+                duration_seconds REAL NOT NULL DEFAULT 0,
+                published INTEGER NOT NULL DEFAULT 1,
+                created_at REAL NOT NULL DEFAULT (unixepoch()),
+                updated_at REAL NOT NULL DEFAULT (unixepoch())
+            );
+            CREATE INDEX IF NOT EXISTS idx_only_grapes_videos_published
+                ON only_grapes_videos(published, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS only_grapes_comments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                video_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                body TEXT NOT NULL,
+                created_at REAL NOT NULL DEFAULT (unixepoch()),
+                updated_at REAL NOT NULL DEFAULT (unixepoch()),
+                FOREIGN KEY (video_id) REFERENCES only_grapes_videos(id)
+                    ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES only_grapes_users(id)
+                    ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_only_grapes_comments_video
+                ON only_grapes_comments(video_id, created_at, id);
+
             CREATE TABLE IF NOT EXISTS auto_translate_usage (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 created_at REAL NOT NULL,
@@ -1137,6 +1177,28 @@ class Database:
             )
             await self.db.commit()
 
+        # Existing installations may have an explicit sidebar selection saved.
+        # Add the new module once without overriding later user choices.
+        async with self.db.execute(
+            "SELECT value FROM settings WHERE key = 'sidebar_only_grapes_migrated'"
+        ) as cursor:
+            sidebar_migrated = await cursor.fetchone()
+        if not sidebar_migrated:
+            await self.db.execute(
+                """
+                UPDATE settings
+                SET value = value || ',only_grapes'
+                WHERE key = 'sidebar_visible_items'
+                  AND value != '__none__'
+                  AND instr(',' || value || ',', ',only_grapes,') = 0
+                """
+            )
+            await self.db.execute(
+                "INSERT INTO settings (key, value) VALUES "
+                "('sidebar_only_grapes_migrated', '1')"
+            )
+            await self.db.commit()
+
     # --- Collectible Cards ---
 
     async def get_collectible_cards(self, *, include_inactive: bool = True) -> list[dict]:
@@ -1691,6 +1753,153 @@ class Database:
     async def delete_file_share_upload(self, upload_id: int) -> None:
         await self.db.execute(
             "DELETE FROM file_share_uploads WHERE id = ?", (upload_id,)
+        )
+        await self.db.commit()
+
+    # --- Only Grapes ---
+
+    async def create_only_grapes_user(
+        self, *, email: str, display_name: str, password_hash: str
+    ) -> bool:
+        try:
+            await self.db.execute(
+                "INSERT INTO only_grapes_users (email, display_name, password_hash) "
+                "VALUES (?, ?, ?)",
+                (email.strip().lower(), display_name.strip(), password_hash),
+            )
+            await self.db.commit()
+            return True
+        except aiosqlite.IntegrityError:
+            await self.db.rollback()
+            return False
+
+    async def get_only_grapes_user_by_email(self, email: str) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM only_grapes_users WHERE email = ? COLLATE NOCASE",
+            (email.strip(),),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_only_grapes_user(self, user_id: int) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM only_grapes_users WHERE id = ?", (int(user_id),)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def mark_only_grapes_login(self, user_id: int) -> None:
+        await self.db.execute(
+            "UPDATE only_grapes_users SET last_login_at = ? WHERE id = ?",
+            (time.time(), int(user_id)),
+        )
+        await self.db.commit()
+
+    async def add_only_grapes_video(
+        self,
+        *,
+        title: str,
+        description: str,
+        original_filename: str,
+        stored_filename: str,
+        size_bytes: int,
+        duration_seconds: float,
+        published: bool = True,
+    ) -> int:
+        cursor = await self.db.execute(
+            """
+            INSERT INTO only_grapes_videos
+                (title, description, original_filename, stored_filename,
+                 size_bytes, duration_seconds, published)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                title.strip(), description.strip(), original_filename,
+                stored_filename, int(size_bytes), float(duration_seconds),
+                1 if published else 0,
+            ),
+        )
+        await self.db.commit()
+        return cursor.lastrowid
+
+    async def get_only_grapes_videos(
+        self, *, published_only: bool = False
+    ) -> list[dict]:
+        where = "WHERE published = 1" if published_only else ""
+        async with self.db.execute(
+            f"SELECT * FROM only_grapes_videos {where} "
+            "ORDER BY created_at DESC, id DESC"
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def get_only_grapes_video(self, video_id: int) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM only_grapes_videos WHERE id = ?", (int(video_id),)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def update_only_grapes_video(
+        self, video_id: int, *, title: str, description: str, published: bool
+    ) -> None:
+        await self.db.execute(
+            """
+            UPDATE only_grapes_videos
+            SET title = ?, description = ?, published = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                title.strip(), description.strip(), 1 if published else 0,
+                time.time(), int(video_id),
+            ),
+        )
+        await self.db.commit()
+
+    async def delete_only_grapes_video(self, video_id: int) -> None:
+        await self.db.execute(
+            "DELETE FROM only_grapes_videos WHERE id = ?", (int(video_id),)
+        )
+        await self.db.commit()
+
+    async def add_only_grapes_comment(
+        self, *, video_id: int, user_id: int, body: str
+    ) -> int:
+        cursor = await self.db.execute(
+            "INSERT INTO only_grapes_comments (video_id, user_id, body) "
+            "VALUES (?, ?, ?)",
+            (int(video_id), int(user_id), body.strip()),
+        )
+        await self.db.commit()
+        return cursor.lastrowid
+
+    async def get_only_grapes_comments(
+        self, *, video_id: int | None = None
+    ) -> list[dict]:
+        where = "WHERE c.video_id = ?" if video_id is not None else ""
+        params = (int(video_id),) if video_id is not None else ()
+        async with self.db.execute(
+            f"""
+            SELECT c.*, u.display_name, u.email, v.title AS video_title
+            FROM only_grapes_comments c
+            JOIN only_grapes_users u ON u.id = c.user_id
+            JOIN only_grapes_videos v ON v.id = c.video_id
+            {where}
+            ORDER BY c.created_at ASC, c.id ASC
+            """,
+            params,
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def get_only_grapes_comment(self, comment_id: int) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM only_grapes_comments WHERE id = ?", (int(comment_id),)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def delete_only_grapes_comment(self, comment_id: int) -> None:
+        await self.db.execute(
+            "DELETE FROM only_grapes_comments WHERE id = ?", (int(comment_id),)
         )
         await self.db.commit()
 

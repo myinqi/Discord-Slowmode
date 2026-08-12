@@ -208,6 +208,17 @@ def create_app(db: Database, bot=None) -> Quart:
     os.makedirs(card_image_dir, exist_ok=True)
     file_share_dir = os.path.join(os.path.dirname(db.db_path), "file_sharing")
     os.makedirs(file_share_dir, exist_ok=True)
+    only_grapes_dir = os.path.join(os.path.dirname(db.db_path), "only_grapes")
+    only_grapes_video_dir = os.path.join(only_grapes_dir, "videos")
+    only_grapes_asset_dir = os.path.join(only_grapes_dir, "assets")
+    os.makedirs(only_grapes_video_dir, exist_ok=True)
+    os.makedirs(only_grapes_asset_dir, exist_ok=True)
+    for partial_name in os.listdir(only_grapes_video_dir):
+        if partial_name.endswith(".part"):
+            try:
+                os.remove(os.path.join(only_grapes_video_dir, partial_name))
+            except OSError:
+                pass
     for partial_name in os.listdir(file_share_dir):
         if partial_name.endswith(".part"):
             try:
@@ -255,6 +266,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('users', 'Users'),
         ('member_directory', 'Member Directory'),
         ('file_sharing', 'File Sharing'),
+        ('only_grapes', 'Only Grapes'),
         ('welcome', 'Welcome'),
         ('party_playlist', 'Party Playlist'),
         ('playlist_search', 'Playlist Search'),
@@ -293,6 +305,7 @@ def create_app(db: Database, bot=None) -> Quart:
         {"key": "users", "endpoint": "users", "icon": "👥", "label": "Users", "perm": "users"},
         {"key": "member_directory", "endpoint": "member_directory", "icon": "📇", "label": "Member Directory", "perm": "member_directory"},
         {"key": "file_sharing", "endpoint": "file_sharing_admin", "icon": "📦", "label": "File Sharing", "perm": "file_sharing"},
+        {"key": "only_grapes", "endpoint": "only_grapes_admin", "icon": "🍇", "label": "Only Grapes", "perm": "only_grapes"},
         {"key": "welcome", "endpoint": "welcome", "icon": "👋", "label": "Welcome", "perm": "welcome"},
         {"key": "party_playlist", "endpoint": "party_playlist", "icon": "🎧", "label": "Party Playlist", "perm": "party_playlist"},
         {"key": "playlist_search", "endpoint": "playlist_search", "icon": "🔍", "label": "Playlist Search", "perm": "playlist_search"},
@@ -1890,6 +1903,505 @@ def create_app(db: Database, bot=None) -> Quart:
         )
         await flash(f"{upload['original_filename']} was deleted.", "success")
         return redirect(url_for("file_sharing_admin"))
+
+    # --- Only Grapes ---
+
+    ONLY_GRAPES_MAX_VIDEO_BYTES = 200 * 1024 * 1024
+    ONLY_GRAPES_DEFAULTS = {
+        "only_grapes_hero_eyebrow": "THE GRAPE EXPERIENCE",
+        "only_grapes_hero_title": "Premium",
+        "only_grapes_hero_accent": "Vineyard Content",
+        "only_grapes_hero_intro": (
+            "Original vineyard stories, fresh video drops and curious moments "
+            "from behind the barrel."
+        ),
+        "only_grapes_about_title": "Rooted in imagination",
+        "only_grapes_about_body": (
+            "Only Grapes is a playful digital vineyard for cinematic stories, "
+            "music and experiments grown with artificial intelligence."
+        ),
+        "only_grapes_membership_title": "Free membership",
+        "only_grapes_membership_body": (
+            "Membership is currently free. Create an account to enter the "
+            "vineyard and watch every published drop."
+        ),
+        "only_grapes_shop_title": "The cellar shop",
+        "only_grapes_shop_body": (
+            "The shop is resting in the cellar for now. Future releases and "
+            "membership options will appear here."
+        ),
+        "only_grapes_contact_title": "Contact the vineyard",
+        "only_grapes_contact_body": (
+            "Questions, ideas or collaborations? Use the community channels "
+            "connected to this site to get in touch."
+        ),
+        "only_grapes_ai_notice": (
+            "Transparency notice: Videos and audio on this site are "
+            "AI-generated or AI-assisted content."
+        ),
+    }
+
+    async def _only_grapes_enabled() -> bool:
+        return await db.get_setting("only_grapes_enabled") == "1"
+
+    async def _only_grapes_content() -> dict[str, str]:
+        content = {}
+        for key, default in ONLY_GRAPES_DEFAULTS.items():
+            content[key] = await db.get_setting(key, default)
+        hero_name = os.path.basename(
+            await db.get_setting("only_grapes_hero_filename") or ""
+        )
+        hero_path = os.path.join(only_grapes_asset_dir, hero_name)
+        content["hero_url"] = (
+            url_for("only_grapes_asset", filename=hero_name)
+            if hero_name and os.path.isfile(hero_path)
+            else url_for("static", filename="only_grapes_hero.png")
+        )
+        return content
+
+    def _only_grapes_logged_in() -> bool:
+        return bool(session.get("only_grapes_user_id"))
+
+    async def _only_grapes_current_user() -> dict | None:
+        user_id = session.get("only_grapes_user_id")
+        if not user_id:
+            return None
+        user = await db.get_only_grapes_user(int(user_id))
+        if not user or not user.get("active"):
+            session.pop("only_grapes_user_id", None)
+            session.pop("only_grapes_display_name", None)
+            return None
+        return user
+
+    async def _only_grapes_video_duration(path: str) -> float:
+        proc = await asyncio.create_subprocess_exec(
+            "ffprobe", "-v", "error", "-show_entries",
+            "format=format_name,duration:stream=codec_type",
+            "-of", "json", path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _stderr = await proc.communicate()
+        if proc.returncode != 0:
+            return 0.0
+        try:
+            metadata = json.loads(stdout.decode())
+            container = str((metadata.get("format") or {}).get("format_name") or "")
+            has_video = any(
+                stream.get("codec_type") == "video"
+                for stream in (metadata.get("streams") or [])
+            )
+            if "mp4" not in container.split(",") or not has_video:
+                return 0.0
+            return max(0.0, float((metadata.get("format") or {}).get("duration") or 0))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return 0.0
+
+    def _only_grapes_valid_image(path: str) -> bool:
+        if not os.path.isfile(path) or not 0 < os.path.getsize(path) <= 15 * 1024 * 1024:
+            return False
+        with open(path, "rb") as image_file:
+            header = image_file.read(16)
+        return bool(
+            header.startswith(b"\x89PNG\r\n\x1a\n")
+            or header.startswith(b"\xff\xd8\xff")
+            or (header.startswith(b"RIFF") and header[8:12] == b"WEBP")
+        )
+
+    async def _only_grapes_create_poster(video_path: str, poster_path: str) -> None:
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-v", "error", "-ss", "0.25", "-i", video_path,
+            "-frames:v", "1", "-vf",
+            "scale=960:540:force_original_aspect_ratio=decrease,"
+            "pad=960:540:(ow-iw)/2:(oh-ih)/2:color=black",
+            poster_path,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
+
+    @app.route("/only-grapes/assets/<filename>")
+    async def only_grapes_asset(filename):
+        from quart import abort, send_from_directory
+        safe_name = os.path.basename(filename)
+        if safe_name != filename:
+            abort(404)
+        return await send_from_directory(only_grapes_asset_dir, safe_name)
+
+    @app.route("/only-grapes", endpoint="only_grapes_home")
+    async def only_grapes_home():
+        enabled = await _only_grapes_enabled()
+        return await render_template(
+            "only_grapes.html",
+            enabled=enabled,
+            page="home",
+            content=await _only_grapes_content(),
+            grape_user=await _only_grapes_current_user(),
+        ), (200 if enabled else 503)
+
+    @app.route("/only-grapes/about")
+    async def only_grapes_about():
+        enabled = await _only_grapes_enabled()
+        return await render_template(
+            "only_grapes.html", enabled=enabled, page="about",
+            content=await _only_grapes_content(),
+            grape_user=await _only_grapes_current_user(),
+        ), (200 if enabled else 503)
+
+    @app.route("/only-grapes/membership")
+    async def only_grapes_membership():
+        enabled = await _only_grapes_enabled()
+        return await render_template(
+            "only_grapes.html", enabled=enabled, page="membership",
+            content=await _only_grapes_content(),
+            grape_user=await _only_grapes_current_user(),
+        ), (200 if enabled else 503)
+
+    @app.route("/only-grapes/shop")
+    async def only_grapes_shop():
+        enabled = await _only_grapes_enabled()
+        return await render_template(
+            "only_grapes.html", enabled=enabled, page="shop",
+            content=await _only_grapes_content(),
+            grape_user=await _only_grapes_current_user(),
+        ), (200 if enabled else 503)
+
+    @app.route("/only-grapes/contact")
+    async def only_grapes_contact():
+        enabled = await _only_grapes_enabled()
+        return await render_template(
+            "only_grapes.html", enabled=enabled, page="contact",
+            content=await _only_grapes_content(),
+            grape_user=await _only_grapes_current_user(),
+        ), (200 if enabled else 503)
+
+    @app.route("/only-grapes/content")
+    async def only_grapes_content_page():
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        if not await _only_grapes_enabled():
+            return await render_template(
+                "only_grapes.html", enabled=False, page="content",
+                content=await _only_grapes_content(), grape_user=None,
+            ), 503
+        grape_user = await _only_grapes_current_user()
+        if not grape_user:
+            session["only_grapes_after_login"] = url_for("only_grapes_content_page")
+            return redirect(url_for("only_grapes_login"))
+        videos = await db.get_only_grapes_videos(published_only=True)
+        comments_by_video: dict[int, list[dict]] = {}
+        for comment in await db.get_only_grapes_comments():
+            comment["created_label"] = datetime.fromtimestamp(
+                float(comment.get("created_at") or 0),
+                tz=ZoneInfo("Europe/Berlin"),
+            ).strftime("%d %b %Y, %H:%M")
+            comments_by_video.setdefault(int(comment["video_id"]), []).append(comment)
+        return await render_template(
+            "only_grapes.html", enabled=True, page="content",
+            content=await _only_grapes_content(), grape_user=grape_user,
+            videos=videos, comments_by_video=comments_by_video,
+        )
+
+    @app.route("/only-grapes/video/<int:video_id>/comments", methods=["POST"])
+    async def only_grapes_add_comment(video_id: int):
+        from quart import abort
+        if not await _only_grapes_enabled():
+            abort(404)
+        grape_user = await _only_grapes_current_user()
+        if not grape_user:
+            session["only_grapes_after_login"] = (
+                url_for("only_grapes_content_page") + f"#video-{video_id}"
+            )
+            return redirect(url_for("only_grapes_login"))
+        video = await db.get_only_grapes_video(video_id)
+        if not video or not video.get("published"):
+            abort(404)
+        form = await request.form
+        body = (form.get("body") or "").strip()
+        if body:
+            await db.add_only_grapes_comment(
+                video_id=video_id, user_id=grape_user["id"], body=body[:1000]
+            )
+        return redirect(url_for("only_grapes_content_page") + f"#video-{video_id}")
+
+    @app.route("/only-grapes/comments/<int:comment_id>/delete", methods=["POST"])
+    async def only_grapes_delete_comment(comment_id: int):
+        from quart import abort
+        if not await _only_grapes_enabled():
+            abort(404)
+        grape_user = await _only_grapes_current_user()
+        if not grape_user:
+            abort(403)
+        comment = await db.get_only_grapes_comment(comment_id)
+        if not comment or int(comment["user_id"]) != int(grape_user["id"]):
+            abort(403)
+        await db.delete_only_grapes_comment(comment_id)
+        return redirect(
+            url_for("only_grapes_content_page") + f"#video-{comment['video_id']}"
+        )
+
+    @app.route("/only-grapes/login", methods=["GET", "POST"])
+    async def only_grapes_login():
+        if not await _only_grapes_enabled():
+            return redirect(url_for("only_grapes_home"))
+        error = ""
+        if request.method == "POST":
+            form = await request.form
+            user = await db.get_only_grapes_user_by_email(form.get("email", ""))
+            if (
+                user and user.get("active")
+                and check_password(form.get("password", ""), user["password_hash"])
+            ):
+                session["only_grapes_user_id"] = user["id"]
+                session["only_grapes_display_name"] = user["display_name"]
+                await db.mark_only_grapes_login(user["id"])
+                target = session.pop("only_grapes_after_login", "")
+                return redirect(target or url_for("only_grapes_content_page"))
+            error = "The email address or password is incorrect."
+        return await render_template(
+            "only_grapes_auth.html", mode="login", error=error,
+            content=await _only_grapes_content(),
+        )
+
+    @app.route("/only-grapes/register", methods=["GET", "POST"])
+    async def only_grapes_register():
+        if not await _only_grapes_enabled():
+            return redirect(url_for("only_grapes_home"))
+        error = ""
+        if request.method == "POST":
+            form = await request.form
+            email = (form.get("email") or "").strip().lower()
+            display_name = (form.get("display_name") or "").strip()
+            password = form.get("password") or ""
+            if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+                error = "Enter a valid email address."
+            elif not 2 <= len(display_name) <= 60:
+                error = "Your display name must contain 2 to 60 characters."
+            elif len(password) < 8:
+                error = "Use a password with at least 8 characters."
+            else:
+                created = await db.create_only_grapes_user(
+                    email=email, display_name=display_name,
+                    password_hash=hash_password(password),
+                )
+                if created:
+                    user = await db.get_only_grapes_user_by_email(email)
+                    session["only_grapes_user_id"] = user["id"]
+                    session["only_grapes_display_name"] = user["display_name"]
+                    await db.mark_only_grapes_login(user["id"])
+                    return redirect(url_for("only_grapes_content_page"))
+                error = "An account with this email address already exists."
+        return await render_template(
+            "only_grapes_auth.html", mode="register", error=error,
+            content=await _only_grapes_content(),
+        )
+
+    @app.route("/only-grapes/logout", methods=["POST"])
+    async def only_grapes_logout():
+        session.pop("only_grapes_user_id", None)
+        session.pop("only_grapes_display_name", None)
+        return redirect(url_for("only_grapes_home"))
+
+    @app.route("/only-grapes/video/<int:video_id>")
+    async def only_grapes_video(video_id: int):
+        from quart import abort, send_file
+        if not await _only_grapes_enabled() or not await _only_grapes_current_user():
+            abort(404)
+        video = await db.get_only_grapes_video(video_id)
+        if not video or not video.get("published"):
+            abort(404)
+        filename = os.path.basename(video["stored_filename"])
+        path = os.path.join(only_grapes_video_dir, filename)
+        if filename != video["stored_filename"] or not os.path.isfile(path):
+            abort(404)
+        return await send_file(path, mimetype="video/mp4", conditional=True)
+
+    @app.route("/only-grapes/poster/<int:video_id>")
+    async def only_grapes_poster(video_id: int):
+        from quart import abort, send_file
+        if not await _only_grapes_enabled() or not await _only_grapes_current_user():
+            abort(404)
+        video = await db.get_only_grapes_video(video_id)
+        if not video or not video.get("published"):
+            abort(404)
+        stem = os.path.splitext(os.path.basename(video["stored_filename"]))[0]
+        path = os.path.join(only_grapes_video_dir, stem + ".jpg")
+        if not os.path.isfile(path):
+            abort(404)
+        return await send_file(path, mimetype="image/jpeg", conditional=True)
+
+    @app.route("/only-grapes-admin", methods=["GET", "POST"])
+    @permission_required("only_grapes")
+    async def only_grapes_admin():
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        import uuid
+        if request.method == "POST":
+            form = await request.form
+            actions = form.getlist("action")
+            action = actions[-1] if actions else ""
+            if action == "save_content":
+                await db.set_setting(
+                    "only_grapes_enabled", "1" if form.get("enabled") else "0"
+                )
+                for key, default in ONLY_GRAPES_DEFAULTS.items():
+                    value = (form.get(key) or "").strip() or default
+                    await db.set_setting(key, value[:4000])
+                await db.add_audit_log(
+                    event_type="only_grapes_settings_updated",
+                    details="Updated website state and page content",
+                    actor=session.get("username", "unknown"),
+                )
+                await flash("Only Grapes settings saved.", "success")
+            elif action == "upload_hero":
+                files = await request.files
+                upload = files.get("hero_image")
+                extension = os.path.splitext(upload.filename or "")[1].lower() if upload else ""
+                if not upload or extension not in {".jpg", ".jpeg", ".png", ".webp"}:
+                    await flash("Choose a JPG, PNG or WebP hero image.", "error")
+                else:
+                    filename = f"hero-{uuid.uuid4().hex}{extension}"
+                    path = os.path.join(only_grapes_asset_dir, filename)
+                    await upload.save(path)
+                    if not _only_grapes_valid_image(path):
+                        os.remove(path)
+                        await flash(
+                            "The hero must be a valid JPG, PNG or WebP up to 15 MB.",
+                            "error",
+                        )
+                        return redirect(url_for("only_grapes_admin"))
+                    old_name = os.path.basename(
+                        await db.get_setting("only_grapes_hero_filename") or ""
+                    )
+                    await db.set_setting("only_grapes_hero_filename", filename)
+                    if old_name and old_name != filename:
+                        old_path = os.path.join(only_grapes_asset_dir, old_name)
+                        if os.path.isfile(old_path):
+                            os.remove(old_path)
+                    await flash("Hero image updated.", "success")
+            elif action == "reset_hero":
+                old_name = os.path.basename(
+                    await db.get_setting("only_grapes_hero_filename") or ""
+                )
+                await db.set_setting("only_grapes_hero_filename", "")
+                old_path = os.path.join(only_grapes_asset_dir, old_name)
+                if old_name and os.path.isfile(old_path):
+                    os.remove(old_path)
+                await flash("The default hero image was restored.", "success")
+            elif action == "upload_video":
+                files = await request.files
+                upload = files.get("video_file")
+                title = (form.get("title") or "").strip()
+                description = (form.get("description") or "").strip()
+                original_name = os.path.basename(upload.filename or "") if upload else ""
+                if not title:
+                    await flash("A video title is required.", "error")
+                elif not upload or os.path.splitext(original_name)[1].lower() != ".mp4":
+                    await flash("Choose an MP4 video.", "error")
+                else:
+                    stored_name = f"{uuid.uuid4().hex}.mp4"
+                    temp_path = os.path.join(only_grapes_video_dir, stored_name + ".part")
+                    final_path = os.path.join(only_grapes_video_dir, stored_name)
+                    try:
+                        await upload.save(temp_path)
+                        size = os.path.getsize(temp_path)
+                        if size <= 0 or size > ONLY_GRAPES_MAX_VIDEO_BYTES:
+                            raise ValueError("Videos must be between 1 byte and 200 MB.")
+                        duration = await _only_grapes_video_duration(temp_path)
+                        if duration <= 0:
+                            raise ValueError("The uploaded file is not a playable MP4 video.")
+                        os.replace(temp_path, final_path)
+                        poster_path = os.path.join(
+                            only_grapes_video_dir,
+                            os.path.splitext(stored_name)[0] + ".jpg",
+                        )
+                        await _only_grapes_create_poster(final_path, poster_path)
+                        try:
+                            await db.add_only_grapes_video(
+                                title=title[:200], description=description[:2000],
+                                original_filename=original_name[:240],
+                                stored_filename=stored_name, size_bytes=size,
+                                duration_seconds=duration,
+                                published=form.get("published") == "1",
+                            )
+                        except Exception:
+                            os.remove(final_path)
+                            if os.path.isfile(poster_path):
+                                os.remove(poster_path)
+                            raise
+                        await db.add_audit_log(
+                            event_type="only_grapes_video_uploaded",
+                            details=f"Uploaded Only Grapes video: {title[:200]}",
+                            actor=session.get("username", "unknown"),
+                        )
+                        await flash("Video uploaded successfully.", "success")
+                    except ValueError as exc:
+                        if os.path.isfile(temp_path):
+                            os.remove(temp_path)
+                        await flash(str(exc), "error")
+                    except Exception as exc:
+                        if os.path.isfile(temp_path):
+                            os.remove(temp_path)
+                        print(f"[only-grapes] Video upload failed: {exc}", flush=True)
+                        await flash("The video could not be stored.", "error")
+            elif action == "update_video":
+                video_id = int(form.get("video_id") or 0)
+                await db.update_only_grapes_video(
+                    video_id, title=(form.get("title") or "Untitled")[:200],
+                    description=(form.get("description") or "")[:2000],
+                    published=form.get("published") == "1",
+                )
+                await flash("Video updated.", "success")
+            elif action == "delete_video":
+                video_id = int(form.get("video_id") or 0)
+                video = await db.get_only_grapes_video(video_id)
+                if video:
+                    filename = os.path.basename(video["stored_filename"])
+                    path = os.path.join(only_grapes_video_dir, filename)
+                    if filename == video["stored_filename"] and os.path.isfile(path):
+                        os.remove(path)
+                    poster_path = os.path.join(
+                        only_grapes_video_dir, os.path.splitext(filename)[0] + ".jpg"
+                    )
+                    if os.path.isfile(poster_path):
+                        os.remove(poster_path)
+                    await db.delete_only_grapes_video(video_id)
+                    await db.add_audit_log(
+                        event_type="only_grapes_video_deleted",
+                        details=f"Deleted Only Grapes video: {video.get('title', video_id)}",
+                        actor=session.get("username", "unknown"),
+                    )
+                    await flash("Video permanently deleted.", "success")
+            elif action == "delete_comment":
+                comment_id = int(form.get("comment_id") or 0)
+                comment = await db.get_only_grapes_comment(comment_id)
+                if comment:
+                    await db.delete_only_grapes_comment(comment_id)
+                    await db.add_audit_log(
+                        event_type="only_grapes_comment_deleted",
+                        details=f"Deleted Only Grapes comment #{comment_id}",
+                        actor=session.get("username", "unknown"),
+                    )
+                    await flash("Comment deleted.", "success")
+            return redirect(url_for("only_grapes_admin"))
+
+        videos = await db.get_only_grapes_videos()
+        for video in videos:
+            video["size_label"] = format_file_share_size(video["size_bytes"])
+            seconds = int(video.get("duration_seconds") or 0)
+            video["duration_label"] = f"{seconds // 60}:{seconds % 60:02d}"
+        comments = await db.get_only_grapes_comments()
+        for comment in comments:
+            comment["created_label"] = datetime.fromtimestamp(
+                float(comment.get("created_at") or 0),
+                tz=ZoneInfo("Europe/Berlin"),
+            ).strftime("%d.%m.%Y %H:%M")
+        return await render_template(
+            "only_grapes_admin.html",
+            enabled=await _only_grapes_enabled(),
+            content=await _only_grapes_content(), videos=videos, comments=comments,
+            public_url=f"{_public_web_url()}/only-grapes",
+        )
 
     @app.route("/executioner", methods=["GET", "POST"])
     @permission_required('executioner')
