@@ -2063,6 +2063,28 @@ def create_app(db: Database, bot=None) -> Quart:
                 + (f" {detail[-300:]}" if detail else "")
             )
 
+        probe = await asyncio.create_subprocess_exec(
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=codec_name,pix_fmt:format=duration",
+            "-of", "json", output_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _stderr = await probe.communicate()
+        try:
+            metadata = json.loads(stdout.decode())
+            stream = (metadata.get("streams") or [{}])[0]
+            duration = float((metadata.get("format") or {}).get("duration") or 0)
+        except (IndexError, TypeError, ValueError, json.JSONDecodeError):
+            stream, duration = {}, 0
+        if (
+            probe.returncode != 0
+            or stream.get("codec_name") != "h264"
+            or stream.get("pix_fmt") != "yuv420p"
+            or duration <= 0
+        ):
+            raise ValueError("The optimized MP4 failed the browser compatibility check.")
+
     @app.route("/only-grapes/assets/<filename>")
     async def only_grapes_asset(filename):
         from quart import abort, send_from_directory
@@ -2132,6 +2154,10 @@ def create_app(db: Database, bot=None) -> Quart:
             session["only_grapes_after_login"] = url_for("only_grapes_content_page")
             return redirect(url_for("only_grapes_login"))
         videos = await db.get_only_grapes_videos(published_only=True)
+        for video in videos:
+            video["cache_version"] = int(
+                float(video.get("updated_at") or video.get("created_at") or 0)
+            )
         comments_by_video: dict[int, list[dict]] = {}
         for comment in await db.get_only_grapes_comments():
             comment["created_label"] = datetime.fromtimestamp(
@@ -2257,7 +2283,10 @@ def create_app(db: Database, bot=None) -> Quart:
         path = os.path.join(only_grapes_video_dir, filename)
         if filename != video["stored_filename"] or not os.path.isfile(path):
             abort(404)
-        return await send_file(path, mimetype="video/mp4", conditional=True)
+        response = await send_file(path, mimetype="video/mp4", conditional=True)
+        response.headers["Cache-Control"] = "private, no-cache, max-age=0"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
     @app.route("/only-grapes/video/<int:video_id>/played", methods=["POST"])
     async def only_grapes_video_played(video_id: int):
