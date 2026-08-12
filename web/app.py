@@ -191,9 +191,10 @@ def create_app(db: Database, bot=None) -> Quart:
         template_folder="templates",
         static_folder="static",
     )
-    # File sharing accepts files up to 200 MiB. The small multipart allowance
-    # keeps a full-size file from being rejected because of form boundaries.
-    app.config["MAX_CONTENT_LENGTH"] = 201 * 1024 * 1024
+    # Only Grapes accepts videos up to 300 MiB. The small multipart allowance
+    # keeps a full-size upload from being rejected because of form boundaries.
+    # Features with lower limits still enforce those limits after upload.
+    app.config["MAX_CONTENT_LENGTH"] = 301 * 1024 * 1024
     app.config["BODY_TIMEOUT"]       = 600
     # Session cookies: Secure flag so browsers only send them over HTTPS;
     # SameSite=Lax prevents CSRF while keeping normal navigation working.
@@ -1697,7 +1698,10 @@ def create_app(db: Database, bot=None) -> Quart:
                     if enabled else None
                 ),
             ), 413
-        return "Upload exceeds the 200 MB limit.", 413
+        if request.path == "/only-grapes-admin":
+            await flash("The selected video exceeds the 300 MB upload limit.", "error")
+            return redirect(url_for("only_grapes_admin"))
+        return "Upload exceeds the permitted size limit.", 413
 
     @app.route("/file-share", methods=["GET", "POST"])
     async def file_share_upload():
@@ -1906,7 +1910,7 @@ def create_app(db: Database, bot=None) -> Quart:
 
     # --- Only Grapes ---
 
-    ONLY_GRAPES_MAX_VIDEO_BYTES = 200 * 1024 * 1024
+    ONLY_GRAPES_MAX_VIDEO_BYTES = 300 * 1024 * 1024
     ONLY_GRAPES_DEFAULTS = {
         "only_grapes_hero_eyebrow": "THE GRAPE EXPERIENCE",
         "only_grapes_hero_title": "Premium",
@@ -2012,8 +2016,8 @@ def create_app(db: Database, bot=None) -> Quart:
         proc = await asyncio.create_subprocess_exec(
             "ffmpeg", "-y", "-v", "error", "-ss", "0.25", "-i", video_path,
             "-frames:v", "1", "-vf",
-            "scale=960:540:force_original_aspect_ratio=decrease,"
-            "pad=960:540:(ow-iw)/2:(oh-ih)/2:color=black",
+            "scale=720:720:force_original_aspect_ratio=increase,"
+            "crop=720:720",
             poster_path,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
@@ -2225,9 +2229,16 @@ def create_app(db: Database, bot=None) -> Quart:
         if not video or not video.get("published"):
             abort(404)
         stem = os.path.splitext(os.path.basename(video["stored_filename"]))[0]
-        path = os.path.join(only_grapes_video_dir, stem + ".jpg")
+        path = os.path.join(only_grapes_video_dir, stem + ".square.jpg")
         if not os.path.isfile(path):
-            abort(404)
+            video_path = os.path.join(
+                only_grapes_video_dir, os.path.basename(video["stored_filename"])
+            )
+            if not os.path.isfile(video_path):
+                abort(404)
+            await _only_grapes_create_poster(video_path, path)
+            if not os.path.isfile(path):
+                abort(404)
         return await send_file(path, mimetype="image/jpeg", conditional=True)
 
     @app.route("/only-grapes-admin", methods=["GET", "POST"])
@@ -2306,14 +2317,14 @@ def create_app(db: Database, bot=None) -> Quart:
                         await upload.save(temp_path)
                         size = os.path.getsize(temp_path)
                         if size <= 0 or size > ONLY_GRAPES_MAX_VIDEO_BYTES:
-                            raise ValueError("Videos must be between 1 byte and 200 MB.")
+                            raise ValueError("Videos must be between 1 byte and 300 MB.")
                         duration = await _only_grapes_video_duration(temp_path)
                         if duration <= 0:
                             raise ValueError("The uploaded file is not a playable MP4 video.")
                         os.replace(temp_path, final_path)
                         poster_path = os.path.join(
                             only_grapes_video_dir,
-                            os.path.splitext(stored_name)[0] + ".jpg",
+                            os.path.splitext(stored_name)[0] + ".square.jpg",
                         )
                         await _only_grapes_create_poster(final_path, poster_path)
                         try:
@@ -2361,10 +2372,17 @@ def create_app(db: Database, bot=None) -> Quart:
                     if filename == video["stored_filename"] and os.path.isfile(path):
                         os.remove(path)
                     poster_path = os.path.join(
-                        only_grapes_video_dir, os.path.splitext(filename)[0] + ".jpg"
+                        only_grapes_video_dir,
+                        os.path.splitext(filename)[0] + ".square.jpg",
                     )
                     if os.path.isfile(poster_path):
                         os.remove(poster_path)
+                    legacy_poster_path = os.path.join(
+                        only_grapes_video_dir,
+                        os.path.splitext(filename)[0] + ".jpg",
+                    )
+                    if os.path.isfile(legacy_poster_path):
+                        os.remove(legacy_poster_path)
                     await db.delete_only_grapes_video(video_id)
                     await db.add_audit_log(
                         event_type="only_grapes_video_deleted",
