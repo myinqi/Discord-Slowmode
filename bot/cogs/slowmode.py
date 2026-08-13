@@ -1,9 +1,10 @@
 import asyncio
+import random
 import re
 import time
 import math
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from bot.suno_urls import resolve_suno_uuid
 
@@ -13,6 +14,10 @@ SUNO_URL_PATTERN = re.compile(r'https://suno\.com/(?:s|song)/[\w-]+')
 class SlowmodeCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.song_uuid_retry.start()
+
+    def cog_unload(self):
+        self.song_uuid_retry.cancel()
 
     async def _resolve_song_uuid(self, url: str):
         try:
@@ -21,6 +26,38 @@ class SlowmodeCog(commands.Cog):
                 await self.bot.db.set_song_uuid(url, suno_uuid)
         except Exception as exc:
             print(f"[song-rating] UUID resolution failed for {url}: {exc}", flush=True)
+
+    @tasks.loop(hours=6)
+    async def song_uuid_retry(self):
+        urls = await self.bot.db.get_unresolved_song_urls(limit=None)
+        if not urls:
+            return
+
+        # Random selection prevents permanently broken links from starving newer URLs.
+        random.shuffle(urls)
+        urls = urls[:250]
+        semaphore = asyncio.Semaphore(8)
+
+        async def resolve_one(url: str):
+            async with semaphore:
+                suno_uuid = await resolve_suno_uuid(url)
+                if not suno_uuid:
+                    return False
+                await self.bot.db.set_song_uuid(url, suno_uuid)
+                return True
+
+        results = await asyncio.gather(
+            *(resolve_one(url) for url in urls), return_exceptions=True
+        )
+        resolved = sum(result is True for result in results)
+        print(
+            f"[song-rating] Automatic UUID retry: {resolved}/{len(urls)} resolved",
+            flush=True,
+        )
+
+    @song_uuid_retry.before_loop
+    async def before_song_uuid_retry(self):
+        await self.bot.wait_until_ready()
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):

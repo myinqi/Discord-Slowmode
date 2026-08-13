@@ -307,7 +307,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('suno_info', 'Suno Info'),
         ('audit', 'Audit Log'),
         ('settings', 'Settings'),
-        ('llm', 'Corax Chat (LLM)'),
+        ('llm', 'Corax Chat'),
         ('relic_hunt', "Raven's Nest"),
         ('rpg', 'RPG Adventures'),
         ('card_collection', 'Card Collection'),
@@ -3092,16 +3092,69 @@ def create_app(db: Database, bot=None) -> Quart:
             form = await request.form
             action = form.get("action", "save")
 
+            if action == "send_manual_dm":
+                try:
+                    target_user_id = int(form.get("target_user_id") or 0)
+                except (TypeError, ValueError):
+                    target_user_id = 0
+                content = (form.get("message") or "").strip()
+                guild = get_guild()
+                member = guild.get_member(target_user_id) if guild and target_user_id else None
+                if guild and target_user_id and member is None:
+                    try:
+                        member = await guild.fetch_member(target_user_id)
+                    except Exception:
+                        member = None
+                if member is None or getattr(member, "bot", False):
+                    await flash("Select a valid server member.", "error")
+                elif not content:
+                    await flash("Enter a message to send.", "error")
+                else:
+                    content = content[:1900]
+                    try:
+                        sent = await member.send(content)
+                    except Exception as exc:
+                        print(
+                            f"[corax-dm] Send to {target_user_id} failed: "
+                            f"{type(exc).__name__}: {exc}",
+                            flush=True,
+                        )
+                        await flash(
+                            "Corax could not deliver the DM. The member may have "
+                            "disabled direct messages from this server.",
+                            "error",
+                        )
+                    else:
+                        actor = session.get("username", "unknown")
+                        await db.add_corax_dm_message(
+                            user_id=member.id,
+                            user_name=str(member),
+                            direction="outbound",
+                            content=content,
+                            timestamp=sent.created_at.timestamp(),
+                            discord_message_id=sent.id,
+                            admin_actor=actor,
+                        )
+                        await db.add_audit_log(
+                            event_type="corax_manual_dm_sent",
+                            user_id=member.id,
+                            user_name=str(member),
+                            details=f"Manual Corax DM ({len(content)} characters)",
+                            actor=actor,
+                        )
+                        await flash(f"Message sent to {member.display_name} as Corax.", "success")
+                return redirect(url_for("llm", user_id=target_user_id) + "#manual-chat")
+
             if action == "purge_audit":
                 cfg = await db.get_llm_config()
                 days = int((cfg or {}).get("retention_days") or 30)
                 deleted = await db.purge_llm_audit_log(days)
-                await flash(f"{deleted} audit entries purged.", "success")
+                await flash(f"{deleted} old chat and audit entries purged.", "success")
                 return redirect(url_for("llm"))
 
             if action == "reset_persona":
                 await db.update_llm_config(persona=DEFAULT_PERSONA)
-                await flash("Persona auf Default zurückgesetzt.", "success")
+                await flash("Persona reset to the default prompt.", "success")
                 return redirect(url_for("llm"))
 
             # save main config
@@ -3170,7 +3223,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     f"tools={tools_selected}"
                 ),
             )
-            await flash("Corax-Einstellungen gespeichert.", "success")
+            await flash("Corax settings saved.", "success")
             return redirect(url_for("llm"))
 
         cfg = await db.get_llm_config()
@@ -3185,6 +3238,7 @@ def create_app(db: Database, bot=None) -> Quart:
         guild = get_guild()
         guild_channels = []
         guild_roles = []
+        guild_members = []
         if guild:
             for ch in sorted(guild.text_channels, key=lambda c: c.name.lower()):
                 guild_channels.append({"id": ch.id, "name": ch.name})
@@ -3192,6 +3246,21 @@ def create_app(db: Database, bot=None) -> Quart:
                 if r.is_default():
                     continue
                 guild_roles.append({"id": r.id, "name": r.name})
+            all_members, _members_complete = await get_all_guild_members(guild)
+            selectable_members = sorted(
+                (member for member in all_members if not getattr(member, "bot", False)),
+                key=lambda member: (
+                    (member.display_name or member.name or "").casefold(),
+                    member.id,
+                ),
+            )
+            for member in selectable_members:
+                guild_members.append({
+                    "id": member.id,
+                    "display_name": member.display_name or member.name,
+                    "username": member.name,
+                    "avatar_url": str(member.display_avatar.url),
+                })
 
         # fall back to stored names for any channels/roles not visible in guild
         known_ids = {c["id"] for c in guild_channels}
@@ -3204,6 +3273,27 @@ def create_app(db: Database, bot=None) -> Quart:
                 guild_roles.append({"id": r["role_id"], "name": r.get("role_name") or f"role-{r['role_id']}"})
 
         audit_log = await db.get_llm_audit_log(limit=100)
+        dm_contacts = await db.get_corax_dm_contacts(limit=100)
+        dm_contact_times = {
+            row["user_id"]: float(row["last_message_at"] or 0)
+            for row in dm_contacts
+        }
+        guild_members.sort(key=lambda row: (
+            0 if row["id"] in dm_contact_times else 1,
+            -dm_contact_times.get(row["id"], 0),
+            row["display_name"].casefold(),
+        ))
+        selected_dm_user_id = request.args.get("user_id", type=int)
+        if selected_dm_user_id not in {row["id"] for row in guild_members}:
+            selected_dm_user_id = None
+        selected_dm_user = next(
+            (row for row in guild_members if row["id"] == selected_dm_user_id),
+            None,
+        )
+        dm_messages = (
+            await db.get_corax_dm_messages(selected_dm_user_id, limit=150)
+            if selected_dm_user_id else []
+        )
 
         return await render_template(
             "llm.html",
@@ -3216,7 +3306,39 @@ def create_app(db: Database, bot=None) -> Quart:
             allowed_channel_ids=allowed_channel_ids,
             allowed_role_ids=allowed_role_ids,
             audit_log=audit_log,
+            guild_members=guild_members,
+            selected_dm_user=selected_dm_user,
+            dm_messages=dm_messages,
         )
+
+    @app.route("/llm/manual-dm/<int:user_id>/messages")
+    @permission_required('llm')
+    async def llm_manual_dm_messages(user_id: int):
+        from quart import jsonify
+
+        guild = get_guild()
+        member = guild.get_member(user_id) if guild else None
+        if guild and member is None:
+            try:
+                member = await guild.fetch_member(user_id)
+            except Exception:
+                member = None
+        if member is None or getattr(member, "bot", False):
+            return jsonify({"error": "Server member not found"}), 404
+        messages = await db.get_corax_dm_messages(user_id, limit=150)
+        return jsonify({
+            "user_id": str(user_id),
+            "messages": [
+                {
+                    "id": row["id"],
+                    "timestamp": row["timestamp"],
+                    "direction": row["direction"],
+                    "content": row["content"],
+                    "admin_actor": row.get("admin_actor") or "",
+                }
+                for row in messages
+            ],
+        })
 
     async def _get_player_channels():
         guild = get_guild()
@@ -5216,6 +5338,7 @@ def create_app(db: Database, bot=None) -> Quart:
         current = await _build_song_rating_snapshot_for_date(today, force=True)
         stats = await db.get_song_rating_api_stats()
         unresolved_count = await db.count_unresolved_song_urls()
+        unresolved_urls = await db.get_unresolved_song_url_details(limit=100)
         endpoint_url = url_for("song_rating_api_feed", _external=True)
         if endpoint_url.startswith("http://") and not request.host.startswith(
             ("localhost", "127.0.0.1")
@@ -5232,6 +5355,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 current=current,
                 stats=stats,
                 unresolved_count=unresolved_count,
+                unresolved_urls=unresolved_urls,
                 sync_status=app.song_rating_sync_status,
             )
         )

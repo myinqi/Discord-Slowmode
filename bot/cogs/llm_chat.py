@@ -119,8 +119,47 @@ class LLMChatCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if message.author.bot or not message.guild:
+        if message.author.bot:
             return
+
+        # Manual Corax conversations use Discord DMs and remain available even
+        # while automatic LLM replies are disabled. The web console sends the
+        # outbound half; this listener records user replies.
+        if not message.guild:
+            guild = self.bot.get_guild(Config.GUILD_ID)
+            member = guild.get_member(message.author.id) if guild else None
+            if guild and member is None:
+                try:
+                    member = await guild.fetch_member(message.author.id)
+                except Exception:
+                    member = None
+            if member is None:
+                return
+            content = (message.content or "").strip()
+            if message.attachments:
+                attachment_lines = [
+                    f"Attachment: {item.filename} ({item.url})"
+                    for item in message.attachments
+                ]
+                content = "\n".join(part for part in [content, *attachment_lines] if part)
+            if content:
+                try:
+                    await self.bot.db.add_corax_dm_message(
+                        user_id=message.author.id,
+                        user_name=str(member),
+                        direction="inbound",
+                        content=content,
+                        timestamp=message.created_at.timestamp(),
+                        discord_message_id=message.id,
+                    )
+                except Exception as exc:
+                    print(
+                        f"[corax-dm] Could not store message from "
+                        f"{message.author.id}: {exc}",
+                        flush=True,
+                    )
+            return
+
         me = message.guild.me or self.bot.user
         if not me:
             return

@@ -102,6 +102,23 @@
 </div>
 {% endif %}
 
+{% if unresolved_urls %}
+<details class="mt-4 bg-discord-dark border border-yellow-500/20 rounded-lg">
+    <summary class="cursor-pointer px-4 py-3 text-sm text-yellow-200">Show {{ unresolved_count }} unresolved monitored URL{{ "s" if unresolved_count != 1 else "" }}</summary>
+    <div class="border-t border-gray-700/50 overflow-x-auto">
+        <table class="w-full text-xs">
+            <thead class="text-gray-500 bg-discord-darker"><tr><th class="text-left px-4 py-2">Suno URL</th><th class="text-left px-4 py-2">Channel</th><th class="text-right px-4 py-2">Posts</th></tr></thead>
+            <tbody class="divide-y divide-gray-700/50">
+                {% for row in unresolved_urls %}
+                <tr><td class="px-4 py-2"><a href="{{ row.url }}" target="_blank" rel="noopener noreferrer" class="text-blue-300 hover:underline break-all">{{ row.url }}</a></td><td class="px-4 py-2 text-gray-400">{{ row.channels }}</td><td class="px-4 py-2 text-right text-gray-300">{{ row.posts }}</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% if unresolved_count > unresolved_urls|length %}<p class="px-4 py-3 text-xs text-gray-500">Showing the newest {{ unresolved_urls|length }} URLs.</p>{% endif %}
+    </div>
+</details>
+{% endif %}
+
 <section class="bg-discord-dark border border-gray-700/50 rounded-xl mt-6">
     <div class="px-5 py-4 border-b border-gray-700/50 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div><h3 class="text-white font-semibold">Rating snapshots</h3><p class="text-xs text-gray-500 mt-1">Each row covers songs posted on that day in currently monitored channels. Discord identities and names stay private.</p></div>

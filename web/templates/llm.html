@@ -1,11 +1,89 @@
 {% extends "base.html" %}
-{% block title %}Corax Chat (LLM){% endblock %}
+{% block title %}Corax Chat{% endblock %}
 {% block content %}
-<h2 class="text-2xl font-bold text-white mb-6">🤖 Corax Chat (LLM)</h2>
+<h2 class="text-2xl font-bold text-white mb-6">🤖 Corax Chat</h2>
+
+<section id="manual-chat" class="bg-discord-dark rounded-xl border border-gray-700/50 mb-6">
+    <div class="px-5 py-4 border-b border-gray-700/50">
+        <h3 class="text-white font-semibold">Manual direct messages</h3>
+        <p class="text-gray-400 text-xs mt-1">
+            Talk to a server member directly as Corax. This console remains available
+            when automatic LLM chat is disabled.
+        </p>
+    </div>
+    <div class="p-5 space-y-4">
+        <form method="GET" action="{{ url_for('llm') }}" class="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto] gap-3 items-end">
+            <div>
+                <label for="dm-member-search" class="block text-sm font-medium text-gray-300 mb-1">Server member</label>
+                <input id="dm-member-search" type="search" placeholder="Search display name or username"
+                    class="w-full px-3 py-2 mb-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple">
+                <select id="dm-member-select" name="user_id" required
+                    class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white focus:outline-none focus:border-discord-blurple">
+                    <option value="">Select a member...</option>
+                    {% for member in guild_members %}
+                    <option value="{{ member.id }}"
+                        data-search="{{ (member.display_name ~ ' ' ~ member.username)|lower }}"
+                        {% if selected_dm_user and selected_dm_user.id == member.id %}selected{% endif %}>
+                        {{ member.display_name }} (@{{ member.username }})
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button type="submit" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm font-medium">
+                Open conversation
+            </button>
+        </form>
+
+        {% if selected_dm_user %}
+        <div class="border-t border-gray-700/50 pt-4">
+            <div class="flex items-center gap-3 mb-3">
+                <img src="{{ selected_dm_user.avatar_url }}" alt="" class="w-10 h-10 rounded-full object-cover">
+                <div class="min-w-0">
+                    <div class="text-white font-semibold truncate">{{ selected_dm_user.display_name }}</div>
+                    <div class="text-xs text-gray-500 truncate">@{{ selected_dm_user.username }} · Discord ID {{ selected_dm_user.id }}</div>
+                </div>
+                <span class="ml-auto text-xs text-gray-500">Updates every 5 seconds</span>
+            </div>
+
+            <div id="dm-history" class="h-96 overflow-y-auto bg-discord-darker border border-gray-700 rounded-lg p-4 space-y-3" aria-live="polite">
+                {% for message in dm_messages %}
+                <div class="flex {% if message.direction == 'outbound' %}justify-end{% else %}justify-start{% endif %}" data-message-id="{{ message.id }}">
+                    <div class="max-w-[85%] px-3 py-2 rounded-lg {% if message.direction == 'outbound' %}bg-discord-blurple/30 border border-discord-blurple/40{% else %}bg-gray-800 border border-gray-700{% endif %}">
+                        <div class="text-[11px] text-gray-400 mb-1">
+                            {% if message.direction == 'outbound' %}Corax{% if message.admin_actor %} via {{ message.admin_actor }}{% endif %}{% else %}{{ selected_dm_user.display_name }}{% endif %}
+                            · <span class="dm-time" data-timestamp="{{ message.timestamp }}">{{ message.timestamp|int }}</span>
+                        </div>
+                        <div class="text-sm text-gray-100 whitespace-pre-wrap break-words">{{ message.content }}</div>
+                    </div>
+                </div>
+                {% else %}
+                <p id="dm-empty" class="text-sm text-gray-500 text-center py-12">No direct messages with this member yet.</p>
+                {% endfor %}
+            </div>
+
+            <form method="POST" action="{{ url_for('llm') }}" class="mt-3 flex flex-col sm:flex-row gap-3 items-stretch sm:items-end">
+                <input type="hidden" name="action" value="send_manual_dm">
+                <input type="hidden" name="target_user_id" value="{{ selected_dm_user.id }}">
+                <div class="flex-1">
+                    <label for="dm-message" class="block text-sm font-medium text-gray-300 mb-1">Message as Corax</label>
+                    <textarea id="dm-message" name="message" rows="3" maxlength="1900" required
+                        placeholder="Write a direct message..."
+                        class="w-full px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white resize-y focus:outline-none focus:border-discord-blurple"></textarea>
+                </div>
+                <button type="submit" class="px-5 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg text-sm font-medium">
+                    Send as Corax
+                </button>
+            </form>
+        </div>
+        {% elif not guild_members %}
+        <p class="text-sm text-yellow-300">The Discord bot is offline or no server members are available.</p>
+        {% endif %}
+    </div>
+</section>
 
 <div class="bg-discord-dark rounded-xl border border-gray-700/50 mb-6">
     <div class="px-5 py-4 border-b border-gray-700/50">
-        <h3 class="text-white font-semibold">Configuration</h3>
+        <h3 class="text-white font-semibold">Automatic LLM chat</h3>
         <p class="text-gray-400 text-xs mt-1">
             Corax only replies when <b>explicitly mentioned</b> (@Corax)
             or when a user replies directly to one of its messages — and
@@ -130,10 +208,11 @@
 
             <!-- Retention -->
             <div>
-                <label class="block text-xs font-medium text-gray-300 mb-1">Audit log retention (days)</label>
+                <label class="block text-xs font-medium text-gray-300 mb-1">Chat and audit retention (days)</label>
                 <input type="number" min="1" max="365" name="retention_days"
                     value="{{ cfg.retention_days or 30 }}"
                     class="w-40 px-3 py-2 bg-discord-darker border border-gray-700 rounded-lg text-white">
+                <p class="text-xs text-gray-500 mt-1">Applies to automatic audit entries and manual DM history.</p>
             </div>
 
             <!-- Persona -->
@@ -166,9 +245,9 @@
 
         <form method="POST" class="mt-4">
             <input type="hidden" name="action" value="purge_audit">
-            <button type="submit" onclick="return confirm('Purge old audit entries now?')"
+            <button type="submit" onclick="return confirm('Purge old chat and audit entries now?')"
                 class="px-3 py-2 bg-discord-red/20 hover:bg-discord-red/30 text-red-300 rounded-lg text-xs">
-                Purge audit log by retention now
+                Purge old chat and audit entries now
             </button>
         </form>
     </div>
@@ -225,5 +304,87 @@
     function loadDefaultPersona() {
         document.getElementById('persona').value = DEFAULT_PERSONA;
     }
+
+    const memberSearch = document.getElementById('dm-member-search');
+    const memberSelect = document.getElementById('dm-member-select');
+    if (memberSearch && memberSelect) {
+        memberSearch.addEventListener('input', function() {
+            const query = this.value.trim().toLowerCase();
+            Array.from(memberSelect.options).forEach(function(option, index) {
+                if (index === 0) return;
+                option.hidden = query && !(option.dataset.search || '').includes(query);
+            });
+        });
+    }
+
+    function formatDmTimes(root) {
+        (root || document).querySelectorAll('.dm-time').forEach(function(element) {
+            const timestamp = Number(element.dataset.timestamp || 0);
+            if (timestamp) {
+                element.textContent = new Date(timestamp * 1000).toLocaleString();
+            }
+        });
+    }
+    formatDmTimes(document);
+
+    {% if selected_dm_user %}
+    const dmHistory = document.getElementById('dm-history');
+    const dmMessagesUrl = {{ url_for('llm_manual_dm_messages', user_id=selected_dm_user.id)|tojson }};
+    const dmMemberName = {{ selected_dm_user.display_name|tojson }};
+    let dmLastPayload = '';
+
+    function renderDmMessages(messages) {
+        const wasNearBottom = dmHistory.scrollHeight - dmHistory.scrollTop - dmHistory.clientHeight < 80;
+        dmHistory.replaceChildren();
+        if (!messages.length) {
+            const empty = document.createElement('p');
+            empty.className = 'text-sm text-gray-500 text-center py-12';
+            empty.textContent = 'No direct messages with this member yet.';
+            dmHistory.appendChild(empty);
+            return;
+        }
+        messages.forEach(function(message) {
+            const row = document.createElement('div');
+            row.className = 'flex ' + (message.direction === 'outbound' ? 'justify-end' : 'justify-start');
+            const bubble = document.createElement('div');
+            bubble.className = 'max-w-[85%] px-3 py-2 rounded-lg ' + (
+                message.direction === 'outbound'
+                    ? 'bg-discord-blurple/30 border border-discord-blurple/40'
+                    : 'bg-gray-800 border border-gray-700'
+            );
+            const meta = document.createElement('div');
+            meta.className = 'text-[11px] text-gray-400 mb-1';
+            const sender = message.direction === 'outbound'
+                ? 'Corax' + (message.admin_actor ? ' via ' + message.admin_actor : '')
+                : dmMemberName;
+            meta.textContent = sender + ' · ' + new Date(message.timestamp * 1000).toLocaleString();
+            const body = document.createElement('div');
+            body.className = 'text-sm text-gray-100 whitespace-pre-wrap break-words';
+            body.textContent = message.content;
+            bubble.append(meta, body);
+            row.appendChild(bubble);
+            dmHistory.appendChild(row);
+        });
+        if (wasNearBottom || !dmLastPayload) dmHistory.scrollTop = dmHistory.scrollHeight;
+    }
+
+    async function refreshDmMessages() {
+        try {
+            const response = await fetch(dmMessagesUrl, {headers: {'Accept': 'application/json'}});
+            if (!response.ok) return;
+            const data = await response.json();
+            const payload = JSON.stringify(data.messages || []);
+            if (payload !== dmLastPayload) {
+                renderDmMessages(data.messages || []);
+                dmLastPayload = payload;
+            }
+        } catch (_) {
+            // Keep the existing history visible during temporary connection errors.
+        }
+    }
+    dmHistory.scrollTop = dmHistory.scrollHeight;
+    refreshDmMessages();
+    window.setInterval(refreshDmMessages, 5000);
+    {% endif %}
 </script>
 {% endblock %}

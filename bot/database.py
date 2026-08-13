@@ -1011,6 +1011,21 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_llm_audit_ts ON llm_audit_log(timestamp);
             CREATE INDEX IF NOT EXISTS idx_llm_audit_user ON llm_audit_log(user_id);
 
+            CREATE TABLE IF NOT EXISTS corax_dm_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL DEFAULT (unixepoch()),
+                user_id INTEGER NOT NULL,
+                user_name TEXT NOT NULL DEFAULT '',
+                direction TEXT NOT NULL CHECK(direction IN ('inbound', 'outbound')),
+                content TEXT NOT NULL,
+                discord_message_id INTEGER UNIQUE,
+                admin_actor TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_corax_dm_user_time
+                ON corax_dm_messages(user_id, timestamp DESC);
+            CREATE INDEX IF NOT EXISTS idx_corax_dm_time
+                ON corax_dm_messages(timestamp);
+
             CREATE TABLE IF NOT EXISTS reaction_roles (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 channel_id INTEGER NOT NULL,
@@ -3213,10 +3228,11 @@ class Database:
 
     async def get_unresolved_song_urls(self, limit: int | None = 5000) -> list[str]:
         query = """
-            SELECT url FROM song_posts WHERE suno_uuid IS NULL
-            UNION
-            SELECT song_url FROM song_reactions
-            WHERE suno_uuid IS NULL AND song_url IS NOT NULL
+            SELECT DISTINCT sp.url
+            FROM song_posts sp
+            JOIN monitored_channels mc
+              ON mc.channel_id = sp.channel_id AND mc.enabled = 1
+            WHERE sp.suno_uuid IS NULL
         """
         params = ()
         if limit is not None:
@@ -3228,15 +3244,32 @@ class Database:
     async def count_unresolved_song_urls(self) -> int:
         async with self.db.execute(
             """
-            SELECT COUNT(*) FROM (
-                SELECT url FROM song_posts WHERE suno_uuid IS NULL
-                UNION
-                SELECT song_url FROM song_reactions
-                WHERE suno_uuid IS NULL AND song_url IS NOT NULL
-            )
+            SELECT COUNT(DISTINCT sp.url)
+            FROM song_posts sp
+            JOIN monitored_channels mc
+              ON mc.channel_id = sp.channel_id AND mc.enabled = 1
+            WHERE sp.suno_uuid IS NULL
             """
         ) as cursor:
             return int((await cursor.fetchone())[0])
+
+    async def get_unresolved_song_url_details(self, limit: int = 100) -> list[dict]:
+        async with self.db.execute(
+            """
+            SELECT sp.url, COUNT(DISTINCT sp.message_id) AS posts,
+                   GROUP_CONCAT(DISTINCT mc.channel_name) AS channels,
+                   MAX(sp.posted_at) AS last_posted_at
+            FROM song_posts sp
+            JOIN monitored_channels mc
+              ON mc.channel_id = sp.channel_id AND mc.enabled = 1
+            WHERE sp.suno_uuid IS NULL
+            GROUP BY sp.url
+            ORDER BY last_posted_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
 
     async def build_song_rating_snapshot(
         self, snapshot_date: str, start_timestamp: float, end_timestamp: float
@@ -4434,6 +4467,64 @@ class Database:
             row = await cur.fetchone()
             return row["c"] if row else 0
 
+    async def add_corax_dm_message(
+        self,
+        *,
+        user_id: int,
+        user_name: str,
+        direction: str,
+        content: str,
+        timestamp: float | None = None,
+        discord_message_id: int | None = None,
+        admin_actor: str = "",
+    ) -> bool:
+        if direction not in {"inbound", "outbound"}:
+            raise ValueError("Invalid Corax DM direction")
+        cur = await self.db.execute(
+            """INSERT OR IGNORE INTO corax_dm_messages
+               (timestamp, user_id, user_name, direction, content,
+                discord_message_id, admin_actor)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                float(timestamp if timestamp is not None else time.time()),
+                int(user_id),
+                str(user_name or ""),
+                direction,
+                str(content or "")[:4000],
+                int(discord_message_id) if discord_message_id else None,
+                str(admin_actor or "")[:128],
+            ),
+        )
+        await self.db.commit()
+        return (cur.rowcount or 0) > 0
+
+    async def get_corax_dm_messages(self, user_id: int, limit: int = 100) -> list[dict]:
+        limit = max(1, min(500, int(limit)))
+        async with self.db.execute(
+            """SELECT * FROM (
+                   SELECT * FROM corax_dm_messages
+                   WHERE user_id = ?
+                   ORDER BY timestamp DESC, id DESC
+                   LIMIT ?
+               ) ORDER BY timestamp ASC, id ASC""",
+            (int(user_id), limit),
+        ) as cur:
+            return [dict(row) for row in await cur.fetchall()]
+
+    async def get_corax_dm_contacts(self, limit: int = 100) -> list[dict]:
+        limit = max(1, min(500, int(limit)))
+        async with self.db.execute(
+            """SELECT user_id, MAX(user_name) AS user_name,
+                      MAX(timestamp) AS last_message_at,
+                      COUNT(*) AS message_count
+               FROM corax_dm_messages
+               GROUP BY user_id
+               ORDER BY last_message_at DESC
+               LIMIT ?""",
+            (limit,),
+        ) as cur:
+            return [dict(row) for row in await cur.fetchall()]
+
     async def search_songs_by_artist(self, artist: str, channel_ids: list = None,
                                      days: int = None, limit: int = 10,
                                      order: str = "recent") -> list[dict]:
@@ -4743,8 +4834,11 @@ class Database:
         cur = await self.db.execute(
             "DELETE FROM llm_audit_log WHERE timestamp < ?", (cutoff,)
         )
+        dm_cur = await self.db.execute(
+            "DELETE FROM corax_dm_messages WHERE timestamp < ?", (cutoff,)
+        )
         await self.db.commit()
-        return cur.rowcount or 0
+        return (cur.rowcount or 0) + (dm_cur.rowcount or 0)
 
     # --- Reaction Roles ---
 
