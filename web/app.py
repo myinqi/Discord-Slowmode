@@ -8,7 +8,7 @@ import hmac
 import math
 import secrets
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 import bcrypt
@@ -241,6 +241,14 @@ def create_app(db: Database, bot=None) -> Quart:
     app.songripper_playlist_jobs = {}
     app.songripper_playlist_lock = asyncio.Lock()
     app.song_rating_new_tokens = {}
+    app.song_rating_sync_status = {
+        "running": False,
+        "total": 0,
+        "processed": 0,
+        "resolved": 0,
+        "unresolved": 0,
+    }
+    app.song_rating_sync_task = None
     # Serializes manual starts of both radio managers. The scheduled Exp.
     # Radio start additionally checks the legacy manager before it fires.
     app.radio_start_lock = asyncio.Lock()
@@ -5075,28 +5083,77 @@ def create_app(db: Database, bot=None) -> Quart:
             traceback.print_exc()
             return f"<pre>Error: {e}\n\n{traceback.format_exc()}</pre>", 500
 
-    async def _sync_song_rating_uuids(limit: int = 500) -> tuple[int, int]:
+    async def _sync_song_rating_uuids(limit: int | None = None) -> tuple[int, int]:
         urls = await db.get_unresolved_song_urls(limit=limit)
         if not urls:
             return 0, 0
-        semaphore = asyncio.Semaphore(8)
+        status = app.song_rating_sync_status
+        status.update({
+            "running": True,
+            "total": len(urls),
+            "processed": 0,
+            "resolved": 0,
+            "unresolved": 0,
+        })
+        queue = asyncio.Queue()
+        for url in urls:
+            queue.put_nowait(url)
 
-        async def resolve_one(url: str):
-            async with semaphore:
-                uuid = await resolve_suno_uuid(url)
-                if uuid:
-                    await db.set_song_uuid(url, uuid)
-                    return True
-                return False
+        async def worker():
+            while True:
+                try:
+                    url = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
+                try:
+                    uuid = await resolve_suno_uuid(url)
+                    if uuid:
+                        await db.set_song_uuid(url, uuid)
+                        status["resolved"] += 1
+                    else:
+                        status["unresolved"] += 1
+                except Exception:
+                    status["unresolved"] += 1
+                finally:
+                    status["processed"] += 1
+                    queue.task_done()
 
-        results = await asyncio.gather(
-            *(resolve_one(url) for url in urls), return_exceptions=True
-        )
-        resolved = sum(result is True for result in results)
-        return resolved, len(urls) - resolved
+        try:
+            await asyncio.gather(*(worker() for _ in range(8)))
+            return status["resolved"], status["unresolved"]
+        finally:
+            status["running"] = False
+
+    async def _run_song_rating_uuid_sync():
+        try:
+            await _sync_song_rating_uuids()
+            await db.build_song_rating_snapshot(_song_rating_today())
+        except Exception as exc:
+            app.song_rating_sync_status["running"] = False
+            app.song_rating_sync_status["error"] = str(exc)
 
     def _song_rating_today() -> str:
         return datetime.now(ZoneInfo("Europe/Berlin")).date().isoformat()
+
+    def _song_rating_cutoff(snapshot_date: str) -> float:
+        day = datetime.strptime(snapshot_date, "%Y-%m-%d").date()
+        next_midnight = datetime.combine(
+            day + timedelta(days=1), datetime.min.time(), ZoneInfo("Europe/Berlin")
+        )
+        return next_midnight.timestamp()
+
+    async def _build_song_rating_snapshot_for_date(
+        snapshot_date: str, force: bool = False
+    ) -> list[dict]:
+        if snapshot_date == _song_rating_today():
+            return await db.build_song_rating_snapshot(snapshot_date)
+        if not force:
+            existing = await db.get_song_rating_snapshot(snapshot_date)
+            if existing:
+                return existing
+        return await db.build_song_rating_snapshot(
+            snapshot_date, cutoff_timestamp=_song_rating_cutoff(snapshot_date)
+        )
 
     @app.route("/song-rating-api", methods=["GET", "POST"])
     @permission_required("song_rating_api")
@@ -5124,32 +5181,53 @@ def create_app(db: Database, bot=None) -> Quart:
                     "success",
                 )
             elif action == "sync_uuids":
-                resolved, unresolved = await _sync_song_rating_uuids()
-                await flash(
-                    f"Suno UUID sync complete: {resolved} resolved, {unresolved} unresolved.",
-                    "success" if unresolved == 0 else "warning",
-                )
+                if app.song_rating_sync_status["running"]:
+                    await flash("Suno UUID resolution is already running.", "warning")
+                else:
+                    app.song_rating_sync_task = asyncio.create_task(
+                        _run_song_rating_uuid_sync()
+                    )
+                    await flash(
+                        "Suno UUID resolution started in the background.", "success"
+                    )
             elif action == "refresh_snapshot":
-                await _sync_song_rating_uuids()
                 rows = await db.build_song_rating_snapshot(_song_rating_today())
-                await flash(f"Today's snapshot refreshed with {len(rows)} songs.", "success")
+                await flash(f"Current snapshot refreshed with {len(rows)} songs.", "success")
+            elif action == "build_history":
+                try:
+                    history_days = max(1, min(int(form.get("history_days", 30)), 365))
+                except (TypeError, ValueError):
+                    history_days = 30
+                today_date = datetime.now(ZoneInfo("Europe/Berlin")).date()
+                for days_ago in range(history_days, 0, -1):
+                    snapshot_date = (today_date - timedelta(days=days_ago)).isoformat()
+                    await _build_song_rating_snapshot_for_date(snapshot_date, force=True)
+                await flash(
+                    f"Generated {history_days} historical daily snapshots.", "success"
+                )
             return redirect(url_for("song_rating_api_admin"))
 
         today = _song_rating_today()
         current = await db.build_song_rating_snapshot(today)
         stats = await db.get_song_rating_api_stats()
-        unresolved_count = len(await db.get_unresolved_song_urls(limit=5001))
+        unresolved_count = await db.count_unresolved_song_urls()
+        endpoint_url = url_for("song_rating_api_feed", _external=True)
+        if endpoint_url.startswith("http://") and not request.host.startswith(
+            ("localhost", "127.0.0.1")
+        ):
+            endpoint_url = "https://" + endpoint_url.removeprefix("http://")
         response = await make_response(
             await render_template(
                 "song_rating_api.html",
                 enabled=(await db.get_setting("song_rating_api_enabled")) == "1",
                 token_configured=bool(await db.get_setting("song_rating_api_token_hash")),
                 new_token=app.song_rating_new_tokens.pop(int(session["user_id"]), None),
-                endpoint_url=url_for("song_rating_api_feed", _external=True),
+                endpoint_url=endpoint_url,
                 today=today,
                 current=current,
                 stats=stats,
                 unresolved_count=unresolved_count,
+                sync_status=app.song_rating_sync_status,
             )
         )
         response.headers["Cache-Control"] = "no-store"
@@ -5176,21 +5254,44 @@ def create_app(db: Database, bot=None) -> Quart:
 
         requested_date = (request.args.get("date") or _song_rating_today()).strip()
         try:
-            datetime.strptime(requested_date, "%Y-%m-%d")
+            parsed_date = datetime.strptime(requested_date, "%Y-%m-%d").date()
         except ValueError:
             return jsonify({"error": "Invalid date; use YYYY-MM-DD"}), 400
 
         today = _song_rating_today()
-        if requested_date == today:
-            rows = await db.build_song_rating_snapshot(requested_date)
-        else:
-            rows = await db.get_song_rating_snapshot(requested_date)
+        if parsed_date > datetime.strptime(today, "%Y-%m-%d").date():
+            return jsonify({"error": "Future dates are not available"}), 400
+        rows = await _build_song_rating_snapshot_for_date(requested_date)
         await db.log_song_rating_api_request(requested_date, len(rows))
         response = jsonify({
             "date": requested_date,
             "generated_at": datetime.now(ZoneInfo("Europe/Berlin")).isoformat(),
             "songs": rows,
             "count": len(rows),
+        })
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.route("/api/v1/song-ratings/dates", methods=["GET"])
+    async def song_rating_api_dates():
+        from quart import jsonify
+
+        if (await db.get_setting("song_rating_api_enabled")) != "1":
+            return jsonify({"error": "Song Rating API is disabled"}), 503
+        configured_hash = await db.get_setting("song_rating_api_token_hash")
+        authorization = request.headers.get("Authorization", "")
+        supplied_token = authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
+        if not supplied_token:
+            supplied_token = request.headers.get("X-API-Key", "").strip()
+        supplied_hash = hashlib.sha256(supplied_token.encode("utf-8")).hexdigest()
+        if not configured_hash or not supplied_token or not hmac.compare_digest(
+            configured_hash, supplied_hash
+        ):
+            return jsonify({"error": "Unauthorized"}), 401
+        stats = await db.get_song_rating_api_stats(days=365)
+        response = jsonify({
+            "dates": [row["date"] for row in stats["snapshots"]],
+            "snapshots": stats["snapshots"],
         })
         response.headers["Cache-Control"] = "no-store"
         return response

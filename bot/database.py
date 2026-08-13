@@ -3187,27 +3187,45 @@ class Database:
         )
         await self.db.commit()
 
-    async def get_unresolved_song_urls(self, limit: int = 5000) -> list[str]:
-        async with self.db.execute(
-            """
+    async def get_unresolved_song_urls(self, limit: int | None = 5000) -> list[str]:
+        query = """
             SELECT url FROM song_posts WHERE suno_uuid IS NULL
             UNION
             SELECT song_url FROM song_reactions
             WHERE suno_uuid IS NULL AND song_url IS NOT NULL
-            LIMIT ?
-            """,
-            (limit,),
-        ) as cursor:
+        """
+        params = ()
+        if limit is not None:
+            query += " LIMIT ?"
+            params = (limit,)
+        async with self.db.execute(query, params) as cursor:
             return [row[0] for row in await cursor.fetchall()]
 
-    async def build_song_rating_snapshot(self, snapshot_date: str) -> list[dict]:
-        """Persist and return privacy-safe unique reaction counts per Suno UUID."""
+    async def count_unresolved_song_urls(self) -> int:
+        async with self.db.execute(
+            """
+            SELECT COUNT(*) FROM (
+                SELECT url FROM song_posts WHERE suno_uuid IS NULL
+                UNION
+                SELECT song_url FROM song_reactions
+                WHERE suno_uuid IS NULL AND song_url IS NOT NULL
+            )
+            """
+        ) as cursor:
+            return int((await cursor.fetchone())[0])
+
+    async def build_song_rating_snapshot(
+        self, snapshot_date: str, cutoff_timestamp: float | None = None
+    ) -> list[dict]:
+        """Persist unique reaction counts, optionally limited to a historical cutoff."""
         await self.db.execute(
             "DELETE FROM song_rating_api_snapshots WHERE snapshot_date = ?",
             (snapshot_date,),
         )
+        cutoff_clause = " AND sr.reacted_at < ?" if cutoff_timestamp is not None else ""
+        params = (snapshot_date, cutoff_timestamp) if cutoff_timestamp is not None else (snapshot_date,)
         await self.db.execute(
-            """
+            f"""
             INSERT INTO song_rating_api_snapshots
                 (snapshot_date, suno_uuid, unique_reactions, generated_at)
             SELECT ?, lower(COALESCE(sr.suno_uuid, sp.suno_uuid)),
@@ -3217,9 +3235,10 @@ class Database:
             WHERE COALESCE(sr.suno_uuid, sp.suno_uuid) IS NOT NULL
               AND trim(COALESCE(sr.suno_uuid, sp.suno_uuid)) != ''
               AND sr.reactor_user_id != COALESCE(sr.post_author_id, sp.user_id, -1)
+              {cutoff_clause}
             GROUP BY lower(COALESCE(sr.suno_uuid, sp.suno_uuid))
             """,
-            (snapshot_date,),
+            params,
         )
         await self.db.commit()
         return await self.get_song_rating_snapshot(snapshot_date)

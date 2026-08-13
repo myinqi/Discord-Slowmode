@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Song Rating API{% endblock %}
 {% block content %}
+{% if sync_status.running %}<meta http-equiv="refresh" content="5">{% endif %}
 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
     <div>
         <h2 class="text-2xl font-bold text-white">Song Rating API</h2>
@@ -70,6 +71,7 @@
             <div class="bg-discord-darker rounded-lg p-4 font-mono text-xs text-gray-300 overflow-x-auto"><pre>curl -H "Authorization: Bearer YOUR_TOKEN" \
   "{{ endpoint_url }}?date={{ today }}"</pre></div>
             <p class="text-xs text-gray-500">The date parameter is optional and uses <code>YYYY-MM-DD</code>. Today's data is refreshed on request. Historical dates return their last stored snapshot.</p>
+            <p class="text-xs text-gray-500">Available dates: <code>{{ endpoint_url }}/dates</code>. Requesting a past date creates and stores that snapshot when needed.</p>
             <div class="bg-discord-darker rounded-lg p-4 font-mono text-xs text-gray-300 overflow-x-auto"><pre>{
   "date": "{{ today }}",
   "songs": [
@@ -81,18 +83,36 @@
 </div>
 
 <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-6">
-    <div class="bg-discord-dark border border-gray-700/50 rounded-lg p-4"><div class="text-xs text-gray-500">Songs today</div><div class="text-2xl font-bold text-white mt-1">{{ current|length }}</div></div>
-    <div class="bg-discord-dark border border-gray-700/50 rounded-lg p-4"><div class="text-xs text-gray-500">Unique ratings today</div><div class="text-2xl font-bold text-purple-300 mt-1">{{ current|sum(attribute='unique_reactions') }}</div></div>
+    <div class="bg-discord-dark border border-gray-700/50 rounded-lg p-4"><div class="text-xs text-gray-500">Rated songs in current snapshot</div><div class="text-2xl font-bold text-white mt-1">{{ current|length }}</div></div>
+    <div class="bg-discord-dark border border-gray-700/50 rounded-lg p-4"><div class="text-xs text-gray-500">Unique song-user ratings</div><div class="text-2xl font-bold text-purple-300 mt-1">{{ current|sum(attribute='unique_reactions') }}</div></div>
     <div class="bg-discord-dark border border-gray-700/50 rounded-lg p-4"><div class="text-xs text-gray-500">API requests</div><div class="text-2xl font-bold text-blue-300 mt-1">{{ stats.total_requests }}</div></div>
-    <div class="bg-discord-dark border border-gray-700/50 rounded-lg p-4"><div class="text-xs text-gray-500">Unresolved URLs</div><div class="text-2xl font-bold {% if unresolved_count %}text-yellow-300{% else %}text-green-300{% endif %} mt-1">{{ unresolved_count }}{% if unresolved_count > 5000 %}+{% endif %}</div></div>
+    <div class="bg-discord-dark border border-gray-700/50 rounded-lg p-4"><div class="text-xs text-gray-500">Unresolved URLs</div><div class="text-2xl font-bold {% if unresolved_count %}text-yellow-300{% else %}text-green-300{% endif %} mt-1">{{ unresolved_count }}</div></div>
 </div>
+
+{% if sync_status.running or sync_status.processed %}
+<div class="mt-4 p-4 bg-discord-dark border border-gray-700/50 rounded-lg">
+    <div class="flex items-center justify-between gap-4 text-sm">
+        <span class="text-gray-300">Suno UUID resolution {{ "is running" if sync_status.running else "last run" }}</span>
+        <span class="text-gray-400">{{ sync_status.processed }} / {{ sync_status.total }}</span>
+    </div>
+    <div class="h-2 bg-discord-darker rounded-full overflow-hidden mt-3">
+        <div class="h-full bg-discord-blurple" style="width: {{ ((sync_status.processed / sync_status.total * 100) if sync_status.total else 0)|round(1) }}%"></div>
+    </div>
+    <div class="text-xs text-gray-500 mt-2">{{ sync_status.resolved }} resolved · {{ sync_status.unresolved }} still unresolved</div>
+</div>
+{% endif %}
 
 <section class="bg-discord-dark border border-gray-700/50 rounded-xl mt-6">
     <div class="px-5 py-4 border-b border-gray-700/50 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <div><h3 class="text-white font-semibold">Daily snapshots</h3><p class="text-xs text-gray-500 mt-1">Only aggregate counts are exposed. Discord identities and names stay private.</p></div>
-        <div class="flex gap-2">
-            <form method="POST"><input type="hidden" name="action" value="sync_uuids"><button class="px-3 py-2 bg-discord-lighter hover:bg-gray-600 text-gray-200 rounded-lg text-xs">Resolve Suno IDs</button></form>
-            <form method="POST"><input type="hidden" name="action" value="refresh_snapshot"><button class="px-3 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg text-xs">Refresh today</button></form>
+        <div><h3 class="text-white font-semibold">Rating snapshots</h3><p class="text-xs text-gray-500 mt-1">Each dated row is a cumulative state at that date. Discord identities and names stay private.</p></div>
+        <div class="flex flex-wrap gap-2">
+            <form method="POST"><input type="hidden" name="action" value="sync_uuids"><button {% if sync_status.running %}disabled{% endif %} class="px-3 py-2 bg-discord-lighter hover:bg-gray-600 disabled:opacity-50 text-gray-200 rounded-lg text-xs">{{ "Resolving…" if sync_status.running else "Resolve Suno IDs" }}</button></form>
+            <form method="POST"><input type="hidden" name="action" value="refresh_snapshot"><button class="px-3 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg text-xs">Refresh snapshot</button></form>
+            <form method="POST" class="flex gap-2">
+                <input type="hidden" name="action" value="build_history">
+                <input type="number" name="history_days" value="30" min="1" max="365" aria-label="History days" class="w-20 px-2 py-2 bg-discord-darker border border-gray-700 rounded-lg text-gray-200 text-xs">
+                <button class="px-3 py-2 bg-discord-lighter hover:bg-gray-600 text-gray-200 rounded-lg text-xs">Generate history</button>
+            </form>
         </div>
     </div>
     <div class="overflow-x-auto">
@@ -113,6 +133,7 @@
         <li>The author of a song post is excluded from that post's rating.</li>
         <li>Authenticated reactions from all Player variants are included and linked to their Discord identity.</li>
         <li>Anonymous Player reactions use the bot identity and therefore count at most once per song.</li>
+        <li>Historical snapshots include reactions still recorded in the database up to the end of that day. Reactions removed before this feature was introduced cannot be reconstructed.</li>
     </ul>
 </section>
 {% endblock %}
