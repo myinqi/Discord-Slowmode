@@ -1,8 +1,11 @@
+import asyncio
 import re
 import time
 import math
 import discord
 from discord.ext import commands
+
+from bot.suno_urls import resolve_suno_uuid
 
 SUNO_URL_PATTERN = re.compile(r'https://suno\.com/(?:s|song)/[\w-]+')
 
@@ -10,6 +13,14 @@ SUNO_URL_PATTERN = re.compile(r'https://suno\.com/(?:s|song)/[\w-]+')
 class SlowmodeCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+
+    async def _resolve_song_uuid(self, url: str):
+        try:
+            suno_uuid = await resolve_suno_uuid(url)
+            if suno_uuid:
+                await self.bot.db.set_song_uuid(url, suno_uuid)
+        except Exception as exc:
+            print(f"[song-rating] UUID resolution failed for {url}: {exc}", flush=True)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -63,6 +74,8 @@ class SlowmodeCog(commands.Cog):
                     )
                 except Exception:
                     pass
+
+                asyncio.create_task(self._resolve_song_uuid(url))
 
             # ── LLM-based lyric moderation (new admin-tab feature) ───────
             # Fire-and-forget per URL. The screener internally:

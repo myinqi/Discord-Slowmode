@@ -3,13 +3,17 @@ import json
 import os
 import re
 import functools
+import hashlib
+import hmac
 import math
 import secrets
 import time
+from datetime import datetime
 from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
 import bcrypt
 import aiohttp
-from quart import Quart, render_template, request, redirect, url_for, session, flash
+from quart import Quart, render_template, request, redirect, url_for, session, flash, make_response
 from bot.database import Database
 from bot.backup import (
     create_full_data_archive,
@@ -22,6 +26,7 @@ from bot.exp_radio_files import (
     cleanup_orphan_exp_radio_hook_files,
     exp_radio_hook_cache_path,
 )
+from bot.suno_urls import resolve_suno_uuid
 
 SUNO_URL_PATTERN = re.compile(r'https://suno\.com/(?:s|song)/[\w-]+')
 YOUTUBE_URL_RE   = re.compile(
@@ -235,6 +240,7 @@ def create_app(db: Database, bot=None) -> Quart:
     app.file_share_lock = asyncio.Lock()
     app.songripper_playlist_jobs = {}
     app.songripper_playlist_lock = asyncio.Lock()
+    app.song_rating_new_tokens = {}
     # Serializes manual starts of both radio managers. The scheduled Exp.
     # Radio start additionally checks the legacy manager before it fires.
     app.radio_start_lock = asyncio.Lock()
@@ -275,6 +281,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('song_stats', 'Song Stats'),
         ('user_stats', 'User Stats'),
         ('reaction_stats', 'Reaction Stats'),
+        ('song_rating_api', 'Song Rating API'),
         ('reaction_roles', 'Reaction Roles'),
         ('image_posting', 'Image Posting'),
         ('polls', 'Polls'),
@@ -314,6 +321,7 @@ def create_app(db: Database, bot=None) -> Quart:
         {"key": "song_stats", "endpoint": "song_stats", "icon": "📈", "label": "Song Stats", "perm": "song_stats"},
         {"key": "user_stats", "endpoint": "user_stats", "icon": "👤", "label": "User Stats", "perm": "user_stats"},
         {"key": "reaction_stats", "endpoint": "reaction_stats", "icon": "💬", "label": "Reaction Stats", "perm": "reaction_stats"},
+        {"key": "song_rating_api", "endpoint": "song_rating_api_admin", "icon": "🔌", "label": "Song Rating API", "perm": "song_rating_api"},
         {"key": "reaction_roles", "endpoint": "reaction_roles", "icon": "🎭", "label": "Reaction Roles", "perm": "reaction_roles"},
         {"key": "image_posting", "endpoint": "image_posting", "icon": "🖼️", "label": "Image Posting", "perm": "image_posting"},
         {"key": "polls", "endpoint": "polls", "icon": "📊", "label": "Polls", "perm": "polls"},
@@ -3931,6 +3939,16 @@ def create_app(db: Database, bot=None) -> Quart:
                         reactor_user_name=connection["discord_display_name"],
                         emoji=emoji,
                         song_title=song_post.get("song_title"),
+                        source="player",
+                    )
+                elif not await db.has_player_song_reaction(
+                    message_id_int, int(connection["discord_user_id"]), emoji
+                ):
+                    await db.remove_sourced_song_reaction(
+                        message_id_int,
+                        int(connection["discord_user_id"]),
+                        emoji,
+                        ("player", "public_player"),
                     )
                 thread_ok, thread_error = await _update_player_reaction_summary(song_post)
                 if not thread_ok:
@@ -3943,8 +3961,8 @@ def create_app(db: Database, bot=None) -> Quart:
                     "warning": thread_error,
                 })
 
-            reactor_user_id = session.get("user_id", 0)
-            reactor_user_name = session.get("username", "web-user")
+            reactor_user_id = int(bot.user.id) if bot and bot.user else 0
+            reactor_user_name = str(bot.user) if bot and bot.user else "player-bot"
             await db.add_song_reaction(
                 message_id=message_id_int,
                 channel_id=int(song_post["channel_id"]),
@@ -3954,6 +3972,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 reactor_user_name=reactor_user_name,
                 emoji=emoji,
                 song_title=song_post.get("song_title"),
+                source="bot_player",
             )
 
             discord_ok = False
@@ -4014,6 +4033,16 @@ def create_app(db: Database, bot=None) -> Quart:
                     reactor_user_name=display_name,
                     emoji=emoji,
                     song_title=song_post.get("song_title"),
+                    source="public_player",
+                )
+            elif not await db.has_player_song_reaction(
+                message_id_int, discord_user_id, emoji
+            ):
+                await db.remove_sourced_song_reaction(
+                    message_id_int,
+                    discord_user_id,
+                    emoji,
+                    ("player", "public_player"),
                 )
             thread_ok, thread_error = await _update_player_reaction_summary(song_post)
             if not thread_ok:
@@ -5045,6 +5074,126 @@ def create_app(db: Database, bot=None) -> Quart:
         except Exception as e:
             traceback.print_exc()
             return f"<pre>Error: {e}\n\n{traceback.format_exc()}</pre>", 500
+
+    async def _sync_song_rating_uuids(limit: int = 500) -> tuple[int, int]:
+        urls = await db.get_unresolved_song_urls(limit=limit)
+        if not urls:
+            return 0, 0
+        semaphore = asyncio.Semaphore(8)
+
+        async def resolve_one(url: str):
+            async with semaphore:
+                uuid = await resolve_suno_uuid(url)
+                if uuid:
+                    await db.set_song_uuid(url, uuid)
+                    return True
+                return False
+
+        results = await asyncio.gather(
+            *(resolve_one(url) for url in urls), return_exceptions=True
+        )
+        resolved = sum(result is True for result in results)
+        return resolved, len(urls) - resolved
+
+    def _song_rating_today() -> str:
+        return datetime.now(ZoneInfo("Europe/Berlin")).date().isoformat()
+
+    @app.route("/song-rating-api", methods=["GET", "POST"])
+    @permission_required("song_rating_api")
+    async def song_rating_api_admin():
+        if request.method == "POST":
+            form = await request.form
+            action = (form.get("action") or "save").strip()
+            if action == "save":
+                await db.set_setting(
+                    "song_rating_api_enabled", "1" if form.get("enabled") else "0"
+                )
+                await flash("Song Rating API settings saved.", "success")
+            elif action == "generate_token":
+                token = secrets.token_urlsafe(48)
+                digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+                await db.set_setting("song_rating_api_token_hash", digest)
+                app.song_rating_new_tokens[int(session["user_id"])] = token
+                await db.add_audit_log(
+                    event_type="song_rating_api_token_rotated",
+                    details="Song Rating API access token generated or rotated",
+                    actor=session.get("username", "unknown"),
+                )
+                await flash(
+                    "A new API token was generated. Store it now; it is shown only once.",
+                    "success",
+                )
+            elif action == "sync_uuids":
+                resolved, unresolved = await _sync_song_rating_uuids()
+                await flash(
+                    f"Suno UUID sync complete: {resolved} resolved, {unresolved} unresolved.",
+                    "success" if unresolved == 0 else "warning",
+                )
+            elif action == "refresh_snapshot":
+                await _sync_song_rating_uuids()
+                rows = await db.build_song_rating_snapshot(_song_rating_today())
+                await flash(f"Today's snapshot refreshed with {len(rows)} songs.", "success")
+            return redirect(url_for("song_rating_api_admin"))
+
+        today = _song_rating_today()
+        current = await db.build_song_rating_snapshot(today)
+        stats = await db.get_song_rating_api_stats()
+        unresolved_count = len(await db.get_unresolved_song_urls(limit=5001))
+        response = await make_response(
+            await render_template(
+                "song_rating_api.html",
+                enabled=(await db.get_setting("song_rating_api_enabled")) == "1",
+                token_configured=bool(await db.get_setting("song_rating_api_token_hash")),
+                new_token=app.song_rating_new_tokens.pop(int(session["user_id"]), None),
+                endpoint_url=url_for("song_rating_api_feed", _external=True),
+                today=today,
+                current=current,
+                stats=stats,
+                unresolved_count=unresolved_count,
+            )
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.route("/api/v1/song-ratings", methods=["GET"])
+    async def song_rating_api_feed():
+        from quart import jsonify
+
+        if (await db.get_setting("song_rating_api_enabled")) != "1":
+            return jsonify({"error": "Song Rating API is disabled"}), 503
+        configured_hash = await db.get_setting("song_rating_api_token_hash")
+        authorization = request.headers.get("Authorization", "")
+        supplied_token = ""
+        if authorization.lower().startswith("bearer "):
+            supplied_token = authorization[7:].strip()
+        if not supplied_token:
+            supplied_token = request.headers.get("X-API-Key", "").strip()
+        supplied_hash = hashlib.sha256(supplied_token.encode("utf-8")).hexdigest()
+        if not configured_hash or not supplied_token or not hmac.compare_digest(
+            configured_hash, supplied_hash
+        ):
+            return jsonify({"error": "Unauthorized"}), 401
+
+        requested_date = (request.args.get("date") or _song_rating_today()).strip()
+        try:
+            datetime.strptime(requested_date, "%Y-%m-%d")
+        except ValueError:
+            return jsonify({"error": "Invalid date; use YYYY-MM-DD"}), 400
+
+        today = _song_rating_today()
+        if requested_date == today:
+            rows = await db.build_song_rating_snapshot(requested_date)
+        else:
+            rows = await db.get_song_rating_snapshot(requested_date)
+        await db.log_song_rating_api_request(requested_date, len(rows))
+        response = jsonify({
+            "date": requested_date,
+            "generated_at": datetime.now(ZoneInfo("Europe/Berlin")).isoformat(),
+            "songs": rows,
+            "count": len(rows),
+        })
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     # --- Reaction Roles ---
 
@@ -10861,6 +11010,16 @@ def create_app(db: Database, bot=None) -> Quart:
                     reactor_user_name=connection["discord_display_name"],
                     emoji=emoji,
                     song_title=song_post.get("song_title"),
+                    source="player",
+                )
+            elif not await db.has_player_song_reaction(
+                message_id_int, int(connection["discord_user_id"]), emoji
+            ):
+                await db.remove_sourced_song_reaction(
+                    message_id_int,
+                    int(connection["discord_user_id"]),
+                    emoji,
+                    ("player", "public_player"),
                 )
             thread_ok, thread_error = await _update_player_reaction_summary(song_post)
             if not thread_ok:

@@ -7,6 +7,8 @@ import sqlite3
 import time
 from typing import Optional
 
+from bot.suno_urls import extract_suno_uuid
+
 
 DEFAULT_COLLECTIBLE_RARITY_WEIGHTS = {
     "Common": 100.0,
@@ -435,6 +437,30 @@ class Database:
             )
             await self.db.commit()
 
+        rating_api_sidebar_migration = "migration_sidebar_song_rating_api_v1"
+        async with self.db.execute(
+            "SELECT value FROM settings WHERE key = ?", (rating_api_sidebar_migration,)
+        ) as cursor:
+            rating_api_sidebar_migrated = await cursor.fetchone()
+        if not rating_api_sidebar_migrated:
+            async with self.db.execute(
+                "SELECT value FROM settings WHERE key = 'sidebar_visible_items'"
+            ) as cursor:
+                sidebar_row = await cursor.fetchone()
+            if sidebar_row and sidebar_row[0] and sidebar_row[0] != "__none__":
+                visible_items = [item for item in sidebar_row[0].split(",") if item]
+                if "song_rating_api" not in visible_items:
+                    visible_items.append("song_rating_api")
+                    await self.db.execute(
+                        "UPDATE settings SET value = ? WHERE key = 'sidebar_visible_items'",
+                        (",".join(visible_items),),
+                    )
+            await self.db.execute(
+                "INSERT INTO settings (key, value) VALUES (?, 'done')",
+                (rating_api_sidebar_migration,),
+            )
+            await self.db.commit()
+
         # Add message_id column to song_posts if missing
         async with self.db.execute("PRAGMA table_info(song_posts)") as cursor:
             sp_columns = [row[1] async for row in cursor]
@@ -521,7 +547,72 @@ class Database:
                 ON player_song_reactions(message_id, reacted_at);
             CREATE INDEX IF NOT EXISTS idx_public_player_song_reactions_message
                 ON public_player_song_reactions(message_id, reacted_at);
+
+            CREATE TABLE IF NOT EXISTS song_rating_api_snapshots (
+                snapshot_date TEXT NOT NULL,
+                suno_uuid TEXT NOT NULL,
+                unique_reactions INTEGER NOT NULL,
+                generated_at REAL DEFAULT (unixepoch()),
+                PRIMARY KEY (snapshot_date, suno_uuid)
+            );
+
+            CREATE TABLE IF NOT EXISTS song_rating_api_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                requested_at REAL DEFAULT (unixepoch()),
+                requested_date TEXT,
+                result_count INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_song_rating_api_requests_at
+                ON song_rating_api_requests(requested_at);
         """)
+        await self.db.commit()
+
+        async with self.db.execute("PRAGMA table_info(song_posts)") as cursor:
+            sp_rating_columns = [row[1] async for row in cursor]
+        if "suno_uuid" not in sp_rating_columns:
+            await self.db.execute("ALTER TABLE song_posts ADD COLUMN suno_uuid TEXT")
+
+        async with self.db.execute("PRAGMA table_info(song_reactions)") as cursor:
+            sr_rating_columns = [row[1] async for row in cursor]
+        if "suno_uuid" not in sr_rating_columns:
+            await self.db.execute("ALTER TABLE song_reactions ADD COLUMN suno_uuid TEXT")
+        if "source" not in sr_rating_columns:
+            await self.db.execute(
+                "ALTER TABLE song_reactions ADD COLUMN source TEXT NOT NULL DEFAULT 'discord'"
+            )
+
+        await self.db.execute(
+            "UPDATE song_posts SET suno_uuid = lower(substr(url, instr(url, '/song/') + 6, 36)) "
+            "WHERE suno_uuid IS NULL AND url LIKE '%/song/%'"
+        )
+        await self.db.execute(
+            "UPDATE song_reactions SET suno_uuid = lower(substr(song_url, instr(song_url, '/song/') + 6, 36)) "
+            "WHERE suno_uuid IS NULL AND song_url LIKE '%/song/%'"
+        )
+        await self.db.execute(
+            "UPDATE song_reactions SET source = 'player' "
+            "WHERE source = 'discord' AND EXISTS ("
+            "SELECT 1 FROM player_song_reactions pr "
+            "WHERE pr.message_id = song_reactions.message_id "
+            "AND pr.discord_user_id = song_reactions.reactor_user_id "
+            "AND pr.emoji = song_reactions.emoji)"
+        )
+        await self.db.execute(
+            "UPDATE song_reactions SET source = 'public_player' "
+            "WHERE source = 'discord' AND EXISTS ("
+            "SELECT 1 FROM public_player_song_reactions pr "
+            "WHERE pr.message_id = song_reactions.message_id "
+            "AND pr.discord_user_id = song_reactions.reactor_user_id "
+            "AND pr.emoji = song_reactions.emoji)"
+        )
+        await self.db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_song_posts_suno_uuid ON song_posts(suno_uuid)"
+        )
+        await self.db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_song_reactions_suno_uuid "
+            "ON song_reactions(suno_uuid, reactor_user_id)"
+        )
         await self.db.commit()
 
         # Add song_title column to song_reactions if missing
@@ -2605,12 +2696,14 @@ class Database:
     # --- Song Posts (Statistics) ---
 
     async def add_song_post(self, channel_id: int, user_id: int, user_name: str, url: str, posted_at: float, message_id: int = None, song_title: str = None):
+        suno_uuid = extract_suno_uuid(url)
         await self.db.execute(
-            "INSERT INTO song_posts (channel_id, user_id, user_name, url, posted_at, message_id, song_title) VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "INSERT INTO song_posts (channel_id, user_id, user_name, url, posted_at, message_id, song_title, suno_uuid) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(channel_id, url) DO UPDATE SET "
             "message_id = COALESCE(song_posts.message_id, excluded.message_id), "
-            "song_title = COALESCE(song_posts.song_title, excluded.song_title)",
-            (channel_id, user_id, user_name, url, posted_at, message_id, song_title),
+            "song_title = COALESCE(song_posts.song_title, excluded.song_title), "
+            "suno_uuid = COALESCE(song_posts.suno_uuid, excluded.suno_uuid)",
+            (channel_id, user_id, user_name, url, posted_at, message_id, song_title, suno_uuid),
         )
         await self.db.commit()
 
@@ -2654,10 +2747,13 @@ class Database:
             return result
 
     async def add_song_posts_bulk(self, rows: list[tuple]):
+        enriched = [tuple(row) + (extract_suno_uuid(row[3]),) for row in rows]
         await self.db.executemany(
-            "INSERT INTO song_posts (channel_id, user_id, user_name, url, posted_at, message_id) VALUES (?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(channel_id, url) DO UPDATE SET message_id = COALESCE(song_posts.message_id, excluded.message_id)",
-            rows,
+            "INSERT INTO song_posts (channel_id, user_id, user_name, url, posted_at, message_id, suno_uuid) VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(channel_id, url) DO UPDATE SET "
+            "message_id = COALESCE(song_posts.message_id, excluded.message_id), "
+            "suno_uuid = COALESCE(song_posts.suno_uuid, excluded.suno_uuid)",
+            enriched,
         )
         await self.db.commit()
 
@@ -2941,41 +3037,61 @@ class Database:
     async def add_song_reaction(self, message_id: int, channel_id: int, song_url: str,
                                  post_author_id: int, reactor_user_id: int,
                                  reactor_user_name: str, emoji: str, song_title: str = None,
-                                 reacted_at: float = None):
+                                 reacted_at: float = None, source: str = "discord",
+                                 suno_uuid: str = None):
+        suno_uuid = suno_uuid or extract_suno_uuid(song_url)
         if reacted_at is not None:
             await self.db.execute(
                 "INSERT INTO song_reactions "
-                "(message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji, song_title, reacted_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "(message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji, song_title, reacted_at, source, suno_uuid) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(message_id, reactor_user_id, emoji) DO UPDATE SET "
                 "song_title = COALESCE(song_reactions.song_title, excluded.song_title), "
                 "song_url = COALESCE(song_reactions.song_url, excluded.song_url), "
+                "suno_uuid = COALESCE(song_reactions.suno_uuid, excluded.suno_uuid), "
+                "source = CASE "
+                "WHEN excluded.source = 'discord' AND song_reactions.source IN ('player', 'public_player') THEN 'discord+player' "
+                "WHEN excluded.source IN ('player', 'public_player') AND song_reactions.source = 'discord' THEN 'discord+player' "
+                "WHEN song_reactions.source = 'discord+player' THEN 'discord+player' "
+                "WHEN excluded.source = 'discord' THEN 'discord' "
+                "ELSE song_reactions.source END, "
                 "reacted_at = MIN(song_reactions.reacted_at, excluded.reacted_at)",
-                (message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji, song_title, reacted_at),
+                (message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji, song_title, reacted_at, source, suno_uuid),
             )
         else:
             await self.db.execute(
                 "INSERT INTO song_reactions "
-                "(message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji, song_title) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "(message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji, song_title, source, suno_uuid) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(message_id, reactor_user_id, emoji) DO UPDATE SET "
                 "song_title = COALESCE(song_reactions.song_title, excluded.song_title), "
-                "song_url = COALESCE(song_reactions.song_url, excluded.song_url)",
-                (message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji, song_title),
+                "song_url = COALESCE(song_reactions.song_url, excluded.song_url), "
+                "suno_uuid = COALESCE(song_reactions.suno_uuid, excluded.suno_uuid), "
+                "source = CASE "
+                "WHEN excluded.source = 'discord' AND song_reactions.source IN ('player', 'public_player') THEN 'discord+player' "
+                "WHEN excluded.source IN ('player', 'public_player') AND song_reactions.source = 'discord' THEN 'discord+player' "
+                "WHEN song_reactions.source = 'discord+player' THEN 'discord+player' "
+                "WHEN excluded.source = 'discord' THEN 'discord' "
+                "ELSE song_reactions.source END",
+                (message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji, song_title, source, suno_uuid),
             )
         await self.db.commit()
 
     async def add_song_reactions_bulk(self, rows: list[tuple]):
         """Bulk insert reactions. Rows: (message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji, song_title, reacted_at)"""
+        enriched = [tuple(row) + ("discord", extract_suno_uuid(row[2])) for row in rows]
         await self.db.executemany(
             "INSERT INTO song_reactions "
-            "(message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji, song_title, reacted_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "(message_id, channel_id, song_url, post_author_id, reactor_user_id, reactor_user_name, emoji, song_title, reacted_at, source, suno_uuid) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(message_id, reactor_user_id, emoji) DO UPDATE SET "
             "song_title = COALESCE(song_reactions.song_title, excluded.song_title), "
             "song_url = COALESCE(song_reactions.song_url, excluded.song_url), "
+            "suno_uuid = COALESCE(song_reactions.suno_uuid, excluded.suno_uuid), "
+            "source = CASE WHEN song_reactions.source IN ('player', 'public_player', 'discord+player') "
+            "THEN 'discord+player' ELSE 'discord' END, "
             "reacted_at = MIN(song_reactions.reacted_at, excluded.reacted_at)",
-            rows,
+            enriched,
         )
         await self.db.commit()
 
@@ -3002,11 +3118,160 @@ class Database:
         await self.db.commit()
 
     async def remove_song_reaction(self, message_id: int, reactor_user_id: int, emoji: str):
+        async with self.db.execute(
+            """
+            SELECT 1 FROM player_song_reactions
+            WHERE message_id = ? AND discord_user_id = ? AND emoji = ?
+            UNION ALL
+            SELECT 1 FROM public_player_song_reactions
+            WHERE message_id = ? AND discord_user_id = ? AND emoji = ?
+            LIMIT 1
+            """,
+            (message_id, reactor_user_id, emoji, message_id, reactor_user_id, emoji),
+        ) as cursor:
+            player_active = await cursor.fetchone()
+        if player_active:
+            await self.db.execute(
+                "UPDATE song_reactions SET source = 'player' "
+                "WHERE message_id = ? AND reactor_user_id = ? AND emoji = ?",
+                (message_id, reactor_user_id, emoji),
+            )
+        else:
+            await self.db.execute(
+                "DELETE FROM song_reactions WHERE message_id = ? AND reactor_user_id = ? AND emoji = ?",
+                (message_id, reactor_user_id, emoji),
+            )
+        await self.db.commit()
+
+    async def remove_sourced_song_reaction(
+        self, message_id: int, reactor_user_id: int, emoji: str, sources: tuple[str, ...]
+    ):
+        placeholders = ",".join("?" for _ in sources)
         await self.db.execute(
-            "DELETE FROM song_reactions WHERE message_id = ? AND reactor_user_id = ? AND emoji = ?",
+            "UPDATE song_reactions SET source = 'discord' "
+            "WHERE message_id = ? AND reactor_user_id = ? AND emoji = ? "
+            "AND source = 'discord+player'",
             (message_id, reactor_user_id, emoji),
         )
+        await self.db.execute(
+            f"DELETE FROM song_reactions WHERE message_id = ? AND reactor_user_id = ? "
+            f"AND emoji = ? AND source IN ({placeholders})",
+            (message_id, reactor_user_id, emoji, *sources),
+        )
         await self.db.commit()
+
+    async def has_player_song_reaction(
+        self, message_id: int, discord_user_id: int, emoji: str
+    ) -> bool:
+        async with self.db.execute(
+            """
+            SELECT 1 FROM player_song_reactions
+            WHERE message_id = ? AND discord_user_id = ? AND emoji = ?
+            UNION ALL
+            SELECT 1 FROM public_player_song_reactions
+            WHERE message_id = ? AND discord_user_id = ? AND emoji = ?
+            LIMIT 1
+            """,
+            (message_id, discord_user_id, emoji, message_id, discord_user_id, emoji),
+        ) as cursor:
+            return bool(await cursor.fetchone())
+
+    async def set_song_uuid(self, url: str, suno_uuid: str):
+        suno_uuid = suno_uuid.lower()
+        await self.db.execute(
+            "UPDATE song_posts SET suno_uuid = ? WHERE url = ?", (suno_uuid, url)
+        )
+        await self.db.execute(
+            "UPDATE song_reactions SET suno_uuid = ? WHERE song_url = ?",
+            (suno_uuid, url),
+        )
+        await self.db.commit()
+
+    async def get_unresolved_song_urls(self, limit: int = 5000) -> list[str]:
+        async with self.db.execute(
+            """
+            SELECT url FROM song_posts WHERE suno_uuid IS NULL
+            UNION
+            SELECT song_url FROM song_reactions
+            WHERE suno_uuid IS NULL AND song_url IS NOT NULL
+            LIMIT ?
+            """,
+            (limit,),
+        ) as cursor:
+            return [row[0] for row in await cursor.fetchall()]
+
+    async def build_song_rating_snapshot(self, snapshot_date: str) -> list[dict]:
+        """Persist and return privacy-safe unique reaction counts per Suno UUID."""
+        await self.db.execute(
+            "DELETE FROM song_rating_api_snapshots WHERE snapshot_date = ?",
+            (snapshot_date,),
+        )
+        await self.db.execute(
+            """
+            INSERT INTO song_rating_api_snapshots
+                (snapshot_date, suno_uuid, unique_reactions, generated_at)
+            SELECT ?, lower(COALESCE(sr.suno_uuid, sp.suno_uuid)),
+                   COUNT(DISTINCT sr.reactor_user_id), unixepoch()
+            FROM song_reactions sr
+            LEFT JOIN song_posts sp ON sp.message_id = sr.message_id
+            WHERE COALESCE(sr.suno_uuid, sp.suno_uuid) IS NOT NULL
+              AND trim(COALESCE(sr.suno_uuid, sp.suno_uuid)) != ''
+              AND sr.reactor_user_id != COALESCE(sr.post_author_id, sp.user_id, -1)
+            GROUP BY lower(COALESCE(sr.suno_uuid, sp.suno_uuid))
+            """,
+            (snapshot_date,),
+        )
+        await self.db.commit()
+        return await self.get_song_rating_snapshot(snapshot_date)
+
+    async def get_song_rating_snapshot(self, snapshot_date: str) -> list[dict]:
+        async with self.db.execute(
+            """
+            SELECT snapshot_date AS date, suno_uuid AS uuid, unique_reactions
+            FROM song_rating_api_snapshots
+            WHERE snapshot_date = ?
+            ORDER BY suno_uuid
+            """,
+            (snapshot_date,),
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def log_song_rating_api_request(
+        self, requested_date: str, result_count: int
+    ):
+        await self.db.execute(
+            "INSERT INTO song_rating_api_requests (requested_date, result_count) VALUES (?, ?)",
+            (requested_date, result_count),
+        )
+        await self.db.commit()
+
+    async def get_song_rating_api_stats(self, days: int = 30) -> dict:
+        async with self.db.execute(
+            """
+            SELECT snapshot_date AS date, COUNT(*) AS songs,
+                   COALESCE(SUM(unique_reactions), 0) AS unique_reactions,
+                   MAX(generated_at) AS generated_at
+            FROM song_rating_api_snapshots
+            GROUP BY snapshot_date
+            ORDER BY snapshot_date DESC
+            LIMIT ?
+            """,
+            (days,),
+        ) as cursor:
+            snapshots = [dict(row) for row in await cursor.fetchall()]
+        async with self.db.execute(
+            "SELECT COUNT(*) FROM song_rating_api_requests"
+        ) as cursor:
+            total_requests = (await cursor.fetchone())[0]
+        async with self.db.execute(
+            "SELECT MAX(requested_at) FROM song_rating_api_requests"
+        ) as cursor:
+            last_request_at = (await cursor.fetchone())[0]
+        return {
+            "snapshots": snapshots,
+            "total_requests": total_requests,
+            "last_request_at": last_request_at,
+        }
 
     async def get_player_discord_connection(self, web_user_id: int) -> dict | None:
         async with self.db.execute(
