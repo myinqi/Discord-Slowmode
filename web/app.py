@@ -5127,7 +5127,9 @@ def create_app(db: Database, bot=None) -> Quart:
     async def _run_song_rating_uuid_sync():
         try:
             await _sync_song_rating_uuids()
-            await db.build_song_rating_snapshot(_song_rating_today())
+            await _build_song_rating_snapshot_for_date(
+                _song_rating_today(), force=True
+            )
         except Exception as exc:
             app.song_rating_sync_status["running"] = False
             app.song_rating_sync_status["error"] = str(exc)
@@ -5135,24 +5137,25 @@ def create_app(db: Database, bot=None) -> Quart:
     def _song_rating_today() -> str:
         return datetime.now(ZoneInfo("Europe/Berlin")).date().isoformat()
 
-    def _song_rating_cutoff(snapshot_date: str) -> float:
+    def _song_rating_day_bounds(snapshot_date: str) -> tuple[float, float]:
         day = datetime.strptime(snapshot_date, "%Y-%m-%d").date()
-        next_midnight = datetime.combine(
-            day + timedelta(days=1), datetime.min.time(), ZoneInfo("Europe/Berlin")
-        )
-        return next_midnight.timestamp()
+        timezone = ZoneInfo("Europe/Berlin")
+        midnight = datetime.combine(day, datetime.min.time(), timezone)
+        next_midnight = datetime.combine(day + timedelta(days=1), datetime.min.time(), timezone)
+        return midnight.timestamp(), next_midnight.timestamp()
 
     async def _build_song_rating_snapshot_for_date(
         snapshot_date: str, force: bool = False
     ) -> list[dict]:
-        if snapshot_date == _song_rating_today():
-            return await db.build_song_rating_snapshot(snapshot_date)
-        if not force:
+        if snapshot_date != _song_rating_today() and not force:
             existing = await db.get_song_rating_snapshot(snapshot_date)
             if existing:
                 return existing
+        start_timestamp, end_timestamp = _song_rating_day_bounds(snapshot_date)
         return await db.build_song_rating_snapshot(
-            snapshot_date, cutoff_timestamp=_song_rating_cutoff(snapshot_date)
+            snapshot_date,
+            start_timestamp=start_timestamp,
+            end_timestamp=end_timestamp,
         )
 
     @app.route("/song-rating-api", methods=["GET", "POST"])
@@ -5191,7 +5194,9 @@ def create_app(db: Database, bot=None) -> Quart:
                         "Suno UUID resolution started in the background.", "success"
                     )
             elif action == "refresh_snapshot":
-                rows = await db.build_song_rating_snapshot(_song_rating_today())
+                rows = await _build_song_rating_snapshot_for_date(
+                    _song_rating_today(), force=True
+                )
                 await flash(f"Current snapshot refreshed with {len(rows)} songs.", "success")
             elif action == "build_history":
                 try:
@@ -5208,7 +5213,7 @@ def create_app(db: Database, bot=None) -> Quart:
             return redirect(url_for("song_rating_api_admin"))
 
         today = _song_rating_today()
-        current = await db.build_song_rating_snapshot(today)
+        current = await _build_song_rating_snapshot_for_date(today, force=True)
         stats = await db.get_song_rating_api_stats()
         unresolved_count = await db.count_unresolved_song_urls()
         endpoint_url = url_for("song_rating_api_feed", _external=True)

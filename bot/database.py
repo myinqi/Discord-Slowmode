@@ -565,8 +565,32 @@ class Database:
 
             CREATE INDEX IF NOT EXISTS idx_song_rating_api_requests_at
                 ON song_rating_api_requests(requested_at);
+
+            CREATE TABLE IF NOT EXISTS song_rating_api_snapshot_runs (
+                snapshot_date TEXT PRIMARY KEY,
+                songs INTEGER NOT NULL DEFAULT 0,
+                unique_reactions INTEGER NOT NULL DEFAULT 0,
+                generated_at REAL DEFAULT (unixepoch())
+            );
         """)
         await self.db.commit()
+
+        rating_daily_semantics_migration = (
+            "migration_song_rating_daily_posted_semantics_v1"
+        )
+        async with self.db.execute(
+            "SELECT value FROM settings WHERE key = ?",
+            (rating_daily_semantics_migration,),
+        ) as cursor:
+            rating_daily_semantics_migrated = await cursor.fetchone()
+        if not rating_daily_semantics_migrated:
+            await self.db.execute("DELETE FROM song_rating_api_snapshots")
+            await self.db.execute("DELETE FROM song_rating_api_snapshot_runs")
+            await self.db.execute(
+                "INSERT INTO settings (key, value) VALUES (?, 'done')",
+                (rating_daily_semantics_migration,),
+            )
+            await self.db.commit()
 
         async with self.db.execute("PRAGMA table_info(song_posts)") as cursor:
             sp_rating_columns = [row[1] async for row in cursor]
@@ -3215,30 +3239,47 @@ class Database:
             return int((await cursor.fetchone())[0])
 
     async def build_song_rating_snapshot(
-        self, snapshot_date: str, cutoff_timestamp: float | None = None
+        self, snapshot_date: str, start_timestamp: float, end_timestamp: float
     ) -> list[dict]:
-        """Persist unique reaction counts, optionally limited to a historical cutoff."""
+        """Persist ratings for songs posted during one local calendar day."""
         await self.db.execute(
             "DELETE FROM song_rating_api_snapshots WHERE snapshot_date = ?",
             (snapshot_date,),
         )
-        cutoff_clause = " AND sr.reacted_at < ?" if cutoff_timestamp is not None else ""
-        params = (snapshot_date, cutoff_timestamp) if cutoff_timestamp is not None else (snapshot_date,)
         await self.db.execute(
-            f"""
+            """
             INSERT INTO song_rating_api_snapshots
                 (snapshot_date, suno_uuid, unique_reactions, generated_at)
-            SELECT ?, lower(COALESCE(sr.suno_uuid, sp.suno_uuid)),
+            SELECT ?, lower(sp.suno_uuid),
                    COUNT(DISTINCT sr.reactor_user_id), unixepoch()
-            FROM song_reactions sr
-            LEFT JOIN song_posts sp ON sp.message_id = sr.message_id
-            WHERE COALESCE(sr.suno_uuid, sp.suno_uuid) IS NOT NULL
-              AND trim(COALESCE(sr.suno_uuid, sp.suno_uuid)) != ''
-              AND sr.reactor_user_id != COALESCE(sr.post_author_id, sp.user_id, -1)
-              {cutoff_clause}
-            GROUP BY lower(COALESCE(sr.suno_uuid, sp.suno_uuid))
+            FROM song_posts sp
+            JOIN monitored_channels mc
+              ON mc.channel_id = sp.channel_id AND mc.enabled = 1
+            LEFT JOIN song_reactions sr
+              ON sr.message_id = sp.message_id
+             AND sr.reactor_user_id != sp.user_id
+             AND sr.reacted_at < ?
+            WHERE sp.suno_uuid IS NOT NULL
+              AND trim(sp.suno_uuid) != ''
+              AND sp.posted_at >= ?
+              AND sp.posted_at < ?
+            GROUP BY lower(sp.suno_uuid)
             """,
-            params,
+            (snapshot_date, end_timestamp, start_timestamp, end_timestamp),
+        )
+        await self.db.execute(
+            """
+            INSERT INTO song_rating_api_snapshot_runs
+                (snapshot_date, songs, unique_reactions, generated_at)
+            SELECT ?, COUNT(*), COALESCE(SUM(unique_reactions), 0), unixepoch()
+            FROM song_rating_api_snapshots
+            WHERE snapshot_date = ?
+            ON CONFLICT(snapshot_date) DO UPDATE SET
+                songs = excluded.songs,
+                unique_reactions = excluded.unique_reactions,
+                generated_at = excluded.generated_at
+            """,
+            (snapshot_date, snapshot_date),
         )
         await self.db.commit()
         return await self.get_song_rating_snapshot(snapshot_date)
@@ -3267,11 +3308,8 @@ class Database:
     async def get_song_rating_api_stats(self, days: int = 30) -> dict:
         async with self.db.execute(
             """
-            SELECT snapshot_date AS date, COUNT(*) AS songs,
-                   COALESCE(SUM(unique_reactions), 0) AS unique_reactions,
-                   MAX(generated_at) AS generated_at
-            FROM song_rating_api_snapshots
-            GROUP BY snapshot_date
+            SELECT snapshot_date AS date, songs, unique_reactions, generated_at
+            FROM song_rating_api_snapshot_runs
             ORDER BY snapshot_date DESC
             LIMIT ?
             """,
