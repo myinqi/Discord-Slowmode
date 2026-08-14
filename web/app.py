@@ -10168,9 +10168,130 @@ def create_app(db: Database, bot=None) -> Quart:
                 if m:
                     author = m.group(1)
             result["author"] = author
+            if result["realId"]:
+                rich_meta = await _fetch_suno_meta(result["realId"])
+                result["title"] = rich_meta.get("title") or result["title"]
+                result["author"] = rich_meta.get("artist") or result["author"]
+                result["artwork"] = (
+                    rich_meta.get("image_url")
+                    or result["artwork"]
+                    or f"https://cdn1.suno.ai/image_large_{result['realId']}.jpeg"
+                )
+                result["video"] = rich_meta.get("video_url") or ""
             return jsonify(result)
         except Exception as e:
             return jsonify({"error": str(e)}), 502
+
+    @app.route("/songripper/download-asset")
+    @permission_required('songripper')
+    async def songripper_download_asset():
+        """Download a song's Suno-hosted video or cover image."""
+        from quart import jsonify, send_file
+        from urllib.parse import urlparse
+        import aiohttp, re as _re, tempfile
+
+        song_id = (request.args.get("id") or "").strip()
+        kind = (request.args.get("kind") or "").strip().lower()
+        uuid_match = _re.fullmatch(
+            r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}",
+            song_id,
+            _re.I,
+        )
+        if not uuid_match:
+            return jsonify({"error": "A resolved Suno song UUID is required."}), 400
+        if kind not in {"video", "cover"}:
+            return jsonify({"error": "Asset type must be video or cover."}), 400
+
+        song_uuid = uuid_match.group(0)
+        meta = await _fetch_suno_meta(song_uuid)
+        asset_url = meta.get("video_url") if kind == "video" else meta.get("image_url")
+        if not asset_url and kind == "cover":
+            asset_url = f"https://cdn1.suno.ai/image_large_{song_uuid}.jpeg"
+        if not asset_url:
+            return jsonify({"error": "No Suno video is available for this song."}), 404
+
+        def trusted_suno_url(value):
+            parsed = urlparse(value)
+            host = (parsed.hostname or "").lower()
+            return parsed.scheme == "https" and (host == "suno.ai" or host.endswith(".suno.ai"))
+
+        if not trusted_suno_url(asset_url):
+            return jsonify({"error": "Suno returned an unsupported asset URL."}), 502
+
+        requested_name = (request.args.get("filename") or "suno_song").strip()
+        requested_name = _re.sub(r"[^a-zA-Z0-9_. -]+", "", requested_name).strip(" .") or "suno_song"
+        stem = os.path.splitext(requested_name)[0].strip(" .") or "suno_song"
+        size_limit = 350 * 1024 * 1024 if kind == "video" else 30 * 1024 * 1024
+        temp_path = ""
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            async with aiohttp.ClientSession(headers=headers) as sess:
+                async with sess.get(
+                    asset_url,
+                    timeout=aiohttp.ClientTimeout(total=180),
+                ) as resp:
+                    if resp.status != 200:
+                        return jsonify({"error": f"Suno asset download returned HTTP {resp.status}."}), 502
+                    if not trusted_suno_url(str(resp.url)):
+                        return jsonify({"error": "Suno redirected to an unsupported asset host."}), 502
+                    try:
+                        declared_size = int(resp.headers.get("Content-Length") or 0)
+                    except (TypeError, ValueError):
+                        declared_size = 0
+                    if declared_size > size_limit:
+                        return jsonify({"error": f"The {kind} exceeds the download size limit."}), 413
+
+                    content_type = (resp.headers.get("Content-Type") or "").split(";", 1)[0].lower()
+                    valid_content_type = (
+                        kind == "video"
+                        and (content_type.startswith("video/") or content_type == "application/octet-stream")
+                    ) or (
+                        kind == "cover" and content_type.startswith("image/")
+                    )
+                    if not valid_content_type:
+                        return jsonify({"error": f"Suno returned an invalid {kind} file."}), 502
+                    extension_map = {
+                        "video/mp4": ".mp4",
+                        "video/webm": ".webm",
+                        "video/quicktime": ".mov",
+                        "image/jpeg": ".jpg",
+                        "image/png": ".png",
+                        "image/webp": ".webp",
+                    }
+                    default_extension = ".mp4" if kind == "video" else ".jpg"
+                    extension = extension_map.get(content_type, default_extension)
+                    fd, temp_path = tempfile.mkstemp(prefix="songripper_asset_", suffix=extension)
+                    os.close(fd)
+                    downloaded = 0
+                    with open(temp_path, "wb") as fh:
+                        async for chunk in resp.content.iter_chunked(1024 * 256):
+                            downloaded += len(chunk)
+                            if downloaded > size_limit:
+                                raise ValueError(f"The {kind} exceeds the download size limit.")
+                            fh.write(chunk)
+
+            attachment_name = f"{stem}{extension}"
+            asyncio.create_task(_delete_temp_file_later(temp_path, delay=900))
+            return await send_file(
+                temp_path,
+                mimetype=content_type or ("video/mp4" if kind == "video" else "image/jpeg"),
+                as_attachment=True,
+                attachment_filename=attachment_name,
+            )
+        except ValueError as exc:
+            if temp_path:
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+            return jsonify({"error": str(exc)}), 413
+        except Exception as exc:
+            if temp_path:
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+            return jsonify({"error": f"Asset download failed: {exc}"}), 502
 
     @app.route("/songripper/download-mp3")
     @permission_required('songripper')
