@@ -405,6 +405,8 @@ def create_app(db: Database, bot=None) -> Quart:
     os.makedirs(branding_dir, exist_ok=True)
     card_image_dir = os.path.join(os.path.dirname(db.db_path), "card_images")
     os.makedirs(card_image_dir, exist_ok=True)
+    event_image_dir = os.path.join(os.path.dirname(db.db_path), "event_images")
+    os.makedirs(event_image_dir, exist_ok=True)
     file_share_dir = os.path.join(os.path.dirname(db.db_path), "file_sharing")
     os.makedirs(file_share_dir, exist_ok=True)
     only_grapes_dir = os.path.join(os.path.dirname(db.db_path), "only_grapes")
@@ -504,6 +506,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('relic_hunt', "Raven's Nest"),
         ('rpg', 'RPG Adventures'),
         ('card_collection', 'Card Collection'),
+        ('event_registration', 'Event Registration'),
         ('birthday_calendar', 'Birthday Calendar'),
         ('reminders', 'Reminders'),
     ]
@@ -529,6 +532,7 @@ def create_app(db: Database, bot=None) -> Quart:
         {"key": "quiz", "endpoint": "quiz_admin", "icon": "❓", "label": "Quiz", "perm": "quiz"},
         {"key": "rpg", "endpoint": "rpg_admin", "icon": "🎲", "label": "RPG", "perm": "rpg"},
         {"key": "card_collection", "endpoint": "card_collection_admin", "icon": "🃏", "label": "Card Collection", "perm": "card_collection"},
+        {"key": "event_registration", "endpoint": "event_registration_admin", "icon": "🎟️", "label": "Events", "perm": "event_registration"},
         {"key": "birthday_calendar", "endpoint": "birthday_calendar_admin", "icon": "🎂", "label": "Birthday Calendar", "perm": "birthday_calendar"},
         {"key": "reminders", "endpoint": "reminders_admin", "icon": "⏰", "label": "Reminders", "perm": "reminders"},
         {"key": "radio", "endpoint": "radio_admin", "icon": "📻", "label": "Twitch", "perm": "radio"},
@@ -570,6 +574,14 @@ def create_app(db: Database, bot=None) -> Quart:
         if safe_name != filename:
             abort(404)
         return await send_from_directory(card_image_dir, safe_name)
+
+    @app.route("/event-images/<filename>")
+    async def community_event_image(filename):
+        from quart import abort, send_from_directory
+        safe_name = os.path.basename(filename)
+        if safe_name != filename:
+            abort(404)
+        return await send_from_directory(event_image_dir, safe_name)
 
     @app.context_processor
     async def inject_sidebar_nav():
@@ -6031,6 +6043,200 @@ def create_app(db: Database, bot=None) -> Quart:
             edit_card=edit_card,
             rarities=rarities,
             rarity_weights=rarity_weights,
+        )
+
+    # --- Community Event Registration ---
+
+    @app.route("/event-registration", methods=["GET", "POST"])
+    @permission_required("event_registration")
+    async def event_registration_admin():
+        allowed_extensions = {"png", "jpg", "jpeg", "webp"}
+
+        if request.method == "POST":
+            form = await request.form
+            action = form.get("action", "")
+            event_id_raw = form.get("event_id", "").strip()
+            event_id = int(event_id_raw) if event_id_raw.isdigit() else None
+
+            if action == "delete" and event_id:
+                image_filename = await db.delete_community_event(event_id)
+                if image_filename:
+                    image_path = os.path.join(
+                        event_image_dir, os.path.basename(image_filename)
+                    )
+                    if os.path.isfile(image_path):
+                        os.remove(image_path)
+                    await db.add_audit_log(
+                        event_type="community_event_deleted",
+                        details=f"Event #{event_id} deleted",
+                        actor=session.get("username", "unknown"),
+                    )
+                    await flash("Event deleted.", "success")
+                else:
+                    await flash("Event not found.", "error")
+                return redirect(url_for("event_registration_admin"))
+
+            if action == "toggle" and event_id:
+                event = await db.get_community_event(event_id)
+                if not event:
+                    await flash("Event not found.", "error")
+                else:
+                    active = 0 if event.get("active") else 1
+                    await db.save_community_event(event_id, active=active)
+                    await db.add_audit_log(
+                        event_type="community_event_status_changed",
+                        details=(
+                            f"Event #{event_id} "
+                            f"{'activated' if active else 'deactivated'}"
+                        ),
+                        actor=session.get("username", "unknown"),
+                    )
+                    await flash(
+                        f"Event {'activated' if active else 'deactivated'}.",
+                        "success",
+                    )
+                return redirect(url_for("event_registration_admin"))
+
+            if action == "save":
+                existing = await db.get_community_event(event_id) if event_id else None
+                if event_id and not existing:
+                    await flash("Event not found.", "error")
+                    return redirect(url_for("event_registration_admin"))
+
+                name = form.get("name", "").strip()[:100]
+                description = form.get("description", "").strip()[:3500]
+                event_at_raw = form.get("event_at", "").strip()
+                if not name:
+                    await flash("Event name is required.", "error")
+                    return redirect(
+                        url_for("event_registration_admin", edit=event_id or "")
+                    )
+                if not description:
+                    await flash("Event description is required.", "error")
+                    return redirect(
+                        url_for("event_registration_admin", edit=event_id or "")
+                    )
+                try:
+                    event_local = datetime.fromisoformat(event_at_raw)
+                    if event_local.tzinfo is None:
+                        event_local = event_local.replace(
+                            tzinfo=ZoneInfo("Europe/Berlin")
+                        )
+                    event_at = event_local.timestamp()
+                except (TypeError, ValueError):
+                    await flash("Enter a valid event date and time.", "error")
+                    return redirect(
+                        url_for("event_registration_admin", edit=event_id or "")
+                    )
+
+                image_filename = (
+                    existing.get("image_filename", "") if existing else ""
+                )
+                old_image = image_filename
+                files = await request.files
+                image_file = files.get("image")
+                if image_file and image_file.filename:
+                    original = image_file.filename.strip()
+                    ext = original.rsplit(".", 1)[-1].lower() if "." in original else ""
+                    if ext not in allowed_extensions:
+                        await flash("Use a PNG, JPEG or WebP event image.", "error")
+                        return redirect(
+                            url_for("event_registration_admin", edit=event_id or "")
+                        )
+                    stored_ext = "jpg" if ext == "jpeg" else ext
+                    image_filename = (
+                        f"event_{secrets.token_hex(16)}.{stored_ext}"
+                    )
+                    image_path = os.path.join(event_image_dir, image_filename)
+                    await image_file.save(image_path)
+                    try:
+                        if os.path.getsize(image_path) > 8 * 1024 * 1024:
+                            raise ValueError("Event image is larger than 8 MB.")
+                        with open(image_path, "rb") as handle:
+                            header = handle.read(16)
+                        valid = (
+                            (stored_ext == "png" and header.startswith(b"\x89PNG\r\n\x1a\n"))
+                            or (stored_ext == "jpg" and header.startswith(b"\xff\xd8\xff"))
+                            or (
+                                stored_ext == "webp"
+                                and header.startswith(b"RIFF")
+                                and header[8:12] == b"WEBP"
+                            )
+                        )
+                        if not valid:
+                            raise ValueError("The uploaded event image is invalid.")
+                    except (OSError, ValueError) as exc:
+                        if os.path.isfile(image_path):
+                            os.remove(image_path)
+                        await flash(str(exc), "error")
+                        return redirect(
+                            url_for("event_registration_admin", edit=event_id or "")
+                        )
+
+                if not image_filename:
+                    await flash("An event image is required.", "error")
+                    return redirect(
+                        url_for("event_registration_admin", edit=event_id or "")
+                    )
+
+                saved_id = await db.save_community_event(
+                    event_id,
+                    name=name,
+                    description=description,
+                    event_at=event_at,
+                    image_filename=image_filename,
+                    active=1 if form.get("active") else 0,
+                )
+                if old_image and old_image != image_filename:
+                    old_path = os.path.join(
+                        event_image_dir, os.path.basename(old_image)
+                    )
+                    if os.path.isfile(old_path):
+                        os.remove(old_path)
+                await db.add_audit_log(
+                    event_type="community_event_saved",
+                    details=f"Event #{saved_id}: {name}",
+                    actor=session.get("username", "unknown"),
+                )
+                await flash("Event saved.", "success")
+                return redirect(url_for("event_registration_admin", edit=saved_id))
+
+        events = await db.get_community_events(include_inactive=True)
+        for event in events:
+            event["event_local"] = datetime.fromtimestamp(
+                float(event["event_at"]), tz=ZoneInfo("Europe/Berlin")
+            )
+            event["participants"] = await db.get_community_event_participants(
+                event["id"]
+            )
+            for participant in event["participants"]:
+                participant["joined_local"] = datetime.fromtimestamp(
+                    float(participant["joined_at"]),
+                    tz=ZoneInfo("Europe/Berlin"),
+                )
+
+        edit_raw = request.args.get("edit", "").strip()
+        edit_event = (
+            await db.get_community_event(int(edit_raw))
+            if edit_raw.isdigit()
+            else None
+        )
+        if edit_event:
+            edit_event["event_input"] = datetime.fromtimestamp(
+                float(edit_event["event_at"]), tz=ZoneInfo("Europe/Berlin")
+            ).strftime("%Y-%m-%dT%H:%M")
+
+        return await render_template(
+            "event_registration.html",
+            events=events,
+            edit_event=edit_event,
+            stats={
+                "total": len(events),
+                "active": sum(1 for event in events if event.get("active")),
+                "participants": sum(
+                    int(event.get("participant_count") or 0) for event in events
+                ),
+            },
         )
 
     # --- Birthday Calendar ---

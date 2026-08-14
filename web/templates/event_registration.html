@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% block title %}Event Registration{% endblock %}
+{% block content %}
+{% set current = edit_event or {} %}
+
+<div class="flex flex-wrap items-end justify-between gap-4 mb-6">
+    <div>
+        <h2 class="text-2xl font-bold text-white">Event Registration</h2>
+        <p class="text-gray-400 text-sm mt-1">Create Discord events and review everyone who joined through <code>/join-event</code>.</p>
+    </div>
+    {% if edit_event %}
+    <a href="{{ url_for('event_registration_admin') }}"
+       class="px-4 py-2 bg-discord-lighter hover:bg-gray-600 text-gray-200 rounded-md text-sm">
+        Add new event
+    </a>
+    {% endif %}
+</div>
+
+<div class="grid sm:grid-cols-3 gap-4 mb-6">
+    <div class="bg-discord-dark border border-gray-700/50 rounded-lg p-4">
+        <p class="text-xs uppercase text-gray-500">Events</p>
+        <p class="text-2xl font-bold text-white mt-1">{{ stats.total }}</p>
+    </div>
+    <div class="bg-discord-dark border border-gray-700/50 rounded-lg p-4">
+        <p class="text-xs uppercase text-gray-500">Available</p>
+        <p class="text-2xl font-bold text-green-300 mt-1">{{ stats.active }}</p>
+    </div>
+    <div class="bg-discord-dark border border-gray-700/50 rounded-lg p-4">
+        <p class="text-xs uppercase text-gray-500">Registrations</p>
+        <p class="text-2xl font-bold text-purple-300 mt-1">{{ stats.participants }}</p>
+    </div>
+</div>
+
+<div class="grid grid-cols-1 xl:grid-cols-[minmax(360px,0.7fr)_minmax(560px,1.3fr)] gap-6 items-start">
+    <section class="bg-discord-dark border border-gray-700/50 rounded-lg">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">{% if edit_event %}Edit event{% else %}Create event{% endif %}</h3>
+            <p class="text-xs text-gray-500 mt-1">Active events appear as choices in the Discord command.</p>
+        </div>
+        <form method="POST" enctype="multipart/form-data" class="p-5 space-y-5">
+            <input type="hidden" name="action" value="save">
+            {% if edit_event %}<input type="hidden" name="event_id" value="{{ edit_event.id }}">{% endif %}
+
+            <div>
+                <label class="block text-xs text-gray-400 mb-1">Event name *</label>
+                <input name="name" maxlength="100" required value="{{ current.get('name', '') }}"
+                       placeholder="Summer Listening Night" class="event-field">
+            </div>
+
+            <div>
+                <label class="block text-xs text-gray-400 mb-1">Event date and time (Europe/Berlin) *</label>
+                <input type="datetime-local" name="event_at" required
+                       value="{{ current.get('event_input', '') }}" class="event-field">
+            </div>
+
+            <div>
+                <label class="block text-xs text-gray-400 mb-1">Description *</label>
+                <textarea name="description" maxlength="3500" required rows="6"
+                          placeholder="Tell members what the event is about."
+                          class="event-field resize-y">{{ current.get('description', '') }}</textarea>
+            </div>
+
+            <div>
+                <label class="block text-xs text-gray-400 mb-1">Event image {% if not edit_event %}*{% endif %}</label>
+                <input type="file" name="image" {% if not edit_event %}required{% endif %}
+                       accept="image/png,image/jpeg,image/webp"
+                       class="w-full text-gray-400 text-sm file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:bg-discord-blurple file:text-white hover:file:bg-discord-blurple/80 file:cursor-pointer">
+                <p class="text-xs text-gray-500 mt-1">PNG, JPEG or WebP, up to 8 MB. This image is included in the private Discord confirmation.</p>
+            </div>
+
+            {% if current.get('image_filename') %}
+            <img src="{{ url_for('community_event_image', filename=current.image_filename) }}"
+                 alt="{{ current.name }}" class="w-full aspect-video object-cover rounded-md border border-gray-700/50">
+            {% endif %}
+
+            <div class="flex flex-wrap items-center justify-between gap-4 pt-1">
+                <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                    <input type="checkbox" name="active" value="1" {% if current.get('active', 1) %}checked{% endif %}
+                           class="w-4 h-4 rounded bg-discord-darker border-gray-600 text-discord-blurple focus:ring-discord-blurple">
+                    Available in <code>/join-event</code>
+                </label>
+                <button type="submit" class="px-5 py-2.5 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-md font-medium">
+                    Save event
+                </button>
+            </div>
+        </form>
+    </section>
+
+    <section class="space-y-4">
+        {% if events %}
+        {% for event in events %}
+        <article class="bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden {% if not event.active %}opacity-65{% endif %}">
+            <div class="grid sm:grid-cols-[180px_1fr]">
+                <img src="{{ url_for('community_event_image', filename=event.image_filename) }}"
+                     alt="{{ event.name }}" class="w-full h-full min-h-40 object-cover bg-black">
+                <div class="p-5 min-w-0">
+                    <div class="flex flex-wrap items-start justify-between gap-3">
+                        <div class="min-w-0">
+                            <h3 class="text-white font-semibold text-lg break-words">{{ event.name }}</h3>
+                            <p class="text-purple-200 text-sm mt-1">{{ event.event_local.strftime('%d %B %Y at %H:%M') }} · Europe/Berlin</p>
+                        </div>
+                        <span class="text-xs px-2 py-1 rounded {% if event.active %}bg-green-900/40 text-green-300{% else %}bg-gray-700 text-gray-400{% endif %}">
+                            {{ 'Available' if event.active else 'Hidden' }}
+                        </span>
+                    </div>
+                    <p class="text-gray-400 text-sm mt-3 whitespace-pre-line">{{ event.description }}</p>
+                    <div class="flex flex-wrap items-center gap-2 mt-4">
+                        <a href="{{ url_for('event_registration_admin', edit=event.id) }}"
+                           class="px-3 py-2 bg-discord-lighter hover:bg-gray-600 text-gray-200 rounded-md text-sm">Edit</a>
+                        <form method="POST">
+                            <input type="hidden" name="action" value="toggle">
+                            <input type="hidden" name="event_id" value="{{ event.id }}">
+                            <button class="px-3 py-2 bg-discord-lighter hover:bg-gray-600 text-gray-300 rounded-md text-sm">
+                                {{ 'Hide from command' if event.active else 'Make available' }}
+                            </button>
+                        </form>
+                        <form method="POST" onsubmit="return confirm('Delete this event and all of its registrations?');">
+                            <input type="hidden" name="action" value="delete">
+                            <input type="hidden" name="event_id" value="{{ event.id }}">
+                            <button class="px-3 py-2 bg-red-900/30 hover:bg-red-900/50 text-red-300 rounded-md text-sm">Delete</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            <details class="border-t border-gray-700/50 group">
+                <summary class="px-5 py-4 cursor-pointer text-sm text-gray-300 hover:bg-discord-lighter/30 flex items-center justify-between gap-3">
+                    <span><strong class="text-white">{{ event.participant_count }}</strong> participant{% if event.participant_count != 1 %}s{% endif %}</span>
+                    <span class="text-gray-500 group-open:hidden">Show names</span>
+                    <span class="text-gray-500 hidden group-open:inline">Hide names</span>
+                </summary>
+                {% if event.participants %}
+                <div class="px-5 pb-5 grid sm:grid-cols-2 gap-2 max-h-72 overflow-y-auto">
+                    {% for participant in event.participants %}
+                    <div class="bg-discord-darker border border-gray-700/40 rounded-md px-3 py-2 min-w-0">
+                        <p class="text-gray-200 text-sm font-medium truncate">{{ participant.display_name }}</p>
+                        <p class="text-gray-500 text-xs truncate">@{{ participant.user_name }} · joined {{ participant.joined_local.strftime('%d.%m.%Y %H:%M') }}</p>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="px-5 pb-5 text-sm text-gray-500">Nobody has joined this event yet.</p>
+                {% endif %}
+            </details>
+        </article>
+        {% endfor %}
+        {% else %}
+        <div class="bg-discord-dark border border-gray-700/50 rounded-lg p-10 text-center text-gray-500">
+            Create the first event using the editor.
+        </div>
+        {% endif %}
+    </section>
+</div>
+
+<style>
+.event-field { width:100%; padding:.65rem .75rem; background:#111214; border:1px solid rgb(55 65 81); border-radius:.375rem; color:white; outline:none; }
+.event-field:focus { border-color:#5865f2; box-shadow:0 0 0 2px rgba(88,101,242,.18); }
+</style>
+{% endblock %}

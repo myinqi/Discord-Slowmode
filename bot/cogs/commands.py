@@ -2044,6 +2044,14 @@ class CommandsCog(commands.Cog):
             inline=False,
         )
 
+        embed.add_field(
+            name="🎟️ Community Events",
+            value=(
+                "**`/join-event <event>`** — Join an available community event privately"
+            ),
+            inline=False,
+        )
+
         # Context Menu (all users)
         embed.add_field(
             name="📋 Context Menu (Right-click a message)",

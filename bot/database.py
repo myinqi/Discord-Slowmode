@@ -268,6 +268,32 @@ class Database:
             );
             CREATE INDEX IF NOT EXISTS idx_reminders_due
                 ON reminders(active, next_run_at);
+
+            CREATE TABLE IF NOT EXISTS community_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                event_at REAL NOT NULL,
+                image_filename TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at REAL DEFAULT (unixepoch()),
+                updated_at REAL DEFAULT (unixepoch())
+            );
+            CREATE INDEX IF NOT EXISTS idx_community_events_available
+                ON community_events(active, event_at);
+
+            CREATE TABLE IF NOT EXISTS community_event_participants (
+                event_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                user_name TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                joined_at REAL DEFAULT (unixepoch()),
+                PRIMARY KEY (event_id, user_id),
+                FOREIGN KEY (event_id) REFERENCES community_events(id)
+                    ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_community_event_participants_event
+                ON community_event_participants(event_id, joined_at);
         """)
         await self.db.commit()
         await self._run_migrations()
@@ -384,6 +410,30 @@ class Database:
             await self.db.execute(
                 "INSERT INTO settings (key, value) VALUES (?, 'done')",
                 (reminder_sidebar_migration,),
+            )
+            await self.db.commit()
+
+        event_sidebar_migration = "migration_sidebar_event_registration_v1"
+        async with self.db.execute(
+            "SELECT value FROM settings WHERE key = ?", (event_sidebar_migration,)
+        ) as cursor:
+            event_sidebar_migrated = await cursor.fetchone()
+        if not event_sidebar_migrated:
+            async with self.db.execute(
+                "SELECT value FROM settings WHERE key = 'sidebar_visible_items'"
+            ) as cursor:
+                sidebar_row = await cursor.fetchone()
+            if sidebar_row and sidebar_row[0] and sidebar_row[0] != "__none__":
+                visible_items = [item for item in sidebar_row[0].split(",") if item]
+                if "event_registration" not in visible_items:
+                    visible_items.append("event_registration")
+                    await self.db.execute(
+                        "UPDATE settings SET value = ? WHERE key = 'sidebar_visible_items'",
+                        (",".join(visible_items),),
+                    )
+            await self.db.execute(
+                "INSERT INTO settings (key, value) VALUES (?, 'done')",
+                (event_sidebar_migration,),
             )
             await self.db.commit()
 
@@ -1541,6 +1591,133 @@ class Database:
             "total_cards": int(owned["total_cards"] or 0),
             "available_cards": int(available["available_cards"] or 0),
         }
+
+    # --- Community Events ---
+
+    async def get_community_events(
+        self, *, include_inactive: bool = False
+    ) -> list[dict]:
+        where = "" if include_inactive else "WHERE e.active = 1"
+        async with self.db.execute(
+            f"""
+            SELECT e.*,
+                   (SELECT COUNT(*)
+                    FROM community_event_participants p
+                    WHERE p.event_id = e.id) AS participant_count
+            FROM community_events e
+            {where}
+            ORDER BY e.active DESC, e.event_at ASC, e.name COLLATE NOCASE
+            """
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def get_community_event(self, event_id: int) -> Optional[dict]:
+        async with self.db.execute(
+            """
+            SELECT e.*,
+                   (SELECT COUNT(*)
+                    FROM community_event_participants p
+                    WHERE p.event_id = e.id) AS participant_count
+            FROM community_events e
+            WHERE e.id = ?
+            """,
+            (int(event_id),),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def save_community_event(
+        self, event_id: Optional[int] = None, **fields
+    ) -> int:
+        allowed = {
+            "name", "description", "event_at", "image_filename", "active",
+        }
+        clean = {key: value for key, value in fields.items() if key in allowed}
+        if event_id:
+            if clean:
+                columns = ", ".join(f"{key} = ?" for key in clean)
+                await self.db.execute(
+                    f"UPDATE community_events SET {columns}, "
+                    "updated_at = unixepoch() WHERE id = ?",
+                    (*clean.values(), int(event_id)),
+                )
+            saved_id = int(event_id)
+        else:
+            cursor = await self.db.execute(
+                f"INSERT INTO community_events ({', '.join(clean)}) "
+                f"VALUES ({', '.join('?' for _ in clean)})",
+                tuple(clean.values()),
+            )
+            saved_id = int(cursor.lastrowid)
+        await self.db.commit()
+        return saved_id
+
+    async def delete_community_event(self, event_id: int) -> Optional[str]:
+        event = await self.get_community_event(event_id)
+        if not event:
+            return None
+        await self.db.execute(
+            "DELETE FROM community_events WHERE id = ?", (int(event_id),)
+        )
+        await self.db.commit()
+        return event.get("image_filename")
+
+    async def get_community_event_participants(self, event_id: int) -> list[dict]:
+        async with self.db.execute(
+            """
+            SELECT * FROM community_event_participants
+            WHERE event_id = ?
+            ORDER BY display_name COLLATE NOCASE, joined_at
+            """,
+            (int(event_id),),
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def join_community_event(
+        self,
+        *,
+        event_id: int,
+        user_id: int,
+        user_name: str,
+        display_name: str,
+    ) -> bool:
+        cursor = await self.db.execute(
+            """
+            INSERT OR IGNORE INTO community_event_participants
+                (event_id, user_id, user_name, display_name)
+            SELECT id, ?, ?, ?
+            FROM community_events
+            WHERE id = ? AND active = 1
+            """,
+            (
+                int(user_id),
+                str(user_name)[:100],
+                str(display_name)[:100],
+                int(event_id),
+            ),
+        )
+        joined = cursor.rowcount > 0
+        if not joined:
+            await self.db.execute(
+                """
+                UPDATE community_event_participants
+                SET user_name = ?, display_name = ?
+                WHERE event_id = ? AND user_id = ?
+                  AND EXISTS (
+                      SELECT 1 FROM community_events
+                      WHERE id = ? AND active = 1
+                  )
+                """,
+                (
+                    str(user_name)[:100],
+                    str(display_name)[:100],
+                    int(event_id),
+                    int(user_id),
+                    int(event_id),
+                ),
+            )
+        await self.db.commit()
+        return joined
 
     # --- Birthday Calendar ---
 
