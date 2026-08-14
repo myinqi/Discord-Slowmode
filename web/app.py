@@ -8,6 +8,7 @@ import hmac
 import math
 import secrets
 import time
+import threading
 from datetime import datetime, timedelta
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
@@ -36,6 +37,198 @@ YOUTUBE_URL_RE   = re.compile(
 ELEVENMUSIC_TRACK_RE = re.compile(
     r'(?:https?://)?(?:www\.)?elevenmusic\.io/tracks/([A-Fa-f0-9]{24})'
 )
+
+_SYSTEM_CPU_SAMPLE = {"timestamp": None, "usage_seconds": None}
+_SYSTEM_CPU_LOCK = threading.Lock()
+
+
+def _format_system_bytes(value: int | float | None) -> str:
+    if value is None:
+        return "Unknown"
+    size = float(max(0, value))
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if size < 1024 or unit == "TiB":
+            decimals = 0 if unit == "B" else 1
+            return f"{size:.{decimals}f} {unit}"
+        size /= 1024
+    return "Unknown"
+
+
+def _format_system_uptime(seconds: float) -> str:
+    total = max(0, int(seconds))
+    days, remainder = divmod(total, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, _ = divmod(remainder, 60)
+    if days:
+        return f"{days}d {hours}h {minutes}m"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
+
+
+def _read_system_text(path: str) -> str | None:
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return fh.read().strip()
+    except OSError:
+        return None
+
+
+def _container_process_uptime() -> float:
+    proc_path = "/proc/1/stat" if os.path.exists("/.dockerenv") else "/proc/self/stat"
+    try:
+        stat = _read_system_text(proc_path) or ""
+        fields = stat.rsplit(")", 1)[1].split()
+        start_ticks = int(fields[19])
+        clock_ticks = os.sysconf(os.sysconf_names["SC_CLK_TCK"])
+        host_uptime = float((_read_system_text("/proc/uptime") or "0").split()[0])
+        return max(0.0, host_uptime - (start_ticks / clock_ticks))
+    except (IndexError, KeyError, TypeError, ValueError):
+        return 0.0
+
+
+def _container_memory_values() -> tuple[int | None, int | None]:
+    current_raw = _read_system_text("/sys/fs/cgroup/memory.current")
+    limit_raw = _read_system_text("/sys/fs/cgroup/memory.max")
+    if current_raw is None:
+        current_raw = _read_system_text("/sys/fs/cgroup/memory/memory.usage_in_bytes")
+        limit_raw = _read_system_text("/sys/fs/cgroup/memory/memory.limit_in_bytes")
+
+    try:
+        current = int(current_raw) if current_raw is not None else None
+    except ValueError:
+        current = None
+    try:
+        limit = int(limit_raw) if limit_raw and limit_raw != "max" else None
+    except ValueError:
+        limit = None
+
+    # cgroup v1 represents an unlimited value with a very large integer.
+    if limit is not None and limit >= (1 << 60):
+        limit = None
+    if current is None:
+        status = _read_system_text("/proc/self/status") or ""
+        match = re.search(r"^VmRSS:\s+(\d+)\s+kB", status, re.M)
+        current = int(match.group(1)) * 1024 if match else None
+    return current, limit
+
+
+def _container_cpu_values() -> tuple[float | None, float]:
+    usage_seconds = None
+    cpu_stat = _read_system_text("/sys/fs/cgroup/cpu.stat") or ""
+    match = re.search(r"^usage_usec\s+(\d+)", cpu_stat, re.M)
+    if match:
+        usage_seconds = int(match.group(1)) / 1_000_000
+    else:
+        usage_raw = _read_system_text("/sys/fs/cgroup/cpuacct/cpuacct.usage")
+        if usage_raw:
+            try:
+                usage_seconds = int(usage_raw) / 1_000_000_000
+            except ValueError:
+                pass
+    if usage_seconds is None:
+        usage_seconds = time.process_time()
+
+    available_cores = float(os.cpu_count() or 1)
+    cpu_max = (_read_system_text("/sys/fs/cgroup/cpu.max") or "").split()
+    if len(cpu_max) == 2 and cpu_max[0] != "max":
+        try:
+            available_cores = max(0.01, int(cpu_max[0]) / int(cpu_max[1]))
+        except (ValueError, ZeroDivisionError):
+            pass
+    else:
+        quota_raw = _read_system_text("/sys/fs/cgroup/cpu/cpu.cfs_quota_us")
+        period_raw = _read_system_text("/sys/fs/cgroup/cpu/cpu.cfs_period_us")
+        try:
+            quota = int(quota_raw or -1)
+            period = int(period_raw or 0)
+            if quota > 0 and period > 0:
+                available_cores = max(0.01, quota / period)
+        except ValueError:
+            pass
+
+    now = time.monotonic()
+    cpu_percent = None
+    with _SYSTEM_CPU_LOCK:
+        previous_time = _SYSTEM_CPU_SAMPLE["timestamp"]
+        previous_usage = _SYSTEM_CPU_SAMPLE["usage_seconds"]
+        if previous_time is not None and previous_usage is not None and now > previous_time:
+            cpu_percent = max(0.0, (usage_seconds - previous_usage) / (now - previous_time) * 100)
+        _SYSTEM_CPU_SAMPLE.update(timestamp=now, usage_seconds=usage_seconds)
+    return cpu_percent, available_cores
+
+
+def _collect_container_stats(database_path: str) -> dict:
+    import platform
+    import shutil
+    import socket
+
+    data_dir = os.path.dirname(os.path.abspath(database_path)) or os.getcwd()
+    disk_probe = data_dir
+    while not os.path.exists(disk_probe):
+        parent = os.path.dirname(disk_probe)
+        if parent == disk_probe:
+            disk_probe = os.getcwd()
+            break
+        disk_probe = parent
+    try:
+        disk = shutil.disk_usage(disk_probe)
+        disk_percent = round((disk.used / disk.total) * 100, 1) if disk.total else 0.0
+    except OSError:
+        disk = None
+        disk_percent = None
+
+    memory_current, memory_limit = _container_memory_values()
+    memory_percent = (
+        round((memory_current / memory_limit) * 100, 1)
+        if memory_current is not None and memory_limit
+        else None
+    )
+    cpu_percent, cpu_cores = _container_cpu_values()
+    cpu_capacity_percent = (
+        round(min(100.0, cpu_percent / cpu_cores), 1)
+        if cpu_percent is not None and cpu_cores > 0
+        else None
+    )
+
+    database_size = 0
+    for suffix in ("", "-wal", "-shm"):
+        try:
+            database_size += os.path.getsize(database_path + suffix)
+        except OSError:
+            pass
+
+    os_name = platform.system()
+    os_release = platform.release()
+    os_info = _read_system_text("/etc/os-release") or ""
+    pretty_match = re.search(r'^PRETTY_NAME="?([^"\n]+)"?$', os_info, re.M)
+    if pretty_match:
+        os_name = pretty_match.group(1)
+
+    return {
+        "storage": {
+            "used": _format_system_bytes(disk.used) if disk else "Unknown",
+            "total": _format_system_bytes(disk.total) if disk else "Unknown",
+            "free": _format_system_bytes(disk.free) if disk else "Unknown",
+            "percent": disk_percent,
+        },
+        "memory": {
+            "used": _format_system_bytes(memory_current),
+            "limit": _format_system_bytes(memory_limit) if memory_limit else "No Docker limit",
+            "percent": memory_percent,
+        },
+        "cpu": {
+            "percent": round(cpu_percent, 1) if cpu_percent is not None else None,
+            "capacity_percent": cpu_capacity_percent,
+            "cores": round(cpu_cores, 2),
+        },
+        "uptime": _format_system_uptime(_container_process_uptime()),
+        "database_size": _format_system_bytes(database_size),
+        "hostname": socket.gethostname(),
+        "python_version": platform.python_version(),
+        "os_name": os_name,
+        "kernel": os_release,
+    }
 
 
 def _decode_suno_json_string(value: str) -> str:
@@ -801,6 +994,7 @@ def create_app(db: Database, bot=None) -> Quart:
         bot_name = await db.get_setting("bot_name") or "Slowmode Bot"
         guild_id = await db.get_setting("guild_id") or ""
         log_count = await db.get_audit_log_count()
+        system_stats = _collect_container_stats(db.db_path)
 
         bot_connected = bot is not None and bot.is_ready()
         guild_name = None
@@ -819,7 +1013,14 @@ def create_app(db: Database, bot=None) -> Quart:
             guild_name=guild_name,
             bot_connected=bot_connected,
             log_count=log_count,
+            system_stats=system_stats,
         )
+
+    @app.route("/api/dashboard/system-stats")
+    @login_required
+    async def dashboard_system_stats():
+        from quart import jsonify
+        return jsonify(_collect_container_stats(db.db_path))
 
     @app.route("/settings", methods=["GET", "POST"])
     @permission_required('settings')

@@ -31,6 +31,71 @@
     </div>
 </div>
 
+<!-- Container Health -->
+<div class="mb-8">
+    <div class="flex items-end justify-between gap-4 mb-3">
+        <div>
+            <h3 class="text-white font-semibold">Container Health</h3>
+            <p class="text-gray-500 text-xs mt-1">Live values from the bot container and its persistent data volume.</p>
+        </div>
+        <span id="system-stats-updated" class="text-gray-600 text-xs">Live</span>
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+        <div class="bg-discord-dark rounded-xl p-5 border border-gray-700/50">
+            <div class="text-gray-400 text-sm mb-2">Data Volume</div>
+            <div id="system-storage-value" class="text-white font-semibold text-lg">
+                {{ system_stats.storage.used }} / {{ system_stats.storage.total }}
+            </div>
+            <div class="h-2 bg-discord-darker rounded-full overflow-hidden mt-3">
+                <div id="system-storage-bar" class="h-full bg-discord-blurple transition-all duration-500"
+                    style="width: {{ system_stats.storage.percent or 0 }}%"></div>
+            </div>
+            <div id="system-storage-detail" class="text-gray-500 text-xs mt-2">
+                {% if system_stats.storage.percent is not none %}{{ system_stats.storage.percent }}% used · {% endif %}{{ system_stats.storage.free }} free
+            </div>
+        </div>
+
+        <div class="bg-discord-dark rounded-xl p-5 border border-gray-700/50">
+            <div class="text-gray-400 text-sm mb-2">Container Memory</div>
+            <div id="system-memory-value" class="text-white font-semibold text-lg">
+                {{ system_stats.memory.used }}
+            </div>
+            <div class="h-2 bg-discord-darker rounded-full overflow-hidden mt-3">
+                <div id="system-memory-bar" class="h-full bg-purple-500 transition-all duration-500"
+                    style="width: {{ system_stats.memory.percent or 0 }}%"></div>
+            </div>
+            <div id="system-memory-detail" class="text-gray-500 text-xs mt-2">
+                {% if system_stats.memory.percent is not none %}{{ system_stats.memory.percent }}% of {% endif %}{{ system_stats.memory.limit }}
+            </div>
+        </div>
+
+        <div class="bg-discord-dark rounded-xl p-5 border border-gray-700/50">
+            <div class="text-gray-400 text-sm mb-2">CPU Usage</div>
+            <div id="system-cpu-value" class="text-white font-semibold text-lg">
+                {% if system_stats.cpu.percent is not none %}{{ system_stats.cpu.percent }}%{% else %}Collecting…{% endif %}
+            </div>
+            <div class="h-2 bg-discord-darker rounded-full overflow-hidden mt-3">
+                <div id="system-cpu-bar" class="h-full bg-blue-500 transition-all duration-500"
+                    style="width: {{ system_stats.cpu.capacity_percent or 0 }}%"></div>
+            </div>
+            <div id="system-cpu-detail" class="text-gray-500 text-xs mt-2">100% equals one core · {{ system_stats.cpu.cores }} available</div>
+        </div>
+
+        <div class="bg-discord-dark rounded-xl p-5 border border-gray-700/50">
+            <div class="text-gray-400 text-sm mb-2">Bot Uptime</div>
+            <div id="system-uptime-value" class="text-white font-semibold text-lg">{{ system_stats.uptime }}</div>
+            <div class="text-gray-500 text-xs mt-3">Database</div>
+            <div id="system-database-value" class="text-gray-300 text-sm mt-1">{{ system_stats.database_size }}</div>
+        </div>
+    </div>
+    <div class="flex flex-wrap gap-x-6 gap-y-1 text-gray-600 text-xs mt-3">
+        <span>Container: <span id="system-hostname">{{ system_stats.hostname }}</span></span>
+        <span>Runtime: Python <span id="system-python">{{ system_stats.python_version }}</span></span>
+        <span>OS: <span id="system-os">{{ system_stats.os_name }}</span></span>
+        <span>Kernel: <span id="system-kernel">{{ system_stats.kernel }}</span></span>
+    </div>
+</div>
+
 <!-- Channel Overview -->
 <div class="bg-discord-dark rounded-xl border border-gray-700/50 mb-6">
     <div class="px-5 py-4 border-b border-gray-700/50">
@@ -101,4 +166,51 @@
         </div>
     </div>
 </div>
+
+<script>
+function dashboardPercent(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? Math.max(0, Math.min(100, number)) : 0;
+}
+
+function updateDashboardSystemStats(stats) {
+    document.getElementById('system-storage-value').textContent = `${stats.storage.used} / ${stats.storage.total}`;
+    document.getElementById('system-storage-bar').style.width = `${dashboardPercent(stats.storage.percent)}%`;
+    document.getElementById('system-storage-detail').textContent = stats.storage.percent == null
+        ? `${stats.storage.free} free`
+        : `${stats.storage.percent}% used · ${stats.storage.free} free`;
+
+    document.getElementById('system-memory-value').textContent = stats.memory.used;
+    document.getElementById('system-memory-bar').style.width = `${dashboardPercent(stats.memory.percent)}%`;
+    document.getElementById('system-memory-detail').textContent = stats.memory.percent == null
+        ? stats.memory.limit
+        : `${stats.memory.percent}% of ${stats.memory.limit}`;
+
+    document.getElementById('system-cpu-value').textContent = stats.cpu.percent == null
+        ? 'Collecting…'
+        : `${stats.cpu.percent}%`;
+    document.getElementById('system-cpu-bar').style.width = `${dashboardPercent(stats.cpu.capacity_percent)}%`;
+    document.getElementById('system-cpu-detail').textContent = `100% equals one core · ${stats.cpu.cores} available`;
+    document.getElementById('system-uptime-value').textContent = stats.uptime;
+    document.getElementById('system-database-value').textContent = stats.database_size;
+    document.getElementById('system-hostname').textContent = stats.hostname;
+    document.getElementById('system-python').textContent = stats.python_version;
+    document.getElementById('system-os').textContent = stats.os_name;
+    document.getElementById('system-kernel').textContent = stats.kernel;
+    document.getElementById('system-stats-updated').textContent = `Updated ${new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'})}`;
+}
+
+async function refreshDashboardSystemStats() {
+    try {
+        const response = await fetch('/api/dashboard/system-stats', {cache: 'no-store'});
+        if (!response.ok) return;
+        updateDashboardSystemStats(await response.json());
+    } catch (_) {
+        document.getElementById('system-stats-updated').textContent = 'Update unavailable';
+    }
+}
+
+setTimeout(refreshDashboardSystemStats, 1500);
+setInterval(refreshDashboardSystemStats, 10000);
+</script>
 {% endblock %}
