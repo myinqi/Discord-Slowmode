@@ -10221,6 +10221,110 @@ def create_app(db: Database, bot=None) -> Quart:
     async def songripper():
         return await render_template("songripper.html")
 
+    async def _songripper_conversion_block_status() -> dict:
+        """Return whether CPU-heavy Songripper work must yield to Exp. Radio."""
+        import bot.exp_stream_manager as _esm
+
+        if (
+            exp_stream_manager.is_running
+            or _esm.stream_is_live
+            or app.radio_start_lock.locked()
+        ):
+            return {
+                "blocked": True,
+                "reason": "stream_live",
+                "message": (
+                    "Conversions are temporarily unavailable while "
+                    "Experimental Radio is running. Direct downloads remain available."
+                ),
+                "until": None,
+            }
+
+        try:
+            enabled = await db.get_setting("exp_radio_schedule_enabled") or "off"
+            days_csv = await db.get_setting("exp_radio_schedule_days") or ""
+            schedule_time = (
+                await db.get_setting("exp_radio_schedule_time") or ""
+            ).strip()
+            if enabled != "on" or ":" not in schedule_time:
+                return {"blocked": False, "reason": "", "message": "", "until": None}
+
+            days = {
+                int(day)
+                for day in days_csv.split(",")
+                if day.strip().isdigit() and 0 <= int(day) <= 6
+            }
+            hour_text, minute_text = schedule_time.split(":", 1)
+            hour, minute = int(hour_text), int(minute_text)
+            if not days or not 0 <= hour <= 23 or not 0 <= minute <= 59:
+                return {"blocked": False, "reason": "", "message": "", "until": None}
+
+            now = datetime.now(ZoneInfo("Europe/Berlin"))
+            for day_offset in (0, -1):
+                candidate_day = (now + timedelta(days=day_offset)).date()
+                if candidate_day.weekday() not in days:
+                    continue
+                starts_at = datetime.combine(
+                    candidate_day,
+                    datetime.min.time(),
+                    tzinfo=now.tzinfo,
+                ).replace(hour=hour, minute=minute)
+                ends_at = starts_at + timedelta(minutes=150)
+                if starts_at <= now < ends_at:
+                    return {
+                        "blocked": True,
+                        "reason": "scheduled_stream_window",
+                        "message": (
+                            "Conversions are reserved for Experimental Radio until "
+                            f"{ends_at.strftime('%H:%M')} Europe/Berlin. "
+                            "Direct downloads remain available."
+                        ),
+                        "until": ends_at.isoformat(),
+                    }
+        except (TypeError, ValueError):
+            pass
+
+        return {"blocked": False, "reason": "", "message": "", "until": None}
+
+    async def _songripper_conversion_block_response():
+        status = await _songripper_conversion_block_status()
+        if not status["blocked"]:
+            return None
+        from quart import jsonify
+        return jsonify({"error": status["message"], **status}), 423
+
+    async def _wait_for_songripper_ffmpeg(process, timeout: float = 900):
+        """Wait for FFmpeg while yielding immediately to an Exp. Radio run."""
+        communicate_task = asyncio.create_task(process.communicate())
+        deadline = time.monotonic() + timeout
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError("Songripper conversion timed out.")
+                try:
+                    return await asyncio.wait_for(
+                        asyncio.shield(communicate_task),
+                        timeout=min(2.0, remaining),
+                    )
+                except asyncio.TimeoutError:
+                    block_status = await _songripper_conversion_block_status()
+                    if block_status["blocked"]:
+                        raise RuntimeError(block_status["message"])
+        finally:
+            if not communicate_task.done():
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+                await communicate_task
+
+    @app.route("/songripper/conversion-status")
+    @permission_required('songripper')
+    async def songripper_conversion_status():
+        from quart import jsonify
+        return jsonify(await _songripper_conversion_block_status())
+
     async def _songripper_playlist_name(url: str) -> str:
         """Resolve the public playlist title without making it a hard dependency."""
         import aiohttp
@@ -10311,6 +10415,9 @@ def create_app(db: Database, bot=None) -> Quart:
 
         try:
             async with app.songripper_playlist_lock:
+                block_status = await _songripper_conversion_block_status()
+                if block_status["blocked"]:
+                    raise RuntimeError(block_status["message"])
                 job.update(state="running", message="Resolving playlist...", percent=1)
                 songs = await parse_suno_playlist(url)
                 if not songs:
@@ -10335,6 +10442,9 @@ def create_app(db: Database, bot=None) -> Quart:
 
                 async with aiohttp.ClientSession(headers=headers) as sess:
                     for index, song in enumerate(songs, start=1):
+                        block_status = await _songripper_conversion_block_status()
+                        if block_status["blocked"]:
+                            raise RuntimeError(block_status["message"])
                         song_uuid = str(song.get("uuid") or "").strip()
                         title = str(song.get("title") or "").strip()
                         title = title or song_uuid[:12]
@@ -10394,7 +10504,7 @@ def create_app(db: Database, bot=None) -> Quart:
                                 stdout=asyncio.subprocess.DEVNULL,
                                 stderr=asyncio.subprocess.PIPE,
                             )
-                            _, err = await proc.communicate()
+                            _, err = await _wait_for_songripper_ffmpeg(proc)
                             if proc.returncode != 0 or not os.path.isfile(out_path):
                                 detail = err.decode("utf-8", errors="replace").strip()
                                 raise RuntimeError(detail or "unknown ffmpeg error")
@@ -10489,6 +10599,10 @@ def create_app(db: Database, bot=None) -> Quart:
     async def songripper_prepare_playlist():
         """Start a serial playlist export in the background."""
         from quart import jsonify
+
+        blocked = await _songripper_conversion_block_response()
+        if blocked is not None:
+            return blocked
 
         data = await request.get_json(silent=True) or {}
         url = str(data.get("url") or "").strip()
@@ -10723,12 +10837,197 @@ def create_app(db: Database, bot=None) -> Quart:
                     pass
             return jsonify({"error": f"Asset download failed: {exc}"}), 502
 
+    @app.route("/songripper/download-square-video")
+    @permission_required('songripper')
+    async def songripper_download_square_video():
+        """Download a Suno video and render a normalized 1080x1080 MP4."""
+        from quart import jsonify, send_file
+        from urllib.parse import urlparse
+        import aiohttp, re as _re, tempfile
+
+        blocked = await _songripper_conversion_block_response()
+        if blocked is not None:
+            return blocked
+
+        song_id = (request.args.get("id") or "").strip()
+        mode = (request.args.get("mode") or "pad").strip().lower()
+        if mode not in {"pad", "crop", "blur"}:
+            return jsonify({"error": "Square mode must be pad, crop, or blur."}), 400
+        uuid_match = _re.fullmatch(
+            r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}",
+            song_id,
+            _re.I,
+        )
+        if not uuid_match:
+            return jsonify({"error": "A resolved Suno song UUID is required."}), 400
+
+        song_uuid = uuid_match.group(0)
+        meta = await _fetch_suno_meta(song_uuid)
+        video_url = str(meta.get("video_url") or "").strip()
+        if not video_url:
+            return jsonify({"error": "No Suno video is available for this song."}), 404
+
+        def trusted_suno_url(value):
+            parsed = urlparse(value)
+            host = (parsed.hostname or "").lower()
+            return parsed.scheme == "https" and (
+                host == "suno.ai" or host.endswith(".suno.ai")
+            )
+
+        if not trusted_suno_url(video_url):
+            return jsonify({"error": "Suno returned an unsupported video URL."}), 502
+
+        requested_name = (request.args.get("filename") or "suno_song_video.mp4").strip()
+        requested_name = _re.sub(
+            r"[^a-zA-Z0-9_. -]+", "", requested_name
+        ).strip(" .") or "suno_song_video.mp4"
+        stem = os.path.splitext(requested_name)[0].strip(" .") or "suno_song_video"
+        attachment_name = f"{stem}.mp4"
+        source_path = ""
+        output_path = ""
+        process = None
+        size_limit = 350 * 1024 * 1024
+
+        try:
+            source_fd, source_path = tempfile.mkstemp(
+                prefix="songripper_video_source_", suffix=".video"
+            )
+            os.close(source_fd)
+            output_fd, output_path = tempfile.mkstemp(
+                prefix="songripper_square_video_", suffix=".mp4"
+            )
+            os.close(output_fd)
+
+            headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36"
+                )
+            }
+            async with aiohttp.ClientSession(headers=headers) as sess:
+                async with sess.get(
+                    video_url,
+                    timeout=aiohttp.ClientTimeout(total=300),
+                ) as resp:
+                    if resp.status != 200:
+                        return jsonify({
+                            "error": f"Suno video download returned HTTP {resp.status}."
+                        }), 502
+                    if not trusted_suno_url(str(resp.url)):
+                        return jsonify({
+                            "error": "Suno redirected to an unsupported video host."
+                        }), 502
+                    content_type = (
+                        (resp.headers.get("Content-Type") or "")
+                        .split(";", 1)[0]
+                        .lower()
+                    )
+                    if not (
+                        content_type.startswith("video/")
+                        or content_type == "application/octet-stream"
+                    ):
+                        return jsonify({"error": "Suno returned an invalid video file."}), 502
+                    try:
+                        declared_size = int(resp.headers.get("Content-Length") or 0)
+                    except (TypeError, ValueError):
+                        declared_size = 0
+                    if declared_size > size_limit:
+                        return jsonify({"error": "The Suno video exceeds 350 MB."}), 413
+
+                    downloaded = 0
+                    with open(source_path, "wb") as handle:
+                        async for chunk in resp.content.iter_chunked(1024 * 1024):
+                            downloaded += len(chunk)
+                            if downloaded > size_limit:
+                                raise ValueError("The Suno video exceeds 350 MB.")
+                            handle.write(chunk)
+            if os.path.getsize(source_path) < 1024:
+                raise ValueError("The downloaded Suno video is empty.")
+
+            if mode == "crop":
+                video_args = [
+                    "-vf",
+                    "scale=1080:1080:force_original_aspect_ratio=increase,"
+                    "crop=1080:1080,setsar=1",
+                    "-map", "0:v:0", "-map", "0:a?",
+                ]
+            elif mode == "blur":
+                video_args = [
+                    "-filter_complex",
+                    "[0:v]split=2[bg][fg];"
+                    "[bg]scale=1080:1080:force_original_aspect_ratio=increase,"
+                    "crop=1080:1080,boxblur=30:10[blurred];"
+                    "[fg]scale=1080:1080:force_original_aspect_ratio=decrease[front];"
+                    "[blurred][front]overlay=(W-w)/2:(H-h)/2,setsar=1[vout]",
+                    "-map", "[vout]", "-map", "0:a?",
+                ]
+            else:
+                video_args = [
+                    "-vf",
+                    "scale=1080:1080:force_original_aspect_ratio=decrease,"
+                    "pad=1080:1080:(ow-iw)/2:(oh-ih)/2:black,setsar=1",
+                    "-map", "0:v:0", "-map", "0:a?",
+                ]
+
+            process = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-y", "-hide_banner", "-v", "error",
+                "-i", source_path,
+                *video_args,
+                "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+                "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-b:a", "256k",
+                "-movflags", "+faststart",
+                output_path,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await _wait_for_songripper_ffmpeg(process)
+            if process.returncode != 0:
+                error_text = stderr.decode("utf-8", "replace")[-1800:].strip()
+                raise RuntimeError(error_text or "FFmpeg video conversion failed.")
+            if not os.path.isfile(output_path) or os.path.getsize(output_path) < 1024:
+                raise RuntimeError("FFmpeg did not create a valid output video.")
+
+            try:
+                os.remove(source_path)
+            except OSError:
+                pass
+            source_path = ""
+            asyncio.create_task(_delete_temp_file_later(output_path, delay=900))
+            return await send_file(
+                output_path,
+                mimetype="video/mp4",
+                as_attachment=True,
+                attachment_filename=attachment_name,
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 413
+        except FileNotFoundError:
+            return jsonify({"error": "FFmpeg is not installed in the container."}), 500
+        except Exception as exc:
+            return jsonify({"error": f"Video conversion failed: {exc}"}), 502
+        finally:
+            if source_path:
+                try:
+                    os.remove(source_path)
+                except OSError:
+                    pass
+            if output_path and (not os.path.isfile(output_path) or process is None or process.returncode != 0):
+                try:
+                    os.remove(output_path)
+                except OSError:
+                    pass
+
     @app.route("/songripper/download-mp3")
     @permission_required('songripper')
     async def songripper_download_mp3():
         """Download Suno audio server-side and re-encode it to a clean MP3."""
         from quart import Response, jsonify
         import aiohttp, re as _re, tempfile
+
+        blocked = await _songripper_conversion_block_response()
+        if blocked is not None:
+            return blocked
 
         song_id = request.args.get("id", "").strip()
         filename = request.args.get("filename", "suno_song").strip()
@@ -10781,7 +11080,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     stdout=asyncio.subprocess.DEVNULL,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                _, err = await proc.communicate()
+                _, err = await _wait_for_songripper_ffmpeg(proc)
                 if proc.returncode != 0 or not os.path.exists(out_path):
                     detail = err.decode("utf-8", errors="replace").strip()
                     return jsonify({"error": f"MP3 re-encode failed: {detail or 'unknown ffmpeg error'}"}), 500
@@ -10806,6 +11105,10 @@ def create_app(db: Database, bot=None) -> Quart:
         """Convert Suno audio to a mono square signal with a configurable dead zone."""
         from quart import Response, jsonify
         import aiohttp, re as _re, tempfile
+
+        blocked = await _songripper_conversion_block_response()
+        if blocked is not None:
+            return blocked
 
         song_id = request.args.get("id", "").strip()
         output_format = request.args.get("format", "wav").strip().lower()
@@ -10884,7 +11187,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     stdout=asyncio.subprocess.DEVNULL,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                _, err = await proc.communicate()
+                _, err = await _wait_for_songripper_ffmpeg(proc)
                 if proc.returncode != 0 or not os.path.exists(out_path):
                     detail = err.decode("utf-8", errors="replace").strip()
                     return jsonify({"error": f"Square-wave conversion failed: {detail or 'unknown ffmpeg error'}"}), 500

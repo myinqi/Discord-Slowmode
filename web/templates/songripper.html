@@ -47,6 +47,9 @@
                 <div id="songripper-progress" class="h-full bg-discord-blurple transition-all" style="width:0%"></div>
             </div>
             <p id="songripper-status" class="text-gray-500 text-xs mt-2">Ready.</p>
+            <div id="songripper-conversion-blocked"
+                 class="hidden mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+            </div>
         </div>
 
         <div id="songripper-meta" class="hidden p-5 border-b border-gray-700/50">
@@ -93,6 +96,22 @@
                     ⬇ Download Cover Image
                 </button>
             </div>
+            <div class="border border-gray-700/50 rounded-lg p-3">
+                <p class="text-gray-300 text-xs font-semibold mb-2">Square video export · 1080 × 1080</p>
+                <div class="flex flex-col sm:flex-row gap-2">
+                    <select id="songripper-square-video-mode"
+                            class="flex-1 bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-gray-200 text-sm focus:border-discord-blurple focus:outline-none">
+                        <option value="pad">Fit with black bars</option>
+                        <option value="crop">Center crop</option>
+                        <option value="blur">Blurred background</option>
+                    </select>
+                    <button type="button" id="songripper-square-video-btn" onclick="downloadSongripperSquareVideo()" disabled
+                            class="px-4 py-2 bg-indigo-600/20 hover:bg-indigo-600/40 disabled:bg-gray-700/30 disabled:text-gray-500 text-indigo-300 rounded-lg text-sm font-semibold transition-colors">
+                        ⬇ Convert &amp; Download
+                    </button>
+                </div>
+                <p class="mt-1.5 text-[10px] text-gray-600">Downloads the Suno video, converts it to an H.264 square MP4, and removes temporary files afterward.</p>
+            </div>
             <div class="pt-1">
                 <button type="button" id="songripper-karaoke-btn" onclick="downloadSongripperAsset('karaoke')" disabled
                     class="w-full px-4 py-2 border border-gray-700 hover:border-gray-600 disabled:opacity-40 text-gray-500 hover:text-gray-300 rounded-lg text-xs font-medium transition-colors">
@@ -115,6 +134,9 @@ let songripperSourceExt = 'mp3';
 let songripperMode = 'song';
 let songripperPlaylistUrl = '';
 let songripperPlaylistSongs = [];
+let songripperConversionBlocked = false;
+let songripperConversionBusy = false;
+let songripperConversionStatus = {blocked: false, message: ''};
 
 function songripperStatus(text) {
     document.getElementById('songripper-status').textContent = text;
@@ -122,6 +144,47 @@ function songripperStatus(text) {
 
 function songripperProgress(value) {
     document.getElementById('songripper-progress').style.width = `${value}%`;
+}
+
+function songripperApplyConversionStatus(status) {
+    songripperConversionStatus = status || {blocked: false, message: ''};
+    songripperConversionBlocked = Boolean(status?.blocked);
+    const notice = document.getElementById('songripper-conversion-blocked');
+    notice.textContent = status?.message || '';
+    notice.classList.toggle('hidden', !songripperConversionBlocked);
+    if (songripperConversionBusy && !songripperConversionBlocked) return;
+
+    const playlistReady = songripperPlaylistSongs.length > 0;
+    const songReady = Boolean(songripperAudioId && songripperAudioBuffer);
+    document.getElementById('songripper-mp3-btn').disabled = songripperConversionBlocked
+        || (songripperMode === 'playlist' ? !playlistReady : !songReady);
+    document.getElementById('songripper-wav-btn').disabled = songripperMode === 'playlist'
+        ? (songripperConversionBlocked || !playlistReady)
+        : !songReady;
+    document.getElementById('songripper-square-wav-btn').disabled = songripperConversionBlocked || !songReady;
+    document.getElementById('songripper-square-mp3-btn').disabled = songripperConversionBlocked || !songReady;
+    document.getElementById('songripper-square-video-btn').disabled = songripperConversionBlocked
+        || !songripperMeta?.video;
+}
+
+async function songripperRefreshConversionStatus() {
+    try {
+        const response = await fetch('/songripper/conversion-status', {cache: 'no-store'});
+        const status = await response.json();
+        if (response.ok) songripperApplyConversionStatus(status);
+        return response.ok ? status : null;
+    } catch (_) {
+        return null;
+    }
+}
+
+async function songripperEnsureConversionAvailable() {
+    const status = await songripperRefreshConversionStatus();
+    if (status?.blocked) {
+        songripperStatus(status.message);
+        return false;
+    }
+    return true;
 }
 
 function updateSongripperThresholdLabel() {
@@ -165,20 +228,23 @@ function songripperSetDownloadButtons(mp3Text, wavText, disabled) {
     const wav = document.getElementById('songripper-wav-btn');
     mp3.textContent = mp3Text;
     wav.textContent = wavText;
-    mp3.disabled = disabled;
-    wav.disabled = disabled;
+    mp3.disabled = disabled || songripperConversionBlocked;
+    wav.disabled = disabled || (songripperMode === 'playlist' && songripperConversionBlocked);
 }
 
 function songripperSetAssetButtons(videoAvailable, coverAvailable, karaokeAvailable = false) {
     const video = document.getElementById('songripper-video-btn');
     const cover = document.getElementById('songripper-cover-btn');
     const karaoke = document.getElementById('songripper-karaoke-btn');
+    const squareVideo = document.getElementById('songripper-square-video-btn');
     video.disabled = !videoAvailable;
     cover.disabled = !coverAvailable;
     karaoke.disabled = !karaokeAvailable;
+    squareVideo.disabled = !videoAvailable || songripperConversionBlocked;
     video.title = videoAvailable ? 'Download the Suno song video' : 'No Suno video is available for this song';
     cover.title = coverAvailable ? 'Download the Suno cover image' : 'No cover image is available for this song';
     karaoke.title = karaokeAvailable ? 'Download the full Suno karaoke video' : 'No Suno karaoke video is available for this song';
+    squareVideo.title = videoAvailable ? 'Convert the Suno video to a 1080 × 1080 MP4' : 'No Suno video is available for this song';
 }
 
 async function loadSongripperPlaylist(url) {
@@ -315,6 +381,7 @@ async function loadSongripperAudio() {
     document.getElementById('songripper-wav-btn').disabled = false;
     document.getElementById('songripper-square-wav-btn').disabled = false;
     document.getElementById('songripper-square-mp3-btn').disabled = false;
+    songripperApplyConversionStatus(songripperConversionStatus);
     songripperProgress(100);
     songripperStatus('Ready to download.');
 }
@@ -366,15 +433,60 @@ async function downloadSongripperAsset(kind) {
     }
 }
 
+async function downloadSongripperSquareVideo() {
+    if (!songripperAudioId || !songripperMeta?.video) {
+        alert('No Suno video is available for this song.');
+        return;
+    }
+    if (!await songripperEnsureConversionAvailable()) return;
+    const button = document.getElementById('songripper-square-video-btn');
+    const mode = document.getElementById('songripper-square-video-mode').value || 'pad';
+    const filename = `${songripperSafeName()}_video.mp4`;
+    songripperConversionBusy = true;
+    button.disabled = true;
+    songripperProgress(65);
+    songripperStatus('Downloading and converting the Suno video to 1080 × 1080...');
+    try {
+        const params = new URLSearchParams({
+            id: songripperAudioId,
+            mode: mode,
+            filename: filename,
+        });
+        const response = await fetch(`/songripper/download-square-video?${params.toString()}`);
+        if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            throw new Error(data.error || `Video conversion failed (${response.status}).`);
+        }
+        const blob = await response.blob();
+        const disposition = response.headers.get('Content-Disposition') || '';
+        const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+        const plainName = disposition.match(/filename="([^"]+)"/i);
+        const serverName = encodedName
+            ? decodeURIComponent(encodedName[1])
+            : (plainName ? plainName[1] : filename);
+        songripperSaveBlob(blob, serverName);
+        songripperProgress(100);
+        songripperStatus('Converted square video downloaded.');
+    } catch (err) {
+        songripperProgress(0);
+        songripperStatus(err.message || String(err));
+    } finally {
+        songripperConversionBusy = false;
+        songripperApplyConversionStatus(songripperConversionStatus);
+    }
+}
+
 async function downloadSongripperSquare(format) {
     if (!songripperAudioId) {
         alert('No audio loaded.');
         return;
     }
+    if (!await songripperEnsureConversionAvailable()) return;
     const safeName = songripperSafeName();
     const thresholdPercent = Number(document.getElementById('songripper-square-threshold').value || 0);
     const threshold = Math.max(0, Math.min(50, thresholdPercent)) / 100;
     const btn = document.getElementById(`songripper-square-${format}-btn`);
+    songripperConversionBusy = true;
     btn.disabled = true;
     songripperStatus(`Creating Square ${format.toUpperCase()} · Threshold ${thresholdPercent}%...`);
     try {
@@ -391,7 +503,8 @@ async function downloadSongripperSquare(format) {
     } catch (err) {
         songripperStatus(err.message || String(err));
     } finally {
-        btn.disabled = false;
+        songripperConversionBusy = false;
+        songripperApplyConversionStatus(songripperConversionStatus);
     }
 }
 
@@ -406,7 +519,9 @@ async function downloadSongripperAudio(format) {
             alert('No audio loaded.');
             return;
         }
+        if (!await songripperEnsureConversionAvailable()) return;
         const btn = document.getElementById('songripper-mp3-btn');
+        songripperConversionBusy = true;
         btn.disabled = true;
         songripperStatus('Re-encoding MP3 on the server...');
         try {
@@ -422,7 +537,8 @@ async function downloadSongripperAudio(format) {
         } catch (err) {
             songripperStatus(err.message || String(err));
         } finally {
-            btn.disabled = false;
+            songripperConversionBusy = false;
+            songripperApplyConversionStatus(songripperConversionStatus);
         }
         return;
     }
@@ -470,6 +586,8 @@ async function downloadSongripperPlaylist(format) {
         alert('No playlist loaded.');
         return;
     }
+    if (!await songripperEnsureConversionAvailable()) return;
+    songripperConversionBusy = true;
     songripperSetDownloadButtons('Preparing playlist...', 'Preparing playlist...', true);
     songripperProgress(0);
     songripperStatus('Starting sequential playlist export...');
@@ -506,8 +624,13 @@ async function downloadSongripperPlaylist(format) {
         songripperProgress(0);
         songripperStatus(err.message || String(err));
     } finally {
+        songripperConversionBusy = false;
         songripperSetDownloadButtons('⬇ Download playlist as MP3 (ZIP)', '⬇ Download playlist as WAV (ZIP)', false);
+        songripperApplyConversionStatus(songripperConversionStatus);
     }
 }
+
+songripperRefreshConversionStatus();
+window.setInterval(songripperRefreshConversionStatus, 60000);
 </script>
 {% endblock %}
