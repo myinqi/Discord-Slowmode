@@ -133,6 +133,8 @@ class Database:
                 event_key TEXT NOT NULL UNIQUE,
                 guild_id INTEGER NOT NULL,
                 user_id INTEGER NOT NULL,
+                user_name TEXT,
+                display_name TEXT,
                 event_type TEXT NOT NULL CHECK(event_type IN ('join', 'leave')),
                 occurred_at REAL NOT NULL,
                 source TEXT NOT NULL DEFAULT 'live'
@@ -313,6 +315,20 @@ class Database:
         if "permissions" not in wu_columns:
             await self.db.execute("ALTER TABLE web_users ADD COLUMN permissions TEXT DEFAULT '[]'")
             await self.db.commit()
+
+        async with self.db.execute(
+            "PRAGMA table_info(discord_member_events)"
+        ) as cursor:
+            member_event_columns = [row[1] async for row in cursor]
+        if "user_name" not in member_event_columns:
+            await self.db.execute(
+                "ALTER TABLE discord_member_events ADD COLUMN user_name TEXT"
+            )
+        if "display_name" not in member_event_columns:
+            await self.db.execute(
+                "ALTER TABLE discord_member_events ADD COLUMN display_name TEXT"
+            )
+        await self.db.commit()
 
         # Existing installations may have an explicit sidebar allow-list.
         # Add the new module once, then leave future visibility changes to
@@ -2520,6 +2536,8 @@ class Database:
         user_id: int,
         event_type: str,
         occurred_at: float,
+        user_name: str = "",
+        display_name: str = "",
     ) -> None:
         if event_type not in {"join", "leave"}:
             raise ValueError("Unsupported Discord member event type")
@@ -2527,21 +2545,54 @@ class Database:
         event_key = f"{event_type}:{guild_id}:{user_id}:{timestamp:.6f}"
         await self.db.execute(
             """INSERT OR IGNORE INTO discord_member_events
-               (event_key, guild_id, user_id, event_type, occurred_at, source)
-               VALUES (?, ?, ?, ?, ?, 'live')""",
-            (event_key, guild_id, user_id, event_type, timestamp),
+               (event_key, guild_id, user_id, user_name, display_name,
+                event_type, occurred_at, source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'live')""",
+            (
+                event_key,
+                guild_id,
+                user_id,
+                user_name or None,
+                display_name or None,
+                event_type,
+                timestamp,
+            ),
         )
         await self.db.commit()
 
     async def get_discord_member_events(self, guild_id: int) -> list[dict]:
         async with self.db.execute(
-            """SELECT event_type, occurred_at, source
+            """SELECT user_id, user_name, display_name, event_type,
+                      occurred_at, source
                FROM discord_member_events
                WHERE guild_id = ?
                ORDER BY occurred_at, id""",
             (guild_id,),
         ) as cursor:
             return [dict(row) for row in await cursor.fetchall()]
+
+    async def update_discord_member_event_identity(
+        self,
+        guild_id: int,
+        user_id: int,
+        user_name: str,
+        display_name: str,
+    ) -> None:
+        """Backfill identity details for member events recorded by older versions."""
+        await self.db.execute(
+            """UPDATE discord_member_events
+               SET user_name = CASE
+                       WHEN user_name IS NULL OR user_name = '' THEN ?
+                       ELSE user_name
+                   END,
+                   display_name = CASE
+                       WHEN display_name IS NULL OR display_name = '' THEN ?
+                       ELSE display_name
+                   END
+               WHERE guild_id = ? AND user_id = ?""",
+            (user_name or None, display_name or None, guild_id, user_id),
+        )
+        await self.db.commit()
 
     async def get_discord_member_tracking_started_at(self, guild_id: int) -> float | None:
         value = await self.get_setting(f"discord_member_tracking_started_at:{guild_id}")

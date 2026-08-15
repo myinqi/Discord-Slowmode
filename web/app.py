@@ -911,6 +911,35 @@ def create_app(db: Database, bot=None) -> Quart:
                 tracking_started_at, tz=timezone.utc
             ).strftime("%d %B %Y")
 
+        def recent_member_events(event_type: str, limit: int = 10) -> list[dict]:
+            matching_events = sorted(
+                (
+                    event
+                    for event in events
+                    if event["event_type"] == event_type
+                ),
+                key=lambda event: event["occurred_at"],
+                reverse=True,
+            )
+            result = []
+            for event in matching_events[:limit]:
+                display_name = (event.get("display_name") or "").strip()
+                user_name = (event.get("user_name") or "").strip()
+                result.append({
+                    "display_name": display_name or user_name or "Unknown member",
+                    "user_name": user_name,
+                    "user_id": event.get("user_id"),
+                    "occurred_at_label": datetime.fromtimestamp(
+                        event["occurred_at"], tz=timezone.utc
+                    ).strftime("%d.%m.%Y %H:%M UTC"),
+                })
+            return result
+
+        join_events = [event for event in events if event["event_type"] == "join"]
+        leave_events = [event for event in events if event["event_type"] == "leave"]
+        recent_joins = recent_member_events("join")
+        recent_departures = recent_member_events("leave")
+
         return {
             "growth": {
                 "labels": growth_keys,
@@ -927,6 +956,10 @@ def create_app(db: Database, bot=None) -> Quart:
                 "leaves": [yearly[key]["leaves"] for key in year_keys],
             },
             "tracked_leaves": sum(1 for event in events if event["event_type"] == "leave"),
+            "recent_joins": recent_joins,
+            "joins_truncated": len(join_events) > len(recent_joins),
+            "recent_departures": recent_departures,
+            "departures_truncated": len(leave_events) > len(recent_departures),
             "tracking_started_label": tracking_label,
         }
 
@@ -1759,7 +1792,8 @@ def create_app(db: Database, bot=None) -> Quart:
         guild = get_guild()
         raw_members, complete = await get_all_guild_members(guild)
         all_rows = [build_member_directory_row(member) for member in raw_members]
-        add_member_directory_activity(all_rows, await db.get_all_user_activity())
+        activity_rows = await db.get_all_user_activity()
+        add_member_directory_activity(all_rows, activity_rows)
         chart_data = build_member_history_charts([], None)
         if guild:
             await db.backfill_discord_member_joins(
@@ -1770,8 +1804,57 @@ def create_app(db: Database, bot=None) -> Quart:
                     if member.joined_at is not None
                 ],
             )
+            member_events = await db.get_discord_member_events(guild.id)
+            activity_by_user = {
+                int(activity["user_id"]): activity
+                for activity in activity_rows
+                if activity.get("user_id") is not None
+            }
+            current_member_by_id = {row["id"]: row for row in all_rows}
+            for event in member_events:
+                current_member = current_member_by_id.get(event["user_id"], {})
+                if not event.get("user_name"):
+                    event["user_name"] = current_member.get("username", "")
+                if not event.get("display_name"):
+                    event["display_name"] = current_member.get("display_name", "")
+                if event["event_type"] != "leave":
+                    continue
+                identity_was_missing = (
+                    not event.get("user_name") or not event.get("display_name")
+                )
+                cached_user = bot.get_user(event["user_id"]) if bot else None
+                activity = activity_by_user.get(event["user_id"], {})
+                if (
+                    bot
+                    and cached_user is None
+                    and not event.get("user_name")
+                    and not activity.get("user_name")
+                ):
+                    try:
+                        cached_user = await bot.fetch_user(event["user_id"])
+                    except Exception:
+                        cached_user = None
+                if not event.get("user_name"):
+                    event["user_name"] = (
+                        getattr(cached_user, "name", "")
+                        or activity.get("user_name", "")
+                    )
+                if not event.get("display_name"):
+                    event["display_name"] = (
+                        getattr(cached_user, "display_name", "")
+                        or activity.get("user_name", "")
+                    )
+                if identity_was_missing and (
+                    event.get("user_name") or event.get("display_name")
+                ):
+                    await db.update_discord_member_event_identity(
+                        guild.id,
+                        event["user_id"],
+                        event.get("user_name", ""),
+                        event.get("display_name", ""),
+                    )
             chart_data = build_member_history_charts(
-                await db.get_discord_member_events(guild.id),
+                member_events,
                 await db.get_discord_member_tracking_started_at(guild.id),
             )
         filtered_rows = filter_member_directory_rows(all_rows, request.args)

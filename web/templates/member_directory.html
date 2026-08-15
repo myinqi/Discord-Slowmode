@@ -82,6 +82,64 @@
             <div class="relative h-64"><canvas id="member-year-chart"></canvas></div>
         </div>
     </div>
+    {% if chart_data.recent_joins or chart_data.recent_departures %}
+    <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mt-4">
+        {% if chart_data.recent_joins %}
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50 overflow-hidden">
+            <div class="px-4 py-3 border-b border-gray-700/50 flex items-center justify-between gap-3">
+                <div>
+                    <p class="text-white text-sm font-medium">Recent arrivals</p>
+                    <p class="text-gray-500 text-xs mt-0.5">Latest known server joins.</p>
+                </div>
+                {% if chart_data.joins_truncated %}
+                <span class="text-gray-500 text-xs">Latest 10</span>
+                {% endif %}
+            </div>
+            <div class="divide-y divide-gray-700/40">
+                {% for arrival in chart_data.recent_joins %}
+                <div class="px-4 py-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                    <div class="min-w-0">
+                        <p class="text-gray-200 text-sm font-medium truncate">{{ arrival.display_name }}</p>
+                        <p class="text-gray-500 text-xs truncate">
+                            {% if arrival.user_name and arrival.user_name != arrival.display_name %}@{{ arrival.user_name }} · {% endif %}
+                            Discord ID {{ arrival.user_id }}
+                        </p>
+                    </div>
+                    <time class="text-green-300/80 text-xs shrink-0">{{ arrival.occurred_at_label }}</time>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+        {% if chart_data.recent_departures %}
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50 overflow-hidden">
+            <div class="px-4 py-3 border-b border-gray-700/50 flex items-center justify-between gap-3">
+                <div>
+                    <p class="text-white text-sm font-medium">Recent departures</p>
+                    <p class="text-gray-500 text-xs mt-0.5">Recorded after member tracking was enabled.</p>
+                </div>
+                {% if chart_data.departures_truncated %}
+                <span class="text-gray-500 text-xs">Latest 10</span>
+                {% endif %}
+            </div>
+            <div class="divide-y divide-gray-700/40">
+                {% for departure in chart_data.recent_departures %}
+                <div class="px-4 py-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                    <div class="min-w-0">
+                        <p class="text-gray-200 text-sm font-medium truncate">{{ departure.display_name }}</p>
+                        <p class="text-gray-500 text-xs truncate">
+                            {% if departure.user_name and departure.user_name != departure.display_name %}@{{ departure.user_name }} · {% endif %}
+                            Discord ID {{ departure.user_id }}
+                        </p>
+                    </div>
+                    <time class="text-red-300/80 text-xs shrink-0">{{ departure.occurred_at_label }}</time>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
 </section>
 
 <div class="bg-discord-dark rounded-xl border border-gray-700/50 mb-6">
@@ -296,8 +354,24 @@
             data: {
                 labels: series.labels,
                 datasets: [
-                    { label: 'Joins', data: series.joins, backgroundColor: 'rgba(87, 242, 135, 0.72)', borderRadius: 3 },
-                    { label: 'Departures', data: series.leaves, backgroundColor: 'rgba(237, 66, 69, 0.72)', borderRadius: 3 }
+                    {
+                        label: 'Joins',
+                        data: series.joins,
+                        backgroundColor: 'rgba(87, 242, 135, 0.72)',
+                        borderColor: 'rgba(87, 242, 135, 0.95)',
+                        borderWidth: 1,
+                        borderRadius: 3,
+                        minBarLength: 6
+                    },
+                    {
+                        label: 'Departures',
+                        data: series.leaves,
+                        backgroundColor: 'rgba(237, 66, 69, 0.78)',
+                        borderColor: 'rgba(248, 113, 113, 1)',
+                        borderWidth: 1,
+                        borderRadius: 3,
+                        minBarLength: 8
+                    }
                 ]
             },
             options: commonOptions

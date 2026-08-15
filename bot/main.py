@@ -69,7 +69,12 @@ class SlowmodeBot(commands.Bot):
         occurred_at = (member.joined_at or discord.utils.utcnow()).timestamp()
         try:
             await self.db.record_discord_member_event(
-                member.guild.id, member.id, "join", occurred_at
+                member.guild.id,
+                member.id,
+                "join",
+                occurred_at,
+                user_name=member.name,
+                display_name=member.display_name,
             )
         except Exception as exc:
             print(f"Member join history failed for {member.id}: {exc}")
@@ -83,6 +88,8 @@ class SlowmodeBot(commands.Bot):
                 member.id,
                 "leave",
                 discord.utils.utcnow().timestamp(),
+                user_name=member.name,
+                display_name=member.display_name,
             )
         except Exception as exc:
             print(f"Member leave history failed for {member.id}: {exc}")
