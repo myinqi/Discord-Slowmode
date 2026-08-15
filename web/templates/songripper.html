@@ -93,6 +93,13 @@
                     ⬇ Download Cover Image
                 </button>
             </div>
+            <div class="pt-1">
+                <button type="button" id="songripper-karaoke-btn" onclick="downloadSongripperAsset('karaoke')" disabled
+                    class="w-full px-4 py-2 border border-gray-700 hover:border-gray-600 disabled:opacity-40 text-gray-500 hover:text-gray-300 rounded-lg text-xs font-medium transition-colors">
+                    ⬇ Download Suno Karaoke Video
+                </button>
+                <p class="mt-1.5 text-[10px] text-gray-600">Suno-generated full song video with synchronized lyrics.</p>
+            </div>
         </div>
     </div>
 </div>
@@ -162,13 +169,16 @@ function songripperSetDownloadButtons(mp3Text, wavText, disabled) {
     wav.disabled = disabled;
 }
 
-function songripperSetAssetButtons(videoAvailable, coverAvailable) {
+function songripperSetAssetButtons(videoAvailable, coverAvailable, karaokeAvailable = false) {
     const video = document.getElementById('songripper-video-btn');
     const cover = document.getElementById('songripper-cover-btn');
+    const karaoke = document.getElementById('songripper-karaoke-btn');
     video.disabled = !videoAvailable;
     cover.disabled = !coverAvailable;
+    karaoke.disabled = !karaokeAvailable;
     video.title = videoAvailable ? 'Download the Suno song video' : 'No Suno video is available for this song';
     cover.title = coverAvailable ? 'Download the Suno cover image' : 'No cover image is available for this song';
+    karaoke.title = karaokeAvailable ? 'Download the full Suno karaoke video' : 'No Suno karaoke video is available for this song';
 }
 
 async function loadSongripperPlaylist(url) {
@@ -274,7 +284,7 @@ async function loadSongripperAudio() {
     } else {
         artwork.classList.add('hidden');
     }
-    songripperSetAssetButtons(Boolean(meta.video), Boolean(meta.artwork));
+    songripperSetAssetButtons(Boolean(meta.video), Boolean(meta.artwork), Boolean(meta.karaokeVideo));
 
     songripperProgress(25);
     songripperStatus('Loading audio...');
@@ -320,14 +330,15 @@ function songripperSaveBlob(blob, filename) {
 }
 
 async function downloadSongripperAsset(kind) {
-    if (!songripperAudioId || !['video', 'cover'].includes(kind)) {
+    if (!songripperAudioId || !['video', 'karaoke', 'cover'].includes(kind)) {
         alert('No song loaded.');
         return;
     }
     const btn = document.getElementById(`songripper-${kind}-btn`);
-    const label = kind === 'video' ? 'Video' : 'Cover image';
-    const fallbackExtension = kind === 'video' ? 'mp4' : 'jpg';
-    const filename = `${songripperSafeName()}${kind === 'cover' ? '_cover' : ''}.${fallbackExtension}`;
+    const label = kind === 'video' ? 'Video' : (kind === 'karaoke' ? 'Karaoke video' : 'Cover image');
+    const fallbackExtension = kind === 'cover' ? 'jpg' : 'mp4';
+    const suffix = kind === 'cover' ? '_cover' : (kind === 'karaoke' ? '_karaoke' : '');
+    const filename = `${songripperSafeName()}${suffix}.${fallbackExtension}`;
     btn.disabled = true;
     songripperStatus(`Downloading ${label.toLowerCase()}...`);
     try {
@@ -349,7 +360,9 @@ async function downloadSongripperAsset(kind) {
     } catch (err) {
         songripperStatus(err.message || String(err));
     } finally {
-        btn.disabled = kind === 'video' ? !songripperMeta?.video : !songripperMeta?.artwork;
+        btn.disabled = kind === 'video'
+            ? !songripperMeta?.video
+            : (kind === 'karaoke' ? !songripperMeta?.karaokeVideo : !songripperMeta?.artwork);
     }
 }
 

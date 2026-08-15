@@ -4422,7 +4422,7 @@ def create_app(db: Database, bot=None) -> Quart:
     async def _fetch_suno_meta(uuid):
         """Shared helper to fetch song metadata from Suno embed page."""
         import aiohttp, re, html as _html
-        lyrics = title = image_url = artist = video_url = handle = None
+        lyrics = title = image_url = artist = video_url = karaoke_video_url = handle = None
         try:
             async with aiohttp.ClientSession() as sess:
                 async with sess.get(
@@ -4553,6 +4553,15 @@ def create_app(db: Database, bot=None) -> Quart:
                     if m:
                         video_url = m.group(1).replace("\\/", "/")
 
+                    # Full Suno-generated karaoke video with synchronized lyrics.
+                    # Keep this separate from video_cover_url, which is the visual
+                    # used by the Suno Info player.
+                    m = re.search(r'(?<!cover_)"video_url"\s*:\s*"([^"]+)"', html)
+                    if not m:
+                        m = re.search(r'(?<!cover_)video_url\\":\\"([^"\\]+)\\"', html)
+                    if m:
+                        karaoke_video_url = m.group(1).replace("\\/", "/")
+
                     # Handle (artist URL slug) — first occurrence is the song owner
                     m = re.search(r'handle\\":\\"([^"\\]+)\\"', html)
                     if not m:
@@ -4565,7 +4574,15 @@ def create_app(db: Database, bot=None) -> Quart:
             title = _html.unescape(title)
         if artist:
             artist = _html.unescape(artist)
-        return {"lyrics": lyrics, "title": title, "image_url": image_url, "artist": artist, "video_url": video_url, "handle": handle}
+        return {
+            "lyrics": lyrics,
+            "title": title,
+            "image_url": image_url,
+            "artist": artist,
+            "video_url": video_url,
+            "karaoke_video_url": karaoke_video_url,
+            "handle": handle,
+        }
 
     async def _fetch_elevenmusic_meta(track_id: str):
         """Fetch public ElevenMusic track metadata from the rendered track page."""
@@ -10585,6 +10602,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     or f"https://cdn1.suno.ai/image_large_{result['realId']}.jpeg"
                 )
                 result["video"] = rich_meta.get("video_url") or ""
+                result["karaokeVideo"] = rich_meta.get("karaoke_video_url") or ""
             return jsonify(result)
         except Exception as e:
             return jsonify({"error": str(e)}), 502
@@ -10606,12 +10624,17 @@ def create_app(db: Database, bot=None) -> Quart:
         )
         if not uuid_match:
             return jsonify({"error": "A resolved Suno song UUID is required."}), 400
-        if kind not in {"video", "cover"}:
-            return jsonify({"error": "Asset type must be video or cover."}), 400
+        if kind not in {"video", "karaoke", "cover"}:
+            return jsonify({"error": "Asset type must be video, karaoke, or cover."}), 400
 
         song_uuid = uuid_match.group(0)
         meta = await _fetch_suno_meta(song_uuid)
-        asset_url = meta.get("video_url") if kind == "video" else meta.get("image_url")
+        if kind == "video":
+            asset_url = meta.get("video_url")
+        elif kind == "karaoke":
+            asset_url = meta.get("karaoke_video_url")
+        else:
+            asset_url = meta.get("image_url")
         if not asset_url and kind == "cover":
             asset_url = f"https://cdn1.suno.ai/image_large_{song_uuid}.jpeg"
         if not asset_url:
@@ -10628,7 +10651,7 @@ def create_app(db: Database, bot=None) -> Quart:
         requested_name = (request.args.get("filename") or "suno_song").strip()
         requested_name = _re.sub(r"[^a-zA-Z0-9_. -]+", "", requested_name).strip(" .") or "suno_song"
         stem = os.path.splitext(requested_name)[0].strip(" .") or "suno_song"
-        size_limit = 350 * 1024 * 1024 if kind == "video" else 30 * 1024 * 1024
+        size_limit = 350 * 1024 * 1024 if kind in {"video", "karaoke"} else 30 * 1024 * 1024
         temp_path = ""
         try:
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -10650,7 +10673,7 @@ def create_app(db: Database, bot=None) -> Quart:
 
                     content_type = (resp.headers.get("Content-Type") or "").split(";", 1)[0].lower()
                     valid_content_type = (
-                        kind == "video"
+                        kind in {"video", "karaoke"}
                         and (content_type.startswith("video/") or content_type == "application/octet-stream")
                     ) or (
                         kind == "cover" and content_type.startswith("image/")
@@ -10665,7 +10688,7 @@ def create_app(db: Database, bot=None) -> Quart:
                         "image/png": ".png",
                         "image/webp": ".webp",
                     }
-                    default_extension = ".mp4" if kind == "video" else ".jpg"
+                    default_extension = ".mp4" if kind in {"video", "karaoke"} else ".jpg"
                     extension = extension_map.get(content_type, default_extension)
                     fd, temp_path = tempfile.mkstemp(prefix="songripper_asset_", suffix=extension)
                     os.close(fd)
@@ -10681,7 +10704,7 @@ def create_app(db: Database, bot=None) -> Quart:
             asyncio.create_task(_delete_temp_file_later(temp_path, delay=900))
             return await send_file(
                 temp_path,
-                mimetype=content_type or ("video/mp4" if kind == "video" else "image/jpeg"),
+                mimetype=content_type or ("video/mp4" if kind in {"video", "karaoke"} else "image/jpeg"),
                 as_attachment=True,
                 attachment_filename=attachment_name,
             )
