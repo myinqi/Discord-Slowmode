@@ -867,6 +867,20 @@ def create_app(db: Database, bot=None) -> Quart:
         from collections import defaultdict
         from datetime import datetime, timezone
 
+        unique_events = []
+        seen_events = set()
+        for event in events:
+            event_key = (
+                event["event_type"],
+                event.get("user_id"),
+                round(float(event["occurred_at"])),
+            )
+            if event_key in seen_events:
+                continue
+            seen_events.add(event_key)
+            unique_events.append(event)
+        events = unique_events
+
         monthly = defaultdict(lambda: {"joins": 0, "leaves": 0})
         yearly = defaultdict(lambda: {"joins": 0, "leaves": 0})
         for event in events:

@@ -356,7 +356,7 @@
                 datasets: [
                     {
                         label: 'Joins',
-                        data: series.joins,
+                        data: series.joins.map(value => value > 0 ? value : null),
                         backgroundColor: 'rgba(87, 242, 135, 0.72)',
                         borderColor: 'rgba(87, 242, 135, 0.95)',
                         borderWidth: 1,
@@ -365,7 +365,7 @@
                     },
                     {
                         label: 'Departures',
-                        data: series.leaves,
+                        data: series.leaves.map(value => value > 0 ? value : null),
                         backgroundColor: 'rgba(237, 66, 69, 0.78)',
                         borderColor: 'rgba(248, 113, 113, 1)',
                         borderWidth: 1,
@@ -374,7 +374,16 @@
                     }
                 ]
             },
-            options: commonOptions
+            options: {
+                ...commonOptions,
+                scales: {
+                    ...commonOptions.scales,
+                    x: {
+                        ...commonOptions.scales.x,
+                        offset: true
+                    }
+                }
+            }
         });
     }
 
