@@ -2095,7 +2095,8 @@ def create_app(db: Database, bot=None) -> Quart:
     @app.route("/file-sharing/<int:upload_id>/download")
     @permission_required("file_sharing")
     async def file_sharing_download(upload_id: int):
-        from quart import abort, send_file
+        from quart import Response, abort
+        from urllib.parse import quote
 
         upload = await db.get_file_share_upload(upload_id)
         if not upload:
@@ -2109,11 +2110,77 @@ def create_app(db: Database, bot=None) -> Quart:
             details=f"Downloaded file #{upload_id}: {upload['original_filename']}",
             actor=session.get("username", "unknown"),
         )
-        return await send_file(
-            path,
+
+        file_size = os.path.getsize(path)
+        start = 0
+        end = file_size - 1
+        status = 200
+        range_header = (request.headers.get("Range") or "").strip()
+        if range_header:
+            match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header)
+            if not match or not any(match.groups()):
+                return Response(
+                    status=416,
+                    headers={"Content-Range": f"bytes */{file_size}"},
+                )
+            start_text, end_text = match.groups()
+            try:
+                if not start_text:
+                    suffix_length = int(end_text)
+                    if suffix_length <= 0:
+                        raise ValueError
+                    start = max(0, file_size - suffix_length)
+                else:
+                    start = int(start_text)
+                    if start >= file_size:
+                        raise ValueError
+                    if end_text:
+                        end = min(int(end_text), file_size - 1)
+                        if end < start:
+                            raise ValueError
+                status = 206
+            except ValueError:
+                return Response(
+                    status=416,
+                    headers={"Content-Range": f"bytes */{file_size}"},
+                )
+
+        content_length = max(0, end - start + 1)
+        original_name = str(upload["original_filename"] or "download")
+        ascii_name = re.sub(r"[^A-Za-z0-9._ -]+", "_", original_name)
+        ascii_name = ascii_name.strip(" .") or "download"
+        disposition = (
+            f'attachment; filename="{ascii_name}"; '
+            f"filename*=UTF-8''{quote(original_name, safe='')}"
+        )
+
+        async def stream_file():
+            remaining = content_length
+            with open(path, "rb") as handle:
+                handle.seek(start)
+                while remaining > 0:
+                    chunk = await asyncio.to_thread(
+                        handle.read,
+                        min(1024 * 1024, remaining),
+                    )
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                    yield chunk
+
+        headers = {
+            "Accept-Ranges": "bytes",
+            "Content-Disposition": disposition,
+            "Content-Length": str(content_length),
+            "Cache-Control": "private, no-store",
+        }
+        if status == 206:
+            headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
+        return Response(
+            stream_file(),
+            status=status,
             mimetype="application/octet-stream",
-            as_attachment=True,
-            attachment_filename=upload["original_filename"],
+            headers=headers,
         )
 
     @app.route("/file-sharing/<int:upload_id>/delete", methods=["POST"])
@@ -4193,6 +4260,13 @@ def create_app(db: Database, bot=None) -> Quart:
             thread_id=thread.id,
             summary_message_id=summary_message.id,
         )
+        try:
+            await thread.edit(
+                archived=True,
+                reason="Player reaction summary updated",
+            )
+        except discord.HTTPException as exc:
+            return False, f"Reaction summary was updated, but its thread could not be archived: {exc}"
         return True, None
 
     @app.route("/api/player-discord-status")
