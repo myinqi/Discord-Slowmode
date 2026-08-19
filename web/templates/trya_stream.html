@@ -1086,6 +1086,13 @@
                                     🎞
                                 </button>
                             </form>
+                            <form method="POST" class="inline">
+                                <input type="hidden" name="action" value="rebuild_square_media">
+                                <input type="hidden" name="song_id" value="{{ song.id }}">
+                                <button type="submit"
+                                    title="Rebuild the cached square song visual with blurred background"
+                                    class="px-2.5 py-1.5 bg-cyan-600/20 hover:bg-cyan-600/40 text-cyan-300 rounded-lg text-xs transition-colors">□</button>
+                            </form>
                             <form method="POST" class="inline"
                                   onsubmit="return confirm('Re-run Whisper analysis for this song?\n\nThis takes several minutes (CPU bound) and runs in the background.');">
                                 <input type="hidden" name="action" value="reanalyze_whisper_one">
@@ -1219,6 +1226,12 @@
                                 class="px-2.5 py-1.5 bg-gray-700/40 hover:bg-red-900/40 text-gray-400 hover:text-red-300 rounded-lg text-xs transition-colors">✕ Hook</button>
                         </form>
                         {% endif %}
+                        <form method="POST" class="inline">
+                            <input type="hidden" name="action" value="rebuild_square_media">
+                            <input type="hidden" name="song_id" value="{{ song.id }}">
+                            <button type="submit" title="Rebuild square visual"
+                                class="px-2.5 py-1.5 bg-cyan-600/20 hover:bg-cyan-600/40 text-cyan-300 rounded-lg text-xs transition-colors">□</button>
+                        </form>
                         {% if song.analysis_status != 'done' and not status.running %}
                         <form method="POST" class="inline">
                             <input type="hidden" name="action" value="reanalyze_whisper_one">
@@ -1313,6 +1326,12 @@
                         <button type="submit" title="Reject proposal" class="px-2.5 py-1.5 bg-red-900/30 hover:bg-red-900/60 text-red-300 rounded-lg text-xs transition-colors">Reject</button>
                     </form>
                     {% endif %}
+                    <form method="POST" class="inline">
+                        <input type="hidden" name="action" value="rebuild_square_media">
+                        <input type="hidden" name="song_id" value="{{ song.id }}">
+                        <button type="submit" title="Rebuild square visual"
+                            class="px-2.5 py-1.5 bg-cyan-600/20 hover:bg-cyan-600/40 text-cyan-300 rounded-lg text-xs transition-colors">□</button>
+                    </form>
                     {% if song.analysis_status != 'done' and not status.running %}
                     <form method="POST" class="inline">
                         <input type="hidden" name="action" value="reanalyze_whisper_one">

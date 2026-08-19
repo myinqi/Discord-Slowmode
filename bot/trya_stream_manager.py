@@ -11,6 +11,7 @@ The stream only briefly disconnects once per full playlist loop (not between son
 """
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -29,8 +30,8 @@ _LEGACY_RTMP_BASE = "rtmp://live.twitch.tv/app/"
 _FPS        = 30
 _DEFAULT_OBS_OVERLAY_FPS = 20
 _W, _H      = 1920, 1080
-_INSET_W    = 560
-_INSET_H    = 560
+_INSET_W    = 480
+_INSET_H    = 480
 _LOOP_OVERLAY_W = 650
 _LOOP_OVERLAY_H = 366
 _OBS_BRIDGE_W = 480
@@ -777,6 +778,87 @@ class TryaStreamManager:
             self.playlist = ready
             self._log(f"Reshuffled playlist ({len(ready)} songs) — next rotation starting.")
 
+    async def _get_square_blur_media(self, source_path: str, force: bool = False) -> str:
+        """Pre-render one source into a cached square blur composition."""
+        stat = os.stat(source_path)
+        signature = hashlib.sha256(
+            f"square-blur-v2-{_INSET_W}x{_INSET_H}|{os.path.abspath(source_path)}|{stat.st_size}|{stat.st_mtime_ns}".encode()
+        ).hexdigest()[:20]
+        cache_dir = os.path.join(self.trya_stream_dir, "square_cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        output_path = os.path.join(cache_dir, f"{signature}.mp4")
+        if not force and os.path.isfile(output_path) and os.path.getsize(output_path) > 0:
+            return output_path
+
+        temporary_path = f"{output_path}.tmp.mp4"
+        is_image = os.path.splitext(source_path)[1].lower() in {".jpg", ".jpeg", ".png", ".webp"}
+        input_args = ["-loop", "1", "-t", "1", "-i", source_path] if is_image else ["-i", source_path]
+        filtergraph = (
+            f"[0:v]split=2[bg][fg];"
+            f"[bg]scale={_INSET_W}:{_INSET_H}:force_original_aspect_ratio=increase,"
+            f"crop={_INSET_W}:{_INSET_H},boxblur=30:10[blurred];"
+            f"[fg]scale={_INSET_W}:{_INSET_H}:force_original_aspect_ratio=decrease:"
+            f"force_divisible_by=2[front];"
+            f"[blurred][front]overlay=(W-w)/2:(H-h)/2,setsar=1,fps=24,format=yuv420p[vout]"
+        )
+        command = [
+            "ffmpeg", "-y", "-hide_banner", "-v", "error", *input_args,
+            "-filter_complex", filtergraph, "-map", "[vout]", "-an",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "24",
+            "-pix_fmt", "yuv420p", "-movflags", "+faststart", temporary_path,
+        ]
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await process.communicate()
+        if process.returncode != 0 or not os.path.isfile(temporary_path):
+            try:
+                os.remove(temporary_path)
+            except OSError:
+                pass
+            detail = (stderr or b"").decode("utf-8", "replace").strip()
+            raise RuntimeError(detail or "square media conversion failed")
+        os.replace(temporary_path, output_path)
+        return output_path
+
+    async def prepare_song_square_media(self, song: dict, force: bool = False) -> str | None:
+        """Resolve one song's visual and persist its prepared square cache state."""
+        song_id = int(song.get("id") or 0)
+        if not song_id:
+            return None
+        await self.db.update_trya_stream_song(
+            song_id, square_media_status="processing", square_media_error=None
+        )
+        try:
+            source_path = await self._get_video(song) or await self._get_cover(song)
+            if not source_path:
+                raise RuntimeError("No song video or cover is available")
+            output_path = await self._get_square_blur_media(source_path, force=force)
+            filename = os.path.basename(output_path)
+            await self.db.update_trya_stream_song(
+                song_id,
+                square_media_filename=filename,
+                square_media_status="ready",
+                square_media_at=time.time(),
+                square_media_error=None,
+            )
+            self._log(f"Square media ready: {song.get('title') or song_id} → {output_path}")
+            return output_path
+        except Exception as exc:
+            await self.db.update_trya_stream_song(
+                song_id,
+                square_media_status="failed",
+                square_media_at=time.time(),
+                square_media_error=str(exc)[:1000],
+            )
+            self._log(
+                f"Square media preparation failed for {song.get('title') or song_id}: {exc}",
+                "error",
+            )
+            return None
+
     async def _play_playlist(self, songs: list):
         """Run one FFmpeg job that covers all songs without stopping between them."""
         bg_fn   = await self.db.get_setting("trya_stream_bg_filename") or ""
@@ -851,7 +933,16 @@ class TryaStreamManager:
         # Prefetch all covers/videos
         media_paths = []
         for song in songs:
-            path = await self._get_video(song) or await self._get_cover(song)
+            square_filename = os.path.basename(song.get("square_media_filename") or "")
+            square_path = os.path.join(self.trya_stream_dir, "square_cache", square_filename) if square_filename else ""
+            if song.get("square_media_status") == "ready" and os.path.isfile(square_path):
+                path = square_path
+            else:
+                path = await self._get_video(song) or await self._get_cover(song)
+                self._log(
+                    f"Prepared square media missing for {song.get('title') or song.get('id')}; using low-cost fit fallback.",
+                    "error",
+                )
             media_paths.append(path)
             self._log(f"Media ready: {song.get('title')} → {path}")
 
@@ -2137,18 +2228,15 @@ class TryaStreamManager:
             )
             last = "[after_obs]"
 
-        # Render every source aspect ratio inside one square inset. A blurred
-        # cover layer fills unused space while the sharp foreground stays fully visible.
+        # Square media is pre-rendered during submission processing. The live
+        # graph only performs a cheap fit/pad fallback if that cache is unavailable.
         n = len(songs)
         for i, (song, mid) in enumerate(zip(songs, media_inputs)):
             dur = song.get("duration") or 300
             filters.append(
-                f"[{mid}:v]split=2[cvbg{i}][cvfg{i}];"
-                f"[cvbg{i}]scale={_INSET_W}:{_INSET_H}:force_original_aspect_ratio=increase,"
-                f"crop={_INSET_W}:{_INSET_H},boxblur=30:10[cvblur{i}];"
-                f"[cvfg{i}]scale={_INSET_W}:{_INSET_H}:force_original_aspect_ratio=decrease:force_divisible_by=2[cvfront{i}];"
-                f"[cvblur{i}][cvfront{i}]overlay=(W-w)/2:(H-h)/2,setsar=1,"
-                f"fps={_FPS},trim=0:{dur},setpts=PTS-STARTPTS[cv{i}]"
+                f"[{mid}:v]scale={_INSET_W}:{_INSET_H}:force_original_aspect_ratio=decrease:"
+                f"force_divisible_by=2,pad={_INSET_W}:{_INSET_H}:(ow-iw)/2:(oh-ih)/2:black,"
+                f"setsar=1,fps={_FPS},trim=0:{dur},setpts=PTS-STARTPTS[cv{i}]"
             )
         concat_in = "".join(f"[cv{i}]" for i in range(n))
         filters.append(f"{concat_in}concat=n={n}:v=1:a=0[covers]")

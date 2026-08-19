@@ -1327,6 +1327,11 @@ async def process_exp_song(db, song_id: int, trya_stream_dir: str, bot=None,
                 f"#{song_id}: Whisper result discarded; admin playlist bypass is active.",
                 prefix="[whisper]",
             )
+            manager = getattr(bot, "trya_stream_manager", None)
+            if manager is None:
+                from bot.trya_stream_manager import TryaStreamManager
+                manager = TryaStreamManager(db, trya_stream_dir)
+            await manager.prepare_song_square_media(latest)
             return
 
         # 3b) Forced-alignment-light: keep Whisper structure/timing, correct
@@ -1409,6 +1414,13 @@ async def process_exp_song(db, song_id: int, trya_stream_dir: str, bot=None,
                 )
 
         await retry_whisper_year_anomaly_if_needed(db, song_id, trya_stream_dir)
+        latest = await db.get_trya_stream_song(song_id)
+        if latest:
+            manager = getattr(bot, "trya_stream_manager", None)
+            if manager is None:
+                from bot.trya_stream_manager import TryaStreamManager
+                manager = TryaStreamManager(db, trya_stream_dir)
+            await manager.prepare_song_square_media(latest)
 
     except Exception as e:
         log_event(f"Pipeline error for #{song_id}: {e}", level="error", prefix="[whisper]")

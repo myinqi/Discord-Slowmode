@@ -1289,7 +1289,11 @@ class Database:
                 approved_by TEXT,
                 whisper_anomaly_retry_count INTEGER NOT NULL DEFAULT 0,
                 whisper_anomaly_retry_at REAL,
-                whisper_anomaly_retry_trigger TEXT
+                whisper_anomaly_retry_trigger TEXT,
+                square_media_filename TEXT,
+                square_media_status TEXT,
+                square_media_at REAL,
+                square_media_error TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_trya_stream_user ON trya_stream_songs(user_id);
             CREATE INDEX IF NOT EXISTS idx_trya_stream_expires ON trya_stream_songs(expires_at);
@@ -1323,6 +1327,10 @@ class Database:
             ("whisper_anomaly_retry_count", "INTEGER NOT NULL DEFAULT 0"),
             ("whisper_anomaly_retry_at", "REAL"),
             ("whisper_anomaly_retry_trigger", "TEXT"),
+            ("square_media_filename", "TEXT"),
+            ("square_media_status", "TEXT"),
+            ("square_media_at", "REAL"),
+            ("square_media_error", "TEXT"),
         ]:
             try:
                 await self.db.execute(
@@ -5745,7 +5753,8 @@ class Database:
             "playlist_remove_reason", "replacement_song_id", "approval_status",
             "approved_at", "approved_by", "suno_url", "suno_uuid",
             "whisper_anomaly_retry_count", "whisper_anomaly_retry_at",
-            "whisper_anomaly_retry_trigger",
+            "whisper_anomaly_retry_trigger", "square_media_filename",
+            "square_media_status", "square_media_at", "square_media_error",
         }
         updates = {k: v for k, v in fields.items() if k in allowed}
         if not updates:

@@ -8978,6 +8978,22 @@ def create_app(db: Database, bot=None) -> Quart:
                         )
                         await flash("Nothing to update — Suno returned no usable metadata.", "warning")
 
+            elif action == "rebuild_square_media":
+                sid = int(form.get("song_id", "0") or 0)
+                song = await db.get_trya_stream_song(sid) if sid else None
+                if not song:
+                    await flash("Song not found.", "error")
+                elif trya_stream_manager.is_running:
+                    await flash("Stop TrYa Stream before rebuilding square media.", "error")
+                else:
+                    async def _rebuild_square(target=dict(song)):
+                        await trya_stream_manager.prepare_song_square_media(target, force=True)
+                    asyncio.create_task(_rebuild_square())
+                    await flash(
+                        f"Square media rebuild queued for “{song.get('title') or sid}”. Watch the Live Log for progress.",
+                        "success",
+                    )
+
             elif action == "renormalize_cover_one":
                 sid = int(form.get("song_id", "0") or 0)
                 s = await db.get_trya_stream_song(sid) if sid else None
