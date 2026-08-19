@@ -33,11 +33,7 @@
                 </div>
                 <p class="text-gray-600 text-[10px] mb-3">Values below the threshold become silence; values above it use a ±80% level.</p>
                 <div class="flex flex-col sm:flex-row gap-2">
-                    <button type="button" id="songripper-square-wav-btn" onclick="downloadSongripperSquare('wav')" disabled
-                        class="flex-1 px-3 py-1.5 border border-gray-700 hover:border-gray-600 disabled:opacity-40 text-gray-500 hover:text-gray-300 rounded-lg text-xs transition-colors">
-                        Square WAV
-                    </button>
-                    <button type="button" id="songripper-square-mp3-btn" onclick="downloadSongripperSquare('mp3')" disabled
+                    <button type="button" id="songripper-square-mp3-btn" onclick="downloadSongripperSquare()" disabled
                         class="flex-1 px-3 py-1.5 border border-gray-700 hover:border-gray-600 disabled:opacity-40 text-gray-500 hover:text-gray-300 rounded-lg text-xs transition-colors">
                         Square MP3
                     </button>
@@ -77,13 +73,9 @@
             <audio id="songripper-player" controls crossorigin="anonymous"
                 class="w-full rounded-lg accent-discord-blurple"></audio>
             <div class="flex flex-col sm:flex-row gap-3">
-                <button type="button" id="songripper-mp3-btn" onclick="downloadSongripperAudio('mp3')" disabled
+                <button type="button" id="songripper-mp3-btn" onclick="downloadSongripperAudio()" disabled
                     class="flex-1 px-4 py-2 bg-green-600/20 hover:bg-green-600/40 disabled:bg-gray-700/30 disabled:text-gray-500 text-green-300 rounded-lg text-sm font-semibold transition-colors">
                     ⬇ Download MP3
-                </button>
-                <button type="button" id="songripper-wav-btn" onclick="downloadSongripperAudio('wav')" disabled
-                    class="flex-1 px-4 py-2 bg-purple-600/20 hover:bg-purple-600/40 disabled:bg-gray-700/30 disabled:text-gray-500 text-purple-300 rounded-lg text-sm font-semibold transition-colors">
-                    ⬇ Download WAV
                 </button>
             </div>
             <div class="flex flex-col sm:flex-row gap-3">
@@ -158,10 +150,6 @@ function songripperApplyConversionStatus(status) {
     const songReady = Boolean(songripperAudioId && songripperAudioBuffer);
     document.getElementById('songripper-mp3-btn').disabled = songripperConversionBlocked
         || (songripperMode === 'playlist' ? !playlistReady : !songReady);
-    document.getElementById('songripper-wav-btn').disabled = songripperMode === 'playlist'
-        ? (songripperConversionBlocked || !playlistReady)
-        : !songReady;
-    document.getElementById('songripper-square-wav-btn').disabled = songripperConversionBlocked || !songReady;
     document.getElementById('songripper-square-mp3-btn').disabled = songripperConversionBlocked || !songReady;
     document.getElementById('songripper-square-video-btn').disabled = songripperConversionBlocked
         || !songripperMeta?.video;
@@ -223,13 +211,10 @@ function songripperIsPlaylist(raw) {
     return /https?:\/\/(?:www\.)?suno\.com\/playlist\/[a-f0-9-]{36}/i.test((raw || '').trim());
 }
 
-function songripperSetDownloadButtons(mp3Text, wavText, disabled) {
+function songripperSetDownloadButton(mp3Text, disabled) {
     const mp3 = document.getElementById('songripper-mp3-btn');
-    const wav = document.getElementById('songripper-wav-btn');
     mp3.textContent = mp3Text;
-    wav.textContent = wavText;
     mp3.disabled = disabled || songripperConversionBlocked;
-    wav.disabled = disabled || (songripperMode === 'playlist' && songripperConversionBlocked);
 }
 
 function songripperSetAssetButtons(videoAvailable, coverAvailable, karaokeAvailable = false) {
@@ -256,7 +241,7 @@ async function loadSongripperPlaylist(url) {
     songripperAudioBytes = null;
     songripperProgress(5);
     songripperStatus('Loading playlist and resolving track names...');
-    songripperSetDownloadButtons('⬇ Download playlist as MP3 (ZIP)', '⬇ Download playlist as WAV (ZIP)', true);
+    songripperSetDownloadButton('⬇ Download playlist as MP3 (ZIP)', true);
     songripperSetAssetButtons(false, false);
     document.getElementById('songripper-square-panel').classList.add('hidden');
     const player = document.getElementById('songripper-player');
@@ -293,7 +278,7 @@ async function loadSongripperPlaylist(url) {
             return `<li class="px-3 py-2 text-sm text-gray-300"><span class="text-gray-600 tabular-nums mr-2">${index + 1}.</span>${songripperEscape(title)}${artist}</li>`;
         }).join('');
         document.getElementById('songripper-playlist').classList.remove('hidden');
-        songripperSetDownloadButtons('⬇ Download playlist as MP3 (ZIP)', '⬇ Download playlist as WAV (ZIP)', false);
+        songripperSetDownloadButton('⬇ Download playlist as MP3 (ZIP)', false);
         songripperProgress(100);
         songripperStatus(`Playlist ready: ${songripperPlaylistSongs.length} tracks.`);
     } catch (err) {
@@ -316,12 +301,11 @@ async function loadSongripperAudio() {
     songripperMode = 'song';
     songripperPlaylistUrl = '';
     songripperPlaylistSongs = [];
-    songripperSetDownloadButtons('⬇ Download MP3', '⬇ Download WAV', true);
+    songripperSetDownloadButton('⬇ Download MP3', true);
     songripperSetAssetButtons(false, false);
     document.getElementById('songripper-square-panel').classList.remove('hidden');
     document.getElementById('songripper-player').classList.remove('hidden');
     document.getElementById('songripper-playlist').classList.add('hidden');
-    document.getElementById('songripper-square-wav-btn').disabled = true;
     document.getElementById('songripper-square-mp3-btn').disabled = true;
     songripperMeta = null;
     songripperAudioBuffer = null;
@@ -378,8 +362,6 @@ async function loadSongripperAudio() {
     songripperAudioBuffer = await songripperAudioCtx.decodeAudioData(songripperAudioBytes.slice(0));
     document.getElementById('songripper-duration').textContent = `Duration: ${songripperFormatTime(songripperAudioBuffer.duration)}`;
     document.getElementById('songripper-mp3-btn').disabled = false;
-    document.getElementById('songripper-wav-btn').disabled = false;
-    document.getElementById('songripper-square-wav-btn').disabled = false;
     document.getElementById('songripper-square-mp3-btn').disabled = false;
     songripperApplyConversionStatus(songripperConversionStatus);
     songripperProgress(100);
@@ -476,7 +458,7 @@ async function downloadSongripperSquareVideo() {
     }
 }
 
-async function downloadSongripperSquare(format) {
+async function downloadSongripperSquare() {
     if (!songripperAudioId) {
         alert('No audio loaded.');
         return;
@@ -485,13 +467,13 @@ async function downloadSongripperSquare(format) {
     const safeName = songripperSafeName();
     const thresholdPercent = Number(document.getElementById('songripper-square-threshold').value || 0);
     const threshold = Math.max(0, Math.min(50, thresholdPercent)) / 100;
-    const btn = document.getElementById(`songripper-square-${format}-btn`);
+    const btn = document.getElementById('songripper-square-mp3-btn');
     songripperConversionBusy = true;
     btn.disabled = true;
-    songripperStatus(`Creating Square ${format.toUpperCase()} · Threshold ${thresholdPercent}%...`);
+    songripperStatus(`Creating Square MP3 · Threshold ${thresholdPercent}%...`);
     try {
-        const filename = `${safeName}_square-wave.${format}`;
-        const url = `/songripper/download-square?id=${encodeURIComponent(songripperAudioId)}&format=${encodeURIComponent(format)}&threshold=${encodeURIComponent(threshold)}&filename=${encodeURIComponent(filename)}`;
+        const filename = `${safeName}_square-wave.mp3`;
+        const url = `/songripper/download-square?id=${encodeURIComponent(songripperAudioId)}&threshold=${encodeURIComponent(threshold)}&filename=${encodeURIComponent(filename)}`;
         const resp = await fetch(url);
         if (!resp.ok) {
             const data = await resp.json().catch(() => ({}));
@@ -499,7 +481,7 @@ async function downloadSongripperSquare(format) {
         }
         const blob = await resp.blob();
         songripperSaveBlob(blob, filename);
-        songripperStatus(`Square ${format.toUpperCase()} downloaded.`);
+        songripperStatus('Square MP3 downloaded.');
     } catch (err) {
         songripperStatus(err.message || String(err));
     } finally {
@@ -508,94 +490,58 @@ async function downloadSongripperSquare(format) {
     }
 }
 
-async function downloadSongripperAudio(format) {
+async function downloadSongripperAudio() {
     if (songripperMode === 'playlist') {
-        await downloadSongripperPlaylist(format);
+        await downloadSongripperPlaylist();
         return;
     }
     const safeName = songripperSafeName();
-    if (format === 'mp3') {
-        if (!songripperAudioId) {
-            alert('No audio loaded.');
-            return;
-        }
-        if (!await songripperEnsureConversionAvailable()) return;
-        const btn = document.getElementById('songripper-mp3-btn');
-        songripperConversionBusy = true;
-        btn.disabled = true;
-        songripperStatus('Re-encoding MP3 on the server...');
-        try {
-            const url = `/songripper/download-mp3?id=${encodeURIComponent(songripperAudioId)}&filename=${encodeURIComponent(safeName + '.mp3')}`;
-            const resp = await fetch(url);
-            if (!resp.ok) {
-                const data = await resp.json().catch(() => ({}));
-                throw new Error(data.error || `Download failed (${resp.status})`);
-            }
-            const blob = await resp.blob();
-            songripperSaveBlob(blob, `${safeName}.mp3`);
-            songripperStatus('Corrected MP3 downloaded.');
-        } catch (err) {
-            songripperStatus(err.message || String(err));
-        } finally {
-            songripperConversionBusy = false;
-            songripperApplyConversionStatus(songripperConversionStatus);
-        }
+    if (!songripperAudioId) {
+        alert('No audio loaded.');
         return;
     }
-
-    if (!songripperAudioBuffer) {
-        alert('No decoded audio loaded.');
-        return;
+    if (!await songripperEnsureConversionAvailable()) return;
+    const btn = document.getElementById('songripper-mp3-btn');
+    songripperConversionBusy = true;
+    btn.disabled = true;
+    songripperStatus('Re-encoding MP3 on the server...');
+    try {
+        const url = `/songripper/download-mp3?id=${encodeURIComponent(songripperAudioId)}&filename=${encodeURIComponent(safeName + '.mp3')}`;
+        const resp = await fetch(url);
+        if (!resp.ok) {
+            const data = await resp.json().catch(() => ({}));
+            throw new Error(data.error || `Download failed (${resp.status})`);
+        }
+        const blob = await resp.blob();
+        songripperSaveBlob(blob, `${safeName}.mp3`);
+        songripperStatus('Corrected MP3 downloaded.');
+    } catch (err) {
+        songripperStatus(err.message || String(err));
+    } finally {
+        songripperConversionBusy = false;
+        songripperApplyConversionStatus(songripperConversionStatus);
     }
-    const samples = songripperAudioBuffer.getChannelData(0);
-    const sampleRate = songripperAudioBuffer.sampleRate;
-    const bitsPerSample = 16;
-    const bytesPerSample = bitsPerSample / 8;
-    const blockAlign = bytesPerSample;
-    const dataLen = samples.length * blockAlign;
-    const wav = new ArrayBuffer(44 + dataLen);
-    const view = new DataView(wav);
-    view.setUint32(0, 0x52494646, false);
-    view.setUint32(4, 36 + dataLen, true);
-    view.setUint32(8, 0x57415645, false);
-    view.setUint32(12, 0x666d7420, false);
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true);
-    view.setUint16(22, 1, true);
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate * blockAlign, true);
-    view.setUint16(32, blockAlign, true);
-    view.setUint16(34, bitsPerSample, true);
-    view.setUint32(36, 0x64617461, false);
-    view.setUint32(40, dataLen, true);
-    let offset = 44;
-    for (let i = 0; i < samples.length; i++) {
-        const s = Math.max(-1, Math.min(1, samples[i]));
-        view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
-        offset += 2;
-    }
-    songripperSaveBlob(new Blob([wav], {type: 'audio/wav'}), `${safeName}.wav`);
 }
 
 function songripperWait(milliseconds) {
     return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
 
-async function downloadSongripperPlaylist(format) {
+async function downloadSongripperPlaylist() {
     if (!songripperPlaylistUrl || !songripperPlaylistSongs.length) {
         alert('No playlist loaded.');
         return;
     }
     if (!await songripperEnsureConversionAvailable()) return;
     songripperConversionBusy = true;
-    songripperSetDownloadButtons('Preparing playlist...', 'Preparing playlist...', true);
+    songripperSetDownloadButton('Preparing playlist...', true);
     songripperProgress(0);
     songripperStatus('Starting sequential playlist export...');
     try {
         const response = await fetch('/songripper/playlist/prepare', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({url: songripperPlaylistUrl, format: format}),
+            body: JSON.stringify({url: songripperPlaylistUrl}),
         });
         const start = await response.json();
         if (!response.ok || start.error) {
@@ -625,7 +571,7 @@ async function downloadSongripperPlaylist(format) {
         songripperStatus(err.message || String(err));
     } finally {
         songripperConversionBusy = false;
-        songripperSetDownloadButtons('⬇ Download playlist as MP3 (ZIP)', '⬇ Download playlist as WAV (ZIP)', false);
+        songripperSetDownloadButton('⬇ Download playlist as MP3 (ZIP)', false);
         songripperApplyConversionStatus(songripperConversionStatus);
     }
 }

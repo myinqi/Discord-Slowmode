@@ -29,8 +29,8 @@ _LEGACY_RTMP_BASE = "rtmp://live.twitch.tv/app/"
 _FPS        = 30
 _DEFAULT_OBS_OVERLAY_FPS = 20
 _W, _H      = 1920, 1080
-_INSET_W    = 360   # portrait inset width  (9:16 ≈ 360×640, doubled from 180×320)
-_INSET_H    = 640   # portrait inset height
+_INSET_W    = 560
+_INSET_H    = 560
 _LOOP_OVERLAY_W = 650
 _LOOP_OVERLAY_H = 366
 _OBS_BRIDGE_W = 480
@@ -2137,13 +2137,17 @@ class TryaStreamManager:
             )
             last = "[after_obs]"
 
-        # Scale each media input to portrait inset, then concat
+        # Render every source aspect ratio inside one square inset. A blurred
+        # cover layer fills unused space while the sharp foreground stays fully visible.
         n = len(songs)
         for i, (song, mid) in enumerate(zip(songs, media_inputs)):
             dur = song.get("duration") or 300
             filters.append(
-                f"[{mid}:v]scale={_INSET_W}:{_INSET_H}:force_original_aspect_ratio=increase,"
-                f"crop={_INSET_W}:{_INSET_H},setsar=1,"
+                f"[{mid}:v]split=2[cvbg{i}][cvfg{i}];"
+                f"[cvbg{i}]scale={_INSET_W}:{_INSET_H}:force_original_aspect_ratio=increase,"
+                f"crop={_INSET_W}:{_INSET_H},boxblur=30:10[cvblur{i}];"
+                f"[cvfg{i}]scale={_INSET_W}:{_INSET_H}:force_original_aspect_ratio=decrease:force_divisible_by=2[cvfront{i}];"
+                f"[cvblur{i}][cvfront{i}]overlay=(W-w)/2:(H-h)/2,setsar=1,"
                 f"fps={_FPS},trim=0:{dur},setpts=PTS-STARTPTS[cv{i}]"
             )
         concat_in = "".join(f"[cv{i}]" for i in range(n))

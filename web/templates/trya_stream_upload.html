@@ -9,6 +9,9 @@
 </head>
 <body class="dark bg-discord-darker min-h-screen flex items-center justify-center p-4">
 <div class="w-full max-w-2xl">
+<div class="flex justify-center mb-5">
+    <img src="{{ url_for('static', filename='TrYa_logo.png') }}" alt="TrYa Stream" class="h-24 w-auto object-contain drop-shadow-xl">
+</div>
 {% if stream_live %}
 <div class="bg-yellow-900/40 border border-yellow-700/50 rounded-xl p-6 text-center">
     <p class="text-yellow-300 font-semibold">TrYa Stream submissions are temporarily paused.</p>
@@ -34,10 +37,26 @@
         {% if form_error %}
         <div class="bg-red-900/40 border border-red-700/50 rounded-lg p-4 text-red-300 text-sm">{{ form_error }}</div>
         {% endif %}
-        <div class="bg-gray-800/50 rounded-lg p-4">
-            <p class="text-gray-400 text-xs uppercase tracking-wide mb-1">Suno Song</p>
-            <a href="{{ song.suno_url }}" target="_blank" rel="noopener" class="text-discord-blurple hover:underline text-sm break-all">{{ song.suno_url }}</a>
-            <p class="text-gray-500 text-xs mt-2">Destination: {{ (song.playlist_source or 'submission')|capitalize }}</p>
+        <div class="bg-gray-800/50 rounded-lg p-4 space-y-4">
+            <div>
+                <p class="text-gray-400 text-xs uppercase tracking-wide">Destination</p>
+                <p class="text-white text-sm mt-1">{{ (song.playlist_source or 'submission')|capitalize }} playlist</p>
+            </div>
+            <div>
+                <label for="suno-url" class="block text-sm font-medium text-gray-200 mb-2">Suno song URL</label>
+                <input id="suno-url" type="url" name="suno_url" required
+                    value="{{ submitted_suno_url or song.suno_url or '' }}"
+                    placeholder="https://suno.com/s/..."
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm placeholder-gray-500 focus:border-discord-blurple focus:outline-none">
+            </div>
+            <div>
+                <label for="hook-value" class="block text-sm font-medium text-gray-200 mb-2">Suno Hook URL or ID <span class="text-gray-500 font-normal">(optional)</span></label>
+                <input id="hook-value" type="text" name="hook_value"
+                    value="{{ submitted_hook or '' }}"
+                    placeholder="Leave empty to use the regular song video or cover"
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm placeholder-gray-500 focus:border-discord-blurple focus:outline-none">
+                <p class="text-gray-500 text-xs mt-2">The Hook must belong to the submitted Suno song.</p>
+            </div>
         </div>
 
         <div class="rounded-lg border border-blue-700/40 bg-blue-900/20 p-4 text-sm text-gray-300">

@@ -2082,8 +2082,8 @@ class CommandsCog(commands.Cog):
         embed.add_field(
             name="TrYa Stream",
             value=(
-                "**`/trya-stream-submit <suno_url> [hook] [destination]`** — Submit to the submission, intro, or outro playlist\n"
-                "**`/trya-stream-replace <suno_url> [hook] [destination]`** — Replace your oldest song after the new upload succeeds\n"
+                "**`/trya-stream-submit [destination]`** — Open the combined song, Hook, audio and rights upload form\n"
+                "**`/trya-stream-replace [destination]`** — Replace your oldest song after the new web upload succeeds\n"
                 "**`/trya-stream-delete`** — Remove one of your songs from the playlist\n"
                 "**`/trya-stream-hook <hook>`** — Add or change a Hook video\n"
                 "**`/trya-stream-hook-remove`** — Remove a Hook video\n"
@@ -2119,14 +2119,10 @@ class CommandsCog(commands.Cog):
     async def _trya_stream_submit(
         self,
         interaction: discord.Interaction,
-        suno_url: str,
-        hook: str | None,
         destination: str,
         *,
         replace: bool,
     ) -> None:
-        import hashlib
-        from bot.suno_urls import resolve_suno_uuid
         from bot.trya_stream_manager import is_submissions_locked
 
         await interaction.response.defer(ephemeral=True)
@@ -2160,21 +2156,6 @@ class CommandsCog(commands.Cog):
             await interaction.followup.send(message, ephemeral=True)
             return
 
-        raw_url = suno_url.strip()
-        if not SUNO_URL_PATTERN.fullmatch(raw_url):
-            await interaction.followup.send(
-                "Invalid URL. Provide a Suno song link such as `https://suno.com/s/…`.",
-                ephemeral=True,
-            )
-            return
-        suno_uuid = await resolve_suno_uuid(raw_url)
-        if not suno_uuid:
-            await interaction.followup.send(
-                "Suno could not resolve that song URL. Check the link and try again.",
-                ephemeral=True,
-            )
-            return
-
         songs = [
             song
             for song in await self.bot.db.get_all_trya_stream_songs(active_only=False)
@@ -2197,23 +2178,6 @@ class CommandsCog(commands.Cog):
             )
             return
 
-        all_songs = await self.bot.db.get_all_trya_stream_songs(active_only=False)
-        duplicate = next(
-            (
-                song for song in all_songs
-                if str(song.get("suno_uuid") or "").lower() == suno_uuid.lower()
-                and song.get("analysis_status") != "failed"
-                and (song.get("active") or not song.get("original_uploaded_at"))
-            ),
-            None,
-        )
-        if duplicate:
-            await interaction.followup.send(
-                "That Suno song is already in the TrYa Stream playlist or awaiting upload.",
-                ephemeral=True,
-            )
-            return
-
         if destination == "submission" and not replace:
             max_per_user = int(
                 await self.bot.db.get_setting("trya_stream_max_per_user")
@@ -2227,71 +2191,35 @@ class CommandsCog(commands.Cog):
                 )
                 return
 
-        resolved_hook = None
-        hook_value = (hook or "").strip()
-        if hook_value:
-            from bot.suno_hook import SunoHookError, resolve_suno_hook
+        web_url = str(getattr(self.bot, "web_url", "") or "").rstrip("/")
+        if not web_url:
+            await interaction.followup.send(
+                "Upload link unavailable — ask an admin to set `WEB_URL`.", ephemeral=True
+            )
+            return
 
-            try:
-                resolved_hook = await resolve_suno_hook(hook_value)
-                if resolved_hook["original_clip_id"].lower() != suno_uuid.lower():
-                    raise SunoHookError("This Hook belongs to a different Suno song.")
-            except SunoHookError as exc:
-                await interaction.followup.send(f"The Hook is invalid: {exc}", ephemeral=True)
-                return
-            except Exception:
-                await interaction.followup.send(
-                    "Suno could not validate the Hook right now. Try again shortly.",
-                    ephemeral=True,
-                )
-                return
-
-        rights_hash = hashlib.sha256(
-            (
-                f"{TRYA_STREAM_RIGHTS_VERSION}\n{TRYA_STREAM_RIGHTS_DECLARATION}\n"
-                f"user={interaction.user.id}\nurl={raw_url}\nuuid={suno_uuid}\n"
-                f"destination={destination}"
-            ).encode()
-        ).hexdigest()
-        song_id, upload_token = await self.bot.db.add_trya_stream_song(
+        _, upload_token = await self.bot.db.add_trya_stream_song(
             user_id=interaction.user.id,
             user_name=str(interaction.user),
-            suno_url=raw_url,
-            suno_uuid=suno_uuid,
+            suno_url="",
+            suno_uuid="",
             rights_declaration=TRYA_STREAM_RIGHTS_DECLARATION,
-            rights_hash=rights_hash,
+            rights_hash="",
             rights_version=TRYA_STREAM_RIGHTS_VERSION,
             playlist_source=destination,
             replacement_song_id=replace_target["id"] if replace_target else None,
         )
 
-        if resolved_hook:
-            song = await self.bot.db.get_trya_stream_song(song_id)
-            try:
-                await _set_trya_stream_hook(
-                    self.bot,
-                    song,
-                    hook_value,
-                    resolved_hook=resolved_hook,
-                    source_uuid=suno_uuid,
-                )
-            except Exception as exc:
-                await self.bot.db.delete_trya_stream_song(song_id)
-                await interaction.followup.send(
-                    f"The Hook video could not be attached: {exc}\n"
-                    "Your existing song was kept.",
-                    ephemeral=True,
-                )
-                return
-
-        upload_url = f"{self.bot.web_url.rstrip('/')}/trya-stream/upload/{upload_token}"
         view = discord.ui.View()
         view.add_item(discord.ui.Button(
             label="Complete upload",
-            url=upload_url,
+            url=f"{web_url}/trya-stream/upload/{upload_token}",
             style=discord.ButtonStyle.link,
         ))
-        message = "Upload the exact official Suno download and complete the rights declaration on the web page."
+        message = (
+            "Complete the Suno URL, optional Hook, official audio upload, and rights declaration "
+            "together in the web form."
+        )
         if destination in {"intro", "outro"}:
             message += f" Your {destination} requires admin approval after upload before it can be used."
         elif replace_target:
@@ -2299,40 +2227,24 @@ class CommandsCog(commands.Cog):
         await interaction.followup.send(message, view=view, ephemeral=True)
 
     @app_commands.command(name="trya-stream-submit", description="Submit a Suno song to TrYa Stream")
-    @app_commands.describe(
-        suno_url="Suno song URL",
-        hook="Optional Suno Hook ID or share link",
-        destination="Target playlist",
-    )
+    @app_commands.describe(destination="Target playlist")
     @app_commands.choices(destination=TRYA_STREAM_DESTINATION_CHOICES)
     async def trya_stream_submit(
         self,
         interaction: discord.Interaction,
-        suno_url: str,
-        hook: str | None = None,
         destination: str = "submission",
     ):
-        await self._trya_stream_submit(
-            interaction, suno_url, hook, destination, replace=False
-        )
+        await self._trya_stream_submit(interaction, destination, replace=False)
 
     @app_commands.command(name="trya-stream-replace", description="Replace your oldest TrYa Stream song")
-    @app_commands.describe(
-        suno_url="Suno song URL",
-        hook="Optional Suno Hook ID or share link",
-        destination="Target playlist",
-    )
+    @app_commands.describe(destination="Target playlist")
     @app_commands.choices(destination=TRYA_STREAM_DESTINATION_CHOICES)
     async def trya_stream_replace(
         self,
         interaction: discord.Interaction,
-        suno_url: str,
-        hook: str | None = None,
         destination: str = "submission",
     ):
-        await self._trya_stream_submit(
-            interaction, suno_url, hook, destination, replace=True
-        )
+        await self._trya_stream_submit(interaction, destination, replace=True)
 
     @app_commands.command(name="trya-stream-delete", description="Remove one of your songs from TrYa Stream")
     async def trya_stream_delete(self, interaction: discord.Interaction):

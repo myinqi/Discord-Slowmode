@@ -3075,7 +3075,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     event_type="exp_radio_submission_ban_set",
                     user_id=member.id,
                     user_name=str(member),
-                    details=f"Experimental Radio submissions blocked for {stream_count} stream(s)",
+                    details=f"Exp. Radio and TrYa Stream submissions blocked for {stream_count} stream start(s)",
                     actor=actor,
                 )
                 await flash(
@@ -3119,7 +3119,7 @@ def create_app(db: Database, bot=None) -> Quart:
                         event_type="exp_radio_submission_ban_removed",
                         user_id=user_id,
                         user_name=removed["user_name"],
-                        details="Experimental Radio submission ban removed manually",
+                        details="Shared Exp. Radio and TrYa Stream submission ban removed manually",
                         actor=actor,
                     )
                     await flash("Submission ban removed.", "success")
@@ -9705,6 +9705,7 @@ def create_app(db: Database, bot=None) -> Quart:
     async def trya_stream_upload(token: str):
         from bot.trya_stream_manager import is_submissions_locked
         from bot.trya_stream_worker import (
+            TRYA_RIGHTS_DECLARATION,
             TRYA_RIGHTS_VERSION,
             ingest_uploaded_audio,
             process_exp_song,
@@ -9730,7 +9731,115 @@ def create_app(db: Database, bot=None) -> Quart:
                 "trya_stream_upload.html", song=song, token=token
             )
 
+        import hashlib
         form = await request.form
+        submitted_suno_url = (form.get("suno_url") or "").strip()
+        submitted_hook = (form.get("hook_value") or "").strip()
+
+        async def render_upload_error(message: str):
+            return await render_template(
+                "trya_stream_upload.html",
+                song=song,
+                token=token,
+                form_error=message,
+                submitted_suno_url=submitted_suno_url,
+                submitted_hook=submitted_hook,
+            )
+
+        submission_ban = await db.get_exp_radio_submission_ban(int(song.get("user_id") or 0))
+        if submission_ban:
+            return await render_upload_error(
+                "Your shared Exp. Radio / TrYa Stream submission ban is currently active."
+            ), 403
+        if not submitted_suno_url:
+            return await render_upload_error("Enter the Suno song URL."), 400
+        resolved_uuid = await resolve_suno_uuid(submitted_suno_url)
+        if not resolved_uuid:
+            return await render_upload_error(
+                "Suno could not resolve that song URL. Check the link and try again."
+            ), 400
+
+        duplicate = next(
+            (
+                existing
+                for existing in await db.get_all_trya_stream_songs(active_only=False)
+                if int(existing.get("id") or 0) != int(song["id"])
+                and str(existing.get("suno_uuid") or "").lower() == resolved_uuid.lower()
+                and existing.get("analysis_status") != "failed"
+                and (existing.get("active") or not existing.get("original_uploaded_at"))
+            ),
+            None,
+        )
+        if duplicate:
+            return await render_upload_error(
+                "That Suno song is already active or awaiting upload in TrYa Stream."
+            ), 409
+
+        if song.get("playlist_source") == "submission":
+            max_per_user = int(await db.get_setting("trya_stream_max_per_user") or "4")
+            active_count = sum(
+                1
+                for existing in await db.get_all_trya_stream_songs(active_only=False)
+                if int(existing.get("id") or 0) != int(song["id"])
+                and int(existing.get("user_id") or 0) == int(song.get("user_id") or 0)
+                and (existing.get("playlist_source") or "submission") == "submission"
+                and existing.get("analysis_status") != "failed"
+                and (existing.get("active") or not existing.get("original_uploaded_at"))
+            )
+            if not song.get("replacement_song_id") and active_count >= max_per_user:
+                return await render_upload_error(
+                    f"You already have the maximum of {max_per_user} active or pending submissions."
+                ), 409
+
+        resolved_hook = None
+        if submitted_hook:
+            from bot.suno_hook import SunoHookError, resolve_suno_hook
+            try:
+                resolved_hook = await resolve_suno_hook(submitted_hook)
+                if resolved_hook["original_clip_id"].lower() != resolved_uuid.lower():
+                    raise SunoHookError("This Hook belongs to a different Suno song.")
+            except SunoHookError as exc:
+                return await render_upload_error(str(exc)), 400
+            except Exception:
+                return await render_upload_error(
+                    "Suno could not validate the Hook right now. Try again shortly."
+                ), 502
+
+        rights_hash = hashlib.sha256(
+            (
+                f"{TRYA_RIGHTS_VERSION}\n{TRYA_RIGHTS_DECLARATION}\n"
+                f"user={song.get('user_id')}\nurl={submitted_suno_url}\n"
+                f"uuid={resolved_uuid}\ndestination={song.get('playlist_source') or 'submission'}"
+            ).encode()
+        ).hexdigest()
+        await db.update_trya_stream_song(
+            song["id"],
+            suno_url=submitted_suno_url,
+            suno_uuid=resolved_uuid,
+            rights_declaration=TRYA_RIGHTS_DECLARATION,
+            rights_hash=rights_hash,
+            rights_version=TRYA_RIGHTS_VERSION,
+        )
+        song = await db.get_trya_stream_song(song["id"])
+
+        if resolved_hook:
+            candidate = dict(song)
+            candidate.update(resolved_hook)
+            try:
+                cached_path = await trya_stream_manager._get_video(
+                    candidate, allow_hook_fallback=False
+                )
+                if not cached_path or not os.path.exists(cached_path):
+                    raise RuntimeError("The Hook video could not be downloaded.")
+                await db.update_trya_stream_song(
+                    song["id"],
+                    hook_id=resolved_hook["hook_id"],
+                    hook_share_url=resolved_hook["hook_share_url"],
+                    hook_video_url=resolved_hook["hook_video_url"],
+                )
+            except Exception as exc:
+                return await render_upload_error(f"Hook validation failed: {exc}"), 400
+
         required_attestations = (
             "official_download_attested",
             "paid_download_attested",
@@ -9739,20 +9848,12 @@ def create_app(db: Database, bot=None) -> Quart:
             "commercial_rights_attested",
         )
         if any(not form.get(name) for name in required_attestations):
-            return await render_template(
-                "trya_stream_upload.html",
-                song=song,
-                token=token,
-                form_error="Every rights confirmation is required.",
-            ), 400
+            return await render_upload_error("Every rights confirmation is required."), 400
         files = await request.files
         uploaded = files.get("original_audio")
         if not uploaded or not uploaded.filename:
-            return await render_template(
-                "trya_stream_upload.html",
-                song=song,
-                token=token,
-                form_error="Select the MP3 or M4A downloaded through Suno's official Download action.",
+            return await render_upload_error(
+                "Select the MP3 or M4A downloaded through Suno's official Download action."
             ), 400
 
         import tempfile
@@ -9778,12 +9879,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 rights_accepted_at=time.time(),
             )
         except Exception as exc:
-            return await render_template(
-                "trya_stream_upload.html",
-                song=song,
-                token=token,
-                form_error=str(exc),
-            ), 400
+            return await render_upload_error(str(exc)), 400
         finally:
             try:
                 os.remove(staged_path)
@@ -12519,11 +12615,9 @@ def create_app(db: Database, bot=None) -> Quart:
                             else:
                                 raise RuntimeError(f"audio download returned HTTP {last_status}")
 
-                            codec_args = (
-                                ["-c:a", "libmp3lame", "-b:a", "320k", "-write_xing", "1"]
-                                if output_format == "mp3"
-                                else ["-c:a", "pcm_s16le"]
-                            )
+                            codec_args = [
+                                "-c:a", "libmp3lame", "-b:a", "320k", "-write_xing", "1"
+                            ]
                             proc = await asyncio.create_subprocess_exec(
                                 "ffmpeg", "-y", "-hide_banner", "-v", "error",
                                 "-i", src_path,
@@ -12638,8 +12732,8 @@ def create_app(db: Database, bot=None) -> Quart:
         output_format = str(data.get("format") or "mp3").strip().lower()
         if not re.search(r'https?://(?:www\.)?suno\.com/playlist/[a-f0-9-]{36}', url, re.I):
             return jsonify({"error": "Enter a valid Suno playlist URL."}), 400
-        if output_format not in {"mp3", "wav"}:
-            return jsonify({"error": "Format must be MP3 or WAV."}), 400
+        if output_format != "mp3":
+            return jsonify({"error": "Only MP3 export is available."}), 400
 
         _cleanup_songripper_playlist_jobs()
         job_id = secrets.token_urlsafe(24)
@@ -13140,9 +13234,9 @@ def create_app(db: Database, bot=None) -> Quart:
             return blocked
 
         song_id = request.args.get("id", "").strip()
-        output_format = request.args.get("format", "wav").strip().lower()
-        if output_format not in {"wav", "mp3"}:
-            return jsonify({"error": "Format must be wav or mp3."}), 400
+        output_format = request.args.get("format", "mp3").strip().lower()
+        if output_format != "mp3":
+            return jsonify({"error": "Only MP3 export is available."}), 400
         try:
             threshold = float(request.args.get("threshold", "0.10"))
         except (TypeError, ValueError):
@@ -13199,11 +13293,9 @@ def create_app(db: Database, bot=None) -> Quart:
                     + threshold_text
                     + "),0,if(gte(val(0),0),0.8,-0.8))':c=mono"
                 )
-                codec_args = (
-                    ["-c:a", "pcm_s16le"]
-                    if output_format == "wav"
-                    else ["-c:a", "libmp3lame", "-b:a", "320k", "-write_xing", "1"]
-                )
+                codec_args = [
+                    "-c:a", "libmp3lame", "-b:a", "320k", "-write_xing", "1"
+                ]
                 proc = await asyncio.create_subprocess_exec(
                     "ffmpeg", "-y", "-hide_banner", "-v", "error",
                     "-i", src_path,
@@ -13224,10 +13316,9 @@ def create_app(db: Database, bot=None) -> Quart:
                 with open(out_path, "rb") as fh:
                     payload = fh.read()
 
-            mimetype = "audio/wav" if output_format == "wav" else "audio/mpeg"
             return Response(
                 payload,
-                mimetype=mimetype,
+                mimetype="audio/mpeg",
                 headers={
                     "Content-Disposition": f'attachment; filename="{filename}"',
                     "Content-Length": str(len(payload)),

@@ -310,6 +310,26 @@ class Database:
                 ON community_event_participants(event_id, joined_at);
         """)
         await self.db.commit()
+        await self.db.execute(
+            """INSERT INTO exp_radio_submission_bans
+                   (user_id, user_name, display_name, streams_remaining,
+                    created_at, updated_at, created_by)
+               SELECT user_id, user_name, display_name, streams_remaining,
+                      created_at, updated_at, created_by
+               FROM trya_stream_submission_bans
+               WHERE streams_remaining > 0
+               ON CONFLICT(user_id) DO UPDATE SET
+                   user_name = excluded.user_name,
+                   display_name = excluded.display_name,
+                   streams_remaining = MAX(
+                       exp_radio_submission_bans.streams_remaining,
+                       excluded.streams_remaining
+                   ),
+                   updated_at = unixepoch(),
+                   created_by = excluded.created_by"""
+        )
+        await self.db.execute("DELETE FROM trya_stream_submission_bans")
+        await self.db.commit()
         await self._run_migrations()
 
     async def _run_migrations(self):
@@ -5678,21 +5698,12 @@ class Database:
             return row[0] if row else 0
 
     async def get_trya_stream_submission_ban(self, user_id: int) -> Optional[dict]:
-        async with self.db.execute(
-            "SELECT * FROM trya_stream_submission_bans "
-            "WHERE user_id = ? AND streams_remaining > 0",
-            (user_id,),
-        ) as cursor:
-            row = await cursor.fetchone()
-            return dict(row) if row else None
+        """Compatibility alias: submission bans are shared by both streams."""
+        return await self.get_exp_radio_submission_ban(user_id)
 
     async def get_trya_stream_submission_bans(self) -> list[dict]:
-        async with self.db.execute(
-            "SELECT * FROM trya_stream_submission_bans "
-            "WHERE streams_remaining > 0 "
-            "ORDER BY streams_remaining DESC, display_name COLLATE NOCASE"
-        ) as cursor:
-            return [dict(row) for row in await cursor.fetchall()]
+        """Compatibility alias: submission bans are shared by both streams."""
+        return await self.get_exp_radio_submission_bans()
 
     async def set_trya_stream_submission_ban(
         self,
@@ -5702,59 +5713,20 @@ class Database:
         streams_remaining: int,
         created_by: str = "",
     ) -> None:
-        streams_remaining = max(1, int(streams_remaining))
-        await self.db.execute(
-            """
-            INSERT INTO trya_stream_submission_bans
-                (user_id, user_name, display_name, streams_remaining, created_by)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET
-                user_name = excluded.user_name,
-                display_name = excluded.display_name,
-                streams_remaining = excluded.streams_remaining,
-                updated_at = unixepoch(),
-                created_by = excluded.created_by
-            """,
-            (user_id, user_name, display_name, streams_remaining, created_by),
+        await self.set_exp_radio_submission_ban(
+            user_id=user_id,
+            user_name=user_name,
+            display_name=display_name,
+            streams_remaining=streams_remaining,
+            created_by=created_by,
         )
-        await self.db.commit()
 
     async def remove_trya_stream_submission_ban(self, user_id: int) -> Optional[dict]:
-        async with self.db.execute(
-            "SELECT * FROM trya_stream_submission_bans WHERE user_id = ?",
-            (user_id,),
-        ) as cursor:
-            row = await cursor.fetchone()
-        if not row:
-            return None
-        data = dict(row)
-        await self.db.execute(
-            "DELETE FROM trya_stream_submission_bans WHERE user_id = ?",
-            (user_id,),
-        )
-        await self.db.commit()
-        return data
+        return await self.remove_exp_radio_submission_ban(user_id)
 
     async def advance_trya_stream_submission_bans(self) -> list[dict]:
-        """Consume one blocked stream and return the affected rows."""
-        async with self.db.execute(
-            "SELECT * FROM trya_stream_submission_bans WHERE streams_remaining > 0"
-        ) as cursor:
-            affected = [dict(row) for row in await cursor.fetchall()]
-        if not affected:
-            return []
-        await self.db.execute(
-            "UPDATE trya_stream_submission_bans "
-            "SET streams_remaining = streams_remaining - 1, updated_at = unixepoch() "
-            "WHERE streams_remaining > 0"
-        )
-        await self.db.execute(
-            "DELETE FROM trya_stream_submission_bans WHERE streams_remaining <= 0"
-        )
-        await self.db.commit()
-        for row in affected:
-            row["streams_remaining_after"] = max(0, int(row["streams_remaining"]) - 1)
-        return affected
+        """Consume one shared blocked-stream count after a TrYa Stream start."""
+        return await self.advance_exp_radio_submission_bans()
 
     async def update_trya_stream_song(self, song_id: int, **fields):
         """Generic field update for trya_stream_songs."""
@@ -5764,7 +5736,7 @@ class Database:
             "duration", "lyrics", "word_timestamps", "ass_filename",
             "analysis_status", "active", "playlist_source",
             "moderation_status", "moderation_reason", "moderation_at",
-            "rights_version", "paid_download_attested",
+            "rights_declaration", "rights_hash", "rights_version", "paid_download_attested",
             "official_download_attested", "is_suno_remix",
             "third_party_rights_attested", "commercial_rights_attested",
             "original_sha256", "original_filename", "original_mime",
