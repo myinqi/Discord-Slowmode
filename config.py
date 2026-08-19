@@ -30,6 +30,9 @@ class Config:
     # Experimental Radio
     EXP_RADIO_DIR: str = os.getenv("EXP_RADIO_DIR", "data/radio/exp_radio")
 
+    # TrYa Stream
+    TRYA_STREAM_DIR: str = os.getenv("TRYA_STREAM_DIR", "data/radio/trya_stream")
+
     # LLM (Corax chat)
     OLLAMA_URL: str = os.getenv("OLLAMA_URL", "http://ollama:11434")
     LLM_MODEL: str = os.getenv("LLM_MODEL", "qwen2.5:7b-instruct")

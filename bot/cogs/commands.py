@@ -18,6 +18,10 @@ from bot.exp_radio_files import (
     cleanup_exp_radio_song_files,
     exp_radio_hook_cache_path,
 )
+from bot.trya_stream_files import (
+    cleanup_trya_stream_hook_files,
+    trya_stream_hook_cache_path,
+)
 
 SUNO_URL_PATTERN = re.compile(r'https://suno\.com/(?:s|song)/[\w-]+')
 YOUTUBE_URL_RE   = re.compile(
@@ -26,6 +30,22 @@ YOUTUBE_URL_RE   = re.compile(
 )
 SUNO_PLAYLIST_PATTERN = re.compile(r'https://suno\.com/playlist/[\w-]+')
 SPOTIFY_ALBUM_PATTERN = re.compile(r'https://open\.spotify\.com/album/[\w?=&-]+')
+
+TRYA_STREAM_DESTINATIONS = {"submission", "intro", "outro"}
+TRYA_STREAM_DESTINATION_CHOICES = [
+    app_commands.Choice(name="Submission", value="submission"),
+    app_commands.Choice(name="Intro", value="intro"),
+    app_commands.Choice(name="Outro", value="outro"),
+]
+TRYA_STREAM_MAX_PER_USER_DEFAULT = 4
+TRYA_STREAM_RIGHTS_VERSION = "trya-suno-download-v1-2026-09-03"
+TRYA_STREAM_RIGHTS_DECLARATION = (
+    "I attest that this exact audio file was obtained through an official Suno download channel "
+    "while this specific song carried paid-plan commercial-use rights; it is not a Suno Remix; "
+    "I hold every required right and permission for its lyrics, samples, voices, performances and "
+    "other elements; and I grant TrYa Stream a perpetual, non-exclusive authorization to archive "
+    "and process the file and to use the song in Twitch live streams, recordings, clips and VODs."
+)
 
 DEFAULT_REACTION_EMOJIS = ["👍", "❤️", "🔥", "🎵"]
 BERLIN_TZ = ZoneInfo("Europe/Berlin")
@@ -2059,6 +2079,21 @@ class CommandsCog(commands.Cog):
             inline=False,
         )
 
+        embed.add_field(
+            name="TrYa Stream",
+            value=(
+                "**`/trya-stream-submit <suno_url> [hook] [destination]`** — Submit to the submission, intro, or outro playlist\n"
+                "**`/trya-stream-replace <suno_url> [hook] [destination]`** — Replace your oldest song after the new upload succeeds\n"
+                "**`/trya-stream-delete`** — Remove one of your songs from the playlist\n"
+                "**`/trya-stream-hook <hook>`** — Add or change a Hook video\n"
+                "**`/trya-stream-hook-remove`** — Remove a Hook video\n"
+                "**`/trya-stream-playlist`** — Show the current playlist\n"
+                "**`/trya-stream-to-suno`** — Export Suno URLs from the latest stream\n"
+                "Intro and outro uploads require admin approval before use. Rights are declared on the upload page."
+            ),
+            inline=False,
+        )
+
         # Experimental Radio (all users)
         embed.add_field(
             name="🎙️ Experimental Radio",
@@ -2080,6 +2115,366 @@ class CommandsCog(commands.Cog):
             embed.set_footer(text="ℹ️ Some admin commands are hidden — ask a moderator for access")
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _trya_stream_submit(
+        self,
+        interaction: discord.Interaction,
+        suno_url: str,
+        hook: str | None,
+        destination: str,
+        *,
+        replace: bool,
+    ) -> None:
+        import hashlib
+        from bot.suno_urls import resolve_suno_uuid
+        from bot.trya_stream_manager import is_submissions_locked
+
+        await interaction.response.defer(ephemeral=True)
+        destination = destination.strip().lower()
+        if destination not in TRYA_STREAM_DESTINATIONS:
+            await interaction.followup.send(
+                "Invalid destination. Choose submission, intro, or outro.", ephemeral=True
+            )
+            return
+
+        submission_ban = await self.bot.db.get_trya_stream_submission_ban(interaction.user.id)
+        if submission_ban:
+            remaining = int(submission_ban.get("streams_remaining") or 0)
+            await interaction.followup.send(
+                f"You cannot submit TrYa Stream songs for the next **{remaining} "
+                f"stream{'s' if remaining != 1 else ''}**.",
+                ephemeral=True,
+            )
+            return
+
+        locked, reason = await is_submissions_locked(self.bot.db)
+        if locked:
+            if reason == "stream_live":
+                message = "The TrYa Stream is live. Submissions are available again after it ends."
+            else:
+                minutes = reason.replace("pre_start_", "").replace("min", "")
+                message = (
+                    f"The TrYa Stream starts in approximately **{minutes} minutes**. "
+                    "Submissions close 60 minutes before the stream."
+                )
+            await interaction.followup.send(message, ephemeral=True)
+            return
+
+        raw_url = suno_url.strip()
+        if not SUNO_URL_PATTERN.fullmatch(raw_url):
+            await interaction.followup.send(
+                "Invalid URL. Provide a Suno song link such as `https://suno.com/s/…`.",
+                ephemeral=True,
+            )
+            return
+        suno_uuid = await resolve_suno_uuid(raw_url)
+        if not suno_uuid:
+            await interaction.followup.send(
+                "Suno could not resolve that song URL. Check the link and try again.",
+                ephemeral=True,
+            )
+            return
+
+        songs = [
+            song
+            for song in await self.bot.db.get_all_trya_stream_songs(active_only=False)
+            if int(song.get("user_id") or 0) == interaction.user.id
+            and (song.get("active") or not song.get("original_uploaded_at"))
+        ]
+        destination_songs = [
+            song for song in songs
+            if (song.get("playlist_source") or "submission") == destination
+            and song.get("analysis_status") != "failed"
+        ]
+        replace_candidates = [
+            song for song in destination_songs
+            if song.get("active") and song.get("approval_status") == "approved"
+        ]
+        replace_target = replace_candidates[0] if replace and replace_candidates else None
+        if replace and not replace_target:
+            await interaction.followup.send(
+                f"You have no active TrYa Stream {destination} song to replace.", ephemeral=True
+            )
+            return
+
+        all_songs = await self.bot.db.get_all_trya_stream_songs(active_only=False)
+        duplicate = next(
+            (
+                song for song in all_songs
+                if str(song.get("suno_uuid") or "").lower() == suno_uuid.lower()
+                and song.get("analysis_status") != "failed"
+                and (song.get("active") or not song.get("original_uploaded_at"))
+            ),
+            None,
+        )
+        if duplicate:
+            await interaction.followup.send(
+                "That Suno song is already in the TrYa Stream playlist or awaiting upload.",
+                ephemeral=True,
+            )
+            return
+
+        if destination == "submission" and not replace:
+            max_per_user = int(
+                await self.bot.db.get_setting("trya_stream_max_per_user")
+                or str(TRYA_STREAM_MAX_PER_USER_DEFAULT)
+            )
+            if len(destination_songs) >= max_per_user:
+                await interaction.followup.send(
+                    f"You already have {max_per_user} TrYa Stream submissions. "
+                    "Use `/trya-stream-replace` or `/trya-stream-delete` first.",
+                    ephemeral=True,
+                )
+                return
+
+        resolved_hook = None
+        hook_value = (hook or "").strip()
+        if hook_value:
+            from bot.suno_hook import SunoHookError, resolve_suno_hook
+
+            try:
+                resolved_hook = await resolve_suno_hook(hook_value)
+                if resolved_hook["original_clip_id"].lower() != suno_uuid.lower():
+                    raise SunoHookError("This Hook belongs to a different Suno song.")
+            except SunoHookError as exc:
+                await interaction.followup.send(f"The Hook is invalid: {exc}", ephemeral=True)
+                return
+            except Exception:
+                await interaction.followup.send(
+                    "Suno could not validate the Hook right now. Try again shortly.",
+                    ephemeral=True,
+                )
+                return
+
+        rights_hash = hashlib.sha256(
+            (
+                f"{TRYA_STREAM_RIGHTS_VERSION}\n{TRYA_STREAM_RIGHTS_DECLARATION}\n"
+                f"user={interaction.user.id}\nurl={raw_url}\nuuid={suno_uuid}\n"
+                f"destination={destination}"
+            ).encode()
+        ).hexdigest()
+        song_id, upload_token = await self.bot.db.add_trya_stream_song(
+            user_id=interaction.user.id,
+            user_name=str(interaction.user),
+            suno_url=raw_url,
+            suno_uuid=suno_uuid,
+            rights_declaration=TRYA_STREAM_RIGHTS_DECLARATION,
+            rights_hash=rights_hash,
+            rights_version=TRYA_STREAM_RIGHTS_VERSION,
+            playlist_source=destination,
+            replacement_song_id=replace_target["id"] if replace_target else None,
+        )
+
+        if resolved_hook:
+            song = await self.bot.db.get_trya_stream_song(song_id)
+            try:
+                await _set_trya_stream_hook(
+                    self.bot,
+                    song,
+                    hook_value,
+                    resolved_hook=resolved_hook,
+                    source_uuid=suno_uuid,
+                )
+            except Exception as exc:
+                await self.bot.db.delete_trya_stream_song(song_id)
+                await interaction.followup.send(
+                    f"The Hook video could not be attached: {exc}\n"
+                    "Your existing song was kept.",
+                    ephemeral=True,
+                )
+                return
+
+        upload_url = f"{self.bot.web_url.rstrip('/')}/trya-stream/upload/{upload_token}"
+        view = discord.ui.View()
+        view.add_item(discord.ui.Button(
+            label="Complete upload",
+            url=upload_url,
+            style=discord.ButtonStyle.link,
+        ))
+        message = "Upload the exact official Suno download and complete the rights declaration on the web page."
+        if destination in {"intro", "outro"}:
+            message += f" Your {destination} requires admin approval after upload before it can be used."
+        elif replace_target:
+            message += " Your current song remains active until the replacement upload succeeds."
+        await interaction.followup.send(message, view=view, ephemeral=True)
+
+    @app_commands.command(name="trya-stream-submit", description="Submit a Suno song to TrYa Stream")
+    @app_commands.describe(
+        suno_url="Suno song URL",
+        hook="Optional Suno Hook ID or share link",
+        destination="Target playlist",
+    )
+    @app_commands.choices(destination=TRYA_STREAM_DESTINATION_CHOICES)
+    async def trya_stream_submit(
+        self,
+        interaction: discord.Interaction,
+        suno_url: str,
+        hook: str | None = None,
+        destination: str = "submission",
+    ):
+        await self._trya_stream_submit(
+            interaction, suno_url, hook, destination, replace=False
+        )
+
+    @app_commands.command(name="trya-stream-replace", description="Replace your oldest TrYa Stream song")
+    @app_commands.describe(
+        suno_url="Suno song URL",
+        hook="Optional Suno Hook ID or share link",
+        destination="Target playlist",
+    )
+    @app_commands.choices(destination=TRYA_STREAM_DESTINATION_CHOICES)
+    async def trya_stream_replace(
+        self,
+        interaction: discord.Interaction,
+        suno_url: str,
+        hook: str | None = None,
+        destination: str = "submission",
+    ):
+        await self._trya_stream_submit(
+            interaction, suno_url, hook, destination, replace=True
+        )
+
+    @app_commands.command(name="trya-stream-delete", description="Remove one of your songs from TrYa Stream")
+    async def trya_stream_delete(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        songs = await self.bot.db.get_trya_stream_songs_by_user(interaction.user.id)
+        if not songs:
+            await interaction.followup.send("You have no active TrYa Stream songs.", ephemeral=True)
+            return
+        await interaction.followup.send(
+            "Select the song to remove from the playlist. Uploaded files and rights evidence are retained:",
+            view=TryaStreamSongSelectView(
+                self.bot, songs, interaction.user.id, action="delete"
+            ),
+            ephemeral=True,
+        )
+
+    @app_commands.command(name="trya-stream-hook", description="Add or change a Hook on your TrYa Stream song")
+    @app_commands.describe(hook="Suno Hook ID or share link")
+    async def trya_stream_hook(self, interaction: discord.Interaction, hook: str):
+        await interaction.response.defer(ephemeral=True)
+        if _trya_stream_hook_changes_locked():
+            await interaction.followup.send(
+                "Hook videos cannot be changed while TrYa Stream is live.", ephemeral=True
+            )
+            return
+        songs = await self.bot.db.get_trya_stream_songs_by_user(interaction.user.id)
+        if not songs:
+            await interaction.followup.send("You have no active TrYa Stream songs.", ephemeral=True)
+            return
+        if len(songs) == 1:
+            try:
+                resolved = await _set_trya_stream_hook(self.bot, songs[0], hook)
+            except Exception as exc:
+                await interaction.followup.send(f"The Hook could not be set: {exc}", ephemeral=True)
+                return
+            await interaction.followup.send(
+                f"Hook `{resolved['hook_id']}` set for **{songs[0].get('title') or 'your song'}**.",
+                ephemeral=True,
+            )
+            return
+        await interaction.followup.send(
+            "Select the song that should use this Hook:",
+            view=TryaStreamSongSelectView(
+                self.bot, songs, interaction.user.id, action="hook", hook_value=hook
+            ),
+            ephemeral=True,
+        )
+
+    @app_commands.command(name="trya-stream-hook-remove", description="Remove a Hook from your TrYa Stream song")
+    async def trya_stream_hook_remove(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        if _trya_stream_hook_changes_locked():
+            await interaction.followup.send(
+                "Hook videos cannot be changed while TrYa Stream is live.", ephemeral=True
+            )
+            return
+        songs = [
+            song for song in await self.bot.db.get_trya_stream_songs_by_user(interaction.user.id)
+            if song.get("hook_id")
+        ]
+        if not songs:
+            await interaction.followup.send("None of your active songs has a Hook.", ephemeral=True)
+            return
+        if len(songs) == 1:
+            await _remove_trya_stream_hook(self.bot, songs[0])
+            await interaction.followup.send(
+                f"Hook removed from **{songs[0].get('title') or 'your song'}**.", ephemeral=True
+            )
+            return
+        await interaction.followup.send(
+            "Select the song whose Hook should be removed:",
+            view=TryaStreamSongSelectView(
+                self.bot, songs, interaction.user.id, action="hook-remove"
+            ),
+            ephemeral=True,
+        )
+
+    @app_commands.command(name="trya-stream-playlist", description="Show the current TrYa Stream playlist")
+    async def trya_stream_playlist(self, interaction: discord.Interaction):
+        songs = await self.bot.db.get_all_trya_stream_songs(active_only=True)
+        songs = [
+            song for song in songs
+            if song.get("analysis_status") != "failed"
+            and song.get("approval_status") == "approved"
+        ]
+        if not songs:
+            await interaction.response.send_message(
+                "The TrYa Stream playlist is currently empty.", ephemeral=True
+            )
+            return
+        lines = []
+        for index, song in enumerate(songs, 1):
+            source = song.get("playlist_source") or "submission"
+            title = song.get("title") or "Pending upload"
+            artist = song.get("artist") or song.get("user_name") or "Unknown"
+            line = f"**{index}.** [{source}] {title} — {artist}"
+            if song.get("suno_url"):
+                line += f" — <{song['suno_url']}>"
+            lines.append(line)
+        chunks = _discord_message_chunks(
+            f"**TrYa Stream Playlist** ({len(songs)} songs)\n\n", lines
+        )
+        await interaction.response.send_message(chunks[0], ephemeral=True)
+        for chunk in chunks[1:]:
+            await interaction.followup.send(chunk, ephemeral=True)
+
+    @app_commands.command(name="trya-stream-to-suno", description="Get Suno URLs from the latest TrYa Stream")
+    async def trya_stream_to_suno(self, interaction: discord.Interaction):
+        import json
+
+        await interaction.response.defer(ephemeral=True)
+        urls = []
+        manager = getattr(self.bot, "trya_stream_manager", None)
+        if manager and getattr(manager, "is_running", False):
+            urls = [
+                str(song.get("suno_url") or "").strip()
+                for song in (getattr(manager, "playlist", []) or [])
+                if str(song.get("suno_url") or "").strip()
+            ]
+        if not urls:
+            raw = (
+                await self.bot.db.get_setting("trya_stream_last_scheduled_playlist_snapshot", "")
+                or await self.bot.db.get_setting("trya_stream_last_playlist_snapshot", "")
+            )
+            if raw:
+                try:
+                    urls = [
+                        str(url).strip() for url in (json.loads(raw).get("urls") or [])
+                        if str(url).strip()
+                    ]
+                except Exception:
+                    urls = []
+        if not urls:
+            await interaction.followup.send(
+                "No Suno URLs were found for the latest TrYa Stream.", ephemeral=True
+            )
+            return
+        data = ("\n".join(dict.fromkeys(urls)) + "\n").encode()
+        await interaction.followup.send(
+            file=discord.File(io.BytesIO(data), filename="trya-stream-to-suno.txt"),
+            ephemeral=True,
+        )
 
     @app_commands.command(name="twitch-submit", description="Submit a Suno song to the Experimental Radio")
     async def exp_radio_submit(self, interaction: discord.Interaction):
@@ -2295,6 +2690,167 @@ class CommandsCog(commands.Cog):
         data = ("\n".join(urls) + "\n").encode("utf-8")
         file = discord.File(io.BytesIO(data), filename="twitch-to-suno.txt")
         await interaction.followup.send(file=file, ephemeral=True)
+
+
+def _discord_message_chunks(header: str, lines: list[str]) -> list[str]:
+    chunks = []
+    current = header
+    for line in lines:
+        if len(current) + len(line) + 1 > 1900:
+            chunks.append(current)
+            current = ""
+        current += line + "\n"
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _trya_stream_hook_changes_locked() -> bool:
+    import bot.trya_stream_manager as trya_stream
+
+    return bool(trya_stream.stream_is_live)
+
+
+async def _set_trya_stream_hook(
+    bot,
+    song: dict,
+    hook_value: str,
+    *,
+    resolved_hook: dict | None = None,
+    source_uuid: str | None = None,
+) -> dict:
+    from bot.suno_hook import HOOK_ID_RE, SunoHookError, resolve_suno_hook
+
+    if _trya_stream_hook_changes_locked():
+        raise SunoHookError("Hook videos cannot be changed while TrYa Stream is live.")
+    hook = resolved_hook or await resolve_suno_hook(hook_value)
+    expected_uuid = str(source_uuid or song.get("suno_uuid") or "").lower()
+    if not HOOK_ID_RE.fullmatch(expected_uuid):
+        from bot.trya_stream_worker import scrape_suno
+
+        metadata = await scrape_suno(str(song.get("suno_uuid") or ""))
+        expected_uuid = str(metadata.get("real_uuid") or "").lower()
+    if not expected_uuid:
+        raise SunoHookError("The submitted Suno song could not be resolved.")
+    if hook["original_clip_id"].lower() != expected_uuid:
+        raise SunoHookError("This Hook belongs to a different Suno song.")
+
+    manager = getattr(bot, "trya_stream_manager", None)
+    if manager is None:
+        raise SunoHookError("The TrYa Stream manager is unavailable.")
+    candidate = dict(song)
+    candidate.update(hook)
+    cached_path = await manager._get_video(candidate, allow_hook_fallback=False)
+    if not cached_path or not os.path.exists(cached_path):
+        raise SunoHookError("The Hook video could not be downloaded.")
+
+    old_hook_id = str(song.get("hook_id") or "").strip()
+    try:
+        await bot.db.update_trya_stream_song(
+            song["id"],
+            hook_id=hook["hook_id"],
+            hook_share_url=hook["hook_share_url"],
+            hook_video_url=hook["hook_video_url"],
+        )
+    except Exception:
+        if old_hook_id != hook["hook_id"]:
+            try:
+                os.remove(trya_stream_hook_cache_path(
+                    bot.trya_stream_dir, song["id"], hook["hook_id"]
+                ))
+            except FileNotFoundError:
+                pass
+        raise
+
+    if old_hook_id and old_hook_id != hook["hook_id"]:
+        try:
+            os.remove(trya_stream_hook_cache_path(
+                bot.trya_stream_dir, song["id"], old_hook_id
+            ))
+        except FileNotFoundError:
+            pass
+    return hook
+
+
+async def _remove_trya_stream_hook(bot, song: dict) -> None:
+    if _trya_stream_hook_changes_locked():
+        raise RuntimeError("Hook videos cannot be changed while TrYa Stream is live.")
+    await bot.db.update_trya_stream_song(
+        song["id"], hook_id=None, hook_share_url=None, hook_video_url=None
+    )
+    cleanup_trya_stream_hook_files(bot.trya_stream_dir, song)
+
+
+class TryaStreamSongSelectView(discord.ui.View):
+    def __init__(
+        self,
+        bot,
+        songs: list[dict],
+        viewer_id: int,
+        *,
+        action: str,
+        hook_value: str | None = None,
+    ):
+        super().__init__(timeout=120)
+        self.bot = bot
+        self.songs = {str(song["id"]): song for song in songs}
+        self.viewer_id = viewer_id
+        self.action = action
+        self.hook_value = hook_value
+        options = [
+            discord.SelectOption(
+                label=(song.get("title") or "Pending upload")[:100],
+                description=(
+                    f"{song.get('playlist_source') or 'submission'} · Song #{song['id']}"
+                )[:100],
+                value=str(song["id"]),
+            )
+            for song in songs[:25]
+        ]
+        select = discord.ui.Select(placeholder="Choose a TrYa Stream song", options=options)
+        select.callback = self._selected
+        self.add_item(select)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.viewer_id:
+            await interaction.response.send_message(
+                "Only the user who opened this menu can use it.", ephemeral=True
+            )
+            return False
+        return True
+
+    async def _selected(self, interaction: discord.Interaction) -> None:
+        select = self.children[0]
+        song = self.songs.get(select.values[0])
+        if not song:
+            await interaction.response.edit_message(content="Song not found.", view=None)
+            return
+        current = await self.bot.db.get_trya_stream_song(song["id"])
+        if not current or not current.get("active") or current.get("user_id") != self.viewer_id:
+            await interaction.response.edit_message(
+                content="That song is no longer available.", view=None
+            )
+            return
+        try:
+            if self.action == "delete":
+                await self.bot.db.delete_trya_stream_song(song["id"])
+                message = (
+                    f"**{song.get('title') or 'Song #' + str(song['id'])}** was removed from "
+                    "the playlist. Uploaded files and rights evidence were retained."
+                )
+            elif self.action == "hook":
+                hook = await _set_trya_stream_hook(self.bot, current, self.hook_value or "")
+                message = (
+                    f"Hook `{hook['hook_id']}` set for "
+                    f"**{song.get('title') or 'your song'}**."
+                )
+            else:
+                await _remove_trya_stream_hook(self.bot, current)
+                message = f"Hook removed from **{song.get('title') or 'your song'}**."
+        except Exception as exc:
+            await interaction.response.edit_message(content=f"Action failed: {exc}", view=None)
+            return
+        await interaction.response.edit_message(content=message, view=None)
 
 
 _SUNO_SUBMIT_RE = re.compile(r'(?:suno\.com/(?:s|song)/)([A-Za-z0-9_-]{8,})')

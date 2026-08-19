@@ -2,7 +2,8 @@
 
 Listens to Twitch EventSub over WebSockets and posts configurable chat messages
 through the existing Helix chat sender used by Experimental Radio and Raven's
-Nest.  All settings live in the shared settings table under ``twitch_alerts_*``.
+Nest. Settings and chat credential prefixes are configurable; existing instances
+retain the ``twitch_alerts_*`` and ``exp_radio_twitch_*`` defaults.
 """
 
 from __future__ import annotations
@@ -71,8 +72,22 @@ def _tier_label(tier: Any) -> str:
 
 
 class TwitchEventAlerts:
-    def __init__(self, db):
+    def __init__(
+        self,
+        db,
+        *,
+        settings_prefix: str = "twitch_alerts",
+        chat_prefix: str = "exp_radio_twitch",
+        eventsub_prefix: str = "twitch_alerts_eventsub",
+        log_prefix: str = "[twitch-alerts]",
+        logger=_log,
+    ):
         self.db = db
+        self.settings_prefix = settings_prefix
+        self.chat_prefix = chat_prefix
+        self.eventsub_prefix = eventsub_prefix
+        self.log_prefix = log_prefix
+        self.logger = logger
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._ws = None
@@ -99,7 +114,7 @@ class TwitchEventAlerts:
         self.status.running = False
         self.status.connected = False
         self.status.last_message = f"Listener stopped: {exc}"
-        _log(self.status.last_message, "error", "[twitch-alerts]")
+        self.logger(self.status.last_message, "error", self.log_prefix)
 
     async def stop(self) -> None:
         self._running = False
@@ -119,7 +134,9 @@ class TwitchEventAlerts:
         await self.start()
 
     async def _setting(self, key: str) -> str:
-        return await self.db.get_setting(key) or DEFAULT_ALERT_SETTINGS.get(key, "")
+        suffix = key.removeprefix("twitch_alerts")
+        configured_key = f"{self.settings_prefix}{suffix}"
+        return await self.db.get_setting(configured_key) or DEFAULT_ALERT_SETTINGS.get(key, "")
 
     async def _enabled(self) -> bool:
         return (await self._setting("twitch_alerts_enabled")) == "on"
@@ -163,37 +180,37 @@ class TwitchEventAlerts:
             except _ReconnectEventSub as exc:
                 next_url = exc.url or _EVENTSUB_WS_URL
                 self.status.last_message = "Reconnecting to Twitch EventSub"
-                _log("EventSub reconnect requested by Twitch", "info", "[twitch-alerts]")
+                self.logger("EventSub reconnect requested by Twitch", "info", self.log_prefix)
             except asyncio.CancelledError:
                 break
             except Exception as exc:
                 self.status.connected = False
                 self.status.last_message = f"Connection error: {exc}"
-                _log(f"EventSub error: {exc} — reconnecting in {backoff:.0f}s", "error", "[twitch-alerts]")
+                self.logger(f"EventSub error: {exc} — reconnecting in {backoff:.0f}s", "error", self.log_prefix)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 120.0)
                 next_url = _EVENTSUB_WS_URL
 
     async def _connect_once(self, url: str) -> None:
-        chat_bot = TwitchBot(self.db, key_prefix="exp_radio_twitch")
+        chat_bot = TwitchBot(self.db, key_prefix=self.chat_prefix)
         ok, msg = await chat_bot.start()
         if not ok:
             self.status.last_message = f"Twitch chat credentials error: {msg}"
             await asyncio.sleep(30)
             return
 
-        eventsub_bot = TwitchBot(self.db, key_prefix="twitch_alerts_eventsub")
+        eventsub_bot = TwitchBot(self.db, key_prefix=self.eventsub_prefix)
         eventsub_ok, eventsub_msg = await eventsub_bot.start()
         if not eventsub_ok:
             # Keep Follow/Raid usable while installations migrate to the
             # separate broadcaster authorization. Broadcaster-only events
             # will be rejected by Twitch until that authorization exists.
             eventsub_bot = chat_bot
-            _log(
+            self.logger(
                 f"Broadcaster EventSub authorization unavailable ({eventsub_msg}); "
                 "using chat token as fallback",
                 "error",
-                "[twitch-alerts]",
+                self.log_prefix,
             )
 
         async with aiohttp.ClientSession() as session:
@@ -205,7 +222,7 @@ class TwitchEventAlerts:
                 self._ws = ws
                 self.status.connected = True
                 self.status.last_message = "Connected to Twitch EventSub"
-                _log("Connected to Twitch EventSub", "info", "[twitch-alerts]")
+                self.logger("Connected to Twitch EventSub", "info", self.log_prefix)
 
                 async for msg in ws:
                     if not self._running:
@@ -255,7 +272,7 @@ class TwitchEventAlerts:
         if message_type == "revocation":
             sub = payload.get("subscription") or {}
             self.status.last_message = f"Subscription revoked: {sub.get('type')} ({sub.get('status')})"
-            _log(self.status.last_message, "error", "[twitch-alerts]")
+            self.logger(self.status.last_message, "error", self.log_prefix)
 
     async def _subscribe_enabled_events(
         self,
@@ -317,11 +334,11 @@ class TwitchEventAlerts:
                     continue
                 body = await resp.text()
                 failed.append(sub_type)
-                _log(f"Could not subscribe to {sub_type}: HTTP {resp.status} {body[:300]}", "error", "[twitch-alerts]")
+                self.logger(f"Could not subscribe to {sub_type}: HTTP {resp.status} {body[:300]}", "error", self.log_prefix)
         self.status.last_message = f"Subscribed to {created}/{len(subscriptions)} Twitch event(s)"
         if failed:
             self.status.last_message += f"; failed: {', '.join(failed)}"
-        _log(self.status.last_message, "info", "[twitch-alerts]")
+        self.logger(self.status.last_message, "info", self.log_prefix)
 
     async def _announce(self, bot: TwitchBot, sub_type: str, event: Dict[str, Any]) -> None:
         template_key = ""

@@ -1,0 +1,1698 @@
+{% extends "base.html" %}
+{% block title %}TrYa Stream{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+    <div class="flex items-center gap-3">
+        <h2 class="text-2xl font-bold text-white">🎙️ TrYa Stream</h2>
+        <button onclick="document.getElementById('exp-settings-modal').classList.remove('hidden')"
+            class="p-1.5 text-gray-500 hover:text-gray-300 hover:bg-gray-700/50 rounded-lg transition-colors" title="Stream Settings">
+            ⚙️
+        </button>
+        <button type="button" onclick="document.getElementById('exp-settings-modal').classList.remove('hidden'); setTimeout(function(){document.getElementById('trya-alert-settings').scrollIntoView({behavior:'smooth'});}, 50)"
+            class="p-1.5 text-gray-500 hover:text-gray-300 hover:bg-gray-700/50 rounded-lg transition-colors" title="TrYa Stream Twitch Event Chat Alerts">
+            📣
+        </button>
+    </div>
+    <a href="{{ url_for('trya_stream_consent_csv') }}"
+       class="flex items-center gap-1.5 px-3 py-1.5 bg-gray-700/50 hover:bg-gray-700 text-gray-300 text-sm rounded-lg transition-colors">
+        ⬇ Export Consent CSV
+    </a>
+</div>
+
+<!-- Settings Modal -->
+<div id="exp-settings-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/70"
+     onclick="if(event.target===this)this.classList.add('hidden')">
+    <div class="bg-discord-dark rounded-xl border border-gray-700/50 shadow-2xl w-full max-w-6xl mx-4 flex flex-col max-h-[90vh]">
+        <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between flex-shrink-0">
+            <h3 class="text-white font-semibold">⚙️ Stream Settings</h3>
+            <button onclick="document.getElementById('exp-settings-modal').classList.add('hidden')"
+                class="text-gray-400 hover:text-white text-lg transition-colors leading-none">✕</button>
+        </div>
+        <div class="overflow-y-auto flex-1 divide-y divide-gray-700/50">
+        <form method="POST" class="p-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 items-start">
+            <input type="hidden" name="action" value="save_exp_settings">
+            <div class="space-y-2">
+                <label class="block text-gray-400 text-xs">Stream URL</label>
+                <input type="url" name="exp_stream_url"
+                    value="{{ exp_stream_url }}"
+                    placeholder="https://twitch.tv/..."
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                <p class="text-gray-500 text-xs">Posted in Discord when using the "Post Stream Link" button.</p>
+            </div>
+            <div class="pt-2 border-t border-gray-700/50 space-y-4">
+                <div class="space-y-2">
+                    <label class="block text-gray-400 text-xs">Discord Channel 1 (for posts)</label>
+                    <select name="exp_post_channel_1_id"
+                        class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                        <option value="">Select channel…</option>
+                        {% for ch in text_channels %}
+                        <option value="{{ ch.id }}" {% if ch.id|string == exp_post_channel_1_id %}selected{% endif %}>#{{ ch.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="space-y-2">
+                    <label class="block text-gray-400 text-xs">Discord Channel 2 (for posts)</label>
+                    <select name="exp_post_channel_2_id"
+                        class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                        <option value="">Select channel…</option>
+                        {% for ch in text_channels %}
+                        <option value="{{ ch.id }}" {% if ch.id|string == exp_post_channel_2_id %}selected{% endif %}>#{{ ch.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="space-y-2">
+                    <label class="block text-gray-400 text-xs">Discord Channel 3 (for posts)</label>
+                    <select name="exp_post_channel_3_id"
+                        class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                        <option value="">Select channel…</option>
+                        {% for ch in text_channels %}
+                        <option value="{{ ch.id }}" {% if ch.id|string == exp_post_channel_3_id %}selected{% endif %}>#{{ ch.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+            <div class="pt-2 border-t border-gray-700/50 space-y-2">
+                <label class="block text-gray-400 text-xs">Playlist Removal Notification Channel</label>
+                <p class="text-gray-500 text-xs">Posts a message when the configured submission retention ends. Archived audio and consent evidence are retained.</p>
+                <select name="exp_expiry_channel_id"
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                    <option value="">Disabled</option>
+                    {% for ch in text_channels %}
+                    <option value="{{ ch.id }}" {% if ch.id|string == exp_expiry_channel_id %}selected{% endif %}>#{{ ch.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="pt-2 border-t border-gray-700/50 space-y-3">
+                <div class="space-y-2">
+                    <label class="block text-gray-400 text-xs">Announcement Channel</label>
+                    <p class="text-gray-500 text-xs">Used by the manual announcement button in the Discord posting panel.</p>
+                    <select name="exp_announcement_channel_id"
+                        class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                        <option value="">Disabled</option>
+                        {% for ch in text_channels %}
+                        <option value="{{ ch.id }}" {% if ch.id|string == exp_announcement_channel_id %}selected{% endif %}>#{{ ch.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="space-y-2">
+                    <label class="block text-gray-400 text-xs">Announcement Message</label>
+                    <textarea name="exp_announcement_message" rows="4"
+                        placeholder="TrYa Stream submissions are being prepared by the admin team."
+                        class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm placeholder-gray-500 focus:border-discord-blurple focus:outline-none resize-y">{{ exp_announcement_message }}</textarea>
+                </div>
+            </div>
+            <div class="pt-2 border-t border-gray-700/50 space-y-2">
+                <label class="block text-white text-sm">Max submissions per user</label>
+                <div class="flex items-center gap-3">
+                    <input type="number" name="exp_max_per_user" min="1" max="20"
+                        value="{{ exp_max_per_user }}"
+                        class="w-20 px-3 py-1.5 bg-discord-darker border border-gray-700 rounded text-white text-sm focus:border-discord-blurple focus:outline-none">
+                    <span class="text-gray-500 text-xs">songs per person (1–20) — only affects new submissions</span>
+                </div>
+            </div>
+            <div class="pt-2 border-t border-gray-700/50 space-y-2">
+                <label class="block text-white text-sm">Submission playlist retention</label>
+                <div class="flex items-center gap-3">
+                    <input type="number" name="trya_submission_playlist_days" min="1" max="3650"
+                        value="{{ trya_submission_playlist_days }}"
+                        class="w-24 bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                    <span class="text-gray-400 text-sm">days</span>
+                </div>
+                <p class="text-gray-500 text-xs">After this period, submission songs leave the active playlist and the configured notification channel is informed. Original uploads, hashes, consent evidence and working files remain archived.</p>
+            </div>
+            <div class="pt-2 border-t border-gray-700/50 space-y-2">
+                <label class="block text-white text-sm">Video bitrate</label>
+                <select name="exp_video_bitrate_kbps"
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                    <option value="1800" {% if exp_video_bitrate_kbps == 1800 %}selected{% endif %}>1800 kbps - lowest test rate</option>
+                    <option value="2000" {% if exp_video_bitrate_kbps == 2000 %}selected{% endif %}>2000 kbps - stable test rate</option>
+                    <option value="2500" {% if exp_video_bitrate_kbps == 2500 %}selected{% endif %}>2500 kbps - current default</option>
+                </select>
+                <p class="text-gray-500 text-xs">Applies to the next stream start. Audio stays at 128 kbps.</p>
+            </div>
+            <div class="pt-2 border-t border-gray-700/50 space-y-2">
+                <label class="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" name="exp_moderation_enabled"
+                        {% if exp_moderation_enabled == 'on' %}checked{% endif %}
+                        class="w-4 h-4 accent-discord-blurple">
+                    <span class="text-white text-sm">LLM Lyric Moderation</span>
+                </label>
+                <p class="text-gray-500 text-xs">
+                    After Whisper transcription, qwen2.5 checks the lyrics against the
+                    community rules (no hate speech, no explicit/illegal content).
+                    Songs flagged by the model are kept out of the auto-stream playlist
+                    until you manually approve them via the ✓ button on each song.
+                    Original lyrics + an automatic English translation are evaluated.
+                </p>
+            </div>
+            <div class="pt-2 border-t border-gray-700/50 space-y-2">
+                <label class="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" name="exp_progress_overlay"
+                        {% if exp_progress_overlay == 'on' %}checked{% endif %}
+                        class="w-4 h-4 accent-discord-blurple">
+                    <span class="text-white text-sm">Show song progress in stream overlay</span>
+                </label>
+                <p class="text-gray-500 text-xs">
+                    Displays a bottom-right info card in the Twitch stream video showing the
+                    current song's duration and playlist position (e.g. <em>4:33 · Song 9/30</em>).
+                </p>
+            </div>
+            <div class="pt-2 border-t border-gray-700/50 space-y-2">
+                <label class="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" name="exp_disclaimer_enabled"
+                        {% if exp_disclaimer_enabled == 'on' %}checked{% endif %}
+                        class="w-4 h-4 accent-discord-blurple">
+                    <span class="text-white text-sm">Show persistent stream disclaimer</span>
+                </label>
+                <textarea name="exp_disclaimer_text" rows="4" maxlength="2000"
+                    placeholder="AI-generated music and visuals."
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm leading-relaxed resize-y focus:border-discord-blurple focus:outline-none">{{ exp_disclaimer_text }}</textarea>
+                <p class="text-gray-500 text-xs">
+                    Shown continuously in the bottom-right corner above the song progress line.
+                    Line breaks are preserved. Changes apply when the stream video is rebuilt.
+                </p>
+            </div>
+            <div class="pt-2 border-t border-gray-700/50 space-y-2">
+                <label class="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" name="exp_ravenveil_early_boost"
+                        {% if exp_ravenveil_early_boost == 'on' %}checked{% endif %}
+                        class="w-4 h-4 accent-discord-blurple">
+                    <span class="text-white text-sm">Tarja early-play boost</span>
+                </label>
+                <p class="text-gray-500 text-xs">
+                    Places one random ready submission by <span class="text-gray-400">t_ravenveil</span>
+                    at a random position that starts within the stream's first 60 minutes.
+                    Intro duration counts toward the window; admin, intro and outro songs are excluded.
+                </p>
+            </div>
+            <div class="pt-2 border-t border-gray-700/50 space-y-2">
+                <p class="text-white text-sm font-medium">When the playlist ends</p>
+                <label class="flex items-start gap-2 cursor-pointer select-none">
+                    <input type="radio" name="exp_loop_mode" value="stop"
+                        {% if exp_loop_mode == 'stop' %}checked{% endif %}
+                        class="mt-1 w-4 h-4 accent-discord-blurple">
+                    <span class="text-gray-300 text-sm">
+                        <span class="text-white">Stop the stream</span><br>
+                        <span class="text-gray-500 text-xs">Plays each track in the
+                        randomly-shuffled order once, then ends. The bot posts a
+                        heads-up in Twitch chat ~30s before the final track ends.</span>
+                    </span>
+                </label>
+                <label class="flex items-start gap-2 cursor-pointer select-none">
+                    <input type="radio" name="exp_loop_mode" value="reshuffle"
+                        {% if exp_loop_mode != 'stop' %}checked{% endif %}
+                        class="mt-1 w-4 h-4 accent-discord-blurple">
+                    <span class="text-gray-300 text-sm">
+                        <span class="text-white">Restart with a fresh shuffle</span><br>
+                        <span class="text-gray-500 text-xs">Reloads the eligible
+                        playlist (picking up newly approved submissions),
+                        reshuffles, and keeps streaming. A heads-up message is
+                        posted in Twitch chat ~30s before each rotation ends.</span>
+                    </span>
+                </label>
+            </div>
+            <div class="pt-2 border-t border-gray-700/50 space-y-2">
+                <label class="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" name="exp_schedule_enabled"
+                        {% if exp_schedule_enabled == 'on' %}checked{% endif %}
+                        class="w-4 h-4 accent-discord-blurple">
+                    <span class="text-white text-sm font-medium">Auto-start schedule</span>
+                </label>
+                <p class="text-gray-500 text-xs">
+                    Automatically starts the stream on the selected weekdays
+                    at the time below (Europe/Berlin). Each scheduled
+                    start clears the cover cache and rebuilds audio/ASS from
+                    scratch. The stream ends according to the
+                    <em>“When the playlist ends”</em> setting above. If a
+                    stream is already running at trigger time, the
+                    occurrence is considered handled. Starts delayed by a
+                    container restart or brief outage are retried for up to
+                    15 minutes.
+                </p>
+                <div class="grid grid-cols-7 gap-1 text-center text-xs">
+                    {% for label, idx in [('Mon',0),('Tue',1),('Wed',2),('Thu',3),('Fri',4),('Sat',5),('Sun',6)] %}
+                    <label class="cursor-pointer select-none">
+                        <input type="checkbox" name="exp_schedule_day_{{ idx }}"
+                            class="peer sr-only"
+                            {% if (idx|string) in exp_schedule_days_set %}checked{% endif %}>
+                        <span class="block px-1 py-1.5 rounded bg-gray-800 text-gray-400
+                                     peer-checked:bg-discord-blurple peer-checked:text-white
+                                     hover:bg-gray-700 transition-colors">
+                            {{ label }}
+                        </span>
+                    </label>
+                    {% endfor %}
+                </div>
+                <div class="flex items-center gap-2">
+                    <label class="text-gray-400 text-xs">Start time:</label>
+                    <input type="time" name="exp_schedule_time"
+                           value="{{ exp_schedule_time }}"
+                           class="px-2 py-1 bg-gray-800 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-discord-blurple">
+                </div>
+            </div>
+            <div class="pt-2 border-t border-gray-700/50 space-y-3">
+                <p class="text-white text-sm font-medium">▶️ / ⏹ Intro &amp; Outro</p>
+                <label class="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" name="exp_intro_enabled"
+                        {% if exp_intro_enabled == 'on' %}checked{% endif %}
+                        class="w-4 h-4 accent-discord-blurple">
+                    <span class="text-gray-300 text-sm">Play <span class="text-white">Intro</span> song at stream start</span>
+                </label>
+                <label class="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" name="exp_outro_enabled"
+                        {% if exp_outro_enabled == 'on' %}checked{% endif %}
+                        class="w-4 h-4 accent-discord-blurple">
+                    <span class="text-gray-300 text-sm">Play <span class="text-white">Outro</span> song before stream ends</span>
+                </label>
+                <div class="grid grid-cols-1 gap-3 pt-1">
+                    <div class="space-y-1.5">
+                        <label class="block text-gray-400 text-xs">Intro selection</label>
+                        <select name="exp_intro_selection"
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                            <option value="random" {% if exp_intro_selection == 'random' %}selected{% endif %}>Random ready intro</option>
+                            {% for song in active_intro_songs %}
+                            <option value="{{ song.id }}" {% if exp_intro_selection == song.id|string %}selected{% endif %}>
+                                {{ song.title or song.suno_url }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="space-y-1.5">
+                        <label class="block text-gray-400 text-xs">Outro selection</label>
+                        <select name="exp_outro_selection"
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                            <option value="random" {% if exp_outro_selection == 'random' %}selected{% endif %}>Random ready outro</option>
+                            {% for song in active_outro_songs %}
+                            <option value="{{ song.id }}" {% if exp_outro_selection == song.id|string %}selected{% endif %}>
+                                {{ song.title or song.suno_url }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+                <p class="text-gray-500 text-xs">Configure the songs themselves below the Admin Playlist.</p>
+            </div>
+            <div class="pt-2 border-t border-gray-700/50 space-y-2">
+                <p class="text-white text-sm font-medium">🎵 Active Playlist</p>
+                <p class="text-gray-500 text-xs">Which playlist the stream will use when started. Switch here before starting a planned stream.</p>
+                <div class="space-y-1.5">
+                    <label class="flex items-center gap-2 cursor-pointer select-none">
+                        <input type="radio" name="exp_active_playlist" value="submission"
+                            {% if exp_active_playlist != 'admin' and exp_active_playlist != 'both' %}checked{% endif %}
+                            class="w-4 h-4 accent-discord-blurple">
+                        <span class="text-gray-300 text-sm"><span class="text-white">Submission Playlist</span> — songs prepared from this admin page</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer select-none">
+                        <input type="radio" name="exp_active_playlist" value="admin"
+                            {% if exp_active_playlist == 'admin' %}checked{% endif %}
+                            class="w-4 h-4 accent-discord-blurple">
+                        <span class="text-gray-300 text-sm"><span class="text-white">Admin Playlist</span> — songs added directly in this UI</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer select-none">
+                        <input type="radio" name="exp_active_playlist" value="both"
+                            {% if exp_active_playlist == 'both' %}checked{% endif %}
+                            class="w-4 h-4 accent-discord-blurple">
+                        <span class="text-gray-300 text-sm"><span class="text-white">Both</span> — mix submission + admin songs</span>
+                    </label>
+                </div>
+            </div>
+            <button type="submit"
+                class="w-full px-4 py-2 bg-discord-blurple hover:bg-discord-blurple-hover text-white rounded-lg text-sm font-medium transition-colors">
+                Save Settings
+            </button>
+        </form>
+        <!-- Twitch Chat Bot -->
+        <div class="p-5 space-y-4">
+            <p class="text-white text-sm font-medium">Twitch Chat Bot</p>
+            <p class="text-gray-500 text-xs">Posts ♪ Now Playing messages for TrYa Stream. Use the button below to authorize this stream's bot account.</p>
+            <form method="POST" class="space-y-3">
+                <input type="hidden" name="action" value="save_exp_twitch_settings">
+                <div class="space-y-1.5">
+                    <label class="block text-gray-400 text-xs">Client ID</label>
+                    <input type="text" name="exp_twitch_client_id" value="{{ exp_tw_client_id }}"
+                        placeholder="xxxxxxxxxxxxxxxxxx"
+                        class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                </div>
+                <div class="space-y-1.5">
+                    <label class="block text-gray-400 text-xs">Client Secret</label>
+                    <input type="password" name="exp_twitch_client_secret"
+                        placeholder="{{ exp_tw_secret_masked or '••••••••' }}"
+                        class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                </div>
+                <div class="space-y-1.5">
+                    <label class="block text-gray-400 text-xs">Refresh Token</label>
+                    <input type="password" name="exp_twitch_refresh_token"
+                        placeholder="{{ exp_tw_refresh_masked or '••••••••' }}"
+                        class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                </div>
+                <div class="space-y-1.5">
+                    <label class="block text-gray-400 text-xs">Broadcaster Login (channel name)</label>
+                    <input type="text" name="exp_twitch_broadcaster_login" value="{{ exp_tw_broadcaster }}"
+                        placeholder="channel_name"
+                        class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                    {% if exp_tw_bot_login %}
+                    <p class="text-xs text-green-400">Bot logged in as {{ exp_tw_bot_login }}.</p>
+                    {% endif %}
+                </div>
+                <div class="flex items-start justify-between gap-4 pt-1">
+                    <div class="flex-1">
+                        <p class="text-gray-300 text-sm">Enable chat messages</p>
+                        <p class="text-gray-500 text-xs mt-0.5">Post ♪ Now Playing on each song change.</p>
+                    </div>
+                    <label class="relative inline-flex items-center cursor-pointer mt-0.5 flex-shrink-0">
+                        <input type="checkbox" name="exp_twitch_chat_enabled" value="on"
+                               {% if exp_twitch_chat_enabled == 'on' %}checked{% endif %}
+                               class="sr-only peer">
+                        <div class="w-9 h-5 bg-gray-600 rounded-full peer peer-checked:bg-discord-blurple
+                                    after:content-[''] after:absolute after:top-0.5 after:left-[2px]
+                                    after:bg-white after:rounded-full after:h-4 after:w-4
+                                    after:transition-all peer-checked:after:translate-x-full relative"></div>
+                    </label>
+                </div>
+                <div class="flex items-start justify-between gap-4 pt-3 border-t border-gray-700/50">
+                    <div class="flex-1">
+                        <p class="text-gray-300 text-sm">Enable Raven's Nest commands</p>
+                        <p class="text-gray-500 text-xs mt-0.5">Runs an independent listener for !raven, !ritual, !invest and all other game commands in this Twitch channel.</p>
+                    </div>
+                    <label class="relative inline-flex items-center cursor-pointer mt-0.5 flex-shrink-0">
+                        <input type="checkbox" name="trya_relic_hunt_enabled" value="on"
+                               {% if trya_relic_hunt_enabled == 'on' %}checked{% endif %}
+                               class="sr-only peer">
+                        <div class="w-9 h-5 bg-gray-600 rounded-full peer peer-checked:bg-discord-blurple after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full relative"></div>
+                    </label>
+                </div>
+                <div class="rounded-lg border border-gray-700/50 bg-discord-darker/50 p-3 text-xs">
+                    <span class="{% if trya_relic_hunt_running %}text-green-300{% else %}text-gray-400{% endif %}">
+                        Raven's Nest listener: {{ 'Running' if trya_relic_hunt_running else 'Stopped' }}
+                    </span>
+                </div>
+                <button type="submit"
+                    class="w-full px-4 py-2 bg-discord-blurple hover:bg-discord-blurple-hover text-white rounded-lg text-sm font-medium transition-colors">
+                    Save Twitch Settings
+                </button>
+            </form>
+            <div class="flex gap-2">
+                <form method="POST" class="flex-1">
+                    <input type="hidden" name="action" value="restart_trya_relic_hunt">
+                    <button type="submit" class="w-full px-3 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs">Restart Raven's Nest listener</button>
+                </form>
+                <form method="POST" class="flex-1">
+                    <input type="hidden" name="action" value="stop_trya_relic_hunt">
+                    <button type="submit" class="w-full px-3 py-2 rounded-lg bg-red-900/40 hover:bg-red-900/70 text-red-300 text-xs">Stop listener</button>
+                </form>
+            </div>
+
+            {# Bot scope status + token helper #}
+            <div class="pt-3 border-t border-gray-700/50 space-y-3">
+                {% if exp_tw_bot_login %}
+                <div class="flex items-center gap-2 text-xs">
+                    <span class="text-green-400">✓ Bot: {{ exp_tw_bot_login }}</span>
+                    {% if exp_tw_scopes_ok %}
+                    <span class="px-1.5 py-0.5 rounded bg-green-900/50 text-green-300">chat:read ✓</span>
+                    {% else %}
+                    <span class="px-1.5 py-0.5 rounded bg-red-900/50 text-red-300">chat:read missing ⚠</span>
+                    {% endif %}
+                </div>
+                {% endif %}
+
+                {% if exp_tw_client_id and not exp_tw_scopes_ok %}
+                <div class="bg-yellow-900/20 border border-yellow-700/40 rounded-lg p-3 space-y-2 text-xs">
+                    <p class="text-yellow-300 font-medium">🔑 New token required (chat:read missing)</p>
+                    <p class="text-gray-400">Open Twitch, log in as the <strong class="text-white">bot account</strong>, and authorize. Twitch will send you back here automatically.</p>
+                    <a href="{{ url_for('trya_stream_twitch_oauth_start') }}"
+                       class="block text-center px-3 py-2 rounded-lg bg-purple-700 hover:bg-purple-600 text-white transition-colors">
+                        → Authorize Twitch Bot
+                    </a>
+                </div>
+                {% elif exp_tw_client_id and exp_tw_scopes_ok %}
+                <a href="{{ url_for('trya_stream_twitch_oauth_start') }}"
+                   class="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg text-sm bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">
+                    🔑 Re-authorize Bot
+                </a>
+                {% endif %}
+            </div>
+        </div>
+        <!-- Twitch Stream Key -->
+        <div class="p-5 space-y-3">
+            <p class="text-white text-sm font-medium">Twitch Stream Key</p>
+            <form method="POST" class="space-y-3">
+                <input type="hidden" name="action" value="save_stream_key">
+                <input type="password" name="exp_twitch_key"
+                    placeholder="{{ masked_key or 'live_xxxxxxxxxx' }}"
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                <p class="text-gray-500 text-xs">Dedicated TrYa Stream key. Radio instances remain mutually exclusive to protect host resources.</p>
+                <button type="submit"
+                    class="w-full px-4 py-2 bg-discord-blurple hover:bg-discord-blurple-hover text-white rounded-lg text-sm font-medium transition-colors">
+                    Save Key
+                </button>
+            </form>
+        </div>
+        <div id="trya-alert-settings" class="p-5 space-y-4">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div>
+                    <p class="text-white text-sm font-medium">TrYa Stream Twitch Alerts</p>
+                    <p class="text-gray-500 text-xs">Independent EventSub authorization and messages for this stream only.</p>
+                </div>
+                <div class="flex flex-wrap gap-2 text-xs">
+                    <span class="px-2 py-1 rounded bg-gray-800 {% if trya_alert_status.connected %}text-green-300{% else %}text-yellow-300{% endif %}">
+                        {{ 'Connected' if trya_alert_status.connected else trya_alert_status.last_message }}
+                    </span>
+                    <span class="px-2 py-1 rounded bg-gray-800 {% if trya_eventsub_diag.ok %}text-green-300{% else %}text-yellow-300{% endif %}">
+                        Event account: {{ trya_eventsub_diag.bot_login or 'Not authorized' }}
+                    </span>
+                </div>
+            </div>
+            <div class="flex flex-wrap gap-2">
+                <a href="{{ url_for('trya_stream_alerts_broadcaster_oauth_start') }}"
+                   class="px-3 py-2 rounded-lg bg-purple-700 hover:bg-purple-600 text-white text-xs">Authorize broadcaster</a>
+                <form method="POST"><input type="hidden" name="action" value="restart_trya_alerts"><button class="px-3 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white text-xs">Restart listener</button></form>
+                <form method="POST"><input type="hidden" name="action" value="test_trya_alert"><button class="px-3 py-2 rounded-lg bg-discord-blurple text-white text-xs">Send test</button></form>
+            </div>
+            <form method="POST" class="space-y-4">
+                <input type="hidden" name="action" value="save_trya_alert_settings">
+                <label class="flex items-center gap-2 text-white text-sm">
+                    <input type="checkbox" name="trya_stream_twitch_alerts_enabled" value="on" {% if trya_alert_settings.get('trya_stream_twitch_alerts_enabled') == 'on' %}checked{% endif %} class="accent-discord-blurple">
+                    Enable TrYa Stream alerts
+                </label>
+                {% set alert_rows = [
+                    ('follow', 'New follower', '{user}, {login}'),
+                    ('sub', 'New subscription', '{user}, {login}, {tier}, {is_gift}'),
+                    ('resub', 'Resub message', '{user}, {login}, {tier}, {months}, {streak_months}, {message}'),
+                    ('gift', 'Gift subscription', '{gifter}, {login}, {tier}, {total}, {cumulative_total}'),
+                    ('cheer', 'Bits / Cheer', '{user}, {login}, {bits}, {message}'),
+                    ('raid', 'Incoming raid', '{user}, {login}, {viewers}'),
+                    ('watch_streak', 'Watch streak', '{user}, {login}, {streak}, {points}')
+                ] %}
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                    {% for suffix, label, placeholders in alert_rows %}
+                    <div class="rounded-lg border border-gray-700/50 bg-discord-darker/50 p-3 space-y-2">
+                        <label class="flex items-center gap-2 text-white text-sm">
+                            <input type="checkbox" name="trya_stream_twitch_alerts_{{ suffix }}_enabled" value="on" {% if trya_alert_settings.get('trya_stream_twitch_alerts_' ~ suffix ~ '_enabled') == 'on' %}checked{% endif %} class="accent-discord-blurple">
+                            {{ label }}
+                        </label>
+                        <p class="text-gray-500 text-xs">Placeholders: {{ placeholders }}</p>
+                        <textarea name="trya_stream_twitch_alerts_{{ suffix }}_template" rows="2" maxlength="500" class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-xs focus:border-discord-blurple focus:outline-none">{{ trya_alert_settings.get('trya_stream_twitch_alerts_' ~ suffix ~ '_template') }}</textarea>
+                    </div>
+                    {% endfor %}
+                </div>
+                <button class="w-full px-4 py-2 rounded-lg bg-discord-blurple text-white text-sm font-medium">Save Alert Settings</button>
+            </form>
+        </div>
+        <!-- Stream Background + Loop Video -->
+        <div class="p-5 space-y-4">
+            <p class="text-white text-sm font-medium">Stream Background</p>
+            <form method="POST" enctype="multipart/form-data" class="space-y-3">
+                <input type="hidden" name="action" value="upload_background">
+                <div>
+                    <label class="block text-gray-400 text-xs mb-1">Background Image or Video (JPG/PNG/MP4/WebM)</label>
+                    {% if bg_filename %}
+                    <p class="text-xs text-green-400 mb-1">Current: {{ bg_filename }}</p>
+                    {% endif %}
+                    <input type="file" name="bg_file" accept=".jpg,.jpeg,.png,.mp4,.webm"
+                        class="w-full text-sm text-gray-400 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:bg-discord-blurple/30 file:text-discord-blurple hover:file:bg-discord-blurple/50 file:cursor-pointer">
+                </div>
+                <button type="submit"
+                    class="w-full px-4 py-2 bg-gray-700/50 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">
+                    Upload Background
+                </button>
+            </form>
+            <!-- Loop Video Overlay (multi-video with selection) -->
+            <div class="space-y-3">
+                <label class="block text-gray-400 text-xs mb-1">Loop Video Overlay (MP4/WebM – top-right corner)</label>
+
+                <form method="POST" class="space-y-3 rounded-lg border border-gray-700/40 bg-discord-darker/40 p-3">
+                    <input type="hidden" name="action" value="save_exp_loop_source">
+                    <div>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" name="exp_obs_overlay_enabled"
+                                {% if exp_obs_overlay_enabled == 'on' %}checked{% endif %}
+                                class="w-4 h-4 accent-discord-blurple">
+                            <span class="text-gray-300 text-sm">Enable OBS RTMP override</span>
+                        </label>
+                        <p class="text-gray-500 text-xs mt-1">Local loop videos stay active as the fallback. OBS takes over only while it is sending.</p>
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">RTMP Stream Key (for OBS)</label>
+                        <input type="text" name="exp_loop_rtmp_key" value="{{ exp_loop_rtmp_key }}"
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none font-mono"
+                            placeholder="my-secret-key">
+                        {% if exp_loop_rtmp_key %}
+                        <p class="text-gray-500 text-xs mt-1">OBS URL: <code class="text-gray-400">rtmp://YOUR_SERVER:1936/live/{{ exp_loop_rtmp_key }}</code></p>
+                        {% else %}
+                        <p class="text-gray-500 text-xs mt-1">A key will be generated automatically when OBS override is enabled.</p>
+                        {% endif %}
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 text-xs mb-1">OBS Overlay FPS</label>
+                        <select name="exp_obs_overlay_fps"
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                            <option value="15" {% if exp_obs_overlay_fps == 15 %}selected{% endif %}>15 FPS - lowest load</option>
+                            <option value="20" {% if exp_obs_overlay_fps == 20 %}selected{% endif %}>20 FPS - balanced</option>
+                            <option value="24" {% if exp_obs_overlay_fps == 24 %}selected{% endif %}>24 FPS - smoother</option>
+                        </select>
+                    </div>
+                    <div class="rounded-lg border border-blue-500/20 bg-blue-500/10 p-3 text-xs text-gray-300 space-y-2">
+                        <p class="font-medium text-blue-200">Recommended OBS output</p>
+                        <div class="grid grid-cols-2 gap-x-3 gap-y-1">
+                            <span class="text-gray-500">Output resolution</span>
+                            <span>854x480</span>
+                            <span class="text-gray-500">FPS</span>
+                            <span>20</span>
+                            <span class="text-gray-500">Video bitrate</span>
+                            <span>1000-1500 kbps</span>
+                            <span class="text-gray-500">Keyframe interval</span>
+                            <span>2 seconds</span>
+                            <span class="text-gray-500">Audio</span>
+                            <span>Disabled / not used</span>
+                        </div>
+                        <p class="text-gray-500">Set these values in OBS Studio. The stream manager scales the source into the overlay area.</p>
+                    </div>
+                    <button type="submit"
+                        class="w-full px-4 py-2 bg-gray-700/50 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">
+                        Save OBS Overlay
+                    </button>
+                </form>
+
+                {% if loop_videos %}
+                <!-- Selection mode -->
+                <form method="POST" class="space-y-2">
+                    <input type="hidden" name="action" value="set_loop_selection">
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="loop_selection" value="shuffle"
+                            {% if loop_selection == 'shuffle' %}checked{% endif %}
+                            onchange="this.form.submit()"
+                            class="w-3.5 h-3.5 accent-discord-blurple">
+                        <span class="text-gray-300 text-xs">🔀 Shuffle (random on each stream start)</span>
+                    </label>
+                    {% if loop_videos|length > 1 %}
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="loop_selection" value="concat_all"
+                            {% if loop_selection == 'concat_all' %}checked{% endif %}
+                            onchange="this.form.submit()"
+                            class="w-3.5 h-3.5 accent-discord-blurple">
+                        <span class="text-gray-300 text-xs">🎞️ Concatenate all videos into one loop</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="loop_selection" value="concat_all_random"
+                            {% if loop_selection == 'concat_all_random' %}checked{% endif %}
+                            onchange="this.form.submit()"
+                            class="w-3.5 h-3.5 accent-discord-blurple">
+                        <span class="text-gray-300 text-xs">🔀🎞️ Concatenate all videos in random order</span>
+                    </label>
+                    {% endif %}
+                    {% for v in loop_videos %}
+                    <div class="flex items-center gap-2 group">
+                        <label class="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
+                            <input type="radio" name="loop_selection" value="{{ v.filename }}"
+                                {% if loop_selection == v.filename %}checked{% endif %}
+                                onchange="this.form.submit()"
+                                class="w-3.5 h-3.5 accent-discord-blurple">
+                            <span class="text-gray-300 text-xs truncate" title="{{ v.filename }}">
+                                {{ v.label or v.filename }}
+                            </span>
+                        </label>
+                    </div>
+                    {% endfor %}
+                </form>
+
+                <!-- Uploaded videos list with delete buttons -->
+                <div class="space-y-1 pt-1 border-t border-gray-700/30">
+                    <p class="text-gray-500 text-[10px] uppercase tracking-wider">Uploaded Videos</p>
+                    {% for v in loop_videos %}
+                    <div class="flex items-center justify-between gap-2 bg-gray-800/30 rounded px-2 py-1">
+                        <span class="text-gray-400 text-xs truncate" title="{{ v.filename }}">{{ v.label or v.filename }}</span>
+                        <form method="POST" class="shrink-0" onsubmit="return confirm('Delete this loop video?')">
+                            <input type="hidden" name="action" value="delete_loop_video">
+                            <input type="hidden" name="loop_filename" value="{{ v.filename }}">
+                            <button type="submit" class="text-red-400/60 hover:text-red-400 text-xs px-1" title="Delete">✕</button>
+                        </form>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-gray-500 text-xs">No loop videos uploaded yet.</p>
+                {% endif %}
+
+                <!-- Upload new -->
+                <form method="POST" enctype="multipart/form-data" class="space-y-2 pt-1 border-t border-gray-700/30">
+                    <input type="hidden" name="action" value="upload_loop_video">
+                    <input type="text" name="lv_label" placeholder="Label (optional)"
+                        class="w-full px-3 py-1.5 bg-discord-darker border border-gray-700 rounded text-gray-300 text-xs placeholder-gray-600 focus:border-discord-blurple focus:outline-none">
+                    <input type="file" name="lv_file" accept=".mp4,.webm"
+                        class="w-full text-sm text-gray-400 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:bg-discord-blurple/30 file:text-discord-blurple hover:file:bg-discord-blurple/50 file:cursor-pointer">
+                    <button type="submit"
+                        class="w-full px-4 py-2 bg-gray-700/50 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">
+                        Upload Loop Video
+                    </button>
+                </form>
+            </div>
+        </div>
+        </div>
+    </div>
+</div>
+
+<!-- Video preview modal -->
+<div id="exp-preview-modal"
+    class="fixed inset-0 z-50 hidden bg-black/80 flex items-center justify-center p-4"
+    onclick="if (event.target === this) expClosePreview()">
+    <div class="bg-discord-dark rounded-xl border border-gray-700 max-w-3xl w-full max-h-[90vh] overflow-hidden">
+        <div class="px-5 py-3 border-b border-gray-700 flex items-center justify-between">
+            <h3 id="exp-preview-title" class="text-white font-semibold text-sm truncate">Preview</h3>
+            <button onclick="expClosePreview()"
+                class="text-gray-400 hover:text-white text-xl leading-none">×</button>
+        </div>
+        <div class="p-4 bg-black flex items-center justify-center">
+            <video id="exp-preview-video" controls autoplay loop
+                class="max-w-full max-h-[70vh] rounded bg-black"></video>
+        </div>
+        <p class="px-5 py-2 text-gray-500 text-xs">
+            This is the locally cached &amp; normalized version that will be looped in the stream
+            (max 720×720, 24&nbsp;fps). If this is the first preview after submission, downloading
+            and re-encoding can take a few seconds.
+        </p>
+    </div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+{% for cat, msg in messages %}
+<div class="mb-4 px-4 py-3 rounded-lg text-sm {% if cat == 'success' %}bg-green-900/40 text-green-300 border border-green-700/50{% else %}bg-red-900/40 text-red-300 border border-red-700/50{% endif %}">
+    {{ msg }}
+</div>
+{% endfor %}
+{% endwith %}
+
+<div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+
+    <!-- ── Left column: Controls + Config ── -->
+    <div class="space-y-6">
+
+        <!-- Stream Controls -->
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            <div class="px-5 py-4 border-b border-gray-700/50">
+                <h3 class="text-white font-semibold">Stream Controls</h3>
+            </div>
+            <div class="p-5">
+                <div id="exp-stream-status" class="mb-4">
+                    <div class="flex items-center gap-2 mb-1">
+                        <span class="inline-block w-2.5 h-2.5 rounded-full bg-gray-500" id="exp-status-dot"></span>
+                        <span class="text-gray-400 text-sm font-medium" id="exp-status-text">Offline</span>
+                    </div>
+                    <div id="exp-current-song-card"
+                        class="hidden mt-3 rounded-lg border border-gray-700/60 bg-discord-darker/70 px-3 py-2">
+                        <p class="text-gray-500 text-[10px] uppercase tracking-wider mb-1">Current song</p>
+                        <p class="text-white text-sm font-semibold truncate" id="exp-now-playing-title">—</p>
+                        <p class="text-gray-400 text-xs truncate" id="exp-now-playing-artist">—</p>
+                        <div class="mt-2 flex items-center justify-between gap-3">
+                            <span class="text-gray-500 text-xs" id="exp-now-playing-position">—</span>
+                            <a href="#" target="_blank" rel="noopener"
+                                id="exp-now-playing-link"
+                                class="hidden text-discord-blurple hover:text-discord-blurple/80 text-xs font-medium">
+                                Suno ↗
+                            </a>
+                        </div>
+                    </div>
+                    <p class="text-gray-500 text-xs truncate" id="exp-now-playing">—</p>
+                    <p class="text-gray-600 text-xs mt-1 truncate" id="exp-ffmpeg-health">FFmpeg offline</p>
+                    <p class="text-gray-600 text-xs mt-1 truncate" id="exp-obs-overlay-status">OBS overlay disabled</p>
+                </div>
+                <div class="flex gap-2">
+                    <button onclick="expStreamAction('start')" id="exp-btn-start"
+                        class="flex-1 px-3 py-2 bg-green-600/30 hover:bg-green-600/50 text-green-400 rounded-lg text-sm font-medium transition-colors">
+                        ▶ Start
+                    </button>
+                    <button onclick="expStreamAction('safe_stop')" id="exp-btn-safe-stop"
+                        class="flex-1 px-3 py-2 bg-yellow-600/30 hover:bg-yellow-600/50 text-yellow-400 rounded-lg text-sm font-medium transition-colors"
+                        title="Post a chat notice and stop after the current song ends">
+                        🌙 Safe Stop
+                    </button>
+                    <button onclick="expStreamAction('stop')" id="exp-btn-stop"
+                        class="flex-1 px-3 py-2 bg-red-600/30 hover:bg-red-600/50 text-red-400 rounded-lg text-sm font-medium transition-colors">
+                        ⏹ Stop
+                    </button>
+                </div>
+                <div class="flex gap-2 mt-2">
+                    <button onclick="expStreamAction('start_legacy')" id="exp-btn-start-legacy"
+                        class="flex-1 px-3 py-2 bg-blue-600/25 hover:bg-blue-600/40 text-blue-300 rounded-lg text-sm font-medium transition-colors"
+                        title="Start with the older RTMP/CRF FFmpeg pipeline for testing">
+                        ◀ Legacy Start
+                    </button>
+                </div>
+                <p class="text-gray-600 text-xs mt-3">Playlist is randomised at stream start. Only songs with status <span class="text-green-500">Done</span> are included.</p>
+            </div>
+        </div>
+
+        <!-- Post to Discord -->
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            <div class="px-5 py-4 border-b border-gray-700/50">
+                <h3 class="text-white font-semibold">Post to Discord</h3>
+            </div>
+            <div class="p-5 space-y-3">
+                {% if not exp_post_channel_1_id and not exp_post_channel_2_id and not exp_post_channel_3_id %}
+                <p class="text-gray-500 text-xs">No channels configured. Open ⚙️ Settings to set up posting channels and stream URL.</p>
+                {% endif %}
+                {% if exp_post_channel_1_id %}
+                <div>
+                    <p class="text-gray-400 text-xs mb-2">Channel 1: #{% for ch in text_channels %}{% if ch.id|string == exp_post_channel_1_id %}{{ ch.name }}{% endif %}{% endfor %}</p>
+                    <form method="POST">
+                        <input type="hidden" name="action" value="post_exp_stream_url">
+                        <input type="hidden" name="post_channel_id_select" value="{{ exp_post_channel_1_id }}">
+                        <button type="submit" {% if not exp_stream_url %}disabled title="Set a stream URL in ⚙️ Settings first"{% endif %}
+                            class="w-full px-3 py-2 bg-purple-600/20 hover:bg-purple-600/40 disabled:bg-gray-700/30 disabled:text-gray-500 text-purple-400 rounded-lg text-xs font-medium transition-colors">
+                            📺 Post Stream Link
+                        </button>
+                    </form>
+                </div>
+                {% endif %}
+                {% if exp_post_channel_3_id %}
+                <div>
+                    <p class="text-gray-400 text-xs mb-2">Channel 3: #{% for ch in text_channels %}{% if ch.id|string == exp_post_channel_3_id %}{{ ch.name }}{% endif %}{% endfor %}</p>
+                    <form method="POST">
+                        <input type="hidden" name="action" value="post_exp_stream_url">
+                        <input type="hidden" name="post_channel_id_select" value="{{ exp_post_channel_3_id }}">
+                        <button type="submit" {% if not exp_stream_url %}disabled title="Set a stream URL in ⚙️ Settings first"{% endif %}
+                            class="w-full px-3 py-2 bg-purple-600/20 hover:bg-purple-600/40 disabled:bg-gray-700/30 disabled:text-gray-500 text-purple-400 rounded-lg text-xs font-medium transition-colors">
+                            📺 Post Stream Link
+                        </button>
+                    </form>
+                </div>
+                {% endif %}
+                {% if exp_post_channel_2_id %}
+                <div>
+                    <p class="text-gray-400 text-xs mb-2">Channel 2: #{% for ch in text_channels %}{% if ch.id|string == exp_post_channel_2_id %}{{ ch.name }}{% endif %}{% endfor %}</p>
+                    <form method="POST">
+                        <input type="hidden" name="action" value="post_exp_stream_url">
+                        <input type="hidden" name="post_channel_id_select" value="{{ exp_post_channel_2_id }}">
+                        <button type="submit" {% if not exp_stream_url %}disabled title="Set a stream URL in ⚙️ Settings first"{% endif %}
+                            class="w-full px-3 py-2 bg-purple-600/20 hover:bg-purple-600/40 disabled:bg-gray-700/30 disabled:text-gray-500 text-purple-400 rounded-lg text-xs font-medium transition-colors">
+                            📺 Post Stream Link
+                        </button>
+                    </form>
+                </div>
+                {% endif %}
+                <div class="pt-3 mt-3 border-t border-gray-700/50">
+                    <p class="text-gray-400 text-xs mb-2">
+                        Announcement:
+                        {% if exp_announcement_channel_id %}
+                        #{% for ch in text_channels %}{% if ch.id|string == exp_announcement_channel_id %}{{ ch.name }}{% endif %}{% endfor %}
+                        {% else %}
+                        not configured
+                        {% endif %}
+                    </p>
+                    <form method="POST">
+                        <input type="hidden" name="action" value="post_exp_announcement">
+                        <button type="submit"
+                            {% if not exp_announcement_channel_id or not exp_announcement_message %}disabled title="Set an announcement channel and message in ⚙️ Settings first"{% endif %}
+                            class="w-full px-3 py-2 bg-emerald-600/25 hover:bg-emerald-600/45 disabled:bg-gray-700/30 disabled:text-gray-500 text-emerald-300 rounded-lg text-xs font-medium transition-colors">
+                            📣 Post Announcement
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- Live Log -->
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between gap-2">
+                <h3 class="text-white font-semibold">Live Log</h3>
+                <div class="flex items-center gap-3">
+                    <button type="button" id="exp-log-copy" onclick="copyExpLog(this)"
+                        class="px-2.5 py-1 bg-gray-600/20 hover:bg-gray-600/40 text-gray-300 rounded text-xs font-medium transition-colors"
+                        title="Copy log to clipboard">
+                        &#128203; Copy
+                    </button>
+                    <label class="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
+                        <input type="checkbox" id="exp-log-autoscroll" checked
+                            class="w-3.5 h-3.5 accent-discord-blurple">
+                        auto-scroll
+                    </label>
+                </div>
+            </div>
+            <div class="p-3">
+                <pre id="exp-log-pre"
+                    class="text-[11px] leading-snug font-mono whitespace-pre-wrap bg-gray-900/60 text-gray-300 rounded p-3 max-h-[48rem] overflow-y-auto">Waiting for stream activity…</pre>
+                <p class="text-gray-600 text-[10px] mt-2">Last 5 minutes. FFmpeg progress lines are filtered. Refreshes every 2&nbsp;s.</p>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- ── Right column: Song Playlist ── -->
+    <div class="xl:col-span-2 space-y-6">
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            {% set _ns = namespace(total_sec=0) %}
+            {% for song in songs %}{% if song.active and song.duration %}{% set _ns.total_sec = _ns.total_sec + song.duration %}{% endif %}{% endfor %}
+            {% set _th = (_ns.total_sec // 3600) | int %}
+            {% set _tm = ((_ns.total_sec % 3600) // 60) | int %}
+            <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between flex-wrap gap-3">
+                <h3 class="text-white font-semibold">
+                    Song Submissions
+                    <span class="ml-2 text-xs text-gray-500 font-normal">
+                        {{ songs|length }} total
+                        &middot;
+                        {% if _th > 0 %}{{ _th }}h {{ _tm }}m{% else %}{{ _tm }} min{% endif %}
+                    </span>
+                </h3>
+                <div class="flex items-center gap-3 text-xs text-gray-500">
+                    <form method="POST" class="inline">
+                        <input type="hidden" name="action" value="rescrape_metadata">
+                        <button type="submit"
+                                class="px-2.5 py-1 bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 rounded transition-colors"
+                                title="Re-fetch title, artist, cover and video URL from Suno for all active songs">
+                            ⟳ Refresh Metadata
+                        </button>
+                    </form>
+                    <form method="POST" class="inline"
+                          onsubmit="return confirm('Re-run Whisper analysis for all active songs?\n\nThis takes several minutes per song (CPU bound) and runs in the background. Existing subtitles will be regenerated.');">
+                        <input type="hidden" name="action" value="reanalyze_whisper">
+                        <button type="submit"
+                                class="px-2.5 py-1 bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 rounded transition-colors"
+                                title="Re-run Whisper transcription + lyric alignment for all active songs (slow, runs in background)">
+                            ⟳ Re-analyze Whisper
+                        </button>
+                    </form>
+                    <form method="POST" class="inline"
+                          onsubmit="return confirm('Re-normalize covers for all active songs?\n\nDownscales any oversized cached covers (JPG or MP4) to ≤720×720, yuv(j)420p, ~24 fps. Runs in the background — watch the Live Log for progress.');">
+                        <input type="hidden" name="action" value="renormalize_cover_all">
+                        <button type="submit"
+                                class="px-2.5 py-1 bg-amber-600/20 hover:bg-amber-600/40 text-amber-300 rounded transition-colors"
+                                title="Re-normalize all cached covers (JPG + MP4) to a stream-friendly baseline. Helps with stutter on FFmpeg loop boundaries.">
+                            ⟳ Normalize Covers
+                        </button>
+                    </form>
+                    <form method="POST" class="inline"
+                          onsubmit="return confirm('Check the local MP3 duration for all active stream songs and write corrections to the database?\n\nThis can take a little while and will report changes in the Live Log.');">
+                        <input type="hidden" name="action" value="check_durations">
+                        <button type="submit"
+                                class="px-2.5 py-1 bg-cyan-600/20 hover:bg-cyan-600/40 text-cyan-300 rounded transition-colors"
+                                title="Decode-check local MP3 durations for the active stream playlist and write corrections to the database.">
+                            ⏱ Check Durations
+                        </button>
+                    </form>
+                    <form method="POST" class="inline"
+                          onsubmit="return confirm('Clear all {{ songs|length }} song(s) from the active submission playlist?\n\nOriginal uploads, working files, hashes and consent records remain archived.\n\nProceed?');">
+                        <input type="hidden" name="action" value="delete_all_songs">
+                        <button type="submit"
+                                class="px-2.5 py-1 bg-red-600/20 hover:bg-red-600/50 text-red-400 hover:text-red-300 rounded transition-colors font-medium"
+                                title="Remove all songs from the active playlist while retaining the archive">
+                            🗑 Clear Playlist
+                        </button>
+                    </form>
+                    <span class="text-gray-700">|</span>
+                    <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-green-500 inline-block"></span> Done</span>
+                    <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-yellow-500 inline-block"></span> Processing</span>
+                    <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-gray-500 inline-block"></span> Pending</span>
+                    <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-red-500 inline-block"></span> Failed</span>
+                </div>
+            </div>
+            <div class="px-5 py-4 border-b border-gray-700/30 bg-gray-900/20">
+                <form method="POST" enctype="multipart/form-data" class="space-y-3">
+                    <input type="hidden" name="action" value="upload_local_song">
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <label class="text-gray-300 text-sm font-medium whitespace-nowrap">Local song intake</label>
+                        <select name="playlist_source" required class="bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm">
+                            <option value="submission">Submission playlist</option>
+                            <option value="admin">Admin playlist</option>
+                            <option value="intro">Intro playlist</option>
+                            <option value="outro">Outro playlist</option>
+                        </select>
+                        <input type="url" name="suno_url" required placeholder="https://suno.com/s/..." class="flex-1 min-w-64 bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm placeholder-gray-500 focus:border-discord-blurple focus:outline-none">
+                        <input type="file" name="original_audio" accept="audio/mpeg,audio/mp4,.mp3,.m4a" required class="text-xs text-gray-300 file:mr-2 file:px-3 file:py-1.5 file:rounded file:border-0 file:bg-gray-700 file:text-white">
+                        <input type="text" name="submission_user_ref" placeholder="Discord user or ID (submission only)" class="w-64 bg-discord-darker border border-gray-600 rounded-lg px-3 py-1.5 text-white text-sm placeholder-gray-500">
+                    </div>
+                    <div class="grid sm:grid-cols-2 gap-2 text-xs text-gray-400">
+                        <label class="flex items-start gap-2"><input type="checkbox" name="official_download_attested" value="1" required class="mt-0.5 accent-discord-blurple"><span>Official Suno download of this exact file</span></label>
+                        <label class="flex items-start gap-2"><input type="checkbox" name="paid_download_attested" value="1" required class="mt-0.5 accent-discord-blurple"><span>Paid-plan commercial rights existed at download</span></label>
+                        <label class="flex items-start gap-2"><input type="checkbox" name="not_suno_remix_attested" value="1" required class="mt-0.5 accent-discord-blurple"><span>Not a Suno Remix</span></label>
+                        <label class="flex items-start gap-2"><input type="checkbox" name="third_party_rights_attested" value="1" required class="mt-0.5 accent-discord-blurple"><span>All lyrics, samples, voices and other rights held</span></label>
+                        <label class="flex items-start gap-2 sm:col-span-2"><input type="checkbox" name="commercial_rights_attested" value="1" required class="mt-0.5 accent-discord-blurple"><span>Perpetual non-exclusive Twitch live/VOD, processing and evidence-archive authorization</span></label>
+                    </div>
+                    <div class="flex items-center justify-between gap-3">
+                        <p class="text-gray-600 text-xs">The exact MP3/M4A is archived unchanged. FFmpeg creates a separate validated working MP3; no Suno audio CDN is contacted.</p>
+                        <button type="submit" class="px-4 py-2 bg-discord-blurple hover:bg-indigo-500 text-white text-sm rounded-lg transition-colors whitespace-nowrap">Archive &amp; Add Song</button>
+                    </div>
+                </form>
+            </div>
+
+            {% if songs %}
+            <!-- Sort bar -->
+            <div class="px-5 py-2.5 border-b border-gray-700/30 flex items-center gap-2 text-xs flex-wrap">
+                <span class="text-gray-500 mr-1">Sort:</span>
+                <button onclick="sortSongs('default')" id="sort-btn-default" class="sort-btn px-2.5 py-1 rounded text-blue-300 bg-blue-600/20 hover:bg-blue-600/40 transition-colors">Default</button>
+                <button onclick="sortSongs('artist')" id="sort-btn-artist" class="sort-btn px-2.5 py-1 rounded text-gray-400 bg-gray-700/40 hover:bg-gray-600/40 transition-colors" data-dir="asc">Artist A→Z</button>
+                <button onclick="sortSongs('green')" id="sort-btn-green" class="sort-btn px-2.5 py-1 rounded text-gray-400 bg-gray-700/40 hover:bg-gray-600/40 transition-colors">✓ Green first</button>
+                <button onclick="sortSongs('no-status')" id="sort-btn-no-status" class="sort-btn px-2.5 py-1 rounded text-gray-400 bg-gray-700/40 hover:bg-gray-600/40 transition-colors">⬜ No status</button>
+            </div>
+            <div class="divide-y divide-gray-700/30" id="song-list">
+                {% for song in songs %}
+                {% set status_color = {
+                    'done': 'bg-green-500',
+                    'processing': 'bg-yellow-500',
+                    'pending': 'bg-gray-500',
+                    'failed': 'bg-red-500'
+                }.get(song.analysis_status, 'bg-gray-500') %}
+                {% set row_opacity = '' if song.active else 'opacity-40' %}
+                <div class="px-5 py-4 hover:bg-gray-800/20 transition-colors {{ row_opacity }} song-row"
+                     data-artist="{{ (song.artist or '') | lower }}"
+                     data-mod-status="{{ song.moderation_status or '' }}">
+                    <div class="flex items-start gap-4">
+                        <!-- Status dot + cover -->
+                        <div class="flex-shrink-0 relative">
+                            {% if song.cover_url %}
+                            <img src="{{ song.cover_url }}" alt=""
+                                class="w-14 h-14 rounded-lg object-cover bg-gray-800">
+                            {% if song.hook_video_url or song.video_url %}
+                            <button type="button"
+                                data-preview-song-id="{{ song.id }}"
+                                data-preview-title="{{ song.title or '' }}"
+                                title="Preview the selected song video"
+                                class="exp-preview-btn absolute inset-0 flex items-center justify-center rounded-lg bg-black/0 hover:bg-black/50 text-white/0 hover:text-white text-xl transition-all">
+                                ▶
+                            </button>
+                            {% endif %}
+                            {% else %}
+                            <div class="w-14 h-14 rounded-lg bg-gray-800 flex items-center justify-center text-2xl">🎵</div>
+                            {% endif %}
+                            <span class="absolute -top-1 -right-1 w-3 h-3 rounded-full border-2 border-discord-dark {{ status_color }}"></span>
+                        </div>
+                        <!-- Info -->
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <p class="text-white font-medium text-sm truncate">
+                                    {{ song.title or 'Analysing…' }}
+                                </p>
+                                {% if not song.active %}
+                                <span class="px-1.5 py-0.5 bg-gray-700 text-gray-400 text-xs rounded">Deleted</span>
+                                {% endif %}
+                                {% if song.moderation_status == 'passed' %}
+                                <span class="px-1.5 py-0.5 bg-green-900/40 text-green-300 text-xs rounded" title="LLM moderation: passed">✓ mod ok</span>
+                                {% elif song.moderation_status == 'approved' %}
+                                <span class="px-1.5 py-0.5 bg-emerald-900/40 text-emerald-300 text-xs rounded" title="Manually approved by admin">✓ approved</span>
+                                {% elif song.moderation_status == 'flagged' %}
+                                <span class="px-1.5 py-0.5 bg-red-900/50 text-red-300 text-xs rounded" title="Flagged by LLM moderation — needs manual approval">⚠ flagged</span>
+                                {% elif song.moderation_status == 'pending' %}
+                                <span class="px-1.5 py-0.5 bg-yellow-900/40 text-yellow-300 text-xs rounded" title="Moderation pending / needs manual review">⏳ mod pending</span>
+                                {% endif %}
+                                {% if song.hook_id %}
+                                <span class="px-1.5 py-0.5 bg-fuchsia-900/40 text-fuchsia-300 text-xs rounded"
+                                      title="Hook {{ song.hook_id }} is used instead of the regular Suno video">Hook video</span>
+                                {% endif %}
+                                {% if song.whisper_anomaly_retry_count %}
+                                <span class="px-1.5 py-0.5 bg-cyan-900/40 text-cyan-300 text-xs rounded"
+                                      title="One-time second Whisper pass triggered by {{ song.whisper_anomaly_retry_trigger or 'year anomaly' }}">Whisper retry</span>
+                                {% endif %}
+                            </div>
+                            <p class="text-gray-400 text-xs mt-0.5">{{ song.artist or '' }}</p>
+                            <div class="flex items-center gap-3 mt-1.5 flex-wrap">
+                                <span class="text-gray-500 text-xs">by <span class="text-gray-400">{{ song.user_name }}</span></span>
+                                {% if song.duration %}
+                                <span class="text-gray-600 text-xs">{{ '%.1f'|format(song.duration / 60) }} min</span>
+                                {% endif %}
+                                <span class="text-gray-600 text-xs capitalize">{{ song.analysis_status }}</span>
+                                {% if song.word_count %}
+                                <span class="text-gray-600 text-xs" title="Analyzed word timestamps">
+                                    {{ song.word_count }} words
+                                    {% if song.transcript_span %}
+                                    ({{ '%.0f'|format(song.transcript_span[0]) }}–{{ '%.0f'|format(song.transcript_span[1]) }}s)
+                                    {% endif %}
+                                </span>
+                                {% endif %}
+                                {% if song.playlist_expires_at %}
+                                <span class="text-gray-600 text-xs" title="Leaves the active submission playlist; archive remains">
+                                    playlist until {{ song.playlist_expires_at | timestamp_to_date }}
+                                </span>
+                                {% endif %}
+                                {% if song.original_sha256 %}
+                                <span class="text-emerald-500/80 text-xs" title="Original upload archived with SHA-256 {{ song.original_sha256 }}">original archived</span>
+                                {% endif %}
+                                <a href="{{ song.suno_url }}" target="_blank"
+                                    class="text-discord-blurple hover:text-blue-400 text-xs transition-colors">Suno ↗</a>
+                            </div>
+                            {% if song.moderation_reason and song.moderation_status in ('flagged', 'pending') %}
+                            <div class="mt-2 px-3 py-2 rounded text-xs
+                                {% if song.moderation_status == 'flagged' %}bg-red-900/30 text-red-200 border border-red-800/50{% else %}bg-yellow-900/30 text-yellow-200 border border-yellow-800/50{% endif %}">
+                                <span class="font-medium">LLM moderation:</span>
+                                {{ song.moderation_reason }}
+                            </div>
+                            {% endif %}
+                            {% if song.lyrics %}
+                            <details class="mt-2">
+                                <summary class="text-gray-500 text-xs cursor-pointer hover:text-gray-400 select-none">Show lyrics ({{ song.lyrics|length }} chars)</summary>
+                                <pre class="mt-2 text-gray-400 text-xs whitespace-pre-wrap font-sans bg-gray-900/50 rounded p-3 max-h-60 overflow-y-auto">{{ song.lyrics }}</pre>
+                            </details>
+                            {% endif %}
+                            {% if song.transcript_preview %}
+                            <details class="mt-2">
+                                <summary class="text-gray-500 text-xs cursor-pointer hover:text-gray-400 select-none">Show analyzed transcript ({{ song.word_count }} word timestamps)</summary>
+                                <pre class="mt-2 text-emerald-300/80 text-xs whitespace-pre-wrap font-mono bg-gray-900/50 rounded p-3 max-h-60 overflow-y-auto">{{ song.transcript_preview }}</pre>
+                            </details>
+                            {% endif %}
+                        </div>
+                        <!-- Per-song actions -->
+                        {% if song.active %}
+                        <div class="flex-shrink-0 flex flex-col gap-1">
+                            <button type="button"
+                                onclick='openHookDialog({{ song.id }}, {{ (song.title or "Song")|tojson }}, {{ (song.hook_share_url or song.hook_id or "")|tojson }})'
+                                title="{{ 'Change the Hook video override' if song.hook_id else 'Use a Suno Hook video for this song' }}"
+                                class="px-2.5 py-1.5 bg-fuchsia-600/20 hover:bg-fuchsia-600/40 text-fuchsia-300 rounded-lg text-xs transition-colors whitespace-nowrap">
+                                {{ 'Change Hook' if song.hook_id else 'Use Hook Video' }}
+                            </button>
+                            {% if song.hook_id %}
+                            <form method="POST" class="inline"
+                                  onsubmit="return confirm('Remove the Hook video and return to the regular Suno video or cover?');">
+                                <input type="hidden" name="action" value="remove_hook_video">
+                                <input type="hidden" name="song_id" value="{{ song.id }}">
+                                <button type="submit"
+                                    title="Remove the Hook video override"
+                                    class="w-full px-2.5 py-1.5 bg-gray-700/40 hover:bg-red-900/40 text-gray-400 hover:text-red-300 rounded-lg text-xs transition-colors">
+                                    Remove Hook
+                                </button>
+                            </form>
+                            {% endif %}
+                            <form method="POST" class="inline">
+                                <input type="hidden" name="action" value="rescrape_metadata_one">
+                                <input type="hidden" name="song_id" value="{{ song.id }}">
+                                <button type="submit"
+                                    title="Re-fetch title, artist, cover and video URL from Suno for this song"
+                                    class="px-2.5 py-1.5 bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 rounded-lg text-xs transition-colors">
+                                    ⟳
+                                </button>
+                            </form>
+                            <form method="POST" class="inline">
+                                <input type="hidden" name="action" value="renormalize_cover_one">
+                                <input type="hidden" name="song_id" value="{{ song.id }}">
+                                <button type="submit"
+                                    title="Re-encode the cover video to a lightweight stream-friendly format (fixes stuttering)"
+                                    class="px-2.5 py-1.5 bg-amber-600/20 hover:bg-amber-600/40 text-amber-300 rounded-lg text-xs transition-colors">
+                                    🎞
+                                </button>
+                            </form>
+                            <form method="POST" class="inline"
+                                  onsubmit="return confirm('Re-run Whisper analysis for this song?\n\nThis takes several minutes (CPU bound) and runs in the background.');">
+                                <input type="hidden" name="action" value="reanalyze_whisper_one">
+                                <input type="hidden" name="song_id" value="{{ song.id }}">
+                                <button type="submit"
+                                    title="Re-run Whisper transcription + lyric alignment for this song"
+                                    class="px-2.5 py-1.5 bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 rounded-lg text-xs transition-colors">
+                                    ♪
+                                </button>
+                            </form>
+                            {% if song.lyrics %}
+                            <form method="POST" class="inline">
+                                <input type="hidden" name="action" value="remoderate_one">
+                                <input type="hidden" name="song_id" value="{{ song.id }}">
+                                <button type="submit"
+                                    title="Re-run LLM lyric moderation for this song"
+                                    class="px-2.5 py-1.5 bg-sky-600/20 hover:bg-sky-600/40 text-sky-300 rounded-lg text-xs transition-colors">
+                                    🤖
+                                </button>
+                            </form>
+                            {% endif %}
+                            {% if song.moderation_status in ('flagged', 'pending') %}
+                            <form method="POST" class="inline"
+                                  onsubmit="return confirm('Manually approve this flagged song for the stream playlist?');">
+                                <input type="hidden" name="action" value="approve_moderation_one">
+                                <input type="hidden" name="song_id" value="{{ song.id }}">
+                                <button type="submit"
+                                    title="Approve flagged song for the stream playlist (overrides LLM verdict)"
+                                    class="px-2.5 py-1.5 bg-emerald-600/30 hover:bg-emerald-600/60 text-emerald-300 rounded-lg text-xs transition-colors">
+                                    ✓
+                                </button>
+                            </form>
+                            {% endif %}
+                            <form method="POST" onsubmit="return confirm('Remove this song from TrYa Stream?')">
+                                <input type="hidden" name="action" value="delete_song">
+                                <input type="hidden" name="song_id" value="{{ song.id }}">
+                                <button type="submit"
+                                    title="Remove this song"
+                                    class="px-2.5 py-1.5 bg-red-900/30 hover:bg-red-900/60 text-red-400 rounded-lg text-xs transition-colors">
+                                    🗑
+                                </button>
+                            </form>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="px-5 py-12 text-center text-gray-500">
+                <p class="text-4xl mb-3">🎙️</p>
+                <p class="font-medium">No submission-playlist songs yet</p>
+                <p class="text-sm mt-1">Use the admin controls above to prepare this playlist.</p>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- ── Admin Playlist ── -->
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between flex-wrap gap-3">
+                <h3 class="text-white font-semibold">
+                    🎛 Admin Playlist
+                    <span class="ml-2 text-xs text-gray-500 font-normal">{{ admin_songs|selectattr('active')|list|length }} active</span>
+                </h3>
+                <div class="flex items-center gap-2 flex-wrap">
+                    {% set active_admin_count = admin_songs|selectattr('active')|list|length %}
+                    {% if active_admin_count %}
+                    <form method="POST" class="inline"
+                          onsubmit="return confirm('⚠️ Clear admin playlist?\n\nThis will remove all {{ active_admin_count }} active admin song(s).\nSubmission playlist songs will not be touched.\n\nProceed?');">
+                        <input type="hidden" name="action" value="delete_all_admin_songs">
+                        <button type="submit"
+                                class="px-2.5 py-1.5 bg-red-600/20 hover:bg-red-600/50 text-red-400 hover:text-red-300 rounded-lg text-sm transition-colors font-medium"
+                                title="Remove all songs from the admin playlist only">
+                            🗑 Clear Playlist
+                        </button>
+                    </form>
+                    {% endif %}
+                    <span class="text-gray-500 text-xs">Use Local song intake above to add archived audio.</span>
+                </div>
+            </div>
+
+            {% set active_admin = admin_songs|selectattr('active')|list %}
+            {% if active_admin %}
+            <div id="admin-song-list" class="divide-y divide-gray-700/30">
+                {% for song in active_admin %}
+                <div class="px-5 py-3 flex items-center gap-3">
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-2">
+                            {% if song.analysis_status == 'done' %}
+                            <span class="w-2 h-2 rounded-full bg-green-500 flex-shrink-0"></span>
+                            {% elif song.analysis_status in ('processing', 'pending') %}
+                            <span class="w-2 h-2 rounded-full bg-yellow-500 flex-shrink-0"></span>
+                            {% else %}
+                            <span class="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" title="{{ song.analysis_status }}"></span>
+                            {% endif %}
+                            <span class="text-white text-sm font-medium truncate">{{ song.title or '⏳ Processing…' }}</span>
+                            {% if song.artist %}<span class="text-gray-400 text-xs truncate">— {{ song.artist }}</span>{% endif %}
+                            {% if song.hook_id %}
+                            <span class="px-1.5 py-0.5 bg-fuchsia-900/40 text-fuchsia-300 text-xs rounded">Hook video</span>
+                            {% endif %}
+                        </div>
+                        <div class="flex items-center gap-3 mt-0.5 flex-wrap">
+                            <span class="text-gray-600 text-xs">#{{ song.id }}</span>
+                            {% if song.duration %}
+                            <span class="text-gray-600 text-xs">{{ '%.1f'|format(song.duration / 60) }} min</span>
+                            {% endif %}
+                            <a href="{{ song.suno_url }}" target="_blank"
+                                class="text-discord-blurple hover:text-blue-400 text-xs transition-colors">Suno ↗</a>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-1.5 flex-shrink-0 flex-wrap justify-end max-w-md">
+                        {% if song.hook_video_url or song.video_url %}
+                        <button type="button"
+                            data-preview-song-id="{{ song.id }}"
+                            data-preview-title="{{ song.title or '' }}"
+                            title="Preview the selected song video"
+                            class="exp-preview-btn px-2.5 py-1.5 bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 rounded-lg text-xs transition-colors">▶</button>
+                        {% endif %}
+                        <button type="button"
+                            onclick='openHookDialog({{ song.id }}, {{ (song.title or "Song")|tojson }}, {{ (song.hook_share_url or song.hook_id or "")|tojson }})'
+                            title="{{ 'Change the Hook video override' if song.hook_id else 'Use a Suno Hook video for this song' }}"
+                            class="px-2.5 py-1.5 bg-fuchsia-600/20 hover:bg-fuchsia-600/40 text-fuchsia-300 rounded-lg text-xs transition-colors whitespace-nowrap">
+                            {{ 'Change Hook' if song.hook_id else 'Use Hook Video' }}
+                        </button>
+                        {% if song.hook_id %}
+                        <form method="POST" class="inline"
+                              onsubmit="return confirm('Remove the Hook video and return to the regular Suno video or cover?');">
+                            <input type="hidden" name="action" value="remove_hook_video">
+                            <input type="hidden" name="song_id" value="{{ song.id }}">
+                            <button type="submit" title="Remove Hook video"
+                                class="px-2.5 py-1.5 bg-gray-700/40 hover:bg-red-900/40 text-gray-400 hover:text-red-300 rounded-lg text-xs transition-colors">✕ Hook</button>
+                        </form>
+                        {% endif %}
+                        {% if song.analysis_status != 'done' and not status.running %}
+                        <form method="POST" class="inline">
+                            <input type="hidden" name="action" value="reanalyze_whisper_one">
+                            <input type="hidden" name="song_id" value="{{ song.id }}">
+                            <button type="submit" title="Re-run Whisper"
+                                class="px-2.5 py-1.5 bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 rounded-lg text-xs transition-colors">🔁</button>
+                        </form>
+                        {% endif %}
+                        {% if song.analysis_status != 'done' and song.mp3_filename %}
+                        <form method="POST" class="inline"
+                              onsubmit="return confirm('Bypass Whisper transcription for this admin playlist song and mark it stream-ready?');">
+                            <input type="hidden" name="action" value="approve_admin_whisper_bypass">
+                            <input type="hidden" name="song_id" value="{{ song.id }}">
+                            <button type="submit"
+                                title="Bypass Whisper transcript and mark this admin song ready"
+                                class="px-2.5 py-1.5 bg-emerald-600/30 hover:bg-emerald-600/60 text-emerald-300 rounded-lg text-xs transition-colors">✓</button>
+                        </form>
+                        {% endif %}
+                        <form method="POST" onsubmit="return confirm('Remove this song from the admin playlist?')">
+                            <input type="hidden" name="action" value="delete_song">
+                            <input type="hidden" name="song_id" value="{{ song.id }}">
+                            <button type="submit" title="Remove"
+                                class="px-2.5 py-1.5 bg-red-900/30 hover:bg-red-900/60 text-red-400 rounded-lg text-xs transition-colors">🗑</button>
+                        </form>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="px-5 py-8 text-center text-gray-500">
+                <p class="text-3xl mb-2">🎛</p>
+                <p class="text-sm">No admin songs yet. Use Local song intake above.</p>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- ── Intro Song ── -->
+        {% macro _special_song_card(title, songs_list, enabled_val) %}
+        <div class="bg-discord-dark rounded-xl border border-gray-700/50">
+            <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between flex-wrap gap-3">
+                <h3 class="text-white font-semibold">
+                    {{ title }}
+                    <span class="ml-1 text-xs {% if enabled_val == 'on' %}text-green-400{% else %}text-gray-500{% endif %}">
+                        ({% if enabled_val == 'on' %}enabled{% else %}disabled in settings{% endif %})
+                    </span>
+                </h3>
+                <span class="text-gray-500 text-xs">Use Local song intake above and select this destination.</span>
+            </div>
+            {% set active_slot = songs_list|selectattr('active')|list %}
+            {% if active_slot %}
+            {% for song in active_slot %}
+            <div class="px-5 py-3 flex items-center gap-3">
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2">
+                        {% if song.analysis_status == 'done' %}
+                        <span class="w-2 h-2 rounded-full bg-green-500 flex-shrink-0"></span>
+                        {% elif song.analysis_status in ('processing', 'pending') %}
+                        <span class="w-2 h-2 rounded-full bg-yellow-500 flex-shrink-0"></span>
+                        {% else %}
+                        <span class="w-2 h-2 rounded-full bg-red-500 flex-shrink-0"></span>
+                        {% endif %}
+                        <span class="text-white text-sm font-medium truncate">{{ song.title or '⏳ Processing…' }}</span>
+                        {% if song.artist %}<span class="text-gray-400 text-xs truncate">— {{ song.artist }}</span>{% endif %}
+                        {% if song.duration %}<span class="text-gray-500 text-xs">({{ (song.duration / 60)|round(1) }} min)</span>{% endif %}
+                        {% if song.approval_status == 'pending' %}
+                        <span class="px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-300 text-xs">Pending admin approval</span>
+                        {% elif song.approval_status == 'approved' %}
+                        <span class="px-1.5 py-0.5 rounded bg-emerald-900/40 text-emerald-300 text-xs">Approved</span>
+                        {% elif song.approval_status == 'rejected' %}
+                        <span class="px-1.5 py-0.5 rounded bg-red-900/40 text-red-300 text-xs">Rejected</span>
+                        {% endif %}
+                    </div>
+                    <div class="flex items-center gap-3 mt-0.5 flex-wrap">
+                        <span class="text-gray-600 text-xs">#{{ song.id }}</span>
+                        {% if song.duration %}
+                        <span class="text-gray-600 text-xs">{{ '%.1f'|format(song.duration / 60) }} min</span>
+                        {% endif %}
+                        <a href="{{ song.suno_url }}" target="_blank"
+                            class="text-discord-blurple hover:text-blue-400 text-xs transition-colors">Suno ↗</a>
+                    </div>
+                </div>
+                <div class="flex items-center gap-1.5 flex-shrink-0">
+                    {% if song.approval_status == 'pending' %}
+                    <form method="POST" class="inline">
+                        <input type="hidden" name="action" value="approve_special_song">
+                        <input type="hidden" name="song_id" value="{{ song.id }}">
+                        <button type="submit" title="Approve for the {{ song.playlist_source }} playlist" class="px-2.5 py-1.5 bg-emerald-600/30 hover:bg-emerald-600/60 text-emerald-300 rounded-lg text-xs transition-colors">Approve</button>
+                    </form>
+                    <form method="POST" class="inline" onsubmit="return confirm('Reject this {{ song.playlist_source }} proposal? The original and consent evidence remain archived.');">
+                        <input type="hidden" name="action" value="reject_special_song">
+                        <input type="hidden" name="song_id" value="{{ song.id }}">
+                        <button type="submit" title="Reject proposal" class="px-2.5 py-1.5 bg-red-900/30 hover:bg-red-900/60 text-red-300 rounded-lg text-xs transition-colors">Reject</button>
+                    </form>
+                    {% endif %}
+                    {% if song.analysis_status != 'done' and not status.running %}
+                    <form method="POST" class="inline">
+                        <input type="hidden" name="action" value="reanalyze_whisper_one">
+                        <input type="hidden" name="song_id" value="{{ song.id }}">
+                        <button type="submit" title="Re-run Whisper"
+                            class="px-2.5 py-1.5 bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 rounded-lg text-xs transition-colors">🔁</button>
+                    </form>
+                    {% endif %}
+                    <form method="POST" onsubmit="return confirm('Remove this song?')">
+                        <input type="hidden" name="action" value="delete_song">
+                        <input type="hidden" name="song_id" value="{{ song.id }}">
+                        <button type="submit" title="Remove"
+                            class="px-2.5 py-1.5 bg-red-900/30 hover:bg-red-900/60 text-red-400 rounded-lg text-xs transition-colors">🗑</button>
+                    </form>
+                </div>
+            </div>
+            {% endfor %}
+            {% else %}
+            <div class="px-5 py-6 text-center text-gray-500">
+                <p class="text-sm">No songs set yet. Use Local song intake above.</p>
+            </div>
+            {% endif %}
+        </div>
+        {% endmacro %}
+
+        {{ _special_song_card('▶️ Intro Song', intro_songs, exp_intro_enabled) }}
+        {{ _special_song_card('⏹ Outro Song', outro_songs, exp_outro_enabled) }}
+    </div>
+</div>
+
+<dialog id="hook-video-dialog"
+        class="w-full max-w-lg rounded-xl border border-fuchsia-500/40 bg-discord-dark p-0 text-gray-200 shadow-2xl backdrop:bg-black/70">
+    <form method="POST">
+        <input type="hidden" name="action" value="set_hook_video">
+        <input type="hidden" name="song_id" id="hook-song-id">
+        <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between gap-4">
+            <div class="min-w-0">
+                <h3 class="text-white font-semibold">Use Hook Video</h3>
+                <p id="hook-song-title" class="text-gray-500 text-xs mt-0.5 truncate"></p>
+            </div>
+            <button type="button" onclick="closeHookDialog()"
+                    class="w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:text-white hover:bg-gray-700"
+                    title="Close">✕</button>
+        </div>
+        <div class="p-5">
+            <label for="hook-value" class="block text-gray-300 text-sm font-medium mb-1.5">Suno Hook ID or share link</label>
+            <input id="hook-value" name="hook_value" required autocomplete="off"
+                   placeholder="https://suno.com/s/... or Hook UUID"
+                   class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm placeholder-gray-500 focus:border-fuchsia-500 focus:outline-none">
+            <p class="text-gray-500 text-xs mt-2">The Hook must belong to this song. It will loop silently for the full song duration.</p>
+        </div>
+        <div class="px-5 py-4 border-t border-gray-700/50 flex justify-end gap-2">
+            <button type="button" onclick="closeHookDialog()"
+                    class="px-4 py-2 bg-gray-700/60 hover:bg-gray-700 text-gray-300 rounded-lg text-sm">Cancel</button>
+            <button type="submit"
+                    class="px-4 py-2 bg-fuchsia-600 hover:bg-fuchsia-500 text-white rounded-lg text-sm font-medium">Save &amp; cache Hook</button>
+        </div>
+    </form>
+</dialog>
+
+<script>
+function openHookDialog(songId, title, currentValue) {
+    const dialog = document.getElementById('hook-video-dialog');
+    document.getElementById('hook-song-id').value = songId;
+    document.getElementById('hook-song-title').textContent = title;
+    document.getElementById('hook-value').value = currentValue || '';
+    dialog.showModal();
+    setTimeout(() => document.getElementById('hook-value').focus(), 0);
+}
+
+function closeHookDialog() {
+    document.getElementById('hook-video-dialog').close();
+}
+
+document.getElementById('hook-video-dialog')?.addEventListener('click', function(event) {
+    if (event.target === this) closeHookDialog();
+});
+let _expPollTimer = null;
+
+async function expStreamAction(action) {
+    const buttons = [
+        document.getElementById('exp-btn-start'),
+        document.getElementById('exp-btn-start-legacy'),
+        document.getElementById('exp-btn-stop'),
+        document.getElementById('exp-btn-safe-stop'),
+    ].filter(Boolean);
+    buttons.forEach(btn => { btn.disabled = true; });
+    try {
+        const r = await fetch(`/trya-stream/stream/${action}`, { method: 'POST' });
+        const d = await r.json();
+        if (!d.ok) {
+            alert('Error: ' + (d.error || 'Unknown error'));
+        }
+    } catch (e) {
+        alert('Request failed: ' + e.message);
+    } finally {
+        buttons.forEach(btn => { btn.disabled = false; });
+        await updateExpStatus();
+    }
+}
+
+function formatExpHealthAge(age) {
+    if (age === null || age === undefined || Number.isNaN(Number(age))) return '?';
+    const seconds = Math.max(0, Math.round(Number(age)));
+    if (seconds < 60) return `${seconds}s`;
+    return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+function renderExpFfmpegHealth(data, running) {
+    const healthEl = document.getElementById('exp-ffmpeg-health');
+    if (!healthEl) return;
+    const ffmpeg = data.ffmpeg || {};
+    const state = running ? (ffmpeg.state || 'unknown') : 'offline';
+    healthEl.className = 'text-gray-600 text-xs mt-1 truncate';
+
+    if (!running || state === 'offline') {
+        healthEl.textContent = 'FFmpeg offline';
+        return;
+    }
+    if (state === 'stalled') {
+        healthEl.className = 'text-red-400 text-xs mt-1 truncate';
+        healthEl.textContent = `FFmpeg stalled · no progress for ${formatExpHealthAge(ffmpeg.last_progress_age)}`;
+        return;
+    }
+    if (state === 'starting') {
+        healthEl.className = 'text-yellow-400 text-xs mt-1 truncate';
+        healthEl.textContent = 'FFmpeg starting · waiting for progress';
+        return;
+    }
+
+    const parts = [`FFmpeg ${state}`];
+    if (ffmpeg.last_progress_age !== undefined) parts.push(`${formatExpHealthAge(ffmpeg.last_progress_age)} ago`);
+    if (ffmpeg.out_time) parts.push(ffmpeg.out_time);
+    if (ffmpeg.bitrate) parts.push(ffmpeg.bitrate);
+    if (ffmpeg.speed) parts.push(`speed ${ffmpeg.speed}`);
+    if (ffmpeg.frame) parts.push(`frame ${ffmpeg.frame}`);
+    healthEl.className = state === 'healthy'
+        ? 'text-green-400 text-xs mt-1 truncate'
+        : 'text-gray-500 text-xs mt-1 truncate';
+    healthEl.textContent = parts.join(' · ');
+}
+
+function renderExpObsOverlayStatus(data, running) {
+    const obsEl = document.getElementById('exp-obs-overlay-status');
+    if (!obsEl) return;
+    const obs = data.obs_overlay || {};
+    if (!running) {
+        obsEl.className = 'text-gray-600 text-xs mt-1 truncate';
+        obsEl.textContent = 'OBS overlay disabled';
+        return;
+    }
+    if (obs.state === 'waiting') {
+        obsEl.className = 'text-yellow-400 text-xs mt-1 truncate';
+    } else if (obs.state === 'connected') {
+        obsEl.className = 'text-green-400 text-xs mt-1 truncate';
+    } else if (obs.state === 'missing_key') {
+        obsEl.className = 'text-red-400 text-xs mt-1 truncate';
+    } else if (obs.state === 'error') {
+        obsEl.className = 'text-red-400 text-xs mt-1 truncate';
+    } else {
+        obsEl.className = 'text-gray-500 text-xs mt-1 truncate';
+    }
+    obsEl.textContent = obs.label || 'OBS overlay disabled';
+}
+
+function renderExpCurrentSong(data, running) {
+    const card = document.getElementById('exp-current-song-card');
+    const legacyLine = document.getElementById('exp-now-playing');
+    const titleEl = document.getElementById('exp-now-playing-title');
+    const artistEl = document.getElementById('exp-now-playing-artist');
+    const posEl = document.getElementById('exp-now-playing-position');
+    const linkEl = document.getElementById('exp-now-playing-link');
+    if (!card || !legacyLine || !titleEl || !artistEl || !posEl || !linkEl) return;
+
+    const song = data.song || null;
+    if (!running || !song) {
+        card.classList.add('hidden');
+        legacyLine.classList.remove('hidden');
+        legacyLine.textContent = '—';
+        linkEl.classList.add('hidden');
+        linkEl.removeAttribute('href');
+        return;
+    }
+
+    const title = song.title || 'Unknown title';
+    const artist = song.artist || 'Unknown artist';
+    card.classList.remove('hidden');
+    legacyLine.classList.add('hidden');
+    titleEl.textContent = title;
+    artistEl.textContent = artist;
+    posEl.textContent = `Song ${data.song_index || 0}/${data.playlist_length || 0}`;
+    if (song.suno_url) {
+        linkEl.href = song.suno_url;
+        linkEl.classList.remove('hidden');
+    } else {
+        linkEl.classList.add('hidden');
+        linkEl.removeAttribute('href');
+    }
+}
+
+async function updateExpStatus() {
+    try {
+        const r = await fetch('/trya-stream/stream/status');
+        const d = await r.json();
+        const dot  = document.getElementById('exp-status-dot');
+        const text = document.getElementById('exp-status-text');
+        const np   = document.getElementById('exp-now-playing');
+        const safeStopBtn = document.getElementById('exp-btn-safe-stop');
+        if (d.running) {
+            dot.className  = 'inline-block w-2.5 h-2.5 rounded-full bg-green-500';
+            if (d.safe_stop_pending) {
+                text.textContent = 'Live — stopping after current song…';
+            } else {
+                text.textContent = d.legacy_pipeline ? 'Live — legacy pipeline' : 'Live';
+            }
+            if (safeStopBtn) {
+                safeStopBtn.disabled = d.safe_stop_pending;
+                safeStopBtn.textContent = d.safe_stop_pending ? '🌙 Stopping…' : '🌙 Safe Stop';
+            }
+            renderExpCurrentSong(d, true);
+            renderExpFfmpegHealth(d, true);
+            renderExpObsOverlayStatus(d, true);
+        } else {
+            dot.className  = 'inline-block w-2.5 h-2.5 rounded-full bg-gray-500';
+            text.textContent = 'Offline';
+            np.textContent   = '—';
+            renderExpCurrentSong(d, false);
+            if (safeStopBtn) { safeStopBtn.disabled = false; safeStopBtn.textContent = '🌙 Safe Stop'; }
+            renderExpFfmpegHealth(d, false);
+            renderExpObsOverlayStatus(d, false);
+        }
+    } catch (_) {}
+}
+
+// ── Cover-video preview ────────────────────────────────────────────────────
+function expPreviewVideo(songId, title) {
+    const modal = document.getElementById('exp-preview-modal');
+    const video = document.getElementById('exp-preview-video');
+    const titleEl = document.getElementById('exp-preview-title');
+    titleEl.textContent = title ? `Preview: ${title}` : 'Preview';
+    video.src = `/trya-stream/cover-preview/${songId}`;
+    modal.classList.remove('hidden');
+}
+function expClosePreview() {
+    const modal = document.getElementById('exp-preview-modal');
+    const video = document.getElementById('exp-preview-video');
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+    modal.classList.add('hidden');
+}
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') expClosePreview();
+});
+document.addEventListener('click', e => {
+    const btn = e.target.closest('.exp-preview-btn');
+    if (!btn) return;
+    const id    = btn.getAttribute('data-preview-song-id');
+    const title = btn.getAttribute('data-preview-title') || '';
+    if (id) expPreviewVideo(id, title);
+});
+
+// ── Live log panel ──────────────────────────────────────────────────────────
+let _expLogSinceTs = 0;
+const _expLogMaxLines = 500;
+const _expLogColors = {
+    info:   'text-gray-300',
+    ffmpeg: 'text-sky-300/80',
+    error:  'text-red-300',
+};
+function _fmtLogTs(ts) {
+    const d = new Date(ts * 1000);
+    const pad = n => String(n).padStart(2, '0');
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+function copyExpLog(btn) {
+    const pre = document.getElementById('exp-log-pre');
+    const text = pre ? (pre.innerText || pre.textContent || '') : '';
+    if (!text) return;
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(ta);
+    const orig = btn.innerHTML;
+    btn.innerHTML = '&#10003; Copied';
+    btn.classList.add('text-green-400');
+    setTimeout(function () {
+        btn.innerHTML = orig;
+        btn.classList.remove('text-green-400');
+    }, 1500);
+}
+
+async function updateExpLog() {
+    try {
+        const url = _expLogSinceTs
+            ? `/trya-stream/stream/log?since=${_expLogSinceTs}`
+            : '/trya-stream/stream/log?window=300';
+        const r = await fetch(url);
+        const d = await r.json();
+        if (!d.entries || !d.entries.length) return;
+        const pre = document.getElementById('exp-log-pre');
+        const auto = document.getElementById('exp-log-autoscroll').checked;
+        // First load → replace placeholder
+        if (_expLogSinceTs === 0) pre.innerHTML = '';
+        for (const e of d.entries) {
+            const span = document.createElement('span');
+            span.className = _expLogColors[e.level] || _expLogColors.info;
+            span.textContent = `[${_fmtLogTs(e.ts)}] ${e.line}\n`;
+            pre.appendChild(span);
+            if (e.ts > _expLogSinceTs) _expLogSinceTs = e.ts;
+        }
+        // Trim DOM to keep things light
+        while (pre.childElementCount > _expLogMaxLines) {
+            pre.removeChild(pre.firstChild);
+        }
+        if (auto) pre.scrollTop = pre.scrollHeight;
+    } catch (_) {}
+}
+
+// ── Song list sorting ──────────────────────────────────────────────────────
+let _songOriginalOrder = null;
+
+function _setSortActive(by) {
+    document.querySelectorAll('.sort-btn').forEach(b => {
+        b.classList.remove('text-blue-300', 'bg-blue-600/20');
+        b.classList.add('text-gray-400', 'bg-gray-700/40');
+    });
+    const btn = document.getElementById('sort-btn-' + by);
+    if (btn) {
+        btn.classList.add('text-blue-300', 'bg-blue-600/20');
+        btn.classList.remove('text-gray-400', 'bg-gray-700/40');
+    }
+}
+
+function sortSongs(by) {
+    const container = document.getElementById('song-list');
+    if (!container) return;
+    const rows = Array.from(container.querySelectorAll('.song-row'));
+    if (!rows.length) return;
+    if (!_songOriginalOrder) _songOriginalOrder = [...rows];
+
+    _setSortActive(by);
+
+    if (by === 'default') {
+        _songOriginalOrder.forEach(el => container.appendChild(el));
+        return;
+    }
+
+    const sorted = [...rows];
+
+    if (by === 'artist') {
+        const btn = document.getElementById('sort-btn-artist');
+        const dir = btn && btn.dataset.dir === 'desc' ? 'asc' : 'desc';
+        if (btn) { btn.dataset.dir = dir; btn.textContent = dir === 'asc' ? 'Artist A→Z' : 'Artist Z→A'; }
+        sorted.sort((a, b) => {
+            const av = a.dataset.artist || '', bv = b.dataset.artist || '';
+            return dir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+        });
+    } else if (by === 'green') {
+        const pri = { passed: 0, approved: 0, pending: 2, flagged: 3 };
+        sorted.sort((a, b) => (pri[a.dataset.modStatus] ?? 1) - (pri[b.dataset.modStatus] ?? 1));
+    } else if (by === 'no-status') {
+        sorted.sort((a, b) => (a.dataset.modStatus ? 1 : 0) - (b.dataset.modStatus ? 1 : 0));
+    }
+
+    sorted.forEach(el => container.appendChild(el));
+}
+
+(function init() {
+    updateExpStatus();
+    updateExpLog();
+    _expPollTimer = setInterval(updateExpStatus, 5000);
+    setInterval(updateExpLog, 2000);
+    // Save original song order for Default reset
+    const songList = document.getElementById('song-list');
+    if (songList) _songOriginalOrder = Array.from(songList.querySelectorAll('.song-row'));
+})();
+</script>
+{% endblock %}

@@ -231,6 +231,18 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_exp_radio_submission_bans_remaining
                 ON exp_radio_submission_bans(streams_remaining);
 
+            CREATE TABLE IF NOT EXISTS trya_stream_submission_bans (
+                user_id INTEGER PRIMARY KEY,
+                user_name TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                streams_remaining INTEGER NOT NULL DEFAULT 1,
+                created_at REAL DEFAULT (unixepoch()),
+                updated_at REAL DEFAULT (unixepoch()),
+                created_by TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_trya_stream_submission_bans_remaining
+                ON trya_stream_submission_bans(streams_remaining);
+
             CREATE TABLE IF NOT EXISTS birthdays (
                 user_id INTEGER PRIMARY KEY,
                 user_name TEXT NOT NULL,
@@ -743,6 +755,20 @@ class Database:
         """)
         await self.db.commit()
 
+        await self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS trya_stream_playlist_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at REAL NOT NULL,
+                source TEXT NOT NULL DEFAULT '',
+                scheduled INTEGER NOT NULL DEFAULT 0,
+                song_count INTEGER NOT NULL DEFAULT 0,
+                urls_json TEXT NOT NULL DEFAULT '[]'
+            );
+            CREATE INDEX IF NOT EXISTS idx_trya_stream_playlist_snapshots_created
+                ON trya_stream_playlist_snapshots(created_at DESC);
+        """)
+        await self.db.commit()
+
         # Preserve the currently available legacy snapshots before their
         # settings are overwritten by the next stream start.
         async with self.db.execute(
@@ -1188,6 +1214,113 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_exp_radio_user ON exp_radio_songs(user_id);
             CREATE INDEX IF NOT EXISTS idx_exp_radio_expires ON exp_radio_songs(expires_at);
         """)
+        await self.db.commit()
+
+        await self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS trya_stream_songs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                user_name TEXT NOT NULL,
+                suno_url TEXT NOT NULL,
+                suno_uuid TEXT NOT NULL,
+                mp3_filename TEXT,
+                cover_url TEXT,
+                video_url TEXT,
+                hook_id TEXT,
+                hook_share_url TEXT,
+                hook_video_url TEXT,
+                title TEXT,
+                artist TEXT,
+                duration REAL,
+                lyrics TEXT,
+                word_timestamps TEXT DEFAULT '[]',
+                ass_filename TEXT,
+                analysis_status TEXT DEFAULT 'pending',
+                rights_declaration TEXT NOT NULL,
+                rights_hash TEXT NOT NULL,
+                rights_agreed_at REAL NOT NULL,
+                submitted_at REAL DEFAULT (unixepoch()),
+                expires_at REAL NOT NULL,
+                active INTEGER DEFAULT 1,
+                upload_token TEXT,
+                moderation_status TEXT,
+                moderation_reason TEXT,
+                moderation_at REAL,
+                playlist_source TEXT NOT NULL DEFAULT 'submission',
+                rights_version TEXT,
+                paid_download_attested INTEGER,
+                official_download_attested INTEGER,
+                is_suno_remix INTEGER,
+                third_party_rights_attested INTEGER,
+                commercial_rights_attested INTEGER,
+                original_sha256 TEXT,
+                original_filename TEXT,
+                original_mime TEXT,
+                original_size INTEGER,
+                original_uploaded_at REAL,
+                original_archive_filename TEXT,
+                rights_accepted_at REAL,
+                playlist_expires_at REAL,
+                playlist_removed_at REAL,
+                playlist_remove_reason TEXT,
+                replacement_song_id INTEGER,
+                approval_status TEXT NOT NULL DEFAULT 'pending',
+                approved_at REAL,
+                approved_by TEXT,
+                whisper_anomaly_retry_count INTEGER NOT NULL DEFAULT 0,
+                whisper_anomaly_retry_at REAL,
+                whisper_anomaly_retry_trigger TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_trya_stream_user ON trya_stream_songs(user_id);
+            CREATE INDEX IF NOT EXISTS idx_trya_stream_expires ON trya_stream_songs(expires_at);
+        """)
+        await self.db.commit()
+
+        # TrYa-only upload evidence, rights, approval, and playlist lifecycle.
+        # These migrations are intentionally additive: expires_at remains as a
+        # legacy audit value and is never used to remove TrYa rows or files.
+        for col, definition in [
+            ("rights_version", "TEXT"),
+            ("paid_download_attested", "INTEGER"),
+            ("official_download_attested", "INTEGER"),
+            ("is_suno_remix", "INTEGER"),
+            ("third_party_rights_attested", "INTEGER"),
+            ("commercial_rights_attested", "INTEGER"),
+            ("original_sha256", "TEXT"),
+            ("original_filename", "TEXT"),
+            ("original_mime", "TEXT"),
+            ("original_size", "INTEGER"),
+            ("original_uploaded_at", "REAL"),
+            ("original_archive_filename", "TEXT"),
+            ("rights_accepted_at", "REAL"),
+            ("playlist_expires_at", "REAL"),
+            ("playlist_removed_at", "REAL"),
+            ("playlist_remove_reason", "TEXT"),
+            ("replacement_song_id", "INTEGER"),
+            ("approval_status", "TEXT NOT NULL DEFAULT 'pending'"),
+            ("approved_at", "REAL"),
+            ("approved_by", "TEXT"),
+            ("whisper_anomaly_retry_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("whisper_anomaly_retry_at", "REAL"),
+            ("whisper_anomaly_retry_trigger", "TEXT"),
+        ]:
+            try:
+                await self.db.execute(
+                    f"ALTER TABLE trya_stream_songs ADD COLUMN {col} {definition}"
+                )
+                await self.db.commit()
+            except Exception:
+                pass  # column already exists
+
+        # Preserve already-usable legacy rows while all newly-created rows use
+        # the explicit pending/approved workflow below.
+        await self.db.execute(
+            "UPDATE trya_stream_songs SET approval_status = 'approved', "
+            "approved_at = COALESCE(approved_at, submitted_at), "
+            "approved_by = COALESCE(approved_by, 'legacy-migration') "
+            "WHERE original_uploaded_at IS NULL AND mp3_filename IS NOT NULL "
+            "AND approval_status = 'pending'"
+        )
         await self.db.commit()
 
         # Add upload_token to exp_radio_songs (migration for existing installs)
@@ -2304,6 +2437,68 @@ class Database:
             """
             SELECT id, created_at, source, scheduled, song_count, urls_json
             FROM exp_radio_playlist_snapshots
+            WHERE id = ?
+            """,
+            (int(snapshot_id),),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            return None
+        snapshot = dict(row)
+        try:
+            snapshot["urls"] = json.loads(snapshot.pop("urls_json") or "[]")
+        except (TypeError, ValueError):
+            snapshot["urls"] = []
+        return snapshot
+
+    async def save_trya_stream_playlist_snapshot(
+        self,
+        *,
+        created_at: float,
+        source: str,
+        scheduled: bool,
+        urls: list[str],
+    ) -> int:
+        import json
+
+        clean_urls = [str(url).strip() for url in urls if url and str(url).strip()]
+        cursor = await self.db.execute(
+            """
+            INSERT INTO trya_stream_playlist_snapshots
+                (created_at, source, scheduled, song_count, urls_json)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                float(created_at),
+                str(source or ""),
+                1 if scheduled else 0,
+                len(clean_urls),
+                json.dumps(clean_urls),
+            ),
+        )
+        await self.db.commit()
+        return int(cursor.lastrowid)
+
+    async def get_trya_stream_playlist_snapshots(self, limit: int = 50) -> list[dict]:
+        limit = max(1, min(int(limit), 200))
+        async with self.db.execute(
+            """
+            SELECT id, created_at, source, scheduled, song_count
+            FROM trya_stream_playlist_snapshots
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def get_trya_stream_playlist_snapshot(self, snapshot_id: int) -> Optional[dict]:
+        import json
+
+        async with self.db.execute(
+            """
+            SELECT id, created_at, source, scheduled, song_count, urls_json
+            FROM trya_stream_playlist_snapshots
             WHERE id = ?
             """,
             (int(snapshot_id),),
@@ -5412,6 +5607,400 @@ class Database:
                       analysis_status, rights_hash, rights_agreed_at,
                       submitted_at, expires_at, active
                FROM exp_radio_songs ORDER BY submitted_at DESC"""
+        ) as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
+
+    async def add_trya_stream_song(
+        self, user_id: int, user_name: str, suno_url: str = "", suno_uuid: str = "",
+        rights_declaration: str = "", rights_hash: str = "", expiry_days: int = 14,
+        playlist_source: str = "submission", replacement_song_id: int | None = None,
+        rights_version: str | None = None, playlist_expires_at: float | None = None,
+    ) -> tuple[int, str]:
+        """Create an inactive TrYa upload slot for any playlist destination.
+
+        The row only becomes active in ``finalize_trya_stream_upload`` after a
+        validated original has been archived. ``expires_at`` is retained as a
+        far-future legacy field; playlist eligibility uses playlist_expires_at.
+        """
+        import secrets
+        if playlist_source not in {"submission", "admin", "intro", "outro"}:
+            raise ValueError("invalid TrYa playlist_source")
+        upload_token = secrets.token_urlsafe(32)
+        cursor = await self.db.execute(
+            """INSERT INTO trya_stream_songs
+               (user_id, user_name, suno_url, suno_uuid,
+                rights_declaration, rights_hash, rights_agreed_at, expires_at,
+                upload_token, playlist_source, replacement_song_id,
+                rights_version, rights_accepted_at, playlist_expires_at,
+                active, approval_status)
+               VALUES (?, ?, ?, ?, ?, ?, 0, 9999999999, ?, ?, ?, ?,
+                       0, ?, 0, 'pending')""",
+            (user_id, user_name, suno_url or "", suno_uuid or "",
+             rights_declaration, rights_hash, upload_token, playlist_source,
+             replacement_song_id, rights_version, playlist_expires_at),
+        )
+        await self.db.commit()
+        return cursor.lastrowid, upload_token
+
+    async def create_trya_stream_song(self, **kwargs) -> tuple[int, str]:
+        """Destination-aware alias for new local-upload callers."""
+        return await self.add_trya_stream_song(**kwargs)
+
+    async def get_trya_stream_song(self, song_id: int) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM trya_stream_songs WHERE id = ?", (song_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_trya_stream_song_by_token(self, token: str) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM trya_stream_songs WHERE upload_token = ? "
+            "AND playlist_remove_reason IS NULL", (token,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_trya_stream_songs_by_user(self, user_id: int) -> list[dict]:
+        async with self.db.execute(
+            "SELECT * FROM trya_stream_songs WHERE user_id = ? AND active = 1 ORDER BY submitted_at DESC",
+            (user_id,),
+        ) as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
+
+    async def count_trya_stream_songs_by_user(self, user_id: int) -> int:
+        async with self.db.execute(
+            "SELECT COUNT(*) FROM trya_stream_songs "
+            "WHERE user_id = ? AND active = 1 AND analysis_status != 'failed'",
+            (user_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else 0
+
+    async def get_trya_stream_submission_ban(self, user_id: int) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM trya_stream_submission_bans "
+            "WHERE user_id = ? AND streams_remaining > 0",
+            (user_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_trya_stream_submission_bans(self) -> list[dict]:
+        async with self.db.execute(
+            "SELECT * FROM trya_stream_submission_bans "
+            "WHERE streams_remaining > 0 "
+            "ORDER BY streams_remaining DESC, display_name COLLATE NOCASE"
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def set_trya_stream_submission_ban(
+        self,
+        user_id: int,
+        user_name: str,
+        display_name: str,
+        streams_remaining: int,
+        created_by: str = "",
+    ) -> None:
+        streams_remaining = max(1, int(streams_remaining))
+        await self.db.execute(
+            """
+            INSERT INTO trya_stream_submission_bans
+                (user_id, user_name, display_name, streams_remaining, created_by)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                user_name = excluded.user_name,
+                display_name = excluded.display_name,
+                streams_remaining = excluded.streams_remaining,
+                updated_at = unixepoch(),
+                created_by = excluded.created_by
+            """,
+            (user_id, user_name, display_name, streams_remaining, created_by),
+        )
+        await self.db.commit()
+
+    async def remove_trya_stream_submission_ban(self, user_id: int) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM trya_stream_submission_bans WHERE user_id = ?",
+            (user_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        await self.db.execute(
+            "DELETE FROM trya_stream_submission_bans WHERE user_id = ?",
+            (user_id,),
+        )
+        await self.db.commit()
+        return data
+
+    async def advance_trya_stream_submission_bans(self) -> list[dict]:
+        """Consume one blocked stream and return the affected rows."""
+        async with self.db.execute(
+            "SELECT * FROM trya_stream_submission_bans WHERE streams_remaining > 0"
+        ) as cursor:
+            affected = [dict(row) for row in await cursor.fetchall()]
+        if not affected:
+            return []
+        await self.db.execute(
+            "UPDATE trya_stream_submission_bans "
+            "SET streams_remaining = streams_remaining - 1, updated_at = unixepoch() "
+            "WHERE streams_remaining > 0"
+        )
+        await self.db.execute(
+            "DELETE FROM trya_stream_submission_bans WHERE streams_remaining <= 0"
+        )
+        await self.db.commit()
+        for row in affected:
+            row["streams_remaining_after"] = max(0, int(row["streams_remaining"]) - 1)
+        return affected
+
+    async def update_trya_stream_song(self, song_id: int, **fields):
+        """Generic field update for trya_stream_songs."""
+        allowed = {
+            "mp3_filename", "cover_url", "video_url", "title", "artist",
+            "hook_id", "hook_share_url", "hook_video_url",
+            "duration", "lyrics", "word_timestamps", "ass_filename",
+            "analysis_status", "active", "playlist_source",
+            "moderation_status", "moderation_reason", "moderation_at",
+            "rights_version", "paid_download_attested",
+            "official_download_attested", "is_suno_remix",
+            "third_party_rights_attested", "commercial_rights_attested",
+            "original_sha256", "original_filename", "original_mime",
+            "original_size", "original_uploaded_at", "original_archive_filename",
+            "rights_accepted_at", "playlist_expires_at", "playlist_removed_at",
+            "playlist_remove_reason", "replacement_song_id", "approval_status",
+            "approved_at", "approved_by", "suno_url", "suno_uuid",
+            "whisper_anomaly_retry_count", "whisper_anomaly_retry_at",
+            "whisper_anomaly_retry_trigger",
+        }
+        updates = {k: v for k, v in fields.items() if k in allowed}
+        if not updates:
+            return
+        sql = "UPDATE trya_stream_songs SET " + ", ".join(f"{k}=?" for k in updates)
+        sql += " WHERE id = ?"
+        await self.db.execute(sql, (*updates.values(), song_id))
+        await self.db.commit()
+
+    async def claim_trya_whisper_anomaly_retry(
+        self, song_id: int, trigger: str
+    ) -> bool:
+        """Atomically claim the only automatic Whisper anomaly retry."""
+        cursor = await self.db.execute(
+            """UPDATE trya_stream_songs
+               SET whisper_anomaly_retry_count = 1,
+                   whisper_anomaly_retry_at = unixepoch(),
+                   whisper_anomaly_retry_trigger = ?
+               WHERE id = ? AND COALESCE(whisper_anomaly_retry_count, 0) = 0""",
+            (trigger, song_id),
+        )
+        await self.db.commit()
+        return cursor.rowcount > 0
+
+    async def get_all_trya_stream_songs(
+        self, active_only: bool = True, source: str | None = None
+    ) -> list[dict]:
+        """Return songs, optionally filtered by playlist_source ('submission'|'admin').
+        source=None returns all sources."""
+        conditions = ["active = 1"] if active_only else []
+        params: list = []
+        if source is not None:
+            conditions.append("playlist_source = ?")
+            params.append(source)
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        sql = f"SELECT * FROM trya_stream_songs {where} ORDER BY submitted_at ASC"
+        async with self.db.execute(sql, params) as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
+
+    async def add_admin_trya_stream_song(
+        self, suno_url: str = "", suno_uuid: str = "", **kwargs
+    ) -> int:
+        """Create an admin destination upload slot; audio must be local-uploaded."""
+        song_id, _ = await self.add_trya_stream_song(
+            user_id=int(kwargs.pop("user_id", 0)),
+            user_name=str(kwargs.pop("user_name", "admin")),
+            suno_url=suno_url, suno_uuid=suno_uuid,
+            playlist_source="admin", **kwargs,
+        )
+        return song_id
+
+    async def add_trya_intro_outro_song(
+        self, suno_url: str = "", suno_uuid: str = "", source: str = "intro", **kwargs
+    ) -> int:
+        """Create a user-owned intro/outro upload slot pending admin approval."""
+        if source not in {"intro", "outro"}:
+            raise ValueError("source must be intro or outro")
+        song_id, _ = await self.add_trya_stream_song(
+            user_id=int(kwargs.pop("user_id", 0)),
+            user_name=str(kwargs.pop("user_name", "admin")),
+            suno_url=suno_url, suno_uuid=suno_uuid,
+            playlist_source=source, **kwargs,
+        )
+        return song_id
+
+    async def finalize_trya_stream_upload(
+        self, song_id: int, *, approved_by: str = "validated-upload", **evidence
+    ) -> Optional[dict]:
+        """Atomically activate validated evidence and retire a replacement target."""
+        song = await self.get_trya_stream_song(song_id)
+        if not song:
+            return None
+        required = {
+            "original_sha256", "original_filename", "original_mime",
+            "original_size", "original_uploaded_at", "original_archive_filename",
+            "mp3_filename", "duration",
+        }
+        if not required.issubset(evidence) or any(evidence[key] is None for key in required):
+            raise ValueError("incomplete TrYa upload evidence")
+        source = song.get("playlist_source") or "submission"
+        evidence["active"] = 1
+        evidence["analysis_status"] = "pending"
+        evidence["playlist_removed_at"] = None
+        evidence["playlist_remove_reason"] = None
+        if source == "submission":
+            try:
+                retention_days = max(
+                    1,
+                    min(3650, int(await self.get_setting("trya_stream_submission_playlist_days") or "14")),
+                )
+            except (TypeError, ValueError):
+                retention_days = 14
+            evidence["playlist_expires_at"] = time.time() + retention_days * 86400
+        else:
+            evidence["playlist_expires_at"] = None
+        if source in {"submission", "admin"}:
+            evidence.update(
+                approval_status="approved", approved_at=time.time(), approved_by=approved_by
+            )
+        else:
+            evidence.update(approval_status="pending", approved_at=None, approved_by=None)
+        await self.update_trya_stream_song(song_id, **evidence)
+        replacement_id = song.get("replacement_song_id")
+        if replacement_id and source in {"submission", "admin"}:
+            await self.db.execute(
+                """UPDATE trya_stream_songs
+                   SET active = 0, playlist_removed_at = unixepoch(),
+                       playlist_remove_reason = ?, approval_status = 'rejected'
+                   WHERE id = ? AND id != ?""",
+                (f"replaced_by:{song_id}", replacement_id, song_id),
+            )
+            await self.db.commit()
+        return await self.get_trya_stream_song(song_id)
+
+    async def finalize_trya_stream_evidence(self, song_id: int, **evidence) -> Optional[dict]:
+        """Public naming alias for validated upload evidence finalization."""
+        return await self.finalize_trya_stream_upload(song_id, **evidence)
+
+    async def approve_trya_stream_song(self, song_id: int, approved_by: str) -> bool:
+        cursor = await self.db.execute(
+            """UPDATE trya_stream_songs
+               SET approval_status = 'approved', approved_at = unixepoch(), approved_by = ?
+               WHERE id = ? AND active = 1 AND playlist_source IN ('intro', 'outro')
+                     AND original_uploaded_at IS NOT NULL""",
+            (approved_by, song_id),
+        )
+        if cursor.rowcount > 0:
+            song = await self.get_trya_stream_song(song_id)
+            replacement_id = song.get("replacement_song_id") if song else None
+            if replacement_id:
+                await self.db.execute(
+                    """UPDATE trya_stream_songs
+                       SET active = 0, playlist_removed_at = unixepoch(),
+                           playlist_remove_reason = ?, approval_status = 'rejected'
+                       WHERE id = ? AND id != ?""",
+                    (f"replaced_by:{song_id}", replacement_id, song_id),
+                )
+        await self.db.commit()
+        return cursor.rowcount > 0
+
+    async def reject_trya_stream_song(
+        self, song_id: int, approved_by: str, reason: str = "rejected"
+    ) -> bool:
+        cursor = await self.db.execute(
+            """UPDATE trya_stream_songs
+               SET approval_status = 'rejected', approved_at = unixepoch(), approved_by = ?,
+                   active = 0, playlist_removed_at = unixepoch(), playlist_remove_reason = ?
+               WHERE id = ? AND playlist_source IN ('intro', 'outro')""",
+            (approved_by, reason, song_id),
+        )
+        await self.db.commit()
+        return cursor.rowcount > 0
+
+    async def delete_trya_stream_song(self, song_id: int) -> Optional[dict]:
+        """Soft-delete by setting active=0. Returns song data for file cleanup."""
+        async with self.db.execute(
+            "SELECT * FROM trya_stream_songs WHERE id = ?", (song_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            data = dict(row)
+        await self.db.execute(
+            """UPDATE trya_stream_songs SET active = 0,
+               playlist_removed_at = unixepoch(),
+               playlist_remove_reason = COALESCE(playlist_remove_reason, 'removed')
+               WHERE id = ?""",
+            (song_id,),
+        )
+        await self.db.commit()
+        return data
+
+    async def delete_all_trya_stream_songs(self, source: str) -> int:
+        """Soft-delete active songs for exactly one trya-stream playlist source."""
+        if source not in {"submission", "admin", "intro", "outro"}:
+            raise ValueError("delete_all_trya_stream_songs requires a valid playlist source")
+        conditions = ["active = 1"]
+        params: list = [source]
+        conditions.append("playlist_source = ?")
+        where = " AND ".join(conditions)
+        async with self.db.execute(
+            f"SELECT COUNT(*) FROM trya_stream_songs WHERE {where}",
+            params,
+        ) as cursor:
+            row = await cursor.fetchone()
+            count = row[0] if row else 0
+        await self.db.execute(
+            f"""UPDATE trya_stream_songs SET active = 0,
+                playlist_removed_at = unixepoch(),
+                playlist_remove_reason = COALESCE(playlist_remove_reason, 'bulk_removed')
+                WHERE {where}""",
+            params,
+        )
+        await self.db.commit()
+        return count
+
+    async def deactivate_due_trya_stream_submissions(
+        self, reason: str = "playlist_expired"
+    ) -> list[dict]:
+        """Deactivate due submissions while retaining original/work evidence."""
+        async with self.db.execute(
+            """SELECT * FROM trya_stream_songs
+               WHERE active = 1 AND playlist_source = 'submission'
+                 AND playlist_expires_at IS NOT NULL
+                 AND playlist_expires_at <= unixepoch()"""
+        ) as cursor:
+            rows = [dict(r) for r in await cursor.fetchall()]
+        if rows:
+            ids = [row["id"] for row in rows]
+            placeholders = ",".join("?" for _ in ids)
+            await self.db.execute(
+                f"""UPDATE trya_stream_songs SET active = 0,
+                    playlist_removed_at = unixepoch(), playlist_remove_reason = ?
+                    WHERE id IN ({placeholders})""",
+                (reason, *ids),
+            )
+            await self.db.commit()
+        return rows
+
+    async def expire_old_trya_stream_songs(self) -> list[dict]:
+        """Compatibility alias; legacy expires_at intentionally has no effect."""
+        return await self.deactivate_due_trya_stream_submissions()
+
+    async def get_trya_stream_consent_csv_rows(self) -> list[dict]:
+        """All columns are evidence and therefore included in consent exports."""
+        async with self.db.execute(
+            "SELECT * FROM trya_stream_songs ORDER BY submitted_at DESC"
         ) as cursor:
             return [dict(r) for r in await cursor.fetchall()]
 

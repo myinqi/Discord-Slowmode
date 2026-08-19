@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TrYa Stream — Complete Submission</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>tailwind.config={darkMode:'class',theme:{extend:{colors:{'discord-dark':'#2b2d31','discord-darker':'#1e1f22','discord-blurple':'#5865f2'}}}}</script>
+</head>
+<body class="dark bg-discord-darker min-h-screen flex items-center justify-center p-4">
+<div class="w-full max-w-2xl">
+{% if stream_live %}
+<div class="bg-yellow-900/40 border border-yellow-700/50 rounded-xl p-6 text-center">
+    <p class="text-yellow-300 font-semibold">TrYa Stream submissions are temporarily paused.</p>
+    <p class="text-gray-400 text-sm mt-2">Please use this link again after the live stream or pre-stream processing window has ended.</p>
+</div>
+{% elif error %}
+<div class="bg-red-900/40 border border-red-700/50 rounded-xl p-6 text-center">
+    <p class="text-red-300 font-semibold">{{ error }}</p>
+    <p class="text-gray-500 text-sm mt-2">The upload link may be invalid or already completed.</p>
+</div>
+{% elif done %}
+<div class="bg-green-900/40 border border-green-700/50 rounded-xl p-6 text-center">
+    <p class="text-green-300 font-semibold">Upload complete</p>
+    <p class="text-gray-400 text-sm mt-2"><strong>{{ title }}</strong> was archived and its separate stream copy is being analysed.</p>
+</div>
+{% else %}
+<form method="POST" enctype="multipart/form-data" class="bg-discord-dark border border-gray-700/50 rounded-xl overflow-hidden shadow-xl">
+    <div class="px-6 py-5 border-b border-gray-700/50">
+        <h1 class="text-white font-bold text-lg">Complete Your TrYa Stream Submission</h1>
+        <p class="text-gray-400 text-sm mt-1">One upload form for the audio file and all required rights attestations.</p>
+    </div>
+    <div class="p-6 space-y-5">
+        {% if form_error %}
+        <div class="bg-red-900/40 border border-red-700/50 rounded-lg p-4 text-red-300 text-sm">{{ form_error }}</div>
+        {% endif %}
+        <div class="bg-gray-800/50 rounded-lg p-4">
+            <p class="text-gray-400 text-xs uppercase tracking-wide mb-1">Suno Song</p>
+            <a href="{{ song.suno_url }}" target="_blank" rel="noopener" class="text-discord-blurple hover:underline text-sm break-all">{{ song.suno_url }}</a>
+            <p class="text-gray-500 text-xs mt-2">Destination: {{ (song.playlist_source or 'submission')|capitalize }}</p>
+        </div>
+
+        <div class="rounded-lg border border-blue-700/40 bg-blue-900/20 p-4 text-sm text-gray-300">
+            Download this exact song yourself using Suno's official <strong class="text-white">Download</strong> action, then select that untouched MP3 or M4A file below. TrYa Stream never fetches Suno audio from a CDN. The exact upload is retained as evidence; processing uses a separate FFmpeg copy.
+        </div>
+
+        <div>
+            <label class="block text-sm font-medium text-gray-200 mb-2">Official Suno audio file</label>
+            <input type="file" name="original_audio" accept="audio/mpeg,audio/mp4,.mp3,.m4a" required
+                class="block w-full text-sm text-gray-300 file:mr-4 file:px-4 file:py-2 file:rounded-md file:border-0 file:bg-discord-blurple file:text-white hover:file:bg-indigo-500 file:cursor-pointer">
+            <p class="text-gray-500 text-xs mt-2">MP3 or M4A, maximum 20 MiB. The original bytes are archived unchanged.</p>
+        </div>
+
+        <div class="space-y-3 rounded-lg border border-gray-700/50 bg-discord-darker/50 p-4">
+            <p class="text-white text-sm font-semibold">Required confirmations</p>
+            <label class="flex items-start gap-3 text-sm text-gray-300"><input type="checkbox" name="official_download_attested" value="1" required class="mt-1 accent-discord-blurple"><span>I downloaded this exact file through an official download channel provided by Suno.</span></label>
+            <label class="flex items-start gap-3 text-sm text-gray-300"><input type="checkbox" name="paid_download_attested" value="1" required class="mt-1 accent-discord-blurple"><span>At the time of download, this specific song had commercial-use rights under my paid Suno plan. It is not a Free/Basic/Trial-only download.</span></label>
+            <label class="flex items-start gap-3 text-sm text-gray-300"><input type="checkbox" name="not_suno_remix_attested" value="1" required class="mt-1 accent-discord-blurple"><span>This song is not a Suno Remix and was not created through Suno's remix feature.</span></label>
+            <label class="flex items-start gap-3 text-sm text-gray-300"><input type="checkbox" name="third_party_rights_attested" value="1" required class="mt-1 accent-discord-blurple"><span>I hold all necessary rights and permissions for lyrics, samples, voices, performances and every other included element.</span></label>
+            <label class="flex items-start gap-3 text-sm text-gray-300"><input type="checkbox" name="commercial_rights_attested" value="1" required class="mt-1 accent-discord-blurple"><span>I authorize TrYa Stream on a perpetual, non-exclusive basis to store and process this file and to use the song in Twitch live streams, recordings, clips and VOD uploads.</span></label>
+        </div>
+
+        <div class="rounded-lg border border-gray-700/50 p-4 text-xs text-gray-400 leading-relaxed">
+            <p class="text-gray-200 font-medium mb-2">Evidence and retention</p>
+            The original upload, its SHA-256 hash, filename, MIME type, size, upload time and the versioned declaration are retained for rights verification. Removing a song from an active playlist does not delete this evidence or revoke already-created Twitch VODs.
+        </div>
+
+        <button type="submit" class="w-full py-3 bg-discord-blurple hover:bg-indigo-500 text-white font-semibold rounded-lg transition-colors text-sm">Archive Original &amp; Submit</button>
+    </div>
+</form>
+{% endif %}
+</div>
+</body>
+</html>

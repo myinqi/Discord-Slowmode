@@ -27,7 +27,14 @@ from bot.exp_radio_files import (
     cleanup_orphan_exp_radio_hook_files,
     exp_radio_hook_cache_path,
 )
+from bot.trya_stream_files import (
+    cleanup_trya_stream_hook_files,
+    cleanup_trya_stream_song_files,
+    cleanup_orphan_trya_stream_hook_files,
+    trya_stream_hook_cache_path,
+)
 from bot.suno_urls import resolve_suno_uuid
+from config import Config
 
 SUNO_URL_PATTERN = re.compile(r'https://suno\.com/(?:s|song)/[\w-]+')
 YOUTUBE_URL_RE   = re.compile(
@@ -491,6 +498,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('quiz', 'Quiz'),
         ('radio', 'Twitch Radio'),
         ('exp_radio', 'Experimental Radio'),
+        ('trya_stream', 'TrYa Stream'),
         ('submission_bans', 'Submission Bans'),
         ('auto_translate', 'Auto Translate'),
         ('twitch_alerts', 'Twitch Alerts'),
@@ -537,6 +545,7 @@ def create_app(db: Database, bot=None) -> Quart:
         {"key": "reminders", "endpoint": "reminders_admin", "icon": "⏰", "label": "Reminders", "perm": "reminders"},
         {"key": "radio", "endpoint": "radio_admin", "icon": "📻", "label": "Twitch", "perm": "radio"},
         {"key": "exp_radio", "endpoint": "exp_radio_admin", "icon": "🎙️", "label": "Exp. Radio", "perm": "exp_radio"},
+        {"key": "trya_stream", "endpoint": "trya_stream_admin", "icon": "trya_logo", "label": "TrYa Stream", "perm": "trya_stream"},
         {"key": "submission_bans", "endpoint": "submission_bans", "icon": "⛔", "label": "Submission Bans", "perm": "submission_bans"},
         {"key": "relic_hunt", "endpoint": "relic_hunt_admin", "icon": "🪶", "label": "Raven's Nest", "perm": "relic_hunt"},
         {"key": "twitch_alerts", "endpoint": "twitch_alerts_admin", "icon": "📣", "label": "Twitch Alerts", "perm": "twitch_alerts"},
@@ -685,6 +694,8 @@ def create_app(db: Database, bot=None) -> Quart:
                 "radio_cleanup_task",
                 "exp_radio_cleanup_task",
                 "exp_radio_schedule_task",
+                "trya_stream_cleanup_task",
+                "trya_stream_schedule_task",
             ):
                 task = getattr(app, task_name, None)
                 if task and not task.done():
@@ -693,7 +704,11 @@ def create_app(db: Database, bot=None) -> Quart:
             with contextlib.suppress(Exception):
                 await twitch_event_alerts.stop()
             with contextlib.suppress(Exception):
+                await trya_stream_event_alerts.stop()
+            with contextlib.suppress(Exception):
                 await relic_hunt.stop()
+            with contextlib.suppress(Exception):
+                await trya_relic_hunt.stop()
             if bot and not bot.is_closed():
                 with contextlib.suppress(Exception):
                     await bot.close()
@@ -1430,6 +1445,10 @@ def create_app(db: Database, bot=None) -> Quart:
         if exp_stream_manager.is_running or app.radio_start_lock.locked():
             app.database_restore_pending = False
             await flash("Stop the Experimental Radio before restoring a backup.", "error")
+            return redirect(url_for("settings"))
+        if trya_stream_manager.is_running or getattr(trya_stream_manager, "_loading", False):
+            app.database_restore_pending = False
+            await flash("Stop TrYa Stream before restoring a backup.", "error")
             return redirect(url_for("settings"))
 
         data_dir = os.path.dirname(os.path.abspath(db.db_path))
@@ -7027,6 +7046,10 @@ def create_app(db: Database, bot=None) -> Quart:
     for _sub in ("mp3", "ass", "assets"):
         os.makedirs(os.path.join(EXP_RADIO_DIR, _sub), exist_ok=True)
 
+    TRYA_STREAM_DIR = os.path.abspath(Config.TRYA_STREAM_DIR)
+    for _sub in ("mp3", "ass", "assets"):
+        os.makedirs(os.path.join(TRYA_STREAM_DIR, _sub), exist_ok=True)
+
     RIGHTS_DECLARATION_TEXT = (
         "I hereby confirm that I am the creator or rights holder of this audio track "
         "and grant a non-exclusive streaming license for a period of 14 days from the "
@@ -7565,26 +7588,37 @@ def create_app(db: Database, bot=None) -> Quart:
         """Explain why the legacy radio must not be started right now."""
         if exp_stream_manager.is_running:
             return "Experimental Radio is currently live."
-
-        enabled = await db.get_setting("exp_radio_schedule_enabled") or "off"
-        if enabled != "on":
-            return ""
-        days_csv = await db.get_setting("exp_radio_schedule_days") or ""
-        days = {int(day) for day in days_csv.split(",") if day.strip().isdigit()}
-        if not days:
-            return ""
+        if trya_stream_manager.is_running:
+            return "TrYa Stream is currently live."
 
         from datetime import datetime
         from zoneinfo import ZoneInfo
         now = datetime.now(ZoneInfo("Europe/Berlin"))
-        if now.weekday() not in days:
-            return ""
-        schedule_time = (await db.get_setting("exp_radio_schedule_time") or "").strip()
-        time_note = f" at {schedule_time}" if schedule_time else ""
-        return (
-            "Experimental Radio is scheduled for today"
-            f"{time_note}. The legacy radio is locked for the entire scheduled day."
-        )
+
+        enabled = await db.get_setting("exp_radio_schedule_enabled") or "off"
+        days_csv = await db.get_setting("exp_radio_schedule_days") or ""
+        days = {int(day) for day in days_csv.split(",") if day.strip().isdigit()}
+        if enabled == "on" and days and now.weekday() in days:
+            schedule_time = (await db.get_setting("exp_radio_schedule_time") or "").strip()
+            time_note = f" at {schedule_time}" if schedule_time else ""
+            return (
+                "Experimental Radio is scheduled for today"
+                f"{time_note}. The legacy radio is locked for the entire scheduled day."
+            )
+
+        trya_enabled = await db.get_setting("trya_stream_schedule_enabled") or "off"
+        trya_days_csv = await db.get_setting("trya_stream_schedule_days") or ""
+        trya_days = {
+            int(day) for day in trya_days_csv.split(",") if day.strip().isdigit()
+        }
+        if trya_enabled == "on" and trya_days and now.weekday() in trya_days:
+            schedule_time = (await db.get_setting("trya_stream_schedule_time") or "").strip()
+            time_note = f" at {schedule_time}" if schedule_time else ""
+            return (
+                "TrYa Stream is scheduled for today"
+                f"{time_note}. The legacy radio is locked for the entire scheduled day."
+            )
+        return ""
 
     @app.route("/radio/stream/status")
     @permission_required('radio')
@@ -7926,6 +7960,11 @@ def create_app(db: Database, bot=None) -> Quart:
                             "Scheduler: legacy Twitch Radio is running or starting - retrying shortly.",
                             level="error", prefix="[exp-schedule]",
                         )
+                    elif trya_stream_manager.is_running:
+                        log_event(
+                            "Scheduler: TrYa Stream is running - retrying shortly.",
+                            level="error", prefix="[exp-schedule]",
+                        )
                     elif exp_stream_manager.is_running:
                         await db.set_setting(
                             "exp_radio_schedule_last_handled", occurrence_key,
@@ -7953,6 +7992,11 @@ def create_app(db: Database, bot=None) -> Quart:
                                         result = {
                                             "ok": False,
                                             "error": "database restore in progress",
+                                        }
+                                    elif stream_manager.is_running or trya_stream_manager.is_running:
+                                        result = {
+                                            "ok": False,
+                                            "error": "another radio stream started first",
                                         }
                                     else:
                                         result = await exp_stream_manager.start(
@@ -8016,6 +8060,276 @@ def create_app(db: Database, bot=None) -> Quart:
                 print(f"[exp-radio] Scheduler loop error: {e}", flush=True)
             await asyncio.sleep(30)
 
+    async def _trya_stream_cleanup_loop():
+        """Remove due submissions from the active playlist while retaining evidence."""
+        while True:
+            try:
+                await asyncio.sleep(3600)
+                removed = await db.deactivate_due_trya_stream_submissions(
+                    reason="submission_retention_elapsed"
+                )
+                if not removed:
+                    continue
+                print(
+                    f"[trya-stream] Removed {len(removed)} due submission(s) from the playlist; "
+                    "originals and working files retained.",
+                    flush=True,
+                )
+                channel_id_str = await db.get_setting("trya_stream_expiry_channel_id")
+                if channel_id_str and bot and bot.is_ready():
+                    guild = get_guild()
+                    channel = guild.get_channel(int(channel_id_str)) if guild else None
+                    if channel:
+                        lines = [
+                            f"- **{song.get('title') or 'Untitled'}** by "
+                            f"{song.get('artist') or song.get('user_name') or ''}  "
+                            f"{song.get('suno_url') or ''}"
+                            for song in removed
+                        ]
+                        await channel.send(
+                            f"🗂️ **{len(removed)} TrYa Stream submission(s) left the active playlist:**\n"
+                            + "\n".join(lines)
+                            + "\n\nOriginal uploads and consent evidence remain archived."
+                        )
+            except Exception as e:
+                print(f"[trya-stream] Playlist retention error: {e}", flush=True)
+
+    async def _post_trya_stream_announcement(ch_id: str, stream_url: str) -> tuple[bool, str]:
+        """Send the “📺 Live Stream” embed to the given Discord channel id.
+
+        Returns (True, channel_name) on success, (False, error_message) on
+        failure. Called both from the manual “Post Stream Link” buttons on
+        the admin page and from the auto-start scheduler.
+        """
+        if not ch_id or not stream_url:
+            return False, "missing channel id or stream URL"
+        guild = get_guild()
+        if not guild:
+            return False, "Discord guild unavailable"
+        try:
+            ch_int = int(ch_id)
+        except Exception:
+            return False, f"invalid channel id {ch_id!r}"
+        channel = guild.get_channel(ch_int) or guild.get_thread(ch_int)
+        if not channel:
+            return False, f"channel {ch_id} not found"
+        try:
+            import discord
+            embed = discord.Embed(
+                title="\U0001F4FA Live Stream",
+                description=f"Watch the stream now!\n\n**[Tune in]({stream_url})**",
+                color=discord.Color.purple(),
+            )
+            await channel.send(embed=embed)
+            return True, channel.name
+        except Exception as e:
+            return False, f"send failed: {e}"
+
+    async def _trya_stream_schedule_loop():
+        """Auto-start the trya_stream stream on configured weekdays + time.
+
+        A 15-minute catch-up window prevents a container restart or briefly
+        busy event loop at the configured minute from losing the scheduled
+        run. Accepted occurrences are persisted so a later process restart
+        cannot fire the same schedule twice.
+        """
+        from bot.trya_stream_manager import log_event
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+
+        schedule_tz = ZoneInfo("Europe/Berlin")
+        catch_up_seconds = 15 * 60
+        retry_seconds = 60
+        app.trya_schedule_last_attempt_key = ""
+        app.trya_schedule_last_attempt_at = 0.0
+        last_config_signature = None
+        log_event(
+            "Scheduler loop started (Europe/Berlin, 15-minute catch-up window).",
+            prefix="[trya-schedule]",
+        )
+        while True:
+            try:
+                enabled = await db.get_setting("trya_stream_schedule_enabled") or "off"
+                days_csv = await db.get_setting("trya_stream_schedule_days") or ""
+                hhmm = (await db.get_setting("trya_stream_schedule_time") or "").strip()
+                config_signature = (enabled, days_csv, hhmm)
+                if config_signature != last_config_signature:
+                    last_config_signature = config_signature
+                    if enabled == "on":
+                        day_names = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+                        configured_days = [
+                            day_names[int(day)]
+                            for day in days_csv.split(",")
+                            if day.strip().isdigit() and 0 <= int(day) <= 6
+                        ]
+                        if configured_days and hhmm:
+                            log_event(
+                                f"Scheduler armed: {', '.join(configured_days)} at {hhmm} Europe/Berlin.",
+                                prefix="[trya-schedule]",
+                            )
+                        else:
+                            log_event(
+                                "Scheduler enabled but weekdays or start time are missing.",
+                                level="error", prefix="[trya-schedule]",
+                            )
+                    else:
+                        log_event("Scheduler disabled.", prefix="[trya-schedule]")
+                if enabled != "on":
+                    await asyncio.sleep(30)
+                    continue
+                days = {int(d) for d in days_csv.split(",") if d.strip().isdigit()}
+                if not days or not hhmm or ":" not in hhmm:
+                    await asyncio.sleep(30)
+                    continue
+                try:
+                    h_str, m_str = hhmm.split(":", 1)
+                    target_h, target_m = int(h_str), int(m_str)
+                except Exception:
+                    await asyncio.sleep(30)
+                    continue
+                if not (0 <= target_h <= 23 and 0 <= target_m <= 59):
+                    await asyncio.sleep(30)
+                    continue
+
+                now = datetime.now(schedule_tz)
+                target = now.replace(
+                    hour=target_h, minute=target_m, second=0, microsecond=0,
+                )
+                if target > now:
+                    previous_target = target - timedelta(days=1)
+                    if (now - previous_target).total_seconds() <= catch_up_seconds:
+                        target = previous_target
+                seconds_late = (now - target).total_seconds()
+                occurrence_key = target.strftime("%Y-%m-%dT%H:%M%z")
+                last_handled = (
+                    await db.get_setting("trya_stream_schedule_last_handled") or ""
+                )
+                due = (
+                    target.weekday() in days
+                    and 0 <= seconds_late <= catch_up_seconds
+                    and occurrence_key != last_handled
+                )
+                retry_ready = (
+                    occurrence_key != app.trya_schedule_last_attempt_key
+                    or time.monotonic() - app.trya_schedule_last_attempt_at >= retry_seconds
+                )
+                if due and retry_ready:
+                    app.trya_schedule_last_attempt_key = occurrence_key
+                    app.trya_schedule_last_attempt_at = time.monotonic()
+                    late_note = (
+                        "on time" if seconds_late < 60
+                        else f"{int(seconds_late // 60)} minute(s) late"
+                    )
+                    if app.database_restore_pending:
+                        log_event(
+                            "Scheduler: database restore in progress - retrying shortly.",
+                            level="error", prefix="[trya-schedule]",
+                        )
+                    elif stream_manager.is_running or stream_manager._loading:
+                        log_event(
+                            "Scheduler: legacy Twitch Radio is running or starting - retrying shortly.",
+                            level="error", prefix="[trya-schedule]",
+                        )
+                    elif exp_stream_manager.is_running:
+                        log_event(
+                            "Scheduler: Experimental Radio is running - retrying shortly.",
+                            level="error", prefix="[trya-schedule]",
+                        )
+                    elif trya_stream_manager.is_running:
+                        await db.set_setting(
+                            "trya_stream_schedule_last_handled", occurrence_key,
+                        )
+                        log_event(
+                            "Scheduler: stream already running - scheduled occurrence marked as handled.",
+                            prefix="[trya-schedule]",
+                        )
+                    else:
+                        twitch_key = await db.get_setting("trya_stream_twitch_key") or ""
+                        if not twitch_key:
+                            log_event(
+                                "Scheduler: no Twitch stream key configured - retrying shortly.",
+                                level="error", prefix="[trya-schedule]",
+                            )
+                        else:
+                            log_event(
+                                f"Scheduler: triggering auto-start for {target.strftime('%a %H:%M')} "
+                                f"Europe/Berlin ({late_note}) with fresh cache.",
+                                prefix="[trya-schedule]",
+                            )
+                            try:
+                                async with app.radio_start_lock:
+                                    if app.database_restore_pending:
+                                        result = {
+                                            "ok": False,
+                                            "error": "database restore in progress",
+                                        }
+                                    elif stream_manager.is_running or exp_stream_manager.is_running:
+                                        result = {
+                                            "ok": False,
+                                            "error": "another radio stream started first",
+                                        }
+                                    else:
+                                        result = await trya_stream_manager.start(
+                                            twitch_key, fresh_cache=True, scheduled=True,
+                                        )
+                                if result.get("ok"):
+                                    log_event(
+                                        f"Scheduler: start accepted with {result.get('song_count')} song(s); waiting for FFmpeg to go live.",
+                                        prefix="[trya-schedule]",
+                                    )
+                                    live_ok = await trya_stream_manager.wait_until_live(timeout=900)
+                                    if not live_ok:
+                                        log_event(
+                                            "Scheduler: stream did not become live within 15 minutes — skipping Discord announcement.",
+                                            level="error", prefix="[trya-schedule]",
+                                        )
+                                        continue
+                                    await db.set_setting(
+                                        "trya_stream_schedule_last_handled", occurrence_key,
+                                    )
+                                    log_event(
+                                        "Scheduler: stream is live; posting Discord announcement.",
+                                        prefix="[trya-schedule]",
+                                    )
+                                    # Auto-post stream URL to configured
+                                    # Discord channels (same embed as the
+                                    # manual “Post Stream Link” buttons).
+                                    stream_url = await db.get_setting("trya_stream_stream_url") or ""
+                                    if stream_url:
+                                        for slot in ("1", "2", "3"):
+                                            ch_id = await db.get_setting(f"trya_stream_post_channel_{slot}_id") or ""
+                                            if not ch_id:
+                                                continue
+                                            ok, info = await _post_exp_stream_announcement(ch_id, stream_url)
+                                            if ok:
+                                                log_event(
+                                                    f"Scheduler: announced in #{info}.",
+                                                    prefix="[trya-schedule]",
+                                                )
+                                            else:
+                                                log_event(
+                                                    f"Scheduler: announcement to channel {ch_id} failed \u2014 {info}",
+                                                    level="error", prefix="[trya-schedule]",
+                                                )
+                                    else:
+                                        log_event(
+                                            "Scheduler: no stream URL configured \u2014 skipping Discord announcement.",
+                                            prefix="[trya-schedule]",
+                                        )
+                                else:
+                                    log_event(
+                                        f"Scheduler: start failed \u2014 {result.get('error')}",
+                                        level="error", prefix="[trya-schedule]",
+                                    )
+                            except Exception as e:
+                                log_event(
+                                    f"Scheduler: start exception: {e}",
+                                    level="error", prefix="[trya-schedule]",
+                                )
+            except Exception as e:
+                print(f"[trya-stream] Scheduler loop error: {e}", flush=True)
+            await asyncio.sleep(30)
+
     @app.before_serving
     async def start_cleanup_task():
         active_exp_songs = await db.get_all_exp_radio_songs(active_only=True)
@@ -8027,25 +8341,51 @@ def create_app(db: Database, bot=None) -> Quart:
                 f"[exp-radio] Startup cleanup removed {orphan_hooks} orphan Hook file(s).",
                 flush=True,
             )
+        retained_trya_songs = await db.get_all_trya_stream_songs(active_only=False)
+        trya_orphan_hooks = cleanup_orphan_trya_stream_hook_files(
+            TRYA_STREAM_DIR, retained_trya_songs
+        )
+        if trya_orphan_hooks:
+            print(
+                f"[trya-stream] Startup cleanup removed {trya_orphan_hooks} orphan Hook file(s).",
+                flush=True,
+            )
         app.radio_cleanup_task = asyncio.create_task(_radio_cleanup_loop())
         app.exp_radio_cleanup_task = asyncio.create_task(_exp_radio_cleanup_loop())
         app.exp_radio_schedule_task = asyncio.create_task(_exp_radio_schedule_loop())
+        app.trya_stream_cleanup_task = asyncio.create_task(_trya_stream_cleanup_loop())
+        app.trya_stream_schedule_task = asyncio.create_task(_trya_stream_schedule_loop())
         await twitch_event_alerts.start()
+        await trya_stream_event_alerts.start()
         asyncio.create_task(_relic_hunt_autostart())
+        asyncio.create_task(_trya_relic_hunt_autostart())
 
     # ── Experimental Radio ─────────────────────────────────────────────────────
 
     from bot.exp_stream_manager import ExpStreamManager
     exp_stream_manager = ExpStreamManager(db, EXP_RADIO_DIR)
+    from bot.trya_stream_manager import TryaStreamManager
+    trya_stream_manager = TryaStreamManager(db, TRYA_STREAM_DIR)
     if bot is not None:
         bot.exp_stream_manager = exp_stream_manager
+        bot.trya_stream_manager = trya_stream_manager
 
     from bot.relic_hunt import RelicHunt
     from bot.twitch_bot import TwitchBot as _TwitchBot
     from bot.twitch_event_alerts import DEFAULT_ALERT_SETTINGS, TwitchEventAlerts
     from bot.live_log import log_event as _rh_log
-    relic_hunt = RelicHunt(db)
+    from bot.trya_live_log import log_event as _trya_log
+    relic_hunt = RelicHunt(db, stream_kind="exp")
+    trya_relic_hunt = RelicHunt(db, stream_kind="trya")
     twitch_event_alerts = TwitchEventAlerts(db)
+    trya_stream_event_alerts = TwitchEventAlerts(
+        db,
+        settings_prefix="trya_stream_twitch_alerts",
+        chat_prefix="trya_stream_twitch",
+        eventsub_prefix="trya_stream_twitch_alerts_eventsub",
+        log_prefix="[trya-stream-alerts]",
+        logger=_trya_log,
+    )
 
     def _fmt_exp_duration(seconds) -> str:
         try:
@@ -8179,6 +8519,1398 @@ def create_app(db: Database, bot=None) -> Quart:
             _rh_log("Auto-started successfully", "info", "[relic-hunt]")
         except Exception as e:
             _rh_log(f"Auto-start error: {e}", "error", "[relic-hunt]")
+
+    async def _trya_relic_hunt_autostart():
+        await asyncio.sleep(3)
+        try:
+            await db.ensure_relic_tables()
+            enabled = (await db.relic_get_setting("enabled")) != "false"
+            listener_enabled = (
+                await db.get_setting("trya_stream_relic_hunt_enabled") or "on"
+            ) == "on"
+            if not enabled or not listener_enabled:
+                return
+            client_id = await db.get_setting("trya_stream_twitch_client_id")
+            refresh_token = await db.get_setting("trya_stream_twitch_refresh_token")
+            broadcaster = await db.get_setting("trya_stream_twitch_broadcaster_login")
+            exp_broadcaster = await db.get_setting("exp_radio_twitch_broadcaster_login")
+            exp_refresh_token = await db.get_setting("exp_radio_twitch_refresh_token")
+            if (
+                broadcaster
+                and exp_broadcaster
+                and exp_refresh_token
+                and broadcaster.strip().lower() == exp_broadcaster.strip().lower()
+            ):
+                _trya_log(
+                    "TrYa and Exp. Radio use the same Twitch channel; the existing Exp. listener owns Raven's Nest to prevent duplicate command handling",
+                    "info",
+                    "[trya-relic-hunt]",
+                )
+                return
+            if not (client_id and refresh_token and broadcaster):
+                _trya_log(
+                    "Twitch credentials not configured, skipping TrYa Raven's Nest listener",
+                    "error",
+                    "[trya-relic-hunt]",
+                )
+                return
+            twitch = _TwitchBot(db, key_prefix="trya_stream_twitch")
+            ok, message = await twitch.start()
+            if not ok:
+                _trya_log(
+                    f"Auto-start failed: {message}", "error", "[trya-relic-hunt]"
+                )
+                return
+            await trya_relic_hunt.start(twitch)
+            _trya_log("Auto-started successfully", "info", "[trya-relic-hunt]")
+        except Exception as exc:
+            _trya_log(f"Auto-start error: {exc}", "error", "[trya-relic-hunt]")
+
+    async def _trya_stream_relevant_songs() -> list[dict]:
+        active_playlist = (await db.get_setting("trya_stream_active_playlist")) or "submission"
+        if active_playlist == "both":
+            songs = await db.get_all_trya_stream_songs(active_only=True, source="submission")
+            songs += await db.get_all_trya_stream_songs(active_only=True, source="admin")
+        else:
+            songs = await db.get_all_trya_stream_songs(active_only=True, source=active_playlist)
+
+        if (await db.get_setting("trya_stream_intro_enabled") or "off") == "on":
+            songs += await db.get_all_trya_stream_songs(active_only=True, source="intro")
+        if (await db.get_setting("trya_stream_outro_enabled") or "off") == "on":
+            songs += await db.get_all_trya_stream_songs(active_only=True, source="outro")
+
+        seen: set[int] = set()
+        unique: list[dict] = []
+        for song in songs:
+            song_id = int(song.get("id") or 0)
+            if song_id and song_id in seen:
+                continue
+            if song_id:
+                seen.add(song_id)
+            unique.append(song)
+        return unique
+
+    async def _check_trya_stream_durations() -> tuple[int, int, int, int]:
+        from bot.trya_stream_manager import log_event
+
+        songs = await _trya_stream_relevant_songs()
+        checked = corrected = skipped = errors = 0
+        log_event(
+            f"Manual duration check started for {len(songs)} active stream song(s).",
+            prefix="[duration]",
+        )
+        for song in songs:
+            title = song.get("title") or song.get("mp3_filename") or f"#{song.get('id')}"
+            if not song.get("mp3_filename"):
+                skipped += 1
+                log_event(f"Skipped #{song.get('id')} ({title!r}): no MP3 file.", prefix="[duration]")
+                continue
+            checked += 1
+            try:
+                probed = await trya_stream_manager._probe_audio_duration(song)
+            except Exception as exc:
+                probed = None
+                log_event(
+                    f"Duration probe failed for #{song.get('id')} ({title!r}): {exc}",
+                    level="error",
+                    prefix="[duration]",
+                )
+            if probed is None:
+                errors += 1
+                continue
+            try:
+                stored = float(song.get("duration") or 0)
+            except (TypeError, ValueError):
+                stored = 0.0
+            if not stored or abs(probed - stored) > 1.0:
+                try:
+                    await db.update_trya_stream_song(song["id"], duration=probed)
+                    corrected += 1
+                    log_event(
+                        f"Corrected #{song.get('id')} ({title!r}): "
+                        f"{_fmt_exp_duration(stored)} -> {_fmt_exp_duration(probed)} "
+                        f"({stored:.1f}s -> {probed:.1f}s).",
+                        prefix="[duration]",
+                    )
+                except Exception as exc:
+                    errors += 1
+                    log_event(
+                        f"Duration DB update failed for #{song.get('id')} ({title!r}): {exc}",
+                        level="error",
+                        prefix="[duration]",
+                    )
+        log_event(
+            f"Manual duration check done: {checked} checked, {corrected} corrected, "
+            f"{skipped} skipped, {errors} error(s).",
+            level="error" if errors else "info",
+            prefix="[duration]",
+        )
+        return checked, corrected, skipped, errors
+
+    @app.route("/trya-stream", methods=["GET", "POST"])
+    @permission_required('trya_stream')
+    async def trya_stream_admin():
+        import csv, io, uuid as _uuid
+        from datetime import datetime, timezone
+        from quart import jsonify, send_file
+
+        if request.method == "POST":
+            form = await request.form
+            files = await request.files
+            action = form.get("action", "")
+
+            if action == "delete_song":
+                song_id = int(form.get("song_id", 0))
+                removed = await db.delete_trya_stream_song(song_id)
+                if removed:
+                    protected_songs = await db.get_all_trya_stream_songs(active_only=True)
+                    cleanup_trya_stream_song_files(
+                        TRYA_STREAM_DIR, removed, protected_songs
+                    )
+                    await flash(
+                        "Song removed from the active playlist; original, working copy and consent evidence retained.",
+                        "success",
+                    )
+                else:
+                    await flash("Song not found.", "error")
+
+            elif action == "set_hook_video":
+                import bot.trya_stream_manager as _esm
+                from bot.suno_hook import SunoHookError, resolve_suno_hook
+
+                song_id = int(form.get("song_id", 0) or 0)
+                hook_value = (form.get("hook_value") or "").strip()
+                song = await db.get_trya_stream_song(song_id) if song_id else None
+                if _esm.stream_is_live:
+                    await flash("Stop the stream before changing a Hook video.", "error")
+                elif not song or song.get("playlist_source") not in ("submission", "admin"):
+                    await flash("Song not found in the submission or admin playlist.", "error")
+                else:
+                    try:
+                        hook = await resolve_suno_hook(hook_value)
+                        if hook["original_clip_id"].lower() != str(song.get("suno_uuid") or "").lower():
+                            raise SunoHookError(
+                                "This Hook belongs to a different Suno song."
+                            )
+                        candidate = dict(song)
+                        candidate.update(hook)
+                        cached_path = await trya_stream_manager._get_video(
+                            candidate, allow_hook_fallback=False
+                        )
+                        if not cached_path or not os.path.exists(cached_path):
+                            raise SunoHookError("The Hook video could not be downloaded.")
+                        old_hook_id = (song.get("hook_id") or "").strip()
+                        await db.update_trya_stream_song(
+                            song_id,
+                            hook_id=hook["hook_id"],
+                            hook_share_url=hook["hook_share_url"],
+                            hook_video_url=hook["hook_video_url"],
+                        )
+                        if old_hook_id and old_hook_id != hook["hook_id"]:
+                            old_path = trya_stream_hook_cache_path(
+                                TRYA_STREAM_DIR, song_id, old_hook_id
+                            )
+                            try:
+                                os.remove(old_path)
+                            except FileNotFoundError:
+                                pass
+                        await flash(
+                            f"Hook video set for “{song.get('title') or song_id}”.",
+                            "success",
+                        )
+                    except SunoHookError as exc:
+                        await flash(str(exc), "error")
+                    except Exception as exc:
+                        print(
+                            f"[trya-stream] Hook setup failed for song #{song_id}: {exc}",
+                            flush=True,
+                        )
+                        await flash("Hook setup failed. Check the server log.", "error")
+
+            elif action == "remove_hook_video":
+                import bot.trya_stream_manager as _esm
+
+                song_id = int(form.get("song_id", 0) or 0)
+                song = await db.get_trya_stream_song(song_id) if song_id else None
+                if _esm.stream_is_live:
+                    await flash("Stop the stream before removing a Hook video.", "error")
+                elif not song:
+                    await flash("Song not found.", "error")
+                else:
+                    await db.update_trya_stream_song(
+                        song_id,
+                        hook_id=None,
+                        hook_share_url=None,
+                        hook_video_url=None,
+                    )
+                    cleanup_trya_stream_hook_files(TRYA_STREAM_DIR, song)
+                    await flash(
+                        f"Hook video removed from “{song.get('title') or song_id}”.",
+                        "success",
+                    )
+
+            elif action == "upload_local_song":
+                import hashlib
+                import tempfile
+                from bot.trya_stream_worker import (
+                    TRYA_RIGHTS_DECLARATION,
+                    TRYA_RIGHTS_VERSION,
+                    ingest_uploaded_audio,
+                    process_exp_song,
+                )
+
+                suno_url = (form.get("suno_url") or "").strip()
+                playlist_source = (form.get("playlist_source") or "submission").strip()
+                uploaded = files.get("original_audio")
+                required_attestations = (
+                    "official_download_attested", "paid_download_attested",
+                    "not_suno_remix_attested", "third_party_rights_attested",
+                    "commercial_rights_attested",
+                )
+                if playlist_source not in {"submission", "admin", "intro", "outro"}:
+                    await flash("Invalid playlist destination.", "error")
+                elif not suno_url or not uploaded or not uploaded.filename:
+                    await flash("A Suno URL and official MP3/M4A download are required.", "error")
+                elif any(not form.get(name) for name in required_attestations):
+                    await flash("Every rights confirmation is required.", "error")
+                else:
+                    suno_uuid = await resolve_suno_uuid(suno_url)
+                    if not suno_uuid:
+                        await flash("Could not resolve a valid Suno song URL.", "error")
+                    else:
+                        user_ref = (form.get("submission_user_ref") or "").strip()
+                        submitter_id = int(user_ref) if user_ref.isdigit() else 0
+                        submitter_name = user_ref or session.get("username", "admin-ui")
+                        rights_hash = hashlib.sha256(
+                            (
+                                f"{TRYA_RIGHTS_VERSION}\n{TRYA_RIGHTS_DECLARATION}\n"
+                                f"user={submitter_id}\nurl={suno_url}\nuuid={suno_uuid}\n"
+                                f"destination={playlist_source}"
+                            ).encode()
+                        ).hexdigest()
+                        song_id, _ = await db.add_trya_stream_song(
+                            user_id=submitter_id, user_name=submitter_name,
+                            suno_url=suno_url, suno_uuid=suno_uuid,
+                            rights_declaration=TRYA_RIGHTS_DECLARATION,
+                            rights_hash=rights_hash, rights_version=TRYA_RIGHTS_VERSION,
+                            playlist_source=playlist_source,
+                        )
+                        incoming_dir = os.path.join(TRYA_STREAM_DIR, "incoming")
+                        os.makedirs(incoming_dir, exist_ok=True)
+                        suffix = os.path.splitext(uploaded.filename)[1].lower()
+                        fd, staged_path = tempfile.mkstemp(
+                            prefix=f"admin_{song_id}_", suffix=suffix, dir=incoming_dir
+                        )
+                        os.close(fd)
+                        try:
+                            await uploaded.save(staged_path)
+                            await ingest_uploaded_audio(
+                                db, song_id, staged_path, TRYA_STREAM_DIR,
+                                original_filename=uploaded.filename,
+                                rights_version=TRYA_RIGHTS_VERSION,
+                                official_download_attested=True,
+                                paid_download_attested=True, is_suno_remix=False,
+                                third_party_rights_attested=True,
+                                commercial_rights_attested=True,
+                                rights_accepted_at=time.time(),
+                            )
+                        except Exception as exc:
+                            await db.update_trya_stream_song(
+                                song_id, analysis_status="failed",
+                                playlist_remove_reason=str(exc)[:500],
+                            )
+                            await flash(f"Upload rejected: {exc}", "error")
+                        else:
+                            asyncio.create_task(process_exp_song(
+                                db, song_id, TRYA_STREAM_DIR, bot=bot,
+                                skip_moderation=playlist_source in {"admin", "intro", "outro"},
+                                max_duration=None if playlist_source in {"admin", "intro", "outro"} else 360,
+                            ))
+                            note = " It is waiting for admin approval." if playlist_source in {"intro", "outro"} else ""
+                            await flash(
+                                f"Original archived and working copy queued for analysis.{note}",
+                                "success",
+                            )
+                        finally:
+                            try:
+                                os.remove(staged_path)
+                            except OSError:
+                                pass
+
+            elif action == "approve_special_song":
+                song_id = int(form.get("song_id", 0) or 0)
+                approved = await db.approve_trya_stream_song(
+                    song_id, session.get("username", "admin")
+                )
+                if approved:
+                    from bot.trya_stream_worker import retry_whisper_year_anomaly_if_needed
+                    asyncio.create_task(
+                        retry_whisper_year_anomaly_if_needed(db, song_id, TRYA_STREAM_DIR)
+                    )
+                await flash(
+                    "Intro/outro proposal approved." if approved else "Proposal could not be approved.",
+                    "success" if approved else "error",
+                )
+
+            elif action == "reject_special_song":
+                song_id = int(form.get("song_id", 0) or 0)
+                rejected = await db.reject_trya_stream_song(
+                    song_id, session.get("username", "admin"), reason="admin_rejected"
+                )
+                await flash(
+                    "Proposal rejected; archive and consent evidence retained."
+                    if rejected else "Proposal could not be rejected.",
+                    "success" if rejected else "error",
+                )
+
+            elif action == "delete_all_songs":
+                import bot.trya_stream_manager as _esm
+                if _esm.stream_is_live:
+                    await flash("Cannot clear the playlist while the stream is live.", "error")
+                else:
+                    removed = await db.get_all_trya_stream_songs(
+                        active_only=True, source="submission"
+                    )
+                    count = await db.delete_all_trya_stream_songs(source="submission")
+                    protected_songs = await db.get_all_trya_stream_songs(active_only=True)
+                    for song in removed:
+                        cleanup_trya_stream_song_files(
+                            TRYA_STREAM_DIR, song, protected_songs
+                        )
+                    await flash(
+                        f"Playlist cleared — {count} song(s) removed; archives and consent evidence retained.",
+                        "success",
+                    )
+
+            elif action == "delete_all_admin_songs":
+                import bot.trya_stream_manager as _esm
+                if _esm.stream_is_live:
+                    await flash("Cannot clear the admin playlist while the stream is live.", "error")
+                else:
+                    removed = await db.get_all_trya_stream_songs(
+                        active_only=True, source="admin"
+                    )
+                    count = await db.delete_all_trya_stream_songs(source="admin")
+                    protected_songs = await db.get_all_trya_stream_songs(active_only=True)
+                    for song in removed:
+                        cleanup_trya_stream_song_files(
+                            TRYA_STREAM_DIR, song, protected_songs
+                        )
+                    await flash(
+                        f"Admin playlist cleared — {count} song(s) removed; archives and consent evidence retained.",
+                        "success",
+                    )
+
+            elif action == "reanalyze_whisper":
+                import bot.trya_stream_manager as _esm
+                if _esm.stream_is_live:
+                    await flash("Cannot run Whisper while the stream is live.", "error")
+                else:
+                    from bot.trya_stream_worker import process_exp_song
+                    songs_all = await db.get_all_trya_stream_songs(active_only=True)
+                    queued = 0
+                    for s in songs_all:
+                        if not s.get("mp3_filename"):
+                            continue  # MP3 never finished uploading — skip
+                        # Drop stale ASS so the player won't pick it up mid-rebuild
+                        await db.update_trya_stream_song(
+                            s["id"], analysis_status="processing", ass_filename=None,
+                        )
+                        asyncio.create_task(
+                            process_exp_song(db, s["id"], TRYA_STREAM_DIR, bot=bot)
+                        )
+                        queued += 1
+                    await flash(
+                        f"Queued {queued} song(s) for re-analysis. "
+                        "Whisper runs in the background — refresh the page to see status updates.",
+                        "success",
+                    )
+
+            elif action == "check_durations":
+                import bot.trya_stream_manager as _esm
+                if _esm.stream_is_live:
+                    await flash("Cannot check durations while the stream is live.", "error")
+                else:
+                    checked, corrected, skipped, errors = await _check_trya_stream_durations()
+                    msg = (
+                        f"Duration check complete: {checked} checked, "
+                        f"{corrected} corrected, {skipped} skipped"
+                    )
+                    if errors:
+                        msg += f", {errors} error(s). Check the Live Log."
+                    else:
+                        msg += ". Details are in the Live Log."
+                    await flash(msg, "error" if errors else "success")
+
+            elif action == "rescrape_metadata_one":
+                from bot.trya_stream_worker import scrape_suno
+                from bot.trya_stream_manager import log_event
+                sid = int(form.get("song_id", "0") or 0)
+                s = await db.get_trya_stream_song(sid) if sid else None
+                if not s or not s.get("suno_uuid"):
+                    await flash("Song not found.", "error")
+                else:
+                    uuid = s["suno_uuid"]
+                    log_event(f"Refreshing metadata for #{sid} (uuid={uuid})…", prefix="[meta]")
+                    meta = await scrape_suno(uuid)
+                    fields = {}
+                    if meta.get("title"):     fields["title"]     = meta["title"]
+                    if meta.get("artist"):    fields["artist"]    = meta["artist"]
+                    if meta.get("video_url"): fields["video_url"] = meta["video_url"]
+                    if meta.get("cover_url"): fields["cover_url"] = meta["cover_url"]
+                    if fields:
+                        await db.update_trya_stream_song(sid, **fields)
+                        for ext in (".jpg", ".mp4"):
+                            cached = os.path.join(TRYA_STREAM_DIR, "cover_cache", f"{uuid}{ext}")
+                            if os.path.exists(cached):
+                                try: os.remove(cached)
+                                except Exception: pass
+                        log_event(
+                            f"Refreshed metadata for #{sid} ({fields.get('title') or s.get('title')!r}) "
+                            f"— updated: {', '.join(sorted(fields.keys()))}",
+                            prefix="[meta]",
+                        )
+                        await flash(f"Refreshed metadata for “{fields.get('title') or s.get('title')}”.", "success")
+                    else:
+                        log_event(
+                            f"No usable metadata returned for #{sid} (uuid={uuid})",
+                            level="error", prefix="[meta]",
+                        )
+                        await flash("Nothing to update — Suno returned no usable metadata.", "warning")
+
+            elif action == "renormalize_cover_one":
+                sid = int(form.get("song_id", "0") or 0)
+                s = await db.get_trya_stream_song(sid) if sid else None
+                if not s:
+                    await flash("Song not found.", "error")
+                else:
+                    ok, msg = await trya_stream_manager.renormalize_cover(s)
+                    await flash(
+                        f"{'✅' if ok else '❌'} {s.get('title') or sid}: {msg}",
+                        "success" if ok else "error",
+                    )
+
+            elif action == "renormalize_cover_all":
+                from bot.trya_stream_manager import log_event
+                songs_all = await db.get_all_trya_stream_songs(active_only=True)
+                log_event(
+                    f"Bulk cover normalize started for {len(songs_all)} song(s)\u2026",
+                    prefix="[cover]",
+                )
+                # Run in the background so the HTTP request returns immediately
+                # (each individual normalization spawns ffprobe + ffmpeg and
+                # would otherwise block the request for tens of seconds).
+                async def _bulk_renorm(songs):
+                    ok_n = fail_n = skip_n = 0
+                    for s in songs:
+                        title = s.get("title") or s.get("id")
+                        try:
+                            ok, msg = await trya_stream_manager.renormalize_cover(s)
+                        except Exception as e:
+                            log_event(
+                                f"  #{s.get('id')} ({title!r}) error: {e}",
+                                level="error", prefix="[cover]",
+                            )
+                            fail_n += 1
+                            continue
+                        if ok:
+                            log_event(
+                                f"  #{s.get('id')} ({title!r}): {msg}",
+                                prefix="[cover]",
+                            )
+                            ok_n += 1
+                        else:
+                            # 'No usable cover URL' / 'failed' — distinguish
+                            level = "error" if "fail" in msg.lower() else "info"
+                            log_event(
+                                f"  #{s.get('id')} ({title!r}): {msg}",
+                                level=level, prefix="[cover]",
+                            )
+                            if level == "error":
+                                fail_n += 1
+                            else:
+                                skip_n += 1
+                    log_event(
+                        f"Bulk cover normalize done: {ok_n} ok, {fail_n} failed, "
+                        f"{skip_n} skipped (no cached cover).",
+                        prefix="[cover]",
+                    )
+                asyncio.create_task(_bulk_renorm(songs_all))
+                await flash(
+                    f"Queued cover normalization for {len(songs_all)} song(s) \u2014 "
+                    "watch the Live Log for progress.",
+                    "success",
+                )
+
+            elif action == "approve_moderation_one":
+                sid = int(form.get("song_id", "0") or 0)
+                s = await db.get_trya_stream_song(sid) if sid else None
+                if not s:
+                    await flash("Song not found.", "error")
+                else:
+                    await db.update_trya_stream_song(
+                        sid,
+                        moderation_status="approved",
+                        moderation_at=time.time(),
+                    )
+                    from bot.trya_stream_worker import retry_whisper_year_anomaly_if_needed
+                    asyncio.create_task(
+                        retry_whisper_year_anomaly_if_needed(db, sid, TRYA_STREAM_DIR)
+                    )
+                    await flash(
+                        f"✅ Approved “{s.get('title') or sid}” for the stream playlist.",
+                        "success",
+                    )
+
+            elif action == "approve_admin_whisper_bypass":
+                from bot.trya_stream_manager import log_event
+                sid = int(form.get("song_id", "0") or 0)
+                s = await db.get_trya_stream_song(sid) if sid else None
+                if not s:
+                    await flash("Song not found.", "error")
+                elif s.get("playlist_source") != "admin":
+                    await flash("This bypass is only available for admin playlist songs.", "error")
+                elif not s.get("mp3_filename"):
+                    await flash("Cannot approve yet: MP3 download is not complete.", "error")
+                else:
+                    await db.update_trya_stream_song(
+                        sid,
+                        analysis_status="done",
+                        word_timestamps="[]",
+                        ass_filename=None,
+                        moderation_status="approved",
+                        moderation_reason="Admin playlist: Whisper transcript bypassed.",
+                        moderation_at=time.time(),
+                    )
+                    log_event(
+                        f"Admin bypassed Whisper transcript for #{sid} "
+                        f"({s.get('title') or s.get('suno_url') or sid!r}); marked stream-ready.",
+                        prefix="[admin-pl]",
+                    )
+                    await flash(
+                        f"✅ Marked “{s.get('title') or sid}” as ready without Whisper transcript.",
+                        "success",
+                    )
+
+            elif action == "remoderate_one":
+                import bot.trya_stream_manager as _esm
+                if _esm.stream_is_live:
+                    await flash("Cannot run LLM moderation while the stream is live.", "error")
+                else:
+                    from bot.exp_moderation import moderate_lyrics
+                    from bot.llm import OllamaClient
+                    from config import Config
+                    sid = int(form.get("song_id", "0") or 0)
+                    s = await db.get_trya_stream_song(sid) if sid else None
+                    if not s or not s.get("lyrics"):
+                        await flash("Song not found or has no lyrics yet.", "error")
+                    else:
+                        from bot.trya_stream_manager import log_event
+                        async def _run_remoderation(song_id, snap):
+                            title_s = snap.get("title") or f"#{song_id}"
+                            try:
+                                client = OllamaClient(
+                                    base_url=Config.OLLAMA_URL,
+                                    model=Config.LLM_MODEL,
+                                    timeout=Config.LLM_REQUEST_TIMEOUT,
+                                )
+                                log_event(
+                                    f"Re-moderation start for #{song_id} ({title_s!r})",
+                                    prefix="[mod]",
+                                )
+                                verdict = await moderate_lyrics(
+                                    client,
+                                    lyrics=snap.get("lyrics") or "",
+                                    title=snap.get("title") or "",
+                                    artist=snap.get("artist") or "",
+                                )
+                                await db.update_trya_stream_song(
+                                    song_id,
+                                    moderation_status=verdict["status"],
+                                    moderation_reason=verdict.get("reason") or "",
+                                    moderation_at=time.time(),
+                                )
+                                level = "error" if verdict["status"] in ("flagged", "pending") else "info"
+                                summary = (
+                                    f"Re-moderation #{song_id} → {verdict['status']}"
+                                    f"{' (translated)' if verdict.get('translated') else ''}"
+                                )
+                                if verdict.get("reason"):
+                                    summary += f": {verdict['reason']}"
+                                log_event(summary, level=level, prefix="[mod]")
+                            except Exception as e:
+                                log_event(
+                                    f"Re-moderation error #{song_id}: {e}",
+                                    level="error", prefix="[mod]",
+                                )
+                                await db.update_trya_stream_song(
+                                    song_id,
+                                    moderation_status="pending",
+                                    moderation_reason=f"Re-moderation error: {e!s}",
+                                    moderation_at=time.time(),
+                                )
+                        await db.update_trya_stream_song(
+                            sid,
+                            moderation_status="pending",
+                            moderation_reason="Re-moderation in progress…",
+                            moderation_at=time.time(),
+                        )
+                        asyncio.create_task(_run_remoderation(sid, s))
+                        await flash(
+                            f"Queued “{s.get('title') or sid}” for LLM re-moderation. "
+                            "Refresh the page in a few seconds.",
+                            "success",
+                        )
+
+            elif action == "reanalyze_whisper_one":
+                import bot.trya_stream_manager as _esm
+                if _esm.stream_is_live:
+                    await flash("Cannot run Whisper while the stream is live.", "error")
+                else:
+                    from bot.trya_stream_worker import process_exp_song
+                    sid = int(form.get("song_id", "0") or 0)
+                    s = await db.get_trya_stream_song(sid) if sid else None
+                    if not s or not s.get("mp3_filename"):
+                        await flash("Song not found or MP3 missing.", "error")
+                    else:
+                        await db.update_trya_stream_song(
+                            sid, analysis_status="processing", ass_filename=None,
+                        )
+                        asyncio.create_task(
+                            process_exp_song(db, sid, TRYA_STREAM_DIR, bot=bot)
+                        )
+                        await flash(
+                            f"Queued “{s.get('title') or sid}” for Whisper re-analysis. "
+                            "Refresh the page for status.",
+                            "success",
+                        )
+
+            elif action == "rescrape_metadata":
+                from bot.trya_stream_worker import scrape_suno
+                from bot.trya_stream_manager import log_event
+                songs_all = await db.get_all_trya_stream_songs(active_only=True)
+                log_event(
+                    f"Bulk metadata refresh started for {len(songs_all)} song(s)…",
+                    prefix="[meta]",
+                )
+                updated = 0
+                for s in songs_all:
+                    uuid = s.get("suno_uuid")
+                    if not uuid:
+                        continue
+                    meta = await scrape_suno(uuid)
+                    real_uuid = meta.get("real_uuid") or uuid
+                    fields = {}
+                    if meta.get("title"):     fields["title"]     = meta["title"]
+                    if meta.get("artist"):    fields["artist"]    = meta["artist"]
+                    if meta.get("video_url"): fields["video_url"] = meta["video_url"]
+                    if meta.get("cover_url"): fields["cover_url"] = meta["cover_url"]
+                    if fields:
+                        await db.update_trya_stream_song(s["id"], **fields)
+                        updated += 1
+                        log_event(
+                            f"  #{s['id']} ({fields.get('title') or s.get('title')!r}) updated: "
+                            f"{', '.join(sorted(fields.keys()))}",
+                            prefix="[meta]",
+                        )
+                        # Invalidate cached media so next stream run downloads fresh
+                        for ext in (".jpg", ".mp4"):
+                            cached = os.path.join(TRYA_STREAM_DIR, "cover_cache", f"{uuid}{ext}")
+                            if os.path.exists(cached):
+                                try: os.remove(cached)
+                                except Exception: pass
+                log_event(f"Bulk metadata refresh done: {updated}/{len(songs_all)} updated.", prefix="[meta]")
+                await flash(f"Refreshed metadata for {updated} song(s).", "success")
+
+            elif action == "save_stream_key":
+                key = form.get("exp_twitch_key", "").strip()
+                await db.set_setting("trya_stream_twitch_key", key)
+                await flash("Stream key saved.", "success")
+
+            elif action == "save_trya_alert_settings":
+                alert_checkbox_suffixes = (
+                    "enabled", "follow_enabled", "sub_enabled", "resub_enabled",
+                    "gift_enabled", "cheer_enabled", "raid_enabled",
+                    "watch_streak_enabled",
+                )
+                for suffix in alert_checkbox_suffixes:
+                    key = f"trya_stream_twitch_alerts_{suffix}"
+                    await db.set_setting(key, "on" if form.get(key) else "off")
+                for suffix in (
+                    "follow_template", "sub_template", "resub_template",
+                    "gift_template", "cheer_template", "raid_template",
+                    "watch_streak_template",
+                ):
+                    key = f"trya_stream_twitch_alerts_{suffix}"
+                    await db.set_setting(key, (form.get(key) or "")[:500])
+                await trya_stream_event_alerts.restart()
+                await flash("TrYa Stream Twitch alert settings saved.", "success")
+
+            elif action == "restart_trya_alerts":
+                await trya_stream_event_alerts.restart()
+                await flash("TrYa Stream EventSub listener restarted.", "success")
+
+            elif action == "test_trya_alert":
+                alert_bot = _TwitchBot(db, key_prefix="trya_stream_twitch")
+                ok, message = await alert_bot.start()
+                if ok:
+                    ok, message = await alert_bot.send_chat(
+                        "TrYa Stream alert test: EventSub chat delivery is ready."
+                    )
+                await flash(message, "success" if ok else "error")
+
+            elif action == "save_exp_settings":
+                ch1 = form.get("exp_post_channel_1_id", "").strip()
+                ch2 = form.get("exp_post_channel_2_id", "").strip()
+                ch3 = form.get("exp_post_channel_3_id", "").strip()
+                expiry_ch = form.get("exp_expiry_channel_id", "").strip()
+                announcement_ch = form.get("exp_announcement_channel_id", "").strip()
+                announcement_msg = (form.get("exp_announcement_message") or "").strip()
+                stream_url_v = form.get("exp_stream_url", "").strip()
+                moderation_en = "on" if form.get("exp_moderation_enabled") else "off"
+                loop_mode_v = form.get("exp_loop_mode", "reshuffle").strip()
+                if loop_mode_v not in ("stop", "reshuffle"):
+                    loop_mode_v = "reshuffle"
+                # Auto-start scheduler
+                sched_en = "on" if form.get("exp_schedule_enabled") else "off"
+                # Day checkboxes named exp_schedule_day_0..6 (Mon=0 .. Sun=6)
+                sched_days = ",".join(
+                    str(i) for i in range(7) if form.get(f"exp_schedule_day_{i}")
+                )
+                sched_time = (form.get("exp_schedule_time") or "").strip()
+                # Validate HH:MM
+                import re as _re
+                if not _re.match(r"^\d{1,2}:\d{2}$", sched_time):
+                    sched_time = ""
+                await db.set_setting("trya_stream_post_channel_1_id", ch1)
+                await db.set_setting("trya_stream_post_channel_2_id", ch2)
+                await db.set_setting("trya_stream_post_channel_3_id", ch3)
+                await db.set_setting("trya_stream_expiry_channel_id", expiry_ch)
+                await db.set_setting("trya_stream_announcement_channel_id", announcement_ch)
+                await db.set_setting("trya_stream_announcement_message", announcement_msg)
+                progress_overlay_en = "on" if form.get("exp_progress_overlay") else "off"
+                ravenveil_early_boost_en = "on" if form.get("exp_ravenveil_early_boost") else "off"
+                try:
+                    max_per_user_v = max(1, min(20, int(form.get("exp_max_per_user", "4") or "4")))
+                except (ValueError, TypeError):
+                    max_per_user_v = 4
+                try:
+                    submission_playlist_days = max(
+                        1,
+                        min(3650, int(form.get("trya_submission_playlist_days", "14") or "14")),
+                    )
+                except (ValueError, TypeError):
+                    submission_playlist_days = 14
+                try:
+                    video_bitrate_v = int(form.get("exp_video_bitrate_kbps", "2500") or "2500")
+                except (ValueError, TypeError):
+                    video_bitrate_v = 2500
+                if video_bitrate_v not in (1800, 2000, 2500):
+                    video_bitrate_v = 2500
+                await db.set_setting("trya_stream_max_per_user", str(max_per_user_v))
+                await db.set_setting("trya_stream_submission_playlist_days", str(submission_playlist_days))
+                await db.set_setting("trya_stream_video_bitrate_kbps", str(video_bitrate_v))
+                await db.set_setting("trya_stream_moderation_enabled", moderation_en)
+                await db.set_setting("trya_stream_loop_mode", loop_mode_v)
+                await db.set_setting("trya_stream_schedule_enabled", sched_en)
+                await db.set_setting("trya_stream_schedule_days", sched_days)
+                await db.set_setting("trya_stream_schedule_time", sched_time)
+                await db.set_setting("trya_stream_progress_overlay", progress_overlay_en)
+                disclaimer_enabled = "on" if form.get("exp_disclaimer_enabled") else "off"
+                disclaimer_text = (form.get("exp_disclaimer_text") or "").strip()[:2000]
+                await db.set_setting("trya_stream_disclaimer_enabled", disclaimer_enabled)
+                await db.set_setting("trya_stream_disclaimer_text", disclaimer_text)
+                await db.set_setting("trya_stream_ravenveil_early_boost", ravenveil_early_boost_en)
+                active_pl_v = form.get("exp_active_playlist", "submission")
+                if active_pl_v not in ("submission", "admin", "both"):
+                    active_pl_v = "submission"
+                await db.set_setting("trya_stream_active_playlist", active_pl_v)
+                intro_en = "on" if form.get("exp_intro_enabled") else "off"
+                outro_en = "on" if form.get("exp_outro_enabled") else "off"
+                intro_selection = (form.get("exp_intro_selection") or "random").strip()
+                outro_selection = (form.get("exp_outro_selection") or "random").strip()
+                await db.set_setting("trya_stream_intro_enabled", intro_en)
+                await db.set_setting("trya_stream_outro_enabled", outro_en)
+                await db.set_setting("trya_stream_intro_selection", intro_selection)
+                await db.set_setting("trya_stream_outro_selection", outro_selection)
+                if stream_url_v:
+                    await db.set_setting("trya_stream_stream_url", stream_url_v)
+                await flash("Settings saved.", "success")
+
+            elif action == "save_exp_twitch_settings":
+                exp_tw_cid = form.get("exp_twitch_client_id", "").strip()
+                exp_tw_sec = form.get("exp_twitch_client_secret", "").strip()
+                exp_tw_rt  = form.get("exp_twitch_refresh_token", "").strip()
+                exp_tw_bc  = form.get("exp_twitch_broadcaster_login", "").strip()
+                chat_en    = "on" if form.get("exp_twitch_chat_enabled") else "off"
+                relic_en   = "on" if form.get("trya_relic_hunt_enabled") else "off"
+                if exp_tw_cid:
+                    await db.set_setting("trya_stream_twitch_client_id", exp_tw_cid)
+                if exp_tw_sec and not exp_tw_sec.startswith("****"):
+                    await db.set_setting("trya_stream_twitch_client_secret", exp_tw_sec)
+                if exp_tw_rt and not exp_tw_rt.startswith("****"):
+                    await db.set_setting("trya_stream_twitch_refresh_token", exp_tw_rt)
+                    await db.set_setting("trya_stream_twitch_bot_login", "")
+                    await db.set_setting("trya_stream_twitch_bot_user_id", "")
+                if exp_tw_bc:
+                    bn = exp_tw_bc.strip().rstrip("/").lstrip("#").lower()
+                    if "twitch.tv/" in bn:
+                        bn = bn.split("twitch.tv/", 1)[1].split("/")[0]
+                    await db.set_setting("trya_stream_twitch_broadcaster_login", bn)
+                await db.set_setting("trya_stream_twitch_chat_enabled", chat_en)
+                await db.set_setting("trya_stream_relic_hunt_enabled", relic_en)
+                if relic_en == "on":
+                    await trya_relic_hunt.stop()
+                    asyncio.create_task(_trya_relic_hunt_autostart())
+                else:
+                    await trya_relic_hunt.stop()
+                await flash("Twitch Chat Bot and Raven's Nest settings saved.", "success")
+
+            elif action == "restart_trya_relic_hunt":
+                await trya_relic_hunt.stop()
+                asyncio.create_task(_trya_relic_hunt_autostart())
+                await flash("TrYa Raven's Nest listener restart queued.", "success")
+
+            elif action == "stop_trya_relic_hunt":
+                await trya_relic_hunt.stop()
+                await flash("TrYa Raven's Nest listener stopped.", "success")
+
+            elif action == "post_exp_stream_url":
+                ch_id = form.get("post_channel_id_select", "")
+                exp_stream_url_v = await db.get_setting("trya_stream_stream_url") or ""
+                if not exp_stream_url_v:
+                    await flash("No stream URL configured. Open Settings to add one.", "danger")
+                else:
+                    ok, name_or_err = await _post_trya_stream_announcement(ch_id, exp_stream_url_v)
+                    if ok:
+                        await flash(f"Stream link posted to #{name_or_err}.", "success")
+                    else:
+                        await flash(f"Could not post: {name_or_err}", "danger")
+
+            elif action == "post_exp_announcement":
+                ch_id = await db.get_setting("trya_stream_announcement_channel_id") or ""
+                message_text = (await db.get_setting("trya_stream_announcement_message") or "").strip()
+                if not ch_id:
+                    await flash("No announcement channel configured. Open Settings to add one.", "danger")
+                elif not message_text:
+                    await flash("No announcement message configured. Open Settings to add one.", "danger")
+                else:
+                    guild = get_guild()
+                    channel = None
+                    if guild:
+                        try:
+                            ch_int = int(ch_id)
+                            channel = guild.get_channel(ch_int) or guild.get_thread(ch_int)
+                        except Exception:
+                            channel = None
+                    if not channel:
+                        await flash("Announcement channel not found.", "danger")
+                    else:
+                        try:
+                            await channel.send(message_text)
+                            await flash(f"Announcement posted to #{channel.name}.", "success")
+                        except Exception as e:
+                            await flash(f"Could not post announcement: {e}", "danger")
+
+            elif action == "upload_background":
+                bg_file = files.get("bg_file")
+                if bg_file and bg_file.filename:
+                    ext = bg_file.filename.rsplit(".", 1)[-1].lower()
+                    if ext in ("jpg", "jpeg", "png", "mp4", "webm"):
+                        bg_type = "video" if ext in ("mp4", "webm") else "image"
+                        fn = f"exp_bg_{_uuid.uuid4().hex}.{ext}"
+                        await bg_file.save(os.path.join(TRYA_STREAM_DIR, "assets", fn))
+                        old = await db.get_setting("trya_stream_bg_filename")
+                        if old:
+                            old_path = os.path.join(TRYA_STREAM_DIR, "assets", old)
+                            if os.path.exists(old_path):
+                                os.remove(old_path)
+                        await db.set_setting("trya_stream_bg_filename", fn)
+                        await db.set_setting("trya_stream_bg_type", bg_type)
+                        await flash("Background uploaded.", "success")
+                    else:
+                        await flash("Unsupported file type.", "danger")
+
+            elif action == "upload_loop_video":
+                import json as _jl
+                lv_file = files.get("lv_file")
+                if lv_file and lv_file.filename:
+                    ext = lv_file.filename.rsplit(".", 1)[-1].lower()
+                    if ext in ("mp4", "webm"):
+                        fn = f"exp_loop_{_uuid.uuid4().hex}.{ext}"
+                        label = form.get("lv_label", "").strip() or lv_file.filename
+                        await lv_file.save(os.path.join(TRYA_STREAM_DIR, "assets", fn))
+                        raw = await db.get_setting("trya_stream_loop_videos") or "[]"
+                        vids = _jl.loads(raw) if raw else []
+                        vids.append({"filename": fn, "label": label})
+                        await db.set_setting("trya_stream_loop_videos", _jl.dumps(vids))
+                        # If this is the first video, auto-select it
+                        if len(vids) == 1:
+                            await db.set_setting("trya_stream_loop_selection", fn)
+                        await flash("Loop video uploaded.", "success")
+                    else:
+                        await flash("Only MP4/WebM supported.", "danger")
+
+            elif action == "save_exp_loop_source":
+                obs_overlay_enabled_v = "on" if form.get("exp_obs_overlay_enabled") else "off"
+                loop_rtmp_key_v = (form.get("exp_loop_rtmp_key") or "").strip()
+                try:
+                    obs_overlay_fps_v = int(form.get("exp_obs_overlay_fps", "20") or "20")
+                except (TypeError, ValueError):
+                    obs_overlay_fps_v = 20
+                if obs_overlay_fps_v not in (15, 20, 24):
+                    obs_overlay_fps_v = 20
+                if obs_overlay_enabled_v == "on" and not loop_rtmp_key_v:
+                    import secrets as _secrets
+                    loop_rtmp_key_v = _secrets.token_urlsafe(18)
+                await db.set_setting("trya_stream_obs_overlay_enabled", obs_overlay_enabled_v)
+                await db.set_setting("trya_stream_obs_overlay_fps", str(obs_overlay_fps_v))
+                await db.set_setting("trya_stream_loop_source", "local")
+                await db.set_setting("trya_stream_loop_rtmp_key", loop_rtmp_key_v)
+                await flash("OBS overlay settings saved.", "success")
+
+            elif action == "delete_loop_video":
+                import json as _jl
+                del_fn = form.get("loop_filename", "")
+                if del_fn:
+                    raw = await db.get_setting("trya_stream_loop_videos") or "[]"
+                    vids = _jl.loads(raw) if raw else []
+                    vids = [v for v in vids if v.get("filename") != del_fn]
+                    await db.set_setting("trya_stream_loop_videos", _jl.dumps(vids))
+                    del_path = os.path.join(TRYA_STREAM_DIR, "assets", del_fn)
+                    if os.path.exists(del_path):
+                        os.remove(del_path)
+                    # If the deleted video was selected, fall back to shuffle
+                    sel = await db.get_setting("trya_stream_loop_selection") or "shuffle"
+                    if sel == del_fn:
+                        await db.set_setting("trya_stream_loop_selection", "shuffle")
+                    await flash("Loop video removed.", "success")
+
+            elif action == "set_loop_selection":
+                sel = form.get("loop_selection", "shuffle")
+                await db.set_setting("trya_stream_loop_selection", sel)
+                loop_selection_labels = {
+                    "shuffle": "Shuffle",
+                    "concat_all": "Concatenate all videos",
+                    "concat_all_random": "Concatenate all videos in random order",
+                }
+                await flash(f"Loop video selection: {loop_selection_labels.get(sel, sel)}", "success")
+
+            return redirect(request.url)
+
+        songs = await db.get_all_trya_stream_songs(active_only=True, source="submission")
+        # Enrich each song with parsed analysis info for the admin UI:
+        # word_count, coverage span and a transcript preview reconstructed
+        # from the stored word_timestamps JSON.
+        import json as _json
+        for s in songs:
+            wt_raw = s.get("word_timestamps")
+            s["word_count"] = 0
+            s["transcript_preview"] = ""
+            s["transcript_span"] = None
+            if wt_raw:
+                try:
+                    wt = _json.loads(wt_raw) if isinstance(wt_raw, str) else wt_raw
+                    if isinstance(wt, list) and wt:
+                        s["word_count"] = len(wt)
+                        s["transcript_span"] = (
+                            float(wt[0].get("start", 0)),
+                            float(wt[-1].get("end", 0)),
+                        )
+                        # Reconstructed transcript with [mm:ss] markers every ~10s
+                        parts, last_mark = [], -10.0
+                        for w in wt:
+                            st = float(w.get("start", 0))
+                            if st - last_mark >= 10:
+                                m, sec = divmod(int(st), 60)
+                                parts.append(f"\n[{m}:{sec:02d}] ")
+                                last_mark = st
+                            parts.append(w.get("word", ""))
+                            parts.append(" ")
+                        s["transcript_preview"] = "".join(parts).strip()
+                except Exception:
+                    pass
+        status = await trya_stream_manager.get_status()
+        masked_key = "*" * 20 if await db.get_setting("trya_stream_twitch_key") else ""
+        bg_filename  = await db.get_setting("trya_stream_bg_filename") or ""
+        import json as _jlv
+        _loop_raw = await db.get_setting("trya_stream_loop_videos") or "[]"
+        loop_videos = _jlv.loads(_loop_raw) if _loop_raw else []
+        # Auto-migrate legacy single-video setting
+        if not loop_videos:
+            _old_lv = await db.get_setting("trya_stream_loop_filename") or ""
+            if _old_lv:
+                loop_videos = [{"filename": _old_lv, "label": _old_lv}]
+                await db.set_setting("trya_stream_loop_videos", _jlv.dumps(loop_videos))
+                await db.set_setting("trya_stream_loop_selection", _old_lv)
+                await db.set_setting("trya_stream_loop_filename", "")
+        loop_selection = await db.get_setting("trya_stream_loop_selection") or "shuffle"
+        exp_stream_url = await db.get_setting("trya_stream_stream_url") or ""
+        exp_post_channel_1_id = await db.get_setting("trya_stream_post_channel_1_id") or ""
+        exp_post_channel_2_id = await db.get_setting("trya_stream_post_channel_2_id") or ""
+        exp_post_channel_3_id = await db.get_setting("trya_stream_post_channel_3_id") or ""
+        exp_expiry_channel_id = await db.get_setting("trya_stream_expiry_channel_id") or ""
+        exp_announcement_channel_id = await db.get_setting("trya_stream_announcement_channel_id") or ""
+        exp_announcement_message = await db.get_setting("trya_stream_announcement_message") or ""
+        exp_twitch_chat_enabled = await db.get_setting("trya_stream_twitch_chat_enabled") or "off"
+        trya_relic_hunt_enabled = await db.get_setting("trya_stream_relic_hunt_enabled") or "on"
+        exp_moderation_enabled  = await db.get_setting("trya_stream_moderation_enabled") or "off"
+        exp_loop_mode           = await db.get_setting("trya_stream_loop_mode") or "reshuffle"
+        exp_progress_overlay    = await db.get_setting("trya_stream_progress_overlay") or "off"
+        exp_disclaimer_enabled  = await db.get_setting("trya_stream_disclaimer_enabled") or "off"
+        exp_disclaimer_text     = await db.get_setting("trya_stream_disclaimer_text") or ""
+        exp_ravenveil_early_boost = await db.get_setting("trya_stream_ravenveil_early_boost") or "off"
+        exp_max_per_user        = int(await db.get_setting("trya_stream_max_per_user") or "4")
+        try:
+            trya_submission_playlist_days = max(
+                1,
+                min(3650, int(await db.get_setting("trya_stream_submission_playlist_days") or "14")),
+            )
+        except (TypeError, ValueError):
+            trya_submission_playlist_days = 14
+        try:
+            exp_video_bitrate_kbps = int(await db.get_setting("trya_stream_video_bitrate_kbps") or "2500")
+        except (TypeError, ValueError):
+            exp_video_bitrate_kbps = 2500
+        if exp_video_bitrate_kbps not in (1800, 2000, 2500):
+            exp_video_bitrate_kbps = 2500
+        exp_loop_source        = await db.get_setting("trya_stream_loop_source") or "local"
+        if exp_loop_source not in ("local", "rtmp"):
+            exp_loop_source = "local"
+        exp_obs_overlay_enabled = await db.get_setting("trya_stream_obs_overlay_enabled") or "off"
+        if exp_loop_source == "rtmp":
+            exp_obs_overlay_enabled = "on"
+        try:
+            exp_obs_overlay_fps = int(await db.get_setting("trya_stream_obs_overlay_fps") or "20")
+        except (TypeError, ValueError):
+            exp_obs_overlay_fps = 20
+        if exp_obs_overlay_fps not in (15, 20, 24):
+            exp_obs_overlay_fps = 20
+        exp_loop_rtmp_key      = await db.get_setting("trya_stream_loop_rtmp_key") or ""
+        exp_schedule_enabled    = await db.get_setting("trya_stream_schedule_enabled") or "off"
+        exp_schedule_days       = await db.get_setting("trya_stream_schedule_days") or ""
+        exp_schedule_time       = await db.get_setting("trya_stream_schedule_time") or ""
+        exp_schedule_days_set   = set(d for d in exp_schedule_days.split(",") if d)
+        exp_active_playlist     = await db.get_setting("trya_stream_active_playlist") or "submission"
+        exp_intro_enabled       = await db.get_setting("trya_stream_intro_enabled") or "off"
+        exp_outro_enabled       = await db.get_setting("trya_stream_outro_enabled") or "off"
+        exp_intro_selection     = await db.get_setting("trya_stream_intro_selection") or "random"
+        exp_outro_selection     = await db.get_setting("trya_stream_outro_selection") or "random"
+        exp_tw_client_id = await db.get_setting("trya_stream_twitch_client_id") or ""
+        _exp_tw_secret   = await db.get_setting("trya_stream_twitch_client_secret") or ""
+        _exp_tw_refresh  = await db.get_setting("trya_stream_twitch_refresh_token") or ""
+        exp_tw_secret_masked  = f"****{_exp_tw_secret[-4:]}"  if len(_exp_tw_secret)  > 4 else ""
+        exp_tw_refresh_masked = f"****{_exp_tw_refresh[-4:]}" if len(_exp_tw_refresh) > 4 else ""
+        exp_tw_broadcaster = await db.get_setting("trya_stream_twitch_broadcaster_login") or ""
+        exp_tw_bot_login   = await db.get_setting("trya_stream_twitch_bot_login") or ""
+        # Quick scope check for UI badge (uses cached access token if available)
+        exp_tw_scopes_ok = False
+        try:
+            import aiohttp as _ah
+            _rt = await db.get_setting("trya_stream_twitch_refresh_token") or ""
+            _cid = await db.get_setting("trya_stream_twitch_client_id") or ""
+            _cs  = await db.get_setting("trya_stream_twitch_client_secret") or ""
+            if _rt and _cid and _cs:
+                async with _ah.ClientSession() as _hs:
+                    async with _hs.post(
+                        "https://id.twitch.tv/oauth2/token",
+                        data={"client_id": _cid, "client_secret": _cs,
+                              "grant_type": "refresh_token", "refresh_token": _rt},
+                        timeout=_ah.ClientTimeout(total=8),
+                    ) as _hr:
+                        _hd = await _hr.json()
+                        _tok = _hd.get("access_token", "")
+                    if _tok:
+                        async with _hs.get(
+                            "https://id.twitch.tv/oauth2/validate",
+                            headers={"Authorization": f"OAuth {_tok}"},
+                            timeout=_ah.ClientTimeout(total=8),
+                        ) as _hr:
+                            _hv = await _hr.json()
+                            exp_tw_scopes_ok = "chat:read" in (_hv.get("scopes") or [])
+        except Exception:
+            pass
+        exp_guild = get_guild()
+        exp_text_channels = []
+        if exp_guild:
+            for _ch in sorted(exp_guild.text_channels, key=lambda c: c.position):
+                exp_text_channels.append({"id": _ch.id, "name": _ch.name})
+        admin_songs = await db.get_all_trya_stream_songs(active_only=False, source="admin")
+        intro_songs = await db.get_all_trya_stream_songs(active_only=False, source="intro")
+        outro_songs = await db.get_all_trya_stream_songs(active_only=False, source="outro")
+        active_intro_songs = [s for s in intro_songs if s.get("active") and s.get("analysis_status") == "done" and s.get("mp3_filename")]
+        active_outro_songs = [s for s in outro_songs if s.get("active") and s.get("analysis_status") == "done" and s.get("mp3_filename")]
+        trya_alert_settings = {}
+        for default_key, default_value in DEFAULT_ALERT_SETTINGS.items():
+            key = default_key.replace("twitch_alerts", "trya_stream_twitch_alerts", 1)
+            trya_alert_settings[key] = await db.get_setting(key) or default_value
+        trya_eventsub_diag = await _TwitchBot(
+            db, key_prefix="trya_stream_twitch_alerts_eventsub"
+        ).diagnose()
+        return await render_template(
+            "trya_stream.html",
+            songs=songs, status=status,
+            admin_songs=admin_songs,
+            intro_songs=intro_songs,
+            outro_songs=outro_songs,
+            exp_active_playlist=exp_active_playlist,
+            exp_intro_enabled=exp_intro_enabled,
+            exp_outro_enabled=exp_outro_enabled,
+            exp_intro_selection=exp_intro_selection,
+            exp_outro_selection=exp_outro_selection,
+            active_intro_songs=active_intro_songs,
+            active_outro_songs=active_outro_songs,
+            masked_key=masked_key,
+            bg_filename=bg_filename,
+            loop_videos=loop_videos, loop_selection=loop_selection,
+            exp_stream_url=exp_stream_url,
+            exp_post_channel_1_id=exp_post_channel_1_id,
+            exp_post_channel_2_id=exp_post_channel_2_id,
+            exp_post_channel_3_id=exp_post_channel_3_id,
+            exp_expiry_channel_id=exp_expiry_channel_id,
+            exp_announcement_channel_id=exp_announcement_channel_id,
+            exp_announcement_message=exp_announcement_message,
+            exp_twitch_chat_enabled=exp_twitch_chat_enabled,
+            trya_relic_hunt_enabled=trya_relic_hunt_enabled,
+            trya_relic_hunt_running=trya_relic_hunt._running,
+            exp_moderation_enabled=exp_moderation_enabled,
+            exp_loop_mode=exp_loop_mode,
+            exp_loop_source=exp_loop_source,
+            exp_obs_overlay_enabled=exp_obs_overlay_enabled,
+            exp_obs_overlay_fps=exp_obs_overlay_fps,
+            exp_loop_rtmp_key=exp_loop_rtmp_key,
+            exp_progress_overlay=exp_progress_overlay,
+            exp_disclaimer_enabled=exp_disclaimer_enabled,
+            exp_disclaimer_text=exp_disclaimer_text,
+            exp_ravenveil_early_boost=exp_ravenveil_early_boost,
+            exp_max_per_user=exp_max_per_user,
+            exp_video_bitrate_kbps=exp_video_bitrate_kbps,
+            exp_schedule_enabled=exp_schedule_enabled,
+            exp_schedule_time=exp_schedule_time,
+            exp_schedule_days_set=exp_schedule_days_set,
+            exp_tw_client_id=exp_tw_client_id,
+            exp_tw_secret_masked=exp_tw_secret_masked,
+            exp_tw_refresh_masked=exp_tw_refresh_masked,
+            exp_tw_broadcaster=exp_tw_broadcaster,
+            exp_tw_bot_login=exp_tw_bot_login,
+            exp_tw_scopes_ok=exp_tw_scopes_ok,
+            trya_submission_playlist_days=trya_submission_playlist_days,
+            trya_alert_settings=trya_alert_settings,
+            trya_alert_status=trya_stream_event_alerts.status,
+            trya_eventsub_diag=trya_eventsub_diag,
+            text_channels=exp_text_channels,
+        )
+
+    @app.route("/trya-stream/upload/<token>", methods=["GET", "POST"])
+    async def trya_stream_upload(token: str):
+        from bot.trya_stream_manager import is_submissions_locked
+        from bot.trya_stream_worker import (
+            TRYA_RIGHTS_VERSION,
+            ingest_uploaded_audio,
+            process_exp_song,
+        )
+
+        song = await db.get_trya_stream_song_by_token(token)
+        if not song:
+            return await render_template(
+                "trya_stream_upload.html", error="This upload link is invalid."
+            )
+        if song.get("original_uploaded_at"):
+            return await render_template(
+                "trya_stream_upload.html",
+                done=True,
+                title=song.get("title") or "Your song",
+            )
+
+        locked, _ = await is_submissions_locked(db)
+        if locked:
+            return await render_template("trya_stream_upload.html", stream_live=True)
+        if request.method == "GET":
+            return await render_template(
+                "trya_stream_upload.html", song=song, token=token
+            )
+
+        form = await request.form
+        required_attestations = (
+            "official_download_attested",
+            "paid_download_attested",
+            "not_suno_remix_attested",
+            "third_party_rights_attested",
+            "commercial_rights_attested",
+        )
+        if any(not form.get(name) for name in required_attestations):
+            return await render_template(
+                "trya_stream_upload.html",
+                song=song,
+                token=token,
+                form_error="Every rights confirmation is required.",
+            ), 400
+        files = await request.files
+        uploaded = files.get("original_audio")
+        if not uploaded or not uploaded.filename:
+            return await render_template(
+                "trya_stream_upload.html",
+                song=song,
+                token=token,
+                form_error="Select the MP3 or M4A downloaded through Suno's official Download action.",
+            ), 400
+
+        import tempfile
+        incoming_dir = os.path.join(TRYA_STREAM_DIR, "incoming")
+        os.makedirs(incoming_dir, exist_ok=True)
+        suffix = os.path.splitext(uploaded.filename)[1].lower()
+        fd, staged_path = tempfile.mkstemp(prefix=f"song_{song['id']}_", suffix=suffix, dir=incoming_dir)
+        os.close(fd)
+        try:
+            await uploaded.save(staged_path)
+            finalized = await ingest_uploaded_audio(
+                db,
+                song["id"],
+                staged_path,
+                TRYA_STREAM_DIR,
+                original_filename=uploaded.filename,
+                rights_version=song.get("rights_version") or TRYA_RIGHTS_VERSION,
+                official_download_attested=True,
+                paid_download_attested=True,
+                is_suno_remix=False,
+                third_party_rights_attested=True,
+                commercial_rights_attested=True,
+                rights_accepted_at=time.time(),
+            )
+        except Exception as exc:
+            return await render_template(
+                "trya_stream_upload.html",
+                song=song,
+                token=token,
+                form_error=str(exc),
+            ), 400
+        finally:
+            try:
+                os.remove(staged_path)
+            except OSError:
+                pass
+
+        asyncio.create_task(
+            process_exp_song(
+                db,
+                song["id"],
+                TRYA_STREAM_DIR,
+                bot=bot,
+                skip_moderation=(song.get("playlist_source") in {"intro", "outro", "admin"}),
+                max_duration=None if song.get("playlist_source") in {"intro", "outro", "admin"} else 360,
+            )
+        )
+        return await render_template(
+            "trya_stream_upload.html",
+            done=True,
+            title=finalized.get("title") or "Your song",
+        )
+
+    @app.route("/trya-stream/stream/<action>", methods=["POST"])
+    @permission_required('trya_stream')
+    async def trya_stream_stream_action(action):
+        from quart import jsonify
+        if action in ("start", "start_legacy"):
+            if app.database_restore_pending:
+                return jsonify({"ok": False, "error": "A database restore is in progress."}), 409
+            twitch_key = await db.get_setting("trya_stream_twitch_key") or ""
+            if not twitch_key:
+                return jsonify({"ok": False, "error": "No Twitch stream key configured."}), 400
+            async with app.radio_start_lock:
+                if app.database_restore_pending:
+                    return jsonify({"ok": False, "error": "A database restore is in progress."}), 409
+                if stream_manager.is_running or stream_manager._loading:
+                    return jsonify({
+                        "ok": False,
+                        "error": "The legacy Twitch Radio is currently running or starting.",
+                    }), 409
+                if exp_stream_manager.is_running:
+                    return jsonify({
+                        "ok": False,
+                        "error": "Experimental Radio is currently running.",
+                    }), 409
+                result = await trya_stream_manager.start(
+                    twitch_key, legacy_pipeline=(action == "start_legacy"),
+                )
+        elif action == "stop":
+            result = await trya_stream_manager.stop()
+        elif action == "safe_stop":
+            result = await trya_stream_manager.safe_stop()
+        else:
+            return jsonify({"ok": False, "error": "Unknown action"}), 400
+        return jsonify(result)
+
+    @app.route("/trya-stream/stream/status")
+    @permission_required('trya_stream')
+    async def trya_stream_stream_status():
+        from quart import jsonify
+        return jsonify(await trya_stream_manager.get_status())
+
+    @app.route("/trya-stream/cover-preview/<int:song_id>")
+    @permission_required('trya_stream')
+    async def trya_stream_cover_preview(song_id):
+        """Serve the locally cached cover MP4 for admin preview.
+
+        Triggers an on-demand download (and normalization) via the stream
+        manager if the file hasn't been cached yet, so an admin can verify
+        what will actually be streamed without starting the full stream.
+        """
+        from quart import send_file, abort
+        s = await db.get_trya_stream_song(song_id)
+        if not s:
+            return abort(404)
+        # Lazily download + normalize through the stream manager so this
+        # follows the same Hook > regular video priority as the live stream.
+        path = await trya_stream_manager._get_video(s)
+        if not path or not os.path.exists(path):
+            return abort(404)
+        return await send_file(path, mimetype="video/mp4")
+
+    @app.route("/trya-stream/stream/log")
+    @permission_required('trya_stream')
+    async def trya_stream_stream_log():
+        """Return live-log entries for the admin UI panel.
+
+        Query params:
+          since   – unix timestamp (float). If given, only return entries
+                    strictly newer than this. Used for incremental polling.
+          window  – fallback time window in seconds (default 300 = 5 min).
+        """
+        from quart import jsonify, request
+        try:
+            since = float(request.args.get("since", "0") or 0)
+        except ValueError:
+            since = 0.0
+        try:
+            window = float(request.args.get("window", "300") or 300)
+        except ValueError:
+            window = 300.0
+        return jsonify({
+            "running": trya_stream_manager.is_running,
+            "entries": trya_stream_manager.get_log(since_ts=since, max_age_secs=window),
+        })
+
+    @app.route("/trya-stream/twitch-oauth-start")
+    @permission_required('trya_stream')
+    async def trya_stream_twitch_oauth_start():
+        import secrets as _sec
+        from urllib.parse import urlencode
+        client_id = await db.get_setting("trya_stream_twitch_client_id")
+        if not client_id:
+            await flash("Client ID not configured — save it first.", "error")
+            return redirect(url_for("trya_stream_admin"))
+        state = _sec.token_urlsafe(16)
+        session[_TWITCH_OAUTH_STATE_KEY] = state
+        session[_TWITCH_OAUTH_MODE_KEY] = "trya_bot"
+        redirect_uri = _twitch_oauth_redirect_uri()
+        params = urlencode({
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": _TWITCH_BOT_SCOPES,
+            "state": state,
+        })
+        return redirect(f"https://id.twitch.tv/oauth2/authorize?{params}")
 
     @app.route("/exp-radio", methods=["GET", "POST"])
     @permission_required('exp_radio')
@@ -9300,6 +11032,11 @@ def create_app(db: Database, bot=None) -> Quart:
                         "ok": False,
                         "error": "The legacy Twitch Radio is currently running or starting.",
                     }), 409
+                if trya_stream_manager.is_running:
+                    return jsonify({
+                        "ok": False,
+                        "error": "TrYa Stream is currently running.",
+                    }), 409
                 result = await exp_stream_manager.start(
                     twitch_key, legacy_pipeline=(action == "start_legacy"),
                 )
@@ -9404,7 +11141,11 @@ def create_app(db: Database, bot=None) -> Quart:
         state_got = request.args.get("state", "")
         error     = request.args.get("error_description") or request.args.get("error", "")
         oauth_mode = session.pop(_TWITCH_OAUTH_MODE_KEY, "bot")
-        return_endpoint = "radio_admin" if oauth_mode == "radio_bot" else "exp_radio_admin"
+        return_endpoint = {
+            "radio_bot": "radio_admin",
+            "trya_bot": "trya_stream_admin",
+            "trya_eventsub": "trya_stream_admin",
+        }.get(oauth_mode, "exp_radio_admin")
         if error:
             await flash(f"Twitch authorization denied: {error}", "error")
             return redirect(url_for(return_endpoint))
@@ -9412,7 +11153,11 @@ def create_app(db: Database, bot=None) -> Quart:
         if not state_exp or state_got != state_exp:
             await flash("OAuth state mismatch — possible CSRF. Try again.", "error")
             return redirect(url_for(return_endpoint))
-        credential_prefix = "radio_twitch" if oauth_mode == "radio_bot" else "exp_radio_twitch"
+        credential_prefix = {
+            "radio_bot": "radio_twitch",
+            "trya_bot": "trya_stream_twitch",
+            "trya_eventsub": "trya_stream_twitch",
+        }.get(oauth_mode, "exp_radio_twitch")
         client_id     = await db.get_setting(f"{credential_prefix}_client_id") or ""
         client_secret = await db.get_setting(f"{credential_prefix}_client_secret") or ""
         redirect_uri  = _twitch_oauth_redirect_uri()
@@ -9455,6 +11200,29 @@ def create_app(db: Database, bot=None) -> Quart:
                 )
                 return redirect(url_for("radio_admin"))
 
+            if oauth_mode == "trya_eventsub":
+                expected_login = (await db.get_setting("trya_stream_twitch_broadcaster_login") or "").strip().lower()
+                if expected_login and bot_login.lower() != expected_login:
+                    await flash(
+                        f"Broadcaster authorization must use {expected_login}, but Twitch authorized {bot_login}.",
+                        "error",
+                    )
+                    return redirect(url_for("trya_stream_admin"))
+                prefix = "trya_stream_twitch_alerts_eventsub"
+                await db.set_setting(f"{prefix}_client_id", client_id)
+                await db.set_setting(f"{prefix}_client_secret", client_secret)
+                await db.set_setting(f"{prefix}_refresh_token", refresh_token)
+                await db.set_setting(f"{prefix}_broadcaster_login", expected_login or bot_login)
+                await db.set_setting(f"{prefix}_bot_login", bot_login)
+                await db.set_setting(f"{prefix}_bot_user_id", "")
+                await db.set_setting(f"{prefix}_broadcaster_user_id", "")
+                await trya_stream_event_alerts.restart()
+                await flash(
+                    f"TrYa Stream EventSub authorized as broadcaster {bot_login} with scopes: {new_scopes}.",
+                    "success",
+                )
+                return redirect(url_for("trya_stream_admin"))
+
             if oauth_mode == "eventsub":
                 expected_login = (await db.get_setting("exp_radio_twitch_broadcaster_login") or "").strip().lower()
                 if expected_login and bot_login.lower() != expected_login:
@@ -9477,6 +11245,19 @@ def create_app(db: Database, bot=None) -> Quart:
                 )
                 return redirect(url_for("twitch_alerts_admin"))
 
+            if oauth_mode == "trya_bot":
+                await db.set_setting("trya_stream_twitch_refresh_token", refresh_token)
+                await db.set_setting("trya_stream_twitch_bot_login", bot_login)
+                await db.set_setting("trya_stream_twitch_bot_user_id", "")
+                await trya_stream_event_alerts.restart()
+                await trya_relic_hunt.stop()
+                asyncio.create_task(_trya_relic_hunt_autostart())
+                await flash(
+                    f"TrYa Stream bot authorized as {bot_login} with scopes: {new_scopes}.",
+                    "success",
+                )
+                return redirect(url_for("trya_stream_admin"))
+
             await db.set_setting("exp_radio_twitch_refresh_token", refresh_token)
             await db.set_setting("exp_radio_twitch_bot_login", bot_login)
             await db.set_setting("exp_radio_twitch_bot_user_id", "")
@@ -9495,6 +11276,29 @@ def create_app(db: Database, bot=None) -> Quart:
         except Exception as _e:
             await flash(f"OAuth callback error: {_e}", "error")
         return redirect(url_for(return_endpoint))
+
+    @app.route("/trya-stream/twitch-alerts/broadcaster-oauth-start")
+    @permission_required('trya_stream')
+    async def trya_stream_alerts_broadcaster_oauth_start():
+        import secrets as _sec
+        from urllib.parse import urlencode
+        client_id = await db.get_setting("trya_stream_twitch_client_id")
+        broadcaster_login = await db.get_setting("trya_stream_twitch_broadcaster_login")
+        if not client_id or not broadcaster_login:
+            await flash("Configure the TrYa Stream Twitch Client ID and broadcaster login first.", "error")
+            return redirect(url_for("trya_stream_admin"))
+        state = _sec.token_urlsafe(16)
+        session[_TWITCH_OAUTH_STATE_KEY] = state
+        session[_TWITCH_OAUTH_MODE_KEY] = "trya_eventsub"
+        params = urlencode({
+            "client_id": client_id,
+            "redirect_uri": _twitch_oauth_redirect_uri(),
+            "response_type": "code",
+            "scope": _TWITCH_EVENTSUB_SCOPES,
+            "state": state,
+            "force_verify": "true",
+        })
+        return redirect(f"https://id.twitch.tv/oauth2/authorize?{params}")
 
     @app.route("/twitch-alerts/broadcaster-oauth-start")
     @permission_required('twitch_alerts')
@@ -9549,6 +11353,60 @@ def create_app(db: Database, bot=None) -> Quart:
             buf.getvalue(),
             mimetype="text/csv",
             headers={"Content-Disposition": "attachment; filename=exp_radio_consent.csv"},
+        )
+
+    @app.route("/trya-stream/consent-csv")
+    @permission_required('trya_stream')
+    async def trya_stream_consent_csv():
+        import csv, io
+        from datetime import datetime, timezone
+        rows = await db.get_trya_stream_consent_csv_rows()
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow([
+            "ID", "User ID", "Username", "Playlist", "Suno URL", "Suno UUID",
+            "Title", "Artist", "Analysis Status", "Active In Playlist",
+            "Rights Version", "Rights Declaration", "Rights Hash", "Rights Accepted At",
+            "Official Suno Download Attested", "Paid Commercial Download Attested",
+            "Is Suno Remix", "Third-Party Rights Attested", "Commercial Use Attested",
+            "Original SHA-256", "Original Filename", "Original MIME", "Original Size Bytes",
+            "Original Uploaded At", "Original Archive Filename", "Working MP3 Filename",
+            "Submitted At", "Playlist Leaves At", "Playlist Removed At",
+            "Playlist Removal Reason", "Replacement Song ID", "Approval Status",
+            "Approved At", "Approved By", "Whisper Anomaly Retry Count",
+            "Whisper Anomaly Retry At", "Whisper Anomaly Retry Trigger",
+        ])
+        for r in rows:
+            def _dt(ts):
+                if not ts:
+                    return ""
+                return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+            writer.writerow([
+                r.get("id"), r.get("user_id"), r.get("user_name"), r.get("playlist_source"),
+                r.get("suno_url"), r.get("suno_uuid"), r.get("title") or "", r.get("artist") or "",
+                r.get("analysis_status"), "Yes" if r.get("active") else "No",
+                r.get("rights_version") or "", r.get("rights_declaration") or "", r.get("rights_hash") or "",
+                _dt(r.get("rights_accepted_at")), "Yes" if r.get("official_download_attested") else "No",
+                "Yes" if r.get("paid_download_attested") else "No", "Yes" if r.get("is_suno_remix") else "No",
+                "Yes" if r.get("third_party_rights_attested") else "No",
+                "Yes" if r.get("commercial_rights_attested") else "No",
+                r.get("original_sha256") or "", r.get("original_filename") or "",
+                r.get("original_mime") or "", r.get("original_size") or 0,
+                _dt(r.get("original_uploaded_at")), r.get("original_archive_filename") or "",
+                r.get("mp3_filename") or "", _dt(r.get("submitted_at")),
+                _dt(r.get("playlist_expires_at")), _dt(r.get("playlist_removed_at")),
+                r.get("playlist_remove_reason") or "", r.get("replacement_song_id") or "",
+                r.get("approval_status") or "", _dt(r.get("approved_at")),
+                r.get("approved_by") or "", r.get("whisper_anomaly_retry_count") or 0,
+                _dt(r.get("whisper_anomaly_retry_at")),
+                r.get("whisper_anomaly_retry_trigger") or "",
+            ])
+        buf.seek(0)
+        from quart import Response
+        return Response(
+            buf.getvalue(),
+            mimetype="text/csv",
+            headers={"Content-Disposition": "attachment; filename=trya_stream_consent.csv"},
         )
 
     # --- Twitch Event Chat Alerts ---

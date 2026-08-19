@@ -241,10 +241,12 @@ class RelicHunt:
     """Game engine.  Call `start(twitch_bot)` to register commands and begin
     listening; `stop()` to deregister and disconnect the IRC listener."""
 
-    def __init__(self, db):
+    def __init__(self, db, stream_kind: str = "exp"):
         self.db = db
+        self.stream_kind = "trya" if stream_kind == "trya" else "exp"
         self._bot = None
         self._running = False
+        self._watcher_task = None
 
     # ------------------------------------------------------------------ #
     # Lifecycle                                                            #
@@ -283,26 +285,54 @@ class RelicHunt:
             else:
                 twitch_bot.register_command(cmd, self._subscriber_guard(handler))
 
-        asyncio.create_task(self._event_watcher_loop())
+        if not self._watcher_task or self._watcher_task.done():
+            self._watcher_task = asyncio.create_task(self._event_watcher_loop())
         await twitch_bot.start_listener()
-        _rlog("Started — IRC listener active")
+        _rlog(f"Started — {self.stream_kind} IRC listener active")
 
     async def stop(self) -> None:
         self._running = False
+        if self._watcher_task and not self._watcher_task.done():
+            self._watcher_task.cancel()
+            try:
+                await self._watcher_task
+            except asyncio.CancelledError:
+                pass
+        self._watcher_task = None
         if self._bot:
             await self._bot.stop_listener()
-        _rlog("Stopped")
+        self._bot = None
+        _rlog(f"Stopped — {self.stream_kind} IRC listener")
 
     # ------------------------------------------------------------------ #
     # Event watcher loop                                                   #
     # ------------------------------------------------------------------ #
+    def _stream_is_live(self) -> bool:
+        if self.stream_kind == "trya":
+            from bot.trya_stream_manager import stream_is_live
+        else:
+            from bot.exp_stream_manager import stream_is_live
+        return bool(stream_is_live)
+
+    def _other_stream_is_live(self) -> bool:
+        if self.stream_kind == "trya":
+            from bot.exp_stream_manager import stream_is_live
+        else:
+            from bot.trya_stream_manager import stream_is_live
+        return bool(stream_is_live)
+
     async def _event_watcher_loop(self) -> None:
         """Every 10 s: post end messages for expired events; fire auto-starts."""
         while self._running:
             try:
-                await self._tick_expired_events()
-                await self._tick_auto_event()
-                await self._tick_village_payout()
+                owns_events = (
+                    self._stream_is_live()
+                    or (self.stream_kind == "exp" and not self._other_stream_is_live())
+                )
+                if owns_events and not self._other_stream_is_live():
+                    await self._tick_expired_events()
+                    await self._tick_auto_event()
+                    await self._tick_village_payout()
             except Exception as e:
                 _rlog(f"Event watcher error: {e}", "error")
             await asyncio.sleep(10)
@@ -325,8 +355,7 @@ class RelicHunt:
     async def _tick_auto_event(self) -> None:
         if (await self.db.relic_get_setting("auto_event_enabled")) != "true":
             return
-        from bot.exp_stream_manager import stream_is_live
-        if not stream_is_live:
+        if not self._stream_is_live():
             return
         if await self.db.relic_get_active_events():
             return
@@ -363,8 +392,7 @@ class RelicHunt:
     async def _tick_village_payout(self) -> None:
         if (await self.db.relic_get_setting("village_payout_enabled")) == "false":
             return
-        from bot.exp_stream_manager import stream_is_live
-        if not stream_is_live:
+        if not self._stream_is_live():
             return
         now = time.time()
         interval_min = max(1, int((await self.db.relic_get_setting("village_payout_interval_minutes")) or 15))
