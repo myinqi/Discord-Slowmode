@@ -5696,6 +5696,37 @@ class Database:
         ) as cursor:
             return [dict(r) for r in await cursor.fetchall()]
 
+    async def supersede_pending_trya_uploads(
+        self, user_id: int, playlist_source: str
+    ) -> int:
+        """Invalidate unfinished upload links before issuing a replacement link."""
+        cursor = await self.db.execute(
+            """UPDATE trya_stream_songs
+               SET analysis_status = 'failed', playlist_removed_at = unixepoch(),
+                   playlist_remove_reason = 'superseded_pending_upload'
+               WHERE user_id = ? AND playlist_source = ? AND active = 0
+                 AND original_uploaded_at IS NULL
+                 AND playlist_remove_reason IS NULL""",
+            (user_id, playlist_source),
+        )
+        await self.db.commit()
+        return cursor.rowcount
+
+    async def get_trya_stream_manageable_songs_by_user(self, user_id: int) -> list[dict]:
+        """Return active songs plus unfinished upload slots that can be cancelled."""
+        async with self.db.execute(
+            """SELECT * FROM trya_stream_songs
+               WHERE user_id = ? AND (
+                   active = 1 OR (
+                       active = 0 AND original_uploaded_at IS NULL
+                       AND playlist_remove_reason IS NULL
+                   )
+               )
+               ORDER BY submitted_at DESC""",
+            (user_id,),
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
     async def count_trya_stream_songs_by_user(self, user_id: int) -> int:
         async with self.db.execute(
             "SELECT COUNT(*) FROM trya_stream_songs "

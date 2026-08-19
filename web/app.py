@@ -9782,7 +9782,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 if int(existing.get("id") or 0) != int(song["id"])
                 and str(existing.get("suno_uuid") or "").lower() == resolved_uuid.lower()
                 and existing.get("analysis_status") != "failed"
-                and (existing.get("active") or not existing.get("original_uploaded_at"))
+                and existing.get("active")
             ),
             None,
         )
@@ -9800,11 +9800,11 @@ def create_app(db: Database, bot=None) -> Quart:
                 and int(existing.get("user_id") or 0) == int(song.get("user_id") or 0)
                 and (existing.get("playlist_source") or "submission") == "submission"
                 and existing.get("analysis_status") != "failed"
-                and (existing.get("active") or not existing.get("original_uploaded_at"))
+                and existing.get("active")
             )
             if not song.get("replacement_song_id") and active_count >= max_per_user:
                 return await render_upload_error(
-                    f"You already have the maximum of {max_per_user} active or pending submissions."
+                    f"You already have the maximum of {max_per_user} active submissions."
                 ), 409
 
         resolved_hook = None

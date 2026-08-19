@@ -2156,12 +2156,10 @@ class CommandsCog(commands.Cog):
             await interaction.followup.send(message, ephemeral=True)
             return
 
-        songs = [
-            song
-            for song in await self.bot.db.get_all_trya_stream_songs(active_only=False)
-            if int(song.get("user_id") or 0) == interaction.user.id
-            and (song.get("active") or not song.get("original_uploaded_at"))
-        ]
+        await self.bot.db.supersede_pending_trya_uploads(
+            interaction.user.id, destination
+        )
+        songs = await self.bot.db.get_trya_stream_songs_by_user(interaction.user.id)
         destination_songs = [
             song for song in songs
             if (song.get("playlist_source") or "submission") == destination
@@ -2246,12 +2244,12 @@ class CommandsCog(commands.Cog):
     ):
         await self._trya_stream_submit(interaction, destination, replace=True)
 
-    @app_commands.command(name="trya-stream-delete", description="Remove one of your songs from TrYa Stream")
+    @app_commands.command(name="trya-stream-delete", description="Remove a song or cancel a pending TrYa upload")
     async def trya_stream_delete(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        songs = await self.bot.db.get_trya_stream_songs_by_user(interaction.user.id)
+        songs = await self.bot.db.get_trya_stream_manageable_songs_by_user(interaction.user.id)
         if not songs:
-            await interaction.followup.send("You have no active TrYa Stream songs.", ephemeral=True)
+            await interaction.followup.send("You have no active songs or pending TrYa Stream uploads.", ephemeral=True)
             return
         await interaction.followup.send(
             "Select the song to remove from the playlist. Uploaded files and rights evidence are retained:",
@@ -2738,17 +2736,30 @@ class TryaStreamSongSelectView(discord.ui.View):
             await interaction.response.edit_message(content="Song not found.", view=None)
             return
         current = await self.bot.db.get_trya_stream_song(song["id"])
-        if not current or not current.get("active") or current.get("user_id") != self.viewer_id:
+        pending_upload = bool(
+            current
+            and not current.get("active")
+            and not current.get("original_uploaded_at")
+            and not current.get("playlist_remove_reason")
+        )
+        available = bool(
+            current
+            and current.get("user_id") == self.viewer_id
+            and (current.get("active") or (self.action == "delete" and pending_upload))
+        )
+        if not available:
             await interaction.response.edit_message(
-                content="That song is no longer available.", view=None
+                content="That song or upload is no longer available.", view=None
             )
             return
         try:
             if self.action == "delete":
                 await self.bot.db.delete_trya_stream_song(song["id"])
                 message = (
-                    f"**{song.get('title') or 'Song #' + str(song['id'])}** was removed from "
-                    "the playlist. Uploaded files and rights evidence were retained."
+                    "The pending upload was cancelled."
+                    if pending_upload
+                    else f"**{song.get('title') or 'Song #' + str(song['id'])}** was removed from "
+                         "the playlist. Uploaded files and rights evidence were retained."
                 )
             elif self.action == "hook":
                 hook = await _set_trya_stream_hook(self.bot, current, self.hook_value or "")
