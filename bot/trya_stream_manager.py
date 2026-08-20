@@ -1067,6 +1067,10 @@ class TryaStreamManager:
 
         # Build combined ASS (subtitles + NowPlaying title cards)
         show_progress = (await self.db.get_setting("trya_stream_progress_overlay") or "off") == "on"
+        stream_title_enabled = (
+            (await self.db.get_setting("trya_stream_title_enabled") or "off") == "on"
+        )
+        stream_title_text = (await self.db.get_setting("trya_stream_title_text") or "").strip()
         disclaimer_enabled = (
             (await self.db.get_setting("trya_stream_disclaimer_enabled") or "off") == "on"
         )
@@ -1127,6 +1131,8 @@ class TryaStreamManager:
             progress_total_count=progress_total_count,
             progress_index_offset=progress_index_offset,
             progress_extra_duration=progress_extra_duration,
+            stream_title_enabled=stream_title_enabled,
+            stream_title_text=stream_title_text,
             disclaimer_enabled=disclaimer_enabled,
             disclaimer_text=disclaimer_text,
         )
@@ -2238,6 +2244,8 @@ class TryaStreamManager:
         progress_total_count: int | None = None,
         progress_index_offset: int = 0,
         progress_extra_duration: float = 0.0,
+        stream_title_enabled: bool = False,
+        stream_title_text: str = "",
         disclaimer_enabled: bool = False,
         disclaimer_text: str = "",
     ) -> str | None:
@@ -2245,7 +2253,8 @@ class TryaStreamManager:
         Adds a NowPlaying title card at the start of each song.
         When show_progress=True also adds a bottom-right card with
         song duration and playlist position (e.g. '4:33  ·  Song 9/30').
-        An enabled disclaimer remains visible above that progress line."""
+        An enabled title remains visible above the optional disclaimer and
+        progress line."""
         ass_dir = os.path.join(self.trya_stream_dir, "ass")
         out_path = os.path.join(self.trya_stream_dir, "_combined.ass")
 
@@ -2265,6 +2274,8 @@ class TryaStreamManager:
             "&HC8000000,0,0,0,0,100,100,0,0,1,1.5,0.8,7,20,20,14,1\n"
             "Style: Progress,Noto Sans,34,&H00FFFFFF,&H000000FF,&H00000000,"
             "&HA0000000,0,0,0,0,100,100,0,0,1,1.2,0.5,3,10,30,18,1\n"
+            "Style: StreamTitle,Noto Sans,48,&H00E8C97A,&H000000FF,&H00000000,"
+            "&HC8000000,0,0,0,0,100,100,0,0,1,1.5,0.8,3,20,30,72,1\n"
             "Style: Disclaimer,Noto Sans,28,&H00FFFFFF,&H000000FF,&H00000000,"
             "&HA8000000,0,0,0,0,100,100,0,0,3,1.0,0,3,1050,30,72,1\n\n"
             "[Events]\n"
@@ -2336,6 +2347,20 @@ class TryaStreamManager:
             events.append(
                 f"Dialogue: 3,{_cs_to_ts(0)},{_cs_to_ts(offset_cs)},Disclaimer,,0,0,0,,"
                 f"{{\\fad(300,300)}}{disclaimer}"
+            )
+
+        if stream_title_enabled and stream_title_text:
+            stream_title = _strip_emoji(stream_title_text).replace("\\", "\\\\")
+            stream_title = stream_title.replace("{", "\\{").replace("}", "\\}")
+            # Keep the title above every visible disclaimer line while using
+            # the same 30 px right margin as the other bottom-right overlays.
+            disclaimer_lines = 0
+            if disclaimer_enabled and disclaimer_text:
+                disclaimer_lines = max(1, len(disclaimer_text.splitlines()))
+            title_margin_v = 72 + (disclaimer_lines * 36) + (16 if disclaimer_lines else 0)
+            events.append(
+                f"Dialogue: 4,{_cs_to_ts(0)},{_cs_to_ts(offset_cs)},StreamTitle,,0,0,{title_margin_v},,"
+                f"{{\\fad(300,300)}}{stream_title}"
             )
 
         try:

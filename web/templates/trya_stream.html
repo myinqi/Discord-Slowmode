@@ -159,6 +159,23 @@
             </div>
             <div class="pt-2 border-t border-gray-700/50 space-y-2">
                 <label class="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" name="exp_stream_title_enabled"
+                        {% if exp_stream_title_enabled == 'on' %}checked{% endif %}
+                        class="w-4 h-4 accent-discord-blurple">
+                    <span class="text-white text-sm">Show persistent stream title</span>
+                </label>
+                <input type="text" name="exp_stream_title_text" maxlength="200"
+                    value="{{ exp_stream_title_text }}"
+                    placeholder="Welcome to the Raven Nest"
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                <p class="text-gray-500 text-xs">
+                    Shown in the bottom-right corner above the disclaimer. The title uses the
+                    same accent colour and size as the artist display. Changes apply when the
+                    stream video is rebuilt.
+                </p>
+            </div>
+            <div class="pt-2 border-t border-gray-700/50 space-y-2">
+                <label class="flex items-center gap-2 cursor-pointer select-none">
                     <input type="checkbox" name="exp_disclaimer_enabled"
                         {% if exp_disclaimer_enabled == 'on' %}checked{% endif %}
                         class="w-4 h-4 accent-discord-blurple">

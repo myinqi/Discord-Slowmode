@@ -9340,6 +9340,10 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.set_setting("trya_stream_schedule_days", sched_days)
                 await db.set_setting("trya_stream_schedule_time", sched_time)
                 await db.set_setting("trya_stream_progress_overlay", progress_overlay_en)
+                stream_title_enabled = "on" if form.get("exp_stream_title_enabled") else "off"
+                stream_title_text = (form.get("exp_stream_title_text") or "").strip()[:200]
+                await db.set_setting("trya_stream_title_enabled", stream_title_enabled)
+                await db.set_setting("trya_stream_title_text", stream_title_text)
                 disclaimer_enabled = "on" if form.get("exp_disclaimer_enabled") else "off"
                 disclaimer_text = (form.get("exp_disclaimer_text") or "").strip()[:2000]
                 await db.set_setting("trya_stream_disclaimer_enabled", disclaimer_enabled)
@@ -9627,6 +9631,8 @@ def create_app(db: Database, bot=None) -> Quart:
         exp_moderation_enabled  = await db.get_setting("trya_stream_moderation_enabled") or "off"
         exp_loop_mode           = await db.get_setting("trya_stream_loop_mode") or "reshuffle"
         exp_progress_overlay    = await db.get_setting("trya_stream_progress_overlay") or "off"
+        exp_stream_title_enabled = await db.get_setting("trya_stream_title_enabled") or "off"
+        exp_stream_title_text   = await db.get_setting("trya_stream_title_text") or ""
         exp_disclaimer_enabled  = await db.get_setting("trya_stream_disclaimer_enabled") or "off"
         exp_disclaimer_text     = await db.get_setting("trya_stream_disclaimer_text") or ""
         exp_media_corners_enabled = await db.get_setting("trya_stream_media_corners_enabled") or "off"
@@ -9770,6 +9776,8 @@ def create_app(db: Database, bot=None) -> Quart:
             exp_obs_overlay_fps=exp_obs_overlay_fps,
             exp_loop_rtmp_key=exp_loop_rtmp_key,
             exp_progress_overlay=exp_progress_overlay,
+            exp_stream_title_enabled=exp_stream_title_enabled,
+            exp_stream_title_text=exp_stream_title_text,
             exp_disclaimer_enabled=exp_disclaimer_enabled,
             exp_disclaimer_text=exp_disclaimer_text,
             exp_media_corners_enabled=exp_media_corners_enabled,
