@@ -98,7 +98,7 @@ def _rounded_media_filters(
                 f"{input_label}format=rgba,split[{label_prefix}_visual][{label_prefix}_alpha_src]",
                 f"[{label_prefix}_alpha_src]alphaextract[{label_prefix}_source_alpha]",
                 f"[{mask}][{label_prefix}_source_alpha]blend=all_mode=multiply[{label_prefix}_outer_alpha]",
-                f"color=c=0x{color}:s={width}x{height}:r={fps},format=rgba[{label_prefix}_border_color]",
+                f"color=c=0x{color}:s={width}x{height}:r={fps}[{label_prefix}_border_color]",
                 f"[{label_prefix}_border_color][{label_prefix}_outer_alpha]alphamerge[{label_prefix}_border]",
                 f"color=c=white:s={inner_w}x{inner_h}:r={fps},format=gray,"
                 f"geq=lum='if({inner_condition},255,0)',trim=end_frame=1,"
@@ -129,19 +129,18 @@ def _rounded_media_filters(
         inner_condition = _rounded_rect_condition(inner_radius)
         inner_mask = f"{label_prefix}_inner_mask"
         filters.extend([
-            f"color=c=0x{color}:s={width}x{height}:r={fps},format=rgba[{label_prefix}_border_color]",
+            f"color=c=0x{color}:s={width}x{height}:r={fps}[{label_prefix}_border_color]",
             f"[{label_prefix}_border_color][{mask}]alphamerge[{label_prefix}_border]",
             f"color=c=white:s={inner_w}x{inner_h}:r={fps},format=gray,"
             f"geq=lum='if({inner_condition},255,0)',trim=end_frame=1,"
             f"loop=loop=-1:size=1:start=0,setpts=N/({fps}*TB)[{inner_mask}]",
-            f"{input_label}scale={inner_w}:{inner_h}:flags=bicubic,format=rgba[{label_prefix}_inner_visual]",
+            f"{input_label}scale={inner_w}:{inner_h}:flags=bicubic[{label_prefix}_inner_visual]",
             f"[{label_prefix}_inner_visual][{inner_mask}]alphamerge[{label_prefix}_inner]",
             f"[{label_prefix}_border][{label_prefix}_inner]overlay=x={border_width}:y={border_width}:"
             f"shortest=0:eof_action=pass:format=auto{output_label}",
         ])
     else:
-        filters.append(f"{input_label}format=rgba[{label_prefix}_visual]")
-        filters.append(f"[{label_prefix}_visual][{mask}]alphamerge{output_label}")
+        filters.append(f"{input_label}[{mask}]alphamerge{output_label}")
     return filters
 
 # ── ASS timestamp helpers ──────────────────────────────────────────────────────
@@ -1086,6 +1085,15 @@ class TryaStreamManager:
             "border_width": media_border_width,
             "border_color": media_border_color,
         }
+        if media_corners_enabled:
+            border_status = (
+                f"on ({media_border_width}px {media_border_color})"
+                if media_border_enabled
+                else "off"
+            )
+            self._log(
+                f"Media frame: rounded corners {media_corner_radius}px, border {border_status}."
+            )
         progress_total_count = len(songs)
         progress_index_offset = 0
         progress_extra_duration = 0.0
