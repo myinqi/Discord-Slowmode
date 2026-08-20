@@ -2507,8 +2507,20 @@ class CommandsCog(commands.Cog):
             ephemeral=True,
         )
 
+    async def _exp_radio_command_disabled(self, interaction: discord.Interaction) -> bool:
+        if (await self.bot.db.get_setting("exp_radio_enabled") or "on") == "on":
+            return False
+        message = "Experimental Radio is currently disabled by an administrator."
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+        return True
+
     @app_commands.command(name="twitch-submit", description="Submit a Suno song to the Experimental Radio")
     async def exp_radio_submit(self, interaction: discord.Interaction):
+        if await self._exp_radio_command_disabled(interaction):
+            return
         await interaction.response.defer(ephemeral=True)
         submission_ban = await self.bot.db.get_exp_radio_submission_ban(interaction.user.id)
         if submission_ban:
@@ -2534,6 +2546,8 @@ class CommandsCog(commands.Cog):
 
     @app_commands.command(name="twitch-replace", description="Replace your oldest Experimental Radio submission")
     async def exp_radio_replace(self, interaction: discord.Interaction):
+        if await self._exp_radio_command_disabled(interaction):
+            return
         await interaction.response.defer(ephemeral=True)
         submission_ban = await self.bot.db.get_exp_radio_submission_ban(interaction.user.id)
         if submission_ban:
@@ -2562,6 +2576,8 @@ class CommandsCog(commands.Cog):
 
     @app_commands.command(name="twitch-delete", description="Remove one of your Experimental Radio submissions")
     async def exp_radio_delete(self, interaction: discord.Interaction):
+        if await self._exp_radio_command_disabled(interaction):
+            return
         await interaction.response.defer(ephemeral=True)
         songs = await self.bot.db.get_exp_radio_songs_by_user(interaction.user.id)
         if not songs:
@@ -2577,6 +2593,8 @@ class CommandsCog(commands.Cog):
     @app_commands.command(name="twitch-hook", description="Add or change the Hook video on your radio submission")
     @app_commands.describe(hook_video="Suno Hook ID or Hook share link")
     async def exp_radio_hook(self, interaction: discord.Interaction, hook_video: str):
+        if await self._exp_radio_command_disabled(interaction):
+            return
         await interaction.response.defer(ephemeral=True)
         if _exp_radio_hook_changes_locked():
             await interaction.followup.send(
@@ -2612,6 +2630,8 @@ class CommandsCog(commands.Cog):
 
     @app_commands.command(name="twitch-hook-remove", description="Remove the Hook video from your radio submission")
     async def exp_radio_hook_remove(self, interaction: discord.Interaction):
+        if await self._exp_radio_command_disabled(interaction):
+            return
         await interaction.response.defer(ephemeral=True)
         if _exp_radio_hook_changes_locked():
             await interaction.followup.send(
@@ -2650,6 +2670,8 @@ class CommandsCog(commands.Cog):
 
     @app_commands.command(name="twitch-playlist", description="Show the current Experimental Radio playlist")
     async def twitch_playlist(self, interaction: discord.Interaction):
+        if await self._exp_radio_command_disabled(interaction):
+            return
         from datetime import datetime, timezone
         songs = await self.bot.db.get_all_exp_radio_songs(active_only=True, source="submission")
         if not songs:
@@ -2686,6 +2708,8 @@ class CommandsCog(commands.Cog):
 
     @app_commands.command(name="twitch-to-suno", description="List only the Suno URLs from the latest Experimental Radio stream")
     async def twitch_to_suno(self, interaction: discord.Interaction):
+        if await self._exp_radio_command_disabled(interaction):
+            return
         import json
 
         await interaction.response.defer(ephemeral=True)
@@ -3072,6 +3096,13 @@ class ExpRadioTermsView(discord.ui.View):
 
     @discord.ui.button(label="✅ I Agree & Submit", style=discord.ButtonStyle.green)
     async def agree(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if (await self.bot.db.get_setting("exp_radio_enabled") or "on") != "on":
+            await interaction.response.edit_message(
+                content="Experimental Radio is currently disabled by an administrator.",
+                embed=None,
+                view=None,
+            )
+            return
         await interaction.response.send_modal(ExpRadioSubmitModal(self.bot, replace=self.replace))
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
@@ -3104,6 +3135,12 @@ class ExpRadioSubmitModal(discord.ui.Modal, title="Submit to Experimental Radio"
 
     async def on_submit(self, interaction: discord.Interaction):
         import hashlib
+        if (await self.bot.db.get_setting("exp_radio_enabled") or "on") != "on":
+            await interaction.response.send_message(
+                "Experimental Radio is currently disabled by an administrator.",
+                ephemeral=True,
+            )
+            return
         await interaction.response.defer(ephemeral=True)
 
         submission_ban = await self.bot.db.get_exp_radio_submission_ban(interaction.user.id)
@@ -3342,6 +3379,12 @@ class ExpRadioHookSongSelectView(discord.ui.View):
                 "This selection belongs to another user.", ephemeral=True
             )
             return
+        if (await self.bot.db.get_setting("exp_radio_enabled") or "on") != "on":
+            await interaction.response.edit_message(
+                content="Experimental Radio is currently disabled by an administrator.",
+                view=None,
+            )
+            return
         await interaction.response.defer()
         if _exp_radio_hook_changes_locked():
             await interaction.edit_original_response(
@@ -3395,6 +3438,12 @@ class ExpRadioDeleteView(discord.ui.View):
         self.add_item(select)
 
     async def _select_cb(self, interaction: discord.Interaction):
+        if (await self.bot.db.get_setting("exp_radio_enabled") or "on") != "on":
+            await interaction.response.edit_message(
+                content="Experimental Radio is currently disabled by an administrator.",
+                view=None,
+            )
+            return
         song_id = int(interaction.data["values"][0])
         data = await self.bot.db.delete_exp_radio_song(song_id)
         if data:

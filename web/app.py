@@ -7610,7 +7610,10 @@ def create_app(db: Database, bot=None) -> Quart:
         from zoneinfo import ZoneInfo
         now = datetime.now(ZoneInfo("Europe/Berlin"))
 
+        manager_enabled = await db.get_setting("exp_radio_enabled") or "on"
         enabled = await db.get_setting("exp_radio_schedule_enabled") or "off"
+        if manager_enabled != "on":
+            enabled = "off"
         days_csv = await db.get_setting("exp_radio_schedule_days") or ""
         days = {int(day) for day in days_csv.split(",") if day.strip().isdigit()}
         if enabled == "on" and days and now.weekday() in days:
@@ -7894,7 +7897,10 @@ def create_app(db: Database, bot=None) -> Quart:
         )
         while True:
             try:
+                manager_enabled = await db.get_setting("exp_radio_enabled") or "on"
                 enabled = await db.get_setting("exp_radio_schedule_enabled") or "off"
+                if manager_enabled != "on":
+                    enabled = "off"
                 days_csv = await db.get_setting("exp_radio_schedule_days") or ""
                 hhmm = (await db.get_setting("exp_radio_schedule_time") or "").strip()
                 config_signature = (enabled, days_csv, hhmm)
@@ -11585,6 +11591,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 await flash("Stream key saved.", "success")
 
             elif action == "save_exp_settings":
+                enabled_v = "on" if form.get("exp_radio_enabled") else "off"
                 ch1 = form.get("exp_post_channel_1_id", "").strip()
                 ch2 = form.get("exp_post_channel_2_id", "").strip()
                 ch3 = form.get("exp_post_channel_3_id", "").strip()
@@ -11598,6 +11605,8 @@ def create_app(db: Database, bot=None) -> Quart:
                     loop_mode_v = "reshuffle"
                 # Auto-start scheduler
                 sched_en = "on" if form.get("exp_schedule_enabled") else "off"
+                if enabled_v != "on":
+                    sched_en = "off"
                 # Day checkboxes named exp_schedule_day_0..6 (Mon=0 .. Sun=6)
                 sched_days = ",".join(
                     str(i) for i in range(7) if form.get(f"exp_schedule_day_{i}")
@@ -11607,6 +11616,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 import re as _re
                 if not _re.match(r"^\d{1,2}:\d{2}$", sched_time):
                     sched_time = ""
+                await db.set_setting("exp_radio_enabled", enabled_v)
                 await db.set_setting("exp_radio_post_channel_1_id", ch1)
                 await db.set_setting("exp_radio_post_channel_2_id", ch2)
                 await db.set_setting("exp_radio_post_channel_3_id", ch3)
@@ -11659,7 +11669,13 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.set_setting("exp_radio_outro_selection", outro_selection)
                 if stream_url_v:
                     await db.set_setting("exp_radio_stream_url", stream_url_v)
-                await flash("Settings saved.", "success")
+                if enabled_v != "on" and exp_stream_manager.is_running:
+                    await exp_stream_manager.stop()
+                await flash(
+                    "Settings saved. Experimental Radio is disabled."
+                    if enabled_v != "on" else "Settings saved.",
+                    "success",
+                )
 
             elif action == "save_exp_twitch_settings":
                 exp_tw_cid = form.get("exp_twitch_client_id", "").strip()
@@ -11853,6 +11869,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.set_setting("exp_radio_loop_selection", _old_lv)
                 await db.set_setting("exp_radio_loop_filename", "")
         loop_selection = await db.get_setting("exp_radio_loop_selection") or "shuffle"
+        exp_radio_enabled = await db.get_setting("exp_radio_enabled") or "on"
         exp_stream_url = await db.get_setting("exp_radio_stream_url") or ""
         exp_post_channel_1_id = await db.get_setting("exp_radio_post_channel_1_id") or ""
         exp_post_channel_2_id = await db.get_setting("exp_radio_post_channel_2_id") or ""
@@ -11946,6 +11963,7 @@ def create_app(db: Database, bot=None) -> Quart:
         return await render_template(
             "exp_radio.html",
             songs=songs, status=status,
+            exp_radio_enabled=exp_radio_enabled,
             admin_songs=admin_songs,
             intro_songs=intro_songs,
             outro_songs=outro_songs,
@@ -11996,6 +12014,8 @@ def create_app(db: Database, bot=None) -> Quart:
     async def exp_radio_upload_resolve(token: str):
         """Resolve the real Suno UUID (full UUID) for the upload page JS."""
         from quart import jsonify
+        if (await db.get_setting("exp_radio_enabled") or "on") != "on":
+            return jsonify({"error": "Experimental Radio is disabled."}), 503
         import aiohttp, re as _re
         song = await db.get_exp_radio_song_by_token(token)
         if not song:
@@ -12036,6 +12056,11 @@ def create_app(db: Database, bot=None) -> Quart:
     @app.route("/exp-radio/upload/<token>")
     async def exp_radio_upload_page(token: str):
         """Public page (no login) — browser fetches MP3 from Suno CDN and POSTs it here."""
+        if (await db.get_setting("exp_radio_enabled") or "on") != "on":
+            return await render_template(
+                "exp_radio_upload.html",
+                error="Experimental Radio is currently disabled.",
+            ), 503
         from bot.exp_stream_manager import is_submissions_locked as _is_locked
         song = await db.get_exp_radio_song_by_token(token)
         if not song:
@@ -12057,6 +12082,8 @@ def create_app(db: Database, bot=None) -> Quart:
     async def exp_radio_upload_receive(token: str):
         """Receive the MP3 posted by the browser upload page."""
         from quart import jsonify
+        if (await db.get_setting("exp_radio_enabled") or "on") != "on":
+            return jsonify({"ok": False, "error": "Experimental Radio is disabled."}), 503
         import bot.exp_stream_manager as _esm
         song = await db.get_exp_radio_song_by_token(token)
         if not song:
@@ -12130,6 +12157,8 @@ def create_app(db: Database, bot=None) -> Quart:
     async def exp_radio_stream_action(action):
         from quart import jsonify
         if action in ("start", "start_legacy"):
+            if (await db.get_setting("exp_radio_enabled") or "on") != "on":
+                return jsonify({"ok": False, "error": "Experimental Radio is disabled."}), 409
             if app.database_restore_pending:
                 return jsonify({"ok": False, "error": "A database restore is in progress."}), 409
             twitch_key = await db.get_setting("exp_radio_twitch_key") or ""
