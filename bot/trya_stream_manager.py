@@ -324,6 +324,7 @@ class TryaStreamManager:
         self.trya_stream_dir = trya_stream_dir
         self._process      = None
         self._task         = None
+        self._start_lock   = asyncio.Lock()
         self.is_running    = False
         self.current_song: dict | None = None
         self.playlist: list[dict]      = []
@@ -465,6 +466,24 @@ class TryaStreamManager:
     # ── Public API ─────────────────────────────────────────────────────────────
 
     async def start(
+        self,
+        twitch_key: str,
+        fresh_cache: bool = False,
+        legacy_pipeline: bool = False,
+        scheduled: bool = False,
+    ) -> dict:
+        # is_running is set only after the comparatively long media setup.
+        # Serialise that setup so a scheduler and a manual click cannot build
+        # the same intermediates concurrently.
+        async with self._start_lock:
+            return await self._start_locked(
+                twitch_key,
+                fresh_cache=fresh_cache,
+                legacy_pipeline=legacy_pipeline,
+                scheduled=scheduled,
+            )
+
+    async def _start_locked(
         self,
         twitch_key: str,
         fresh_cache: bool = False,
@@ -1977,6 +1996,18 @@ class TryaStreamManager:
 
     # ── Concat-all loop video builder ─────────────────────────────────────────
 
+    async def _video_decodes_cleanly(self, path: str) -> tuple[bool, str]:
+        """Fully decode a generated loop video before exposing it to a stream."""
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-v", "error", "-i", path,
+            "-map", "0:v:0", "-f", "null", "-",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        error = stderr.decode("utf-8", errors="replace").strip()
+        return proc.returncode == 0 and not error, error[-2000:]
+
     async def _build_concat_all_video(self, loop_vids: list, random_order: bool = False) -> str | None:
         """Concatenate every uploaded loop video into one MP4.
 
@@ -2038,8 +2069,14 @@ class TryaStreamManager:
             try:
                 with open(hash_file) as fh:
                     if fh.read().strip() == cur_hash:
-                        self._log("Concat-all loop video: cache hit.")
-                        return out_path
+                        valid, error = await self._video_decodes_cleanly(out_path)
+                        if valid:
+                            self._log("Concat-all loop video: validated cache hit.")
+                            return out_path
+                        self._log(
+                            f"Concat-all cache is damaged and will be rebuilt: {error}",
+                            "error",
+                        )
             except Exception:
                 pass
 
@@ -2060,7 +2097,12 @@ class TryaStreamManager:
             concat_in.append(f"[v{i}]")
         filters.append(f"{''.join(concat_in)}concat=n={len(paths)}:v=1:a=0[vout]")
 
-        tmp_out = out_path + ".tmp.mp4"
+        # Every builder gets a private output. The previous fixed .tmp.mp4
+        # allowed overlapping manual/scheduled starts to corrupt each other.
+        tmp_out = os.path.join(
+            assets,
+            f".{stem}.{os.getpid()}.{time.time_ns()}.tmp.mp4",
+        )
         cmd += [
             "-filter_complex", ";".join(filters),
             "-map", "[vout]",
@@ -2110,6 +2152,15 @@ class TryaStreamManager:
         await proc.wait()
         if proc.returncode != 0:
             self._log(f"Concat-all build failed: {' | '.join(err_tail)}", "error")
+            try: os.remove(tmp_out)
+            except Exception: pass
+            return None
+        valid, validation_error = await self._video_decodes_cleanly(tmp_out)
+        if not valid:
+            self._log(
+                f"Concat-all validation failed: {validation_error or 'video could not be decoded'}",
+                "error",
+            )
             try: os.remove(tmp_out)
             except Exception: pass
             return None
