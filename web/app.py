@@ -9190,7 +9190,15 @@ def create_app(db: Database, bot=None) -> Quart:
                         await flash("Song not found or MP3 missing.", "error")
                     else:
                         await db.update_trya_stream_song(
-                            sid, analysis_status="processing", ass_filename=None,
+                            sid,
+                            analysis_status="processing",
+                            ass_filename=None,
+                            # A deliberate manual re-analysis starts a fresh
+                            # anomaly audit. Automatic pipeline runs remain
+                            # limited to one large-model retry per audit.
+                            whisper_anomaly_retry_count=0,
+                            whisper_anomaly_retry_at=None,
+                            whisper_anomaly_retry_trigger=None,
                         )
                         asyncio.create_task(
                             process_exp_song(db, sid, TRYA_STREAM_DIR, bot=bot)

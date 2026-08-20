@@ -652,6 +652,12 @@ async def get_duration(mp3_path: str) -> float:
 
 # Model size can be overridden via env (tiny, base, small, medium, large-v3)
 _WHISPER_MODEL = os.environ.get("TRYA_STREAM_WHISPER_MODEL", "large-v3-turbo")
+# Keep the regular analysis fast, but give the one-time anomaly retry the full
+# decoder. On hosts where large-v3 is impractical this can be overridden
+# independently without changing the primary transcription model.
+_WHISPER_RETRY_MODEL = os.environ.get(
+    "TRYA_STREAM_WHISPER_RETRY_MODEL", "large-v3"
+)
 
 
 # ── Lyric-sheet language detection ────────────────────────────────────────────
@@ -756,7 +762,12 @@ def _strip_hallucinations(words: list) -> list:
     return out
 
 
-def _whisper_sync(mp3_path: str, lyrics_prompt: str = "", language: Optional[str] = None) -> list:
+def _whisper_sync(
+    mp3_path: str,
+    lyrics_prompt: str = "",
+    language: Optional[str] = None,
+    model_name: Optional[str] = None,
+) -> list:
     """Run faster-whisper synchronously (called in thread pool).
 
     `lyrics_prompt` is accepted for backwards compatibility but is NOT passed
@@ -768,9 +779,12 @@ def _whisper_sync(mp3_path: str, lyrics_prompt: str = "", language: Optional[str
     word substitution against the lyric sheet) which is safer and produces
     no echo artifacts."""
     from faster_whisper import WhisperModel
-    model = WhisperModel(_WHISPER_MODEL, device="cpu", compute_type="int8")
+    model = WhisperModel(
+        model_name or _WHISPER_MODEL, device="cpu", compute_type="int8"
+    )
     segments, _ = model.transcribe(
         mp3_path,
+        task="transcribe",
         word_timestamps=True,
         # `language` is provided by the caller when we could confidently
         # detect it from the lyric sheet (see detect_lyrics_language). If
@@ -814,7 +828,12 @@ def _whisper_sync(mp3_path: str, lyrics_prompt: str = "", language: Optional[str
 _WHISPER_SEM = asyncio.Semaphore(1)   # serialise Whisper runs → prevent OOM
 
 
-async def run_whisper(mp3_path: str, lyrics_prompt: str = "", language: Optional[str] = None) -> list:
+async def run_whisper(
+    mp3_path: str,
+    lyrics_prompt: str = "",
+    language: Optional[str] = None,
+    model_name: Optional[str] = None,
+) -> list:
     """Run Whisper in thread pool so the event loop is not blocked.
 
     Only one Whisper job may run at a time (guarded by _WHISPER_SEM).
@@ -824,7 +843,7 @@ async def run_whisper(mp3_path: str, lyrics_prompt: str = "", language: Optional
     async with _WHISPER_SEM:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
-            None, _whisper_sync, mp3_path, lyrics_prompt, language,
+            None, _whisper_sync, mp3_path, lyrics_prompt, language, model_name,
         )
 
 
@@ -992,6 +1011,36 @@ def whisper_year_anomalies(words: list[dict]) -> list[str]:
     return sorted(found)
 
 
+def whisper_retry_rejection_reason(
+    original_words: list[dict], retry_words: list[dict]
+) -> Optional[str]:
+    """Return why a retry must not replace the existing transcript."""
+    if not retry_words:
+        return "the retry returned no words"
+
+    remaining = whisper_year_anomalies(retry_words)
+    if remaining:
+        return f"the anomaly remains ({','.join(remaining)})"
+
+    # Catch truncated/OOM-adjacent results without requiring clean Suno lyrics.
+    # Short songs and sparse vocals are exempt from the relative-size check.
+    original_count = len(original_words or [])
+    retry_count = len(retry_words)
+    if original_count >= 20 and retry_count < max(10, original_count // 2):
+        return f"the retry is suspiciously short ({retry_count}/{original_count} words)"
+
+    original_end = max(
+        (float(item.get("end") or 0) for item in original_words or []), default=0.0
+    )
+    retry_end = max(
+        (float(item.get("end") or 0) for item in retry_words), default=0.0
+    )
+    if original_end >= 60 and retry_end < original_end * 0.6:
+        return f"the retry ends too early ({retry_end:.1f}s/{original_end:.1f}s)"
+
+    return None
+
+
 async def retry_whisper_year_anomaly_if_needed(
     db, song_id: int, trya_stream_dir: str
 ) -> bool:
@@ -1037,7 +1086,8 @@ async def retry_whisper_year_anomaly_if_needed(
             return False
 
     log_event(
-        f"#{song_id}: final transcript contains {trigger}; starting the one-time second Whisper pass.",
+        f"#{song_id}: final transcript contains {trigger}; starting the one-time "
+        f"second Whisper pass with {_WHISPER_RETRY_MODEL}.",
         prefix="[whisper-retry]",
     )
     await db.update_trya_stream_song(song_id, analysis_status="processing")
@@ -1051,11 +1101,19 @@ async def retry_whisper_year_anomaly_if_needed(
             mp3_path,
             lyrics_prompt=extract_vocab_hints(lyrics),
             language=detect_lyrics_language(lyrics),
+            model_name=_WHISPER_RETRY_MODEL,
         )
-        if not retry_words:
-            raise ValueError("second Whisper pass returned no words")
         if lyrics:
             retry_words = _align_to_lyrics(retry_words, lyrics)
+        rejection_reason = whisper_retry_rejection_reason(words, retry_words)
+        if rejection_reason:
+            await db.update_trya_stream_song(song_id, analysis_status="done")
+            log_event(
+                f"#{song_id}: {_WHISPER_RETRY_MODEL} retry rejected because "
+                f"{rejection_reason}; original transcript retained.",
+                level="error", prefix="[whisper-retry]",
+            )
+            return False
         ass_filename = song.get("ass_filename") or f"{song.get('suno_uuid') or song_id}.ass"
         ass_dir = os.path.join(trya_stream_dir, "ass")
         os.makedirs(ass_dir, exist_ok=True)
@@ -1078,11 +1136,9 @@ async def retry_whisper_year_anomaly_if_needed(
             ass_filename=ass_filename,
             analysis_status="done",
         )
-        remaining = whisper_year_anomalies(retry_words)
         log_event(
-            f"#{song_id}: one-time second Whisper pass complete"
-            + (f"; {','.join(remaining)} still present, no further retry will run." if remaining else "; anomaly cleared."),
-            level="error" if remaining else "info",
+            f"#{song_id}: {_WHISPER_RETRY_MODEL} retry accepted; anomaly cleared "
+            f"({len(words)} -> {len(retry_words)} words).",
             prefix="[whisper-retry]",
         )
         return True
