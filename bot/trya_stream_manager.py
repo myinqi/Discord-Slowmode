@@ -42,6 +42,108 @@ _BROWSER_UA = (
     "Chrome/124.0.0.0 Safari/537.36"
 )
 
+
+def _rounded_rect_condition(radius: int, inset: int = 0) -> str:
+    """FFmpeg expression that is true inside an inset rounded rectangle."""
+    radius = max(1, int(radius))
+    inset = max(0, int(inset))
+    inner_radius = max(1, radius - inset)
+    half_w = f"W/2-{inset}" if inset else "W/2"
+    half_h = f"H/2-{inset}" if inset else "H/2"
+    return (
+        "lte(hypot("
+        f"max(abs(X-W/2)-({half_w}-{inner_radius}),0),"
+        f"max(abs(Y-H/2)-({half_h}-{inner_radius}),0)"
+        f"),{inner_radius})"
+    )
+
+
+def _rounded_media_filters(
+    input_label: str,
+    output_label: str,
+    *,
+    label_prefix: str,
+    width: int,
+    height: int,
+    fps: int,
+    radius: int,
+    border_enabled: bool,
+    border_width: int,
+    border_color: str,
+    preserve_input_alpha: bool = False,
+) -> list[str]:
+    """Apply a cached rounded mask and optional inward border to a stream."""
+    color = (border_color or "#A855F7").strip().lstrip("#")
+    if not re.fullmatch(r"[0-9A-Fa-f]{6}", color):
+        color = "A855F7"
+    outer = _rounded_rect_condition(radius)
+    mask = f"{label_prefix}_outer_mask"
+    filters = [
+        f"color=c=white:s={width}x{height}:r={fps},format=gray,"
+        f"geq=lum='if({outer},255,0)',trim=end_frame=1,"
+        f"loop=loop=-1:size=1:start=0,setpts=N/({fps}*TB)[{mask}]"
+    ]
+
+    if preserve_input_alpha:
+        # The OBS bridge is transparent while no live override is present.
+        # Multiply its alpha by the rounded mask so styling cannot make an
+        # absent source visible.
+        if border_enabled and border_width > 0:
+            inner_w = max(2, width - (2 * border_width))
+            inner_h = max(2, height - (2 * border_width))
+            inner_radius = max(1, radius - border_width)
+            inner_condition = _rounded_rect_condition(inner_radius)
+            inner_mask = f"{label_prefix}_inner_mask"
+            filters.extend([
+                f"{input_label}format=rgba,split[{label_prefix}_visual][{label_prefix}_alpha_src]",
+                f"[{label_prefix}_alpha_src]alphaextract[{label_prefix}_source_alpha]",
+                f"[{mask}][{label_prefix}_source_alpha]blend=all_mode=multiply[{label_prefix}_outer_alpha]",
+                f"color=c=0x{color}:s={width}x{height}:r={fps},format=rgba[{label_prefix}_border_color]",
+                f"[{label_prefix}_border_color][{label_prefix}_outer_alpha]alphamerge[{label_prefix}_border]",
+                f"color=c=white:s={inner_w}x{inner_h}:r={fps},format=gray,"
+                f"geq=lum='if({inner_condition},255,0)',trim=end_frame=1,"
+                f"loop=loop=-1:size=1:start=0,setpts=N/({fps}*TB)[{inner_mask}]",
+                f"[{label_prefix}_visual]scale={inner_w}:{inner_h}:flags=bicubic,format=rgba,"
+                f"split[{label_prefix}_inner_visual][{label_prefix}_inner_alpha_src]",
+                f"[{label_prefix}_inner_alpha_src]alphaextract[{label_prefix}_inner_source_alpha]",
+                f"[{inner_mask}][{label_prefix}_inner_source_alpha]"
+                f"blend=all_mode=multiply[{label_prefix}_inner_alpha]",
+                f"[{label_prefix}_inner_visual][{label_prefix}_inner_alpha]"
+                f"alphamerge[{label_prefix}_inner]",
+                f"[{label_prefix}_border][{label_prefix}_inner]overlay=x={border_width}:y={border_width}:"
+                f"shortest=0:eof_action=pass:format=auto{output_label}",
+            ])
+            return filters
+        filters.extend([
+            f"{input_label}format=rgba,split[{label_prefix}_visual][{label_prefix}_alpha_src]",
+            f"[{label_prefix}_alpha_src]alphaextract[{label_prefix}_source_alpha]",
+            f"[{mask}][{label_prefix}_source_alpha]blend=all_mode=multiply[{label_prefix}_alpha]",
+            f"[{label_prefix}_visual][{label_prefix}_alpha]alphamerge{output_label}",
+        ])
+        return filters
+
+    if border_enabled and border_width > 0:
+        inner_w = max(2, width - (2 * border_width))
+        inner_h = max(2, height - (2 * border_width))
+        inner_radius = max(1, radius - border_width)
+        inner_condition = _rounded_rect_condition(inner_radius)
+        inner_mask = f"{label_prefix}_inner_mask"
+        filters.extend([
+            f"color=c=0x{color}:s={width}x{height}:r={fps},format=rgba[{label_prefix}_border_color]",
+            f"[{label_prefix}_border_color][{mask}]alphamerge[{label_prefix}_border]",
+            f"color=c=white:s={inner_w}x{inner_h}:r={fps},format=gray,"
+            f"geq=lum='if({inner_condition},255,0)',trim=end_frame=1,"
+            f"loop=loop=-1:size=1:start=0,setpts=N/({fps}*TB)[{inner_mask}]",
+            f"{input_label}scale={inner_w}:{inner_h}:flags=bicubic,format=rgba[{label_prefix}_inner_visual]",
+            f"[{label_prefix}_inner_visual][{inner_mask}]alphamerge[{label_prefix}_inner]",
+            f"[{label_prefix}_border][{label_prefix}_inner]overlay=x={border_width}:y={border_width}:"
+            f"shortest=0:eof_action=pass:format=auto{output_label}",
+        ])
+    else:
+        filters.append(f"{input_label}format=rgba[{label_prefix}_visual]")
+        filters.append(f"[{label_prefix}_visual][{mask}]alphamerge{output_label}")
+    return filters
+
 # ── ASS timestamp helpers ──────────────────────────────────────────────────────
 
 def _ts_to_cs(ts: str) -> int:
@@ -952,6 +1054,38 @@ class TryaStreamManager:
             (await self.db.get_setting("trya_stream_disclaimer_enabled") or "off") == "on"
         )
         disclaimer_text = (await self.db.get_setting("trya_stream_disclaimer_text") or "").strip()
+        media_corners_enabled = (
+            (await self.db.get_setting("trya_stream_media_corners_enabled") or "off") == "on"
+        )
+        media_border_enabled = (
+            (await self.db.get_setting("trya_stream_media_border_enabled") or "off") == "on"
+        )
+        try:
+            media_corner_radius = max(
+                1,
+                min(120, int(await self.db.get_setting("trya_stream_media_corner_radius") or "28")),
+            )
+        except (TypeError, ValueError):
+            media_corner_radius = 28
+        try:
+            media_border_width = max(
+                1,
+                min(20, int(await self.db.get_setting("trya_stream_media_border_width") or "3")),
+            )
+        except (TypeError, ValueError):
+            media_border_width = 3
+        media_border_color = (
+            await self.db.get_setting("trya_stream_media_border_color") or "#A855F7"
+        ).strip().upper()
+        if not re.fullmatch(r"#[0-9A-F]{6}", media_border_color):
+            media_border_color = "#A855F7"
+        media_style = {
+            "enabled": media_corners_enabled,
+            "radius": media_corner_radius,
+            "border_enabled": media_border_enabled,
+            "border_width": media_border_width,
+            "border_color": media_border_color,
+        }
         progress_total_count = len(songs)
         progress_index_offset = 0
         progress_extra_duration = 0.0
@@ -994,6 +1128,7 @@ class TryaStreamManager:
             total_dur=total_dur,
             legacy_pipeline=self._legacy_pipeline,
             audio_concat_file=audio_concat_file,
+            media_style=media_style,
         )
 
         titles = " → ".join(s.get("title") or "?" for s in songs)
@@ -2120,6 +2255,7 @@ class TryaStreamManager:
         total_dur: float,
         legacy_pipeline: bool = False,
         audio_concat_file: str | None = None,
+        media_style: dict | None = None,
     ) -> list:
         """Build ONE FFmpeg command for the full playlist.
 
@@ -2195,6 +2331,12 @@ class TryaStreamManager:
 
         # ── Filtergraph ────────────────────────────────────────────────────────
         filters = []
+        media_style = media_style or {}
+        rounded_media = bool(media_style.get("enabled"))
+        corner_radius = max(1, min(120, int(media_style.get("radius") or 28)))
+        border_enabled = bool(media_style.get("border_enabled"))
+        border_width = max(1, min(20, int(media_style.get("border_width") or 3)))
+        border_color = str(media_style.get("border_color") or "#A855F7")
 
         # Background
         if bg_input is not None:
@@ -2208,10 +2350,28 @@ class TryaStreamManager:
 
         # Loop video overlay – top-right, 650×366 (16:9)
         if lv_input is not None:
-            filters.append(
-                f"[{lv_input}:v]scale={_LOOP_OVERLAY_W}:{_LOOP_OVERLAY_H}:force_original_aspect_ratio=decrease,"
-                f"fps={_FPS}[lv]"
-            )
+            if rounded_media:
+                filters.append(
+                    f"[{lv_input}:v]scale={_LOOP_OVERLAY_W}:{_LOOP_OVERLAY_H}:"
+                    f"force_original_aspect_ratio=increase,crop={_LOOP_OVERLAY_W}:{_LOOP_OVERLAY_H},"
+                    f"setsar=1,fps={_FPS}[lv_base]"
+                )
+                filters.extend(_rounded_media_filters(
+                    "[lv_base]", "[lv]",
+                    label_prefix="lv_style",
+                    width=_LOOP_OVERLAY_W,
+                    height=_LOOP_OVERLAY_H,
+                    fps=_FPS,
+                    radius=corner_radius,
+                    border_enabled=border_enabled,
+                    border_width=border_width,
+                    border_color=border_color,
+                ))
+            else:
+                filters.append(
+                    f"[{lv_input}:v]scale={_LOOP_OVERLAY_W}:{_LOOP_OVERLAY_H}:"
+                    f"force_original_aspect_ratio=decrease,fps={_FPS}[lv]"
+                )
             filters.append(
                 f"{last}[lv]overlay=x={W}-{_LOOP_OVERLAY_W}-20:y=20:shortest=0:eof_action=pass[after_lv]"
             )
@@ -2221,8 +2381,23 @@ class TryaStreamManager:
         # visible; live OBS frames cover it in the same position.
         if obs_input is not None:
             filters.append(
-                f"[{obs_input}:v]scale={_LOOP_OVERLAY_W}:{_LOOP_OVERLAY_H}:flags=bicubic,format=rgba[obs]"
+                f"[{obs_input}:v]scale={_LOOP_OVERLAY_W}:{_LOOP_OVERLAY_H}:flags=bicubic,format=rgba[obs_base]"
             )
+            if rounded_media:
+                filters.extend(_rounded_media_filters(
+                    "[obs_base]", "[obs]",
+                    label_prefix="obs_style",
+                    width=_LOOP_OVERLAY_W,
+                    height=_LOOP_OVERLAY_H,
+                    fps=obs_overlay_fps,
+                    radius=corner_radius,
+                    border_enabled=border_enabled,
+                    border_width=border_width,
+                    border_color=border_color,
+                    preserve_input_alpha=True,
+                ))
+            else:
+                filters.append("[obs_base]copy[obs]")
             filters.append(
                 f"{last}[obs]overlay=x={W}-{_LOOP_OVERLAY_W}-20:y=20:shortest=0:eof_action=pass[after_obs]"
             )
@@ -2236,10 +2411,24 @@ class TryaStreamManager:
             filters.append(
                 f"[{mid}:v]scale={_INSET_W}:{_INSET_H}:force_original_aspect_ratio=decrease:"
                 f"force_divisible_by=2,pad={_INSET_W}:{_INSET_H}:(ow-iw)/2:(oh-ih)/2:black,"
-                f"setsar=1,fps={_FPS},trim=0:{dur},setpts=PTS-STARTPTS[cv{i}]"
+                f"setsar=1,fps={_FPS},trim=0:{dur},setpts=PTS-STARTPTS[cv_base{i}]"
             )
-        concat_in = "".join(f"[cv{i}]" for i in range(n))
-        filters.append(f"{concat_in}concat=n={n}:v=1:a=0[covers]")
+        concat_in = "".join(f"[cv_base{i}]" for i in range(n))
+        filters.append(f"{concat_in}concat=n={n}:v=1:a=0[covers_base]")
+        if rounded_media:
+            filters.extend(_rounded_media_filters(
+                "[covers_base]", "[covers]",
+                label_prefix="song_style",
+                width=_INSET_W,
+                height=_INSET_H,
+                fps=_FPS,
+                radius=corner_radius,
+                border_enabled=border_enabled,
+                border_width=border_width,
+                border_color=border_color,
+            ))
+        else:
+            filters.append("[covers_base]copy[covers]")
 
         if not legacy_pipeline:
             audio_concat_in = []

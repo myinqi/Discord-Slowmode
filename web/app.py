@@ -9344,6 +9344,28 @@ def create_app(db: Database, bot=None) -> Quart:
                 disclaimer_text = (form.get("exp_disclaimer_text") or "").strip()[:2000]
                 await db.set_setting("trya_stream_disclaimer_enabled", disclaimer_enabled)
                 await db.set_setting("trya_stream_disclaimer_text", disclaimer_text)
+                media_corners_enabled = "on" if form.get("exp_media_corners_enabled") else "off"
+                media_border_enabled = "on" if form.get("exp_media_border_enabled") else "off"
+                try:
+                    media_corner_radius = max(
+                        1, min(120, int(form.get("exp_media_corner_radius", "28") or "28"))
+                    )
+                except (TypeError, ValueError):
+                    media_corner_radius = 28
+                try:
+                    media_border_width = max(
+                        1, min(20, int(form.get("exp_media_border_width", "3") or "3"))
+                    )
+                except (TypeError, ValueError):
+                    media_border_width = 3
+                media_border_color = (form.get("exp_media_border_color") or "#A855F7").strip().upper()
+                if not _re.fullmatch(r"#[0-9A-F]{6}", media_border_color):
+                    media_border_color = "#A855F7"
+                await db.set_setting("trya_stream_media_corners_enabled", media_corners_enabled)
+                await db.set_setting("trya_stream_media_corner_radius", str(media_corner_radius))
+                await db.set_setting("trya_stream_media_border_enabled", media_border_enabled)
+                await db.set_setting("trya_stream_media_border_width", str(media_border_width))
+                await db.set_setting("trya_stream_media_border_color", media_border_color)
                 await db.set_setting("trya_stream_ravenveil_early_boost", ravenveil_early_boost_en)
                 active_pl_v = form.get("exp_active_playlist", "submission")
                 if active_pl_v not in ("submission", "admin", "both"):
@@ -9583,6 +9605,25 @@ def create_app(db: Database, bot=None) -> Quart:
         exp_progress_overlay    = await db.get_setting("trya_stream_progress_overlay") or "off"
         exp_disclaimer_enabled  = await db.get_setting("trya_stream_disclaimer_enabled") or "off"
         exp_disclaimer_text     = await db.get_setting("trya_stream_disclaimer_text") or ""
+        exp_media_corners_enabled = await db.get_setting("trya_stream_media_corners_enabled") or "off"
+        exp_media_border_enabled = await db.get_setting("trya_stream_media_border_enabled") or "off"
+        try:
+            exp_media_corner_radius = max(
+                1, min(120, int(await db.get_setting("trya_stream_media_corner_radius") or "28"))
+            )
+        except (TypeError, ValueError):
+            exp_media_corner_radius = 28
+        try:
+            exp_media_border_width = max(
+                1, min(20, int(await db.get_setting("trya_stream_media_border_width") or "3"))
+            )
+        except (TypeError, ValueError):
+            exp_media_border_width = 3
+        exp_media_border_color = (
+            await db.get_setting("trya_stream_media_border_color") or "#A855F7"
+        ).strip().upper()
+        if not re.fullmatch(r"#[0-9A-F]{6}", exp_media_border_color):
+            exp_media_border_color = "#A855F7"
         exp_ravenveil_early_boost = await db.get_setting("trya_stream_ravenveil_early_boost") or "off"
         exp_max_per_user        = int(await db.get_setting("trya_stream_max_per_user") or "4")
         try:
@@ -9706,6 +9747,11 @@ def create_app(db: Database, bot=None) -> Quart:
             exp_progress_overlay=exp_progress_overlay,
             exp_disclaimer_enabled=exp_disclaimer_enabled,
             exp_disclaimer_text=exp_disclaimer_text,
+            exp_media_corners_enabled=exp_media_corners_enabled,
+            exp_media_corner_radius=exp_media_corner_radius,
+            exp_media_border_enabled=exp_media_border_enabled,
+            exp_media_border_width=exp_media_border_width,
+            exp_media_border_color=exp_media_border_color,
             exp_ravenveil_early_boost=exp_ravenveil_early_boost,
             exp_max_per_user=exp_max_per_user,
             exp_video_bitrate_kbps=exp_video_bitrate_kbps,

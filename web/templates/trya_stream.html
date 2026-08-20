@@ -172,6 +172,54 @@
                     Line breaks are preserved. Changes apply when the stream video is rebuilt.
                 </p>
             </div>
+            <div class="pt-2 border-t border-gray-700/50 space-y-3">
+                <div>
+                    <p class="text-white text-sm font-medium">Media frame</p>
+                    <p class="text-gray-500 text-xs mt-1">
+                        Applies to song media at the bottom-left and overlay videos at the top-right.
+                    </p>
+                </div>
+                <label class="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" name="exp_media_corners_enabled"
+                        {% if exp_media_corners_enabled == 'on' %}checked{% endif %}
+                        class="w-4 h-4 accent-discord-blurple">
+                    <span class="text-white text-sm">Round media corners</span>
+                </label>
+                <label class="block">
+                    <span class="block text-gray-400 text-xs mb-1">Corner radius (px)</span>
+                    <input type="number" name="exp_media_corner_radius" min="1" max="120" step="1"
+                        value="{{ exp_media_corner_radius }}"
+                        class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                </label>
+                <label class="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" name="exp_media_border_enabled"
+                        {% if exp_media_border_enabled == 'on' %}checked{% endif %}
+                        class="w-4 h-4 accent-discord-blurple">
+                    <span class="text-white text-sm">Show media border</span>
+                </label>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <label class="block">
+                        <span class="block text-gray-400 text-xs mb-1">Border width (px)</span>
+                        <input type="number" name="exp_media_border_width" min="1" max="20" step="1"
+                            value="{{ exp_media_border_width }}"
+                            class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                    </label>
+                    <label class="block">
+                        <span class="block text-gray-400 text-xs mb-1">Border color (hex)</span>
+                        <span class="flex gap-2">
+                            <input type="color" id="exp-media-border-picker"
+                                value="{{ exp_media_border_color }}"
+                                oninput="document.getElementById('exp-media-border-color').value=this.value.toUpperCase()"
+                                class="h-10 w-12 shrink-0 bg-discord-darker border border-gray-600 rounded-lg p-1 cursor-pointer">
+                            <input type="text" id="exp-media-border-color" name="exp_media_border_color"
+                                value="{{ exp_media_border_color }}" maxlength="7" pattern="#[0-9A-Fa-f]{6}"
+                                oninput="if(/^#[0-9A-Fa-f]{6}$/.test(this.value)){document.getElementById('exp-media-border-picker').value=this.value}"
+                                class="min-w-0 flex-1 bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm font-mono focus:border-discord-blurple focus:outline-none">
+                        </span>
+                    </label>
+                </div>
+                <p class="text-gray-500 text-xs">Changes apply when the stream video pipeline is rebuilt.</p>
+            </div>
             <div class="pt-2 border-t border-gray-700/50 space-y-2">
                 <label class="flex items-center gap-2 cursor-pointer select-none">
                     <input type="checkbox" name="exp_ravenveil_early_boost"
