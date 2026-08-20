@@ -72,7 +72,7 @@ def _rounded_media_filters(
     border_color: str,
     preserve_input_alpha: bool = False,
 ) -> list[str]:
-    """Apply a cached rounded mask and optional inward border to a stream."""
+    """Apply a cached rounded mask and an optional low-cost inward border."""
     color = (border_color or "#A855F7").strip().lstrip("#")
     if not re.fullmatch(r"[0-9A-Fa-f]{6}", color):
         color = "A855F7"
@@ -84,63 +84,27 @@ def _rounded_media_filters(
         f"loop=loop=-1:size=1:start=0,setpts=N/({fps}*TB)[{mask}]"
     ]
 
+    visual = input_label
+    if border_enabled and border_width > 0:
+        visual = f"[{label_prefix}_bordered]"
+        filters.append(
+            f"{input_label}drawbox=x=0:y=0:w=iw:h=ih:"
+            f"color=0x{color}:t={border_width}{visual}"
+        )
+
     if preserve_input_alpha:
         # The OBS bridge is transparent while no live override is present.
         # Multiply its alpha by the rounded mask so styling cannot make an
-        # absent source visible.
-        if border_enabled and border_width > 0:
-            inner_w = max(2, width - (2 * border_width))
-            inner_h = max(2, height - (2 * border_width))
-            inner_radius = max(1, radius - border_width)
-            inner_condition = _rounded_rect_condition(inner_radius)
-            inner_mask = f"{label_prefix}_inner_mask"
-            filters.extend([
-                f"{input_label}format=rgba,split[{label_prefix}_visual][{label_prefix}_alpha_src]",
-                f"[{label_prefix}_alpha_src]alphaextract[{label_prefix}_source_alpha]",
-                f"[{mask}][{label_prefix}_source_alpha]blend=all_mode=multiply[{label_prefix}_outer_alpha]",
-                f"color=c=0x{color}:s={width}x{height}:r={fps}[{label_prefix}_border_color]",
-                f"[{label_prefix}_border_color][{label_prefix}_outer_alpha]alphamerge[{label_prefix}_border]",
-                f"color=c=white:s={inner_w}x{inner_h}:r={fps},format=gray,"
-                f"geq=lum='if({inner_condition},255,0)',trim=end_frame=1,"
-                f"loop=loop=-1:size=1:start=0,setpts=N/({fps}*TB)[{inner_mask}]",
-                f"[{label_prefix}_visual]scale={inner_w}:{inner_h}:flags=bicubic,format=rgba,"
-                f"split[{label_prefix}_inner_visual][{label_prefix}_inner_alpha_src]",
-                f"[{label_prefix}_inner_alpha_src]alphaextract[{label_prefix}_inner_source_alpha]",
-                f"[{inner_mask}][{label_prefix}_inner_source_alpha]"
-                f"blend=all_mode=multiply[{label_prefix}_inner_alpha]",
-                f"[{label_prefix}_inner_visual][{label_prefix}_inner_alpha]"
-                f"alphamerge[{label_prefix}_inner]",
-                f"[{label_prefix}_border][{label_prefix}_inner]overlay=x={border_width}:y={border_width}:"
-                f"shortest=0:eof_action=pass:format=auto{output_label}",
-            ])
-            return filters
+        # absent source visible. drawbox keeps this path to one composition.
         filters.extend([
-            f"{input_label}format=rgba,split[{label_prefix}_visual][{label_prefix}_alpha_src]",
+            f"{visual}format=rgba,split[{label_prefix}_visual][{label_prefix}_alpha_src]",
             f"[{label_prefix}_alpha_src]alphaextract[{label_prefix}_source_alpha]",
             f"[{mask}][{label_prefix}_source_alpha]blend=all_mode=multiply[{label_prefix}_alpha]",
             f"[{label_prefix}_visual][{label_prefix}_alpha]alphamerge{output_label}",
         ])
         return filters
 
-    if border_enabled and border_width > 0:
-        inner_w = max(2, width - (2 * border_width))
-        inner_h = max(2, height - (2 * border_width))
-        inner_radius = max(1, radius - border_width)
-        inner_condition = _rounded_rect_condition(inner_radius)
-        inner_mask = f"{label_prefix}_inner_mask"
-        filters.extend([
-            f"color=c=0x{color}:s={width}x{height}:r={fps}[{label_prefix}_border_color]",
-            f"[{label_prefix}_border_color][{mask}]alphamerge[{label_prefix}_border]",
-            f"color=c=white:s={inner_w}x{inner_h}:r={fps},format=gray,"
-            f"geq=lum='if({inner_condition},255,0)',trim=end_frame=1,"
-            f"loop=loop=-1:size=1:start=0,setpts=N/({fps}*TB)[{inner_mask}]",
-            f"{input_label}scale={inner_w}:{inner_h}:flags=bicubic[{label_prefix}_inner_visual]",
-            f"[{label_prefix}_inner_visual][{inner_mask}]alphamerge[{label_prefix}_inner]",
-            f"[{label_prefix}_border][{label_prefix}_inner]overlay=x={border_width}:y={border_width}:"
-            f"shortest=0:eof_action=pass:format=auto{output_label}",
-        ])
-    else:
-        filters.append(f"{input_label}[{mask}]alphamerge{output_label}")
+    filters.append(f"{visual}[{mask}]alphamerge{output_label}")
     return filters
 
 # ── ASS timestamp helpers ──────────────────────────────────────────────────────
