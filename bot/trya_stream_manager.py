@@ -793,6 +793,13 @@ class TryaStreamManager:
             } if self.current_song else None,
             "song_index": self._current_song_index,
             "playlist_length": self._progress_total_count or len(self.playlist),
+            "playlist": [
+                {
+                    "title": song.get("title") or "Unknown title",
+                    "artist": song.get("artist") or "Unknown artist",
+                }
+                for song in self.playlist
+            ] if self.is_running else [],
             "legacy_pipeline": self._legacy_pipeline,
             "ffmpeg": self._get_ffmpeg_health(),
             "obs_overlay": dict(self._obs_overlay_status),
@@ -983,6 +990,34 @@ class TryaStreamManager:
                     if not loop_path:
                         loop_fn = random.choice(loop_vids)["filename"]
                         self._log(f"Random concat-all failed, shuffle fallback: {loop_fn}", "error")
+            elif loop_sel == "concat_random_subset":
+                try:
+                    subset_count = int(
+                        await self.db.get_setting("trya_stream_loop_random_count") or "10"
+                    )
+                except (TypeError, ValueError):
+                    subset_count = 10
+                subset_count = max(1, min(subset_count, len(loop_vids)))
+                selected_loop_vids = await self._select_random_loop_video_subset(
+                    loop_vids, subset_count
+                )
+                if len(selected_loop_vids) == 1:
+                    loop_fn = selected_loop_vids[0]["filename"]
+                    self._log(f"Loop video (random subset single): {loop_fn}")
+                else:
+                    self._log(
+                        f"Loop video random subset: selected {subset_count} of "
+                        f"{len(loop_vids)} videos."
+                    )
+                    loop_path = await self._build_concat_all_video(
+                        selected_loop_vids, random_order=True
+                    )
+                    if not loop_path:
+                        loop_fn = random.choice(selected_loop_vids)["filename"]
+                        self._log(
+                            f"Random subset concat failed, shuffle fallback: {loop_fn}",
+                            "error",
+                        )
             elif loop_sel == "shuffle":
                 loop_fn = random.choice(loop_vids)["filename"]
                 self._log(f"Loop video (shuffle): {loop_fn}")
@@ -1959,6 +1994,58 @@ class TryaStreamManager:
         return False, "No usable cover URL available."
 
     # ── Concat-all loop video builder ─────────────────────────────────────────
+
+    async def _select_random_loop_video_subset(self, loop_vids: list, count: int) -> list:
+        """Draw a random subset while cycling through every uploaded video."""
+        filenames = [video.get("filename") for video in loop_vids if video.get("filename")]
+        available = set(filenames)
+        state_raw = await self.db.get_setting("trya_stream_loop_random_rotation") or "{}"
+        try:
+            state = json.loads(state_raw)
+            if not isinstance(state, dict):
+                state = {}
+        except (TypeError, ValueError, json.JSONDecodeError):
+            state = {}
+
+        known_values = state.get("known", [])
+        if not isinstance(known_values, list):
+            known_values = []
+        remaining_values = state.get("remaining", [])
+        if not isinstance(remaining_values, list):
+            remaining_values = []
+        known = {
+            filename for filename in known_values
+            if isinstance(filename, str)
+        }
+        remaining = []
+        seen = set()
+        for filename in remaining_values:
+            if filename in available and filename not in seen:
+                remaining.append(filename)
+                seen.add(filename)
+
+        new_filenames = [filename for filename in filenames if filename not in known]
+        random.shuffle(new_filenames)
+        remaining.extend(filename for filename in new_filenames if filename not in seen)
+
+        selected = []
+        target = max(1, min(int(count), len(filenames)))
+        while len(selected) < target:
+            if not remaining:
+                remaining = [filename for filename in filenames if filename not in selected]
+                random.shuffle(remaining)
+                if not remaining:
+                    break
+            filename = remaining.pop(0)
+            if filename not in selected:
+                selected.append(filename)
+
+        await self.db.set_setting(
+            "trya_stream_loop_random_rotation",
+            json.dumps({"known": filenames, "remaining": remaining}),
+        )
+        videos_by_filename = {video.get("filename"): video for video in loop_vids}
+        return [videos_by_filename[filename] for filename in selected]
 
     async def _video_decodes_cleanly(self, path: str) -> tuple[bool, str]:
         """Fully decode a generated loop video before exposing it to a stream."""

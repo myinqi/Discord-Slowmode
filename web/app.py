@@ -9535,10 +9535,21 @@ def create_app(db: Database, bot=None) -> Quart:
             elif action == "set_loop_selection":
                 sel = form.get("loop_selection", "shuffle")
                 await db.set_setting("trya_stream_loop_selection", sel)
+                if sel == "concat_random_subset":
+                    import json as _loop_json
+                    raw = await db.get_setting("trya_stream_loop_videos") or "[]"
+                    videos = _loop_json.loads(raw) if raw else []
+                    try:
+                        count = int(form.get("loop_concat_random_count", "10") or "10")
+                    except (TypeError, ValueError):
+                        count = 10
+                    count = max(2, min(count, len(videos))) if len(videos) > 1 else 1
+                    await db.set_setting("trya_stream_loop_random_count", str(count))
                 loop_selection_labels = {
                     "shuffle": "Shuffle",
                     "concat_all": "Concatenate all videos",
                     "concat_all_random": "Concatenate all videos in random order",
+                    "concat_random_subset": "Concatenate a random video selection",
                 }
                 await flash(f"Loop video selection: {loop_selection_labels.get(sel, sel)}", "success")
 
@@ -9591,6 +9602,19 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.set_setting("trya_stream_loop_selection", _old_lv)
                 await db.set_setting("trya_stream_loop_filename", "")
         loop_selection = await db.get_setting("trya_stream_loop_selection") or "shuffle"
+        try:
+            loop_concat_random_count = int(
+                await db.get_setting("trya_stream_loop_random_count") or "10"
+            )
+        except (TypeError, ValueError):
+            loop_concat_random_count = 10
+        if loop_videos:
+            minimum_count = 2 if len(loop_videos) > 1 else 1
+            loop_concat_random_count = max(
+                minimum_count, min(loop_concat_random_count, len(loop_videos))
+            )
+        else:
+            loop_concat_random_count = 1
         exp_stream_url = await db.get_setting("trya_stream_stream_url") or ""
         exp_post_channel_1_id = await db.get_setting("trya_stream_post_channel_1_id") or ""
         exp_post_channel_2_id = await db.get_setting("trya_stream_post_channel_2_id") or ""
@@ -9728,6 +9752,7 @@ def create_app(db: Database, bot=None) -> Quart:
             masked_key=masked_key,
             bg_filename=bg_filename,
             loop_videos=loop_videos, loop_selection=loop_selection,
+            loop_concat_random_count=loop_concat_random_count,
             exp_stream_url=exp_stream_url,
             exp_post_channel_1_id=exp_post_channel_1_id,
             exp_post_channel_2_id=exp_post_channel_2_id,

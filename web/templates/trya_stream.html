@@ -647,6 +647,21 @@
                             class="w-3.5 h-3.5 accent-discord-blurple">
                         <span class="text-gray-300 text-xs">🔀🎞️ Concatenate all videos in random order</span>
                     </label>
+                    <div class="flex items-center gap-2">
+                        <label class="flex items-center gap-2 cursor-pointer min-w-0">
+                            <input type="radio" name="loop_selection" value="concat_random_subset"
+                                {% if loop_selection == 'concat_random_subset' %}checked{% endif %}
+                                onchange="this.form.submit()"
+                                class="w-3.5 h-3.5 accent-discord-blurple flex-shrink-0">
+                            <span class="text-gray-300 text-xs whitespace-nowrap">🔀🎞️ Concatenate</span>
+                        </label>
+                        <input type="number" name="loop_concat_random_count"
+                            value="{{ loop_concat_random_count }}" min="2" max="{{ loop_videos|length }}" step="1"
+                            onchange="this.form.querySelector('[value=concat_random_subset]').checked=true; this.form.submit()"
+                            class="w-16 bg-discord-darker border border-gray-600 rounded px-2 py-1 text-white text-xs text-center focus:border-discord-blurple focus:outline-none"
+                            aria-label="Number of randomly selected videos">
+                        <span class="text-gray-300 text-xs">videos in random order</span>
+                    </div>
                     {% endif %}
                     {% for v in loop_videos %}
                     <div class="flex items-center gap-2 group">
@@ -741,9 +756,16 @@
             </div>
             <div class="p-5">
                 <div id="exp-stream-status" class="mb-4">
-                    <div class="flex items-center gap-2 mb-1">
-                        <span class="inline-block w-2.5 h-2.5 rounded-full bg-gray-500" id="exp-status-dot"></span>
-                        <span class="text-gray-400 text-sm font-medium" id="exp-status-text">Offline</span>
+                    <div class="flex items-center justify-between gap-3 mb-1">
+                        <div class="flex items-center gap-2 min-w-0">
+                            <span class="inline-block w-2.5 h-2.5 rounded-full bg-gray-500 flex-shrink-0" id="exp-status-dot"></span>
+                            <span class="text-gray-400 text-sm font-medium truncate" id="exp-status-text">Offline</span>
+                        </div>
+                        <button type="button" id="exp-playlist-button" onclick="openExpPlaylistDialog()"
+                            class="hidden flex-shrink-0 px-2.5 py-1 text-xs font-medium text-discord-blurple border border-discord-blurple/40 hover:bg-discord-blurple/10 rounded-md transition-colors"
+                            title="Show the current playback order">
+                            Playlist
+                        </button>
                     </div>
                     <div id="exp-current-song-card"
                         class="hidden mt-3 rounded-lg border border-gray-700/60 bg-discord-darker/70 px-3 py-2">
@@ -1410,6 +1432,20 @@
     </div>
 </div>
 
+<dialog id="exp-playlist-dialog"
+        class="w-full max-w-lg rounded-xl border border-gray-700 bg-discord-dark p-0 text-gray-200 shadow-2xl backdrop:bg-black/70">
+    <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between gap-4">
+        <div>
+            <h3 class="text-white font-semibold">Current Playlist</h3>
+            <p id="exp-playlist-summary" class="text-gray-500 text-xs mt-0.5"></p>
+        </div>
+        <button type="button" onclick="closeExpPlaylistDialog()"
+                class="w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:text-white hover:bg-gray-700"
+                title="Close">✕</button>
+    </div>
+    <ol id="exp-playlist-items" class="max-h-[65vh] overflow-y-auto divide-y divide-gray-700/40"></ol>
+</dialog>
+
 <dialog id="hook-video-dialog"
         class="w-full max-w-lg rounded-xl border border-fuchsia-500/40 bg-discord-dark p-0 text-gray-200 shadow-2xl backdrop:bg-black/70">
     <form method="POST">
@@ -1458,6 +1494,57 @@ document.getElementById('hook-video-dialog')?.addEventListener('click', function
     if (event.target === this) closeHookDialog();
 });
 let _expPollTimer = null;
+let _expCurrentPlaylist = [];
+let _expCurrentPlaylistIndex = 0;
+
+function openExpPlaylistDialog() {
+    const dialog = document.getElementById('exp-playlist-dialog');
+    const list = document.getElementById('exp-playlist-items');
+    const summary = document.getElementById('exp-playlist-summary');
+    if (!dialog || !list || !summary) return;
+
+    summary.textContent = `${_expCurrentPlaylist.length} song${_expCurrentPlaylist.length === 1 ? '' : 's'} in playback order`;
+    list.replaceChildren();
+    _expCurrentPlaylist.forEach((song, index) => {
+        const item = document.createElement('li');
+        const current = index + 1 === _expCurrentPlaylistIndex;
+        item.className = `flex items-start gap-3 px-5 py-3 ${current ? 'bg-discord-blurple/10' : ''}`;
+        if (current) item.dataset.current = 'true';
+
+        const number = document.createElement('span');
+        number.className = `w-6 flex-shrink-0 text-right text-xs pt-0.5 ${current ? 'text-discord-blurple font-semibold' : 'text-gray-600'}`;
+        number.textContent = `${index + 1}.`;
+
+        const text = document.createElement('div');
+        text.className = 'min-w-0 flex-1';
+        const title = document.createElement('p');
+        title.className = `text-sm font-medium truncate ${current ? 'text-white' : 'text-gray-200'}`;
+        title.textContent = song.title || 'Unknown title';
+        const artist = document.createElement('p');
+        artist.className = 'text-xs text-gray-500 truncate mt-0.5';
+        artist.textContent = song.artist || 'Unknown artist';
+        text.append(title, artist);
+
+        item.append(number, text);
+        if (current) {
+            const marker = document.createElement('span');
+            marker.className = 'flex-shrink-0 text-[10px] uppercase tracking-wide text-green-400 pt-0.5';
+            marker.textContent = 'Playing';
+            item.append(marker);
+        }
+        list.append(item);
+    });
+    dialog.showModal();
+    list.querySelector('[data-current="true"]')?.scrollIntoView({ block: 'center' });
+}
+
+function closeExpPlaylistDialog() {
+    document.getElementById('exp-playlist-dialog')?.close();
+}
+
+document.getElementById('exp-playlist-dialog')?.addEventListener('click', function(event) {
+    if (event.target === this) closeExpPlaylistDialog();
+});
 
 async function expStreamAction(action) {
     const buttons = [
@@ -1588,6 +1675,9 @@ async function updateExpStatus() {
         const text = document.getElementById('exp-status-text');
         const np   = document.getElementById('exp-now-playing');
         const safeStopBtn = document.getElementById('exp-btn-safe-stop');
+        const playlistBtn = document.getElementById('exp-playlist-button');
+        _expCurrentPlaylist = Array.isArray(d.playlist) ? d.playlist : [];
+        _expCurrentPlaylistIndex = Number(d.song_index || 0);
         if (d.running) {
             dot.className  = 'inline-block w-2.5 h-2.5 rounded-full bg-green-500';
             if (d.safe_stop_pending) {
@@ -1602,6 +1692,7 @@ async function updateExpStatus() {
             renderExpCurrentSong(d, true);
             renderExpFfmpegHealth(d, true);
             renderExpObsOverlayStatus(d, true);
+            if (playlistBtn) playlistBtn.classList.toggle('hidden', !_expCurrentPlaylist.length);
         } else {
             dot.className  = 'inline-block w-2.5 h-2.5 rounded-full bg-gray-500';
             text.textContent = 'Offline';
@@ -1610,6 +1701,7 @@ async function updateExpStatus() {
             if (safeStopBtn) { safeStopBtn.disabled = false; safeStopBtn.textContent = '🌙 Safe Stop'; }
             renderExpFfmpegHealth(d, false);
             renderExpObsOverlayStatus(d, false);
+            if (playlistBtn) playlistBtn.classList.add('hidden');
         }
     } catch (_) {}
 }
