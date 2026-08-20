@@ -6227,7 +6227,7 @@ class Database:
             "material_rights_attested", "technical_processing_attested",
             "private_playback_attested", "rights_accepted_at", "uploaded_at",
             "active", "removed_at", "remove_reason", "replacement_song_id",
-            "upload_token",
+            "upload_token", "playlist_source",
         }
         updates = {key: value for key, value in fields.items() if key in allowed}
         if not updates:

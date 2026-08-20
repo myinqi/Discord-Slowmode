@@ -1346,6 +1346,9 @@ class TryaStreamManager:
             bitrate = 2500
         return bitrate if bitrate in (1800, 2000, 2500) else 2500
 
+    def _obs_listen_port(self) -> int:
+        return 1936
+
     async def _start_obs_overlay_bridge(self, stream_key: str, fps: int) -> str | None:
         """Start a small raw-video bridge for the optional OBS RTMP override.
 
@@ -1433,7 +1436,7 @@ class TryaStreamManager:
                         pass
 
         async def start_listener():
-            rtmp_url = f"rtmp://0.0.0.0:1936/live/{stream_key}"
+            rtmp_url = f"rtmp://0.0.0.0:{self._obs_listen_port()}/live/{stream_key}"
             vf = (
                 f"scale={_OBS_BRIDGE_W}:{_OBS_BRIDGE_H}:force_original_aspect_ratio=decrease,"
                 f"pad={_OBS_BRIDGE_W}:{_OBS_BRIDGE_H}:(ow-iw)/2:(oh-ih)/2:color=black@0,"
@@ -1484,7 +1487,9 @@ class TryaStreamManager:
             self._obs_bridge_proc = proc
             frame_queue: asyncio.Queue = asyncio.Queue(maxsize=2)
             reader_task = asyncio.create_task(read_frames(proc, frame_queue))
-            self._log("OBS overlay bridge listening on rtmp://0.0.0.0:1936/live/<key>.")
+            self._log(
+                f"OBS overlay bridge listening on rtmp://0.0.0.0:{self._obs_listen_port()}/live/<key>."
+            )
             next_frame_at = time.monotonic()
 
             while True:

@@ -22,10 +22,36 @@ class TryaDcsManager(TryaStreamManager):
         super().__init__(db, base_dir)
         self._log_buffer = deque(maxlen=self._LOG_BUFFER_MAX)
         self._output_url = ""
+        self._regular_playlist: list[dict] = []
+        self._intro_song: dict | None = None
+        self._outro_song: dict | None = None
 
     def _log(self, line: str, level: str = "info") -> None:
         self._log_buffer.append((time.time(), level, line))
         print(f"[trya-dcs] {line}", flush=True)
+
+    def _obs_listen_port(self) -> int:
+        return 1937
+
+    def _set_obs_overlay_status(
+        self, enabled: bool, state: str, label: str, mode: str = "local"
+    ) -> None:
+        previous = getattr(self, "_obs_overlay_status", {}).get("state")
+        super()._set_obs_overlay_status(enabled, state, label, mode)
+        if state != previous:
+            event_name = (
+                "radio.obs_online" if state in {"connected", "live"} else "radio.obs_offline"
+            )
+            try:
+                asyncio.get_running_loop().create_task(
+                    trya_dcs_events.publish(event_name, {
+                        "enabled": enabled,
+                        "state": state,
+                        "label": label,
+                    })
+                )
+            except RuntimeError:
+                pass
 
     def get_log(self, since_ts: float = 0.0, max_age_secs: float = 600.0) -> list[dict]:
         cutoff = max(float(since_ts or 0), time.time() - max_age_secs)
@@ -60,16 +86,59 @@ class TryaDcsManager(TryaStreamManager):
                         if abs(float(stored.get("duration") or 0) - actual) > 1:
                             await self.db.update_trya_dcs_song(song["id"], duration=actual)
                     ready.append(song)
-            if not ready:
-                return {"ok": False, "error": "No approved and analyzed DCS songs are ready."}
+            regular = [
+                song for song in ready
+                if (song.get("playlist_source") or "submission") not in {"intro", "outro"}
+            ]
+            intro_pool = [song for song in ready if song.get("playlist_source") == "intro"]
+            outro_pool = [song for song in ready if song.get("playlist_source") == "outro"]
+            if not regular:
+                return {"ok": False, "error": "No approved and analyzed DCS playlist songs are ready."}
 
-            random.shuffle(ready)
-            self.playlist = ready
-            self._progress_total_count = len(ready)
+            def select_special(pool: list[dict], selection: str) -> dict | None:
+                if not pool:
+                    return None
+                if selection and selection != "random":
+                    try:
+                        selected_id = int(selection)
+                    except (TypeError, ValueError):
+                        selected_id = 0
+                    selected = next(
+                        (song for song in pool if int(song.get("id") or 0) == selected_id),
+                        None,
+                    )
+                    if selected:
+                        return selected
+                return random.choice(pool)
+
+            intro_enabled = (await self.db.get_setting("trya_dcs_intro_enabled") or "off") == "on"
+            outro_enabled = (await self.db.get_setting("trya_dcs_outro_enabled") or "off") == "on"
+            self._intro_song = select_special(
+                intro_pool,
+                await self.db.get_setting("trya_dcs_intro_selection") or "random",
+            ) if intro_enabled else None
+            self._outro_song = select_special(
+                outro_pool,
+                await self.db.get_setting("trya_dcs_outro_selection") or "random",
+            ) if outro_enabled else None
+
+            random.shuffle(regular)
+            self._regular_playlist = regular
+            mode = await self.db.get_setting("trya_dcs_loop_mode") or "stop"
+            first_playlist = list(regular)
+            if self._intro_song:
+                first_playlist.insert(0, self._intro_song)
+                self._log(f"Intro song: {self._intro_song.get('title') or self._intro_song['id']}")
+            if self._outro_song and mode != "reshuffle":
+                first_playlist.append(self._outro_song)
+                self._log(f"Outro song: {self._outro_song.get('title') or self._outro_song['id']}")
+
+            self.playlist = first_playlist
+            self._progress_total_count = len(first_playlist)
             self._current_song_index = 1
-            self.current_song = ready[0]
+            self.current_song = first_playlist[0]
             self._current_song_end_time = time.monotonic() + float(
-                ready[0].get("duration") or 300
+                first_playlist[0].get("duration") or 300
             )
             self._safe_stop_requested = False
             self._output_url = (
@@ -87,7 +156,7 @@ class TryaDcsManager(TryaStreamManager):
                     "artist": song.get("artist"),
                     "duration": song.get("duration"),
                 }
-                for song in ready
+                for song in first_playlist
             ]
             await self.db.save_trya_dcs_playlist_snapshot(
                 created_by=created_by,
@@ -98,15 +167,15 @@ class TryaDcsManager(TryaStreamManager):
             self._reset_ffmpeg_health("starting")
             self.is_running = True
             self._task = asyncio.create_task(self._stream_loop())
-            self._log(f"Starting {len(ready)} songs toward MediaMTX.")
+            self._log(f"Starting {len(first_playlist)} songs toward MediaMTX.")
             await trya_dcs_events.publish("radio.mode", {
                 "mode": "starting",
-                "playlist_length": len(ready),
+                "playlist_length": len(first_playlist),
             })
             await trya_dcs_events.publish("radio.queue_update", {
                 "songs": snapshot,
             })
-            return {"ok": True, "song_count": len(ready)}
+            return {"ok": True, "song_count": len(first_playlist)}
 
     async def stop(self) -> dict:
         self.is_running = False
@@ -123,6 +192,8 @@ class TryaDcsManager(TryaStreamManager):
                 except ProcessLookupError:
                     pass
         self._process = None
+        await self._stop_obs_overlay_bridge()
+        self._set_obs_overlay_status(False, "disabled", "OBS overlay disabled", "local")
         task = self._task
         self._task = None
         if task and task is not asyncio.current_task():
@@ -144,6 +215,29 @@ class TryaDcsManager(TryaStreamManager):
         asyncio.create_task(self._safe_stop_waiter())
         return {"ok": True}
 
+    async def _safe_stop_waiter(self) -> None:
+        remaining = self._current_song_end_time - time.monotonic()
+        if remaining > 0:
+            await asyncio.sleep(remaining + 0.5)
+        if not self._safe_stop_requested or not self.is_running:
+            return
+        process = self._process
+        if process and process.returncode is None:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=10)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+        if self._outro_song and (
+            not self.current_song
+            or int(self.current_song.get("id") or 0) != int(self._outro_song.get("id") or 0)
+        ):
+            self._log(f"Safe stop: playing outro {self._outro_song.get('title') or self._outro_song['id']}.")
+            await self._play_dcs_playlist([self._outro_song])
+        if self.is_running:
+            await self.stop()
+
     async def get_status(self) -> dict:
         status = await super().get_status()
         status["output_url"] = self._output_url
@@ -158,13 +252,16 @@ class TryaDcsManager(TryaStreamManager):
                 await self._play_dcs_playlist(self.playlist)
                 if not self.is_running:
                     break
+                if self._safe_stop_requested:
+                    break
                 mode = await self.db.get_setting("trya_dcs_loop_mode") or "stop"
                 if mode != "reshuffle":
                     self._log("Playlist finished.")
                     await self.stop()
                     break
+                self.playlist = list(self._regular_playlist)
                 random.shuffle(self.playlist)
-                self._log("Playlist reshuffled for the next rotation.")
+                self._log("Playlist reshuffled for the next rotation; intro is not repeated.")
         except asyncio.CancelledError:
             pass
         except Exception as exc:
@@ -229,6 +326,26 @@ class TryaDcsManager(TryaStreamManager):
                 "border_color": border_color,
             }
 
+        obs_overlay_path = None
+        obs_overlay_fps = await self._bounded_setting(
+            "trya_dcs_obs_fps", 20, 15, 24
+        )
+        obs_enabled = (await self.db.get_setting("trya_dcs_obs_enabled") or "off") == "on"
+        if obs_enabled:
+            obs_key = (await self.db.get_setting("trya_dcs_obs_stream_key") or "").strip()
+            if obs_key:
+                obs_overlay_path = await self._start_obs_overlay_bridge(obs_key, obs_overlay_fps)
+                self._log(
+                    f"OBS contribution enabled on port {self._obs_listen_port()} ({obs_overlay_fps} fps)."
+                )
+            else:
+                self._set_obs_overlay_status(
+                    True, "missing_key", "OBS stream key missing", "rtmp"
+                )
+                self._log("OBS contribution is enabled but no stream key is configured.", "error")
+        else:
+            self._set_obs_overlay_status(False, "disabled", "OBS overlay disabled", "local")
+
         media_paths = []
         for song in songs:
             path = await self._get_video(song) or await self._get_cover(song)
@@ -259,8 +376,8 @@ class TryaDcsManager(TryaStreamManager):
             bg_path=bg_path,
             bg_type=bg_type,
             loop_path=loop_path,
-            obs_overlay_path=None,
-            obs_overlay_fps=20,
+            obs_overlay_path=obs_overlay_path,
+            obs_overlay_fps=obs_overlay_fps,
             video_bitrate_kbps=video_bitrate,
             ass_path=ass_path,
             twitch_key="",

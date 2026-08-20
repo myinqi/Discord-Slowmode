@@ -8697,6 +8697,13 @@ def create_app(db: Database, bot=None) -> Quart:
             "trya_dcs_reuse_trya_visuals": "on",
             "trya_dcs_stream_title": "TrYa Discord Community Stream",
             "trya_dcs_moderation_enabled": "off",
+            "trya_dcs_intro_enabled": "off",
+            "trya_dcs_intro_selection": "random",
+            "trya_dcs_outro_enabled": "off",
+            "trya_dcs_outro_selection": "random",
+            "trya_dcs_obs_enabled": "off",
+            "trya_dcs_obs_stream_key": "",
+            "trya_dcs_obs_fps": "20",
         }
 
         if request.method == "POST":
@@ -8731,6 +8738,22 @@ def create_app(db: Database, bot=None) -> Quart:
                     "DCS publisher stopped." if result.get("ok") else result.get("error", "Could not stop DCS."),
                     "success" if result.get("ok") else "error",
                 )
+                return redirect(request.url)
+            if action == "set_playlist_source":
+                try:
+                    song_id = int(form.get("song_id") or 0)
+                except (TypeError, ValueError):
+                    song_id = 0
+                source = (form.get("playlist_source") or "submission").strip()
+                if source not in {"submission", "intro", "outro"}:
+                    await flash("Invalid DCS playlist source.", "error")
+                elif not await db.get_trya_dcs_song(song_id):
+                    await flash("The DCS submission no longer exists.", "error")
+                elif trya_dcs_manager.is_running:
+                    await flash("Stop TrYa DCS before changing playlist assignments.", "error")
+                else:
+                    await db.update_trya_dcs_song(song_id, playlist_source=source)
+                    await flash(f"Song assigned to the {source} playlist.", "success")
                 return redirect(request.url)
             if action in {"approve_song", "reject_song"}:
                 try:
@@ -8781,6 +8804,13 @@ def create_app(db: Database, bot=None) -> Quart:
                 public_url = (form.get("public_url") or defaults["trya_dcs_public_url"]).strip()[:500]
                 rtmp_url = (form.get("rtmp_ingest_url") or defaults["trya_dcs_rtmp_ingest_url"]).strip()[:500]
                 disclaimer = (form.get("disclaimer") or "").strip()[:2000]
+                obs_key = (
+                    form.get("obs_stream_key")
+                    or await db.get_setting("trya_dcs_obs_stream_key")
+                    or ""
+                ).strip()[:200]
+                if form.get("obs_enabled") and not obs_key:
+                    obs_key = secrets.token_urlsafe(24)
                 values = {
                     "trya_dcs_enabled": "on" if form.get("enabled") else "off",
                     "trya_dcs_guild_id": guild_id,
@@ -8821,6 +8851,25 @@ def create_app(db: Database, bot=None) -> Quart:
                     ).strip()[:200],
                     "trya_dcs_moderation_enabled": (
                         "on" if form.get("moderation_enabled") else "off"
+                    ),
+                    "trya_dcs_intro_enabled": (
+                        "on" if form.get("intro_enabled") else "off"
+                    ),
+                    "trya_dcs_intro_selection": (
+                        form.get("intro_selection") or "random"
+                    ).strip(),
+                    "trya_dcs_outro_enabled": (
+                        "on" if form.get("outro_enabled") else "off"
+                    ),
+                    "trya_dcs_outro_selection": (
+                        form.get("outro_selection") or "random"
+                    ).strip(),
+                    "trya_dcs_obs_enabled": (
+                        "on" if form.get("obs_enabled") else "off"
+                    ),
+                    "trya_dcs_obs_stream_key": obs_key,
+                    "trya_dcs_obs_fps": str(
+                        bounded_int("obs_fps", 20, 15, 24)
                     ),
                 }
                 for key, value in values.items():

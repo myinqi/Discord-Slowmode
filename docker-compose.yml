@@ -6,6 +6,7 @@ services:
     ports:
       # Port 5000 is NOT exposed to the host — Caddy proxies internally.
       - "1936:1936"
+      - "1937:1937"
     volumes:
       - bot-data:/app/data
     env_file:

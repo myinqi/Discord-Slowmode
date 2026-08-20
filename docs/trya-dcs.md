@@ -33,10 +33,14 @@ The current implementation includes:
   attachments, replies, edits and deletions;
 - managed webhook posting for authenticated web users, marked with `· Web`;
 - optional reuse of the established TrYa background, overlay and media-frame
-  setup without duplicating the large visual assets.
+  setup without duplicating the large visual assets;
+- admin-assigned intro/outro pools, with intro played once and outro on stop-mode
+  completion or safe stop;
+- a dedicated OBS contribution listener at `rtmp://HOST:1937/live` with a
+  per-installation stream key and automatic local-overlay fallback.
 
-Intro/outro parity, OBS contribution and reaction synchronisation remain later
-milestones.
+DCS intro/outro pools and a dedicated OBS RTMP overlay contribution are available.
+Reaction synchronisation remains an optional later milestone.
 
 ## Submission commands
 
@@ -93,7 +97,8 @@ The default already points inside the persistent `/app/data` volume.
 
 ## Network boundary
 
-MediaMTX exposes no host ports in Docker Compose. Internally it uses:
+MediaMTX exposes no host ports in Docker Compose. The bot exposes only the optional
+OBS contribution listener on host port `1937`. Internally MediaMTX uses:
 
 - RTMP ingest: `mediamtx:1935/trya-dcs`
 - HLS: `mediamtx:8888/trya-dcs/index.m3u8`

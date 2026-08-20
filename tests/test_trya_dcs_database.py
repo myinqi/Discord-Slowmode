@@ -98,6 +98,15 @@ class TryaDcsDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(removed["user_id"], 100)
         self.assertIsNone(await self.db.get_trya_dcs_song_by_token(token))
 
+    async def test_playlist_source_can_be_assigned_after_upload(self):
+        song_id, _ = await self._new_slot(user_id=100)
+        await self._finalize(song_id, "intro")
+
+        await self.db.update_trya_dcs_song(song_id, playlist_source="intro")
+        stored = await self.db.get_trya_dcs_song(song_id)
+
+        self.assertEqual(stored["playlist_source"], "intro")
+
     async def test_replacement_retires_old_song_only_after_finalize(self):
         old_id, _ = await self._new_slot(user_id=100)
         await self._finalize(old_id, "old")

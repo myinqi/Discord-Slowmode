@@ -77,9 +77,9 @@ Acceptance:
   - AAC;
   - 2-3 Mbit/s configurable video bitrate;
   - 160-192 kbit/s configurable audio bitrate.
-- [ ] Reuse playlist, intro/outro, overlay, title, disclaimer and media-frame
-      logic where appropriate. Background, random overlay, title, disclaimer
-      and media-frame styling are implemented; intro/outro and OBS remain.
+- [x] Reuse playlist, intro/outro, overlay, title, disclaimer and media-frame
+      logic where appropriate. Intro/outro pools, one-time startup intro,
+      stop-mode/safe-stop outro and dedicated OBS overlay contribution are implemented.
 - [x] Add health reporting for FFmpeg and MediaMTX.
 - [x] Add safe stop and playlist-end behaviour.
 
@@ -203,4 +203,5 @@ These items are intentionally outside the first production-ready release.
       controls, FFmpeg health, playlist snapshots and end behaviour implemented.
 - [x] 2026-08-20: Manual song approval, authenticated Discord-backed chat,
       managed webhooks, guild emojis and the central WebSocket event broker added.
-- [ ] Add full visual composition parity and broaden authorization/database tests.
+- [x] 2026-08-20: Added DCS intro/outro pools and dedicated OBS RTMP overlay contribution.
+- [ ] Broaden authorization/database route tests.

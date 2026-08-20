@@ -56,7 +56,7 @@
             <form method="POST"><input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="stop_stream"><button class="px-4 py-2 rounded-lg bg-red-800 hover:bg-red-700 text-white text-sm font-medium" {% if not stream_status.running %}disabled{% endif %}>Stop</button></form>
         </div>
     </div>
-    <div class="p-5 grid grid-cols-1 md:grid-cols-3 gap-4">
+    <div class="p-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         <div class="bg-discord-darker border border-gray-700 rounded-lg p-4">
             <p class="text-gray-500 text-xs uppercase">Current song</p>
             {% if stream_status.song %}
@@ -75,6 +75,11 @@
             <p class="text-gray-500 text-xs uppercase">Web listeners</p>
             <p class="text-white text-2xl font-semibold mt-1">{{ stream_status.listener_count or 0 }}</p>
             <p class="text-gray-500 text-xs mt-1">Authenticated player sessions currently connected.</p>
+        </div>
+        <div class="bg-discord-darker border border-gray-700 rounded-lg p-4">
+            <p class="text-gray-500 text-xs uppercase">OBS contribution</p>
+            <p class="mt-2 font-semibold {{ 'text-green-300' if stream_status.obs_overlay.state in ('connected', 'live') else ('text-yellow-300' if stream_status.obs_overlay.enabled else 'text-gray-500') }}">{{ stream_status.obs_overlay.label }}</p>
+            <p class="text-gray-500 text-xs mt-1">Dedicated RTMP listener on port 1937.</p>
         </div>
     </div>
     {% if stream_log %}
@@ -197,6 +202,64 @@
         </div>
     </section>
 
+    <section class="bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">Intro, outro and OBS contribution</h3>
+            <p class="text-gray-500 text-sm mt-1">Intro plays once at startup. Outro plays only when the playlist is configured to stop. OBS temporarily replaces the local top-right overlay.</p>
+        </div>
+        <div class="p-5 grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <div class="space-y-4">
+                <label class="flex items-center gap-3">
+                    <input type="checkbox" name="intro_enabled" value="1" {% if settings.trya_dcs_intro_enabled == 'on' %}checked{% endif %}>
+                    <span class="text-gray-300 text-sm">Enable intro</span>
+                </label>
+                <label class="block">
+                    <span class="block text-gray-400 text-xs mb-1">Intro selection</span>
+                    <select name="intro_selection" class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white">
+                        <option value="random" {% if settings.trya_dcs_intro_selection == 'random' %}selected{% endif %}>Random approved intro</option>
+                        {% for song in songs if song.active and song.approval_status == 'approved' and song.analysis_status == 'done' and song.playlist_source == 'intro' %}
+                        <option value="{{ song.id }}" {% if settings.trya_dcs_intro_selection == song.id|string %}selected{% endif %}>{{ song.title or ('Song #' ~ song.id) }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label class="flex items-center gap-3">
+                    <input type="checkbox" name="outro_enabled" value="1" {% if settings.trya_dcs_outro_enabled == 'on' %}checked{% endif %}>
+                    <span class="text-gray-300 text-sm">Enable outro</span>
+                </label>
+                <label class="block">
+                    <span class="block text-gray-400 text-xs mb-1">Outro selection</span>
+                    <select name="outro_selection" class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white">
+                        <option value="random" {% if settings.trya_dcs_outro_selection == 'random' %}selected{% endif %}>Random approved outro</option>
+                        {% for song in songs if song.active and song.approval_status == 'approved' and song.analysis_status == 'done' and song.playlist_source == 'outro' %}
+                        <option value="{{ song.id }}" {% if settings.trya_dcs_outro_selection == song.id|string %}selected{% endif %}>{{ song.title or ('Song #' ~ song.id) }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+            </div>
+            <div class="space-y-4 lg:border-l lg:border-gray-700/50 lg:pl-5">
+                <label class="flex items-center gap-3">
+                    <input type="checkbox" name="obs_enabled" value="1" {% if settings.trya_dcs_obs_enabled == 'on' %}checked{% endif %}>
+                    <span class="text-gray-300 text-sm">Enable OBS overlay contribution</span>
+                </label>
+                <label class="block">
+                    <span class="block text-gray-400 text-xs mb-1">OBS stream key</span>
+                    <input type="password" name="obs_stream_key" value="" placeholder="{% if settings.trya_dcs_obs_stream_key %}Configured - leave empty to keep{% else %}Generated when enabled{% endif %}" class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white font-mono text-sm">
+                </label>
+                <label class="block">
+                    <span class="block text-gray-400 text-xs mb-1">OBS overlay FPS</span>
+                    <select name="obs_fps" class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white">
+                        {% for fps in (15, 20, 24) %}<option value="{{ fps }}" {% if settings.trya_dcs_obs_fps|int == fps %}selected{% endif %}>{{ fps }} FPS</option>{% endfor %}
+                    </select>
+                </label>
+                <div class="rounded-lg border border-gray-700 bg-discord-darker p-3 text-xs space-y-1">
+                    <p class="text-gray-400">OBS Server</p><p class="text-blue-300 font-mono">rtmp://YOUR_SERVER:1937/live</p>
+                    <p class="text-gray-400 mt-2">Stream key</p><p class="text-blue-300 font-mono break-all">{{ settings.trya_dcs_obs_stream_key or 'Save settings to generate a key' }}</p>
+                    <p class="text-gray-600 mt-2">Recommended OBS output: 480×270, 15-24 FPS. Local overlay remains visible while OBS is offline.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
     <section class="bg-discord-dark border border-gray-700/50 rounded-lg p-5">
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-5">
             <label class="flex items-start gap-3 cursor-pointer">
@@ -260,7 +323,18 @@
                         </div>
                         {% endif %}
                     </td>
-                    <td class="px-5 py-3"><span class="{{ 'text-green-300' if song.active else 'text-gray-500' }}">{{ 'Active' if song.active else (song.remove_reason or 'Awaiting upload') }}</span></td>
+                    <td class="px-5 py-3">
+                        <span class="{{ 'text-green-300' if song.active else 'text-gray-500' }}">{{ 'Active' if song.active else (song.remove_reason or 'Awaiting upload') }}</span>
+                        {% if song.active and song.uploaded_at %}
+                        <form method="POST" class="mt-2 flex gap-1">
+                            <input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="set_playlist_source"><input type="hidden" name="song_id" value="{{ song.id }}">
+                            <select name="playlist_source" class="bg-discord-darker border border-gray-600 rounded px-2 py-1 text-xs text-gray-300">
+                                {% for source in ('submission', 'intro', 'outro') %}<option value="{{ source }}" {% if (song.playlist_source or 'submission') == source %}selected{% endif %}>{{ source|capitalize }}</option>{% endfor %}
+                            </select>
+                            <button type="submit" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs">Set</button>
+                        </form>
+                        {% endif %}
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -280,6 +354,8 @@
         <p class="text-green-300">✓ MediaMTX, protected HLS and player foundation</p>
         <p class="text-green-300">✓ Discord OAuth membership gate</p>
         <p class="text-green-300">✓ WebSocket Discord chat bridge and guild emoji picker</p>
+        <p class="text-green-300">✓ Intro/outro pools and safe-stop outro</p>
+        <p class="text-green-300">✓ Dedicated OBS RTMP overlay contribution</p>
     </div>
     <p class="text-gray-600 text-xs mt-4 font-mono break-all">Persistent data: {{ data_directory }}</p>
 </section>
