@@ -22,6 +22,7 @@ from bot.trya_stream_files import (
     cleanup_trya_stream_hook_files,
     trya_stream_hook_cache_path,
 )
+from bot.trya_dcs_worker import DCS_RIGHTS_DECLARATION, DCS_RIGHTS_VERSION
 
 SUNO_URL_PATTERN = re.compile(r'https://suno\.com/(?:s|song)/[\w-]+')
 YOUTUBE_URL_RE   = re.compile(
@@ -2094,6 +2095,17 @@ class CommandsCog(commands.Cog):
             inline=False,
         )
 
+        embed.add_field(
+            name="📡 TrYa DCS",
+            value=(
+                "**`/trya-dcs-submit`** — Open the private community stream submission form\n"
+                "**`/trya-dcs-replace`** — Replace your oldest active DCS submission after upload succeeds\n"
+                "**`/trya-dcs-delete`** — Remove one of your DCS songs or cancel a pending upload\n"
+                "Free/Paid and Original/Cover/Remix status is documented, not automatically excluded."
+            ),
+            inline=False,
+        )
+
         # Experimental Radio (all users)
         embed.add_field(
             name="🎙️ Experimental Radio",
@@ -2383,6 +2395,115 @@ class CommandsCog(commands.Cog):
         data = ("\n".join(dict.fromkeys(urls)) + "\n").encode()
         await interaction.followup.send(
             file=discord.File(io.BytesIO(data), filename="trya-stream-to-suno.txt"),
+            ephemeral=True,
+        )
+
+    async def _trya_dcs_submit(
+        self, interaction: discord.Interaction, *, replace: bool
+    ) -> None:
+        await interaction.response.defer(ephemeral=True)
+        if await self.bot.db.get_setting("trya_dcs_enabled") != "on":
+            await interaction.followup.send(
+                "TrYa DCS submissions are currently disabled.", ephemeral=True
+            )
+            return
+        configured_guild = int(
+            await self.bot.db.get_setting("trya_dcs_guild_id") or 0
+        )
+        if not interaction.guild or not configured_guild or interaction.guild.id != configured_guild:
+            await interaction.followup.send(
+                "This command is available only inside the configured TrYa DCS server.",
+                ephemeral=True,
+            )
+            return
+
+        await self.bot.db.supersede_pending_trya_dcs_uploads(interaction.user.id)
+        active = await self.bot.db.get_trya_dcs_songs_by_user(interaction.user.id)
+        # Active songs are returned newest first. Replacement retires the oldest
+        # only after the new upload and evidence transaction succeeds.
+        replacement = active[-1] if replace and active else None
+        if replace and not replacement:
+            await interaction.followup.send(
+                "You have no active TrYa DCS song to replace.", ephemeral=True
+            )
+            return
+        try:
+            maximum = max(
+                1,
+                min(20, int(await self.bot.db.get_setting("trya_dcs_max_per_user") or "4")),
+            )
+        except (TypeError, ValueError):
+            maximum = 4
+        if not replace and len(active) >= maximum:
+            await interaction.followup.send(
+                f"You already have the maximum of {maximum} active DCS songs. "
+                "Use `/trya-dcs-replace` or `/trya-dcs-delete`.",
+                ephemeral=True,
+            )
+            return
+
+        web_url = str(getattr(self.bot, "web_url", "") or "").rstrip("/")
+        if not web_url:
+            await interaction.followup.send(
+                "Upload link unavailable. Ask an administrator to configure `WEB_URL`.",
+                ephemeral=True,
+            )
+            return
+        song_id, upload_token = await self.bot.db.add_trya_dcs_song(
+            user_id=interaction.user.id,
+            user_name=str(interaction.user),
+            replacement_song_id=replacement["id"] if replacement else None,
+            rights_version=DCS_RIGHTS_VERSION,
+            rights_declaration=DCS_RIGHTS_DECLARATION,
+        )
+        view = discord.ui.View()
+        view.add_item(discord.ui.Button(
+            label="Complete private DCS submission",
+            url=f"{web_url}/trya-dcs/upload/{upload_token}",
+            style=discord.ButtonStyle.link,
+        ))
+        description = (
+            "Complete the Suno URL, optional Hook, official audio upload, status "
+            "documentation and private-community rights confirmations in the web form."
+        )
+        if replacement:
+            description += " Your existing song remains active until this upload succeeds."
+        embed = discord.Embed(
+            title="Complete your TrYa DCS submission",
+            description=description,
+            color=0x5865F2,
+        )
+        embed.set_footer(text=f"Private DCS upload slot #{song_id}")
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+    @app_commands.command(
+        name="trya-dcs-submit", description="Submit a song to the private TrYa DCS stream"
+    )
+    async def trya_dcs_submit(self, interaction: discord.Interaction):
+        await self._trya_dcs_submit(interaction, replace=False)
+
+    @app_commands.command(
+        name="trya-dcs-replace", description="Replace your oldest private TrYa DCS song"
+    )
+    async def trya_dcs_replace(self, interaction: discord.Interaction):
+        await self._trya_dcs_submit(interaction, replace=True)
+
+    @app_commands.command(
+        name="trya-dcs-delete", description="Remove your TrYa DCS song or pending upload"
+    )
+    async def trya_dcs_delete(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        songs = await self.bot.db.get_trya_dcs_songs_by_user(
+            interaction.user.id, include_pending=True
+        )
+        if not songs:
+            await interaction.followup.send(
+                "You have no active DCS songs or pending uploads.", ephemeral=True
+            )
+            return
+        await interaction.followup.send(
+            "Choose the DCS song or pending upload to remove:",
+            view=TryaDcsSongSelectView(self.bot, songs, interaction.user.id),
             ephemeral=True,
         )
 
@@ -2773,6 +2894,59 @@ class TryaStreamSongSelectView(discord.ui.View):
         except Exception as exc:
             await interaction.response.edit_message(content=f"Action failed: {exc}", view=None)
             return
+        await interaction.response.edit_message(content=message, view=None)
+
+
+class TryaDcsSongSelectView(discord.ui.View):
+    def __init__(self, bot, songs: list[dict], viewer_id: int):
+        super().__init__(timeout=120)
+        self.bot = bot
+        self.viewer_id = int(viewer_id)
+        self.songs = {str(song["id"]): song for song in songs}
+        options = []
+        for song in songs[:25]:
+            pending = not song.get("active") and not song.get("uploaded_at")
+            options.append(discord.SelectOption(
+                label=(song.get("title") or "Pending DCS upload")[:100],
+                description=(
+                    f"{'pending upload' if pending else 'active'} · DCS song #{song['id']}"
+                )[:100],
+                value=str(song["id"]),
+            ))
+        select = discord.ui.Select(
+            placeholder="Choose a TrYa DCS song", options=options
+        )
+        select.callback = self._selected
+        self.add_item(select)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.viewer_id:
+            await interaction.response.send_message(
+                "Only the person who opened this menu can use it.", ephemeral=True
+            )
+            return False
+        return True
+
+    async def _selected(self, interaction: discord.Interaction) -> None:
+        selected = self.songs.get(self.children[0].values[0])
+        if not selected:
+            await interaction.response.edit_message(content="Song not found.", view=None)
+            return
+        removed = await self.bot.db.delete_trya_dcs_song(
+            selected["id"], user_id=self.viewer_id
+        )
+        if not removed:
+            await interaction.response.edit_message(
+                content="That song is no longer available.", view=None
+            )
+            return
+        pending = not removed.get("active") and not removed.get("uploaded_at")
+        message = (
+            "The pending DCS upload was cancelled."
+            if pending else
+            f"**{removed.get('title') or 'DCS song #' + str(removed['id'])}** "
+            "was removed from the active playlist. Audit evidence is retained."
+        )
         await interaction.response.edit_message(content=message, view=None)
 
 

@@ -14,7 +14,10 @@ from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 import bcrypt
 import aiohttp
-from quart import Quart, render_template, request, redirect, url_for, session, flash, make_response
+from quart import (
+    Quart, flash, make_response, redirect, render_template, request,
+    session, url_for, websocket,
+)
 from bot.database import Database
 from bot.backup import (
     create_full_data_archive,
@@ -451,6 +454,8 @@ def create_app(db: Database, bot=None) -> Quart:
         "unresolved": 0,
     }
     app.song_rating_sync_task = None
+    app.trya_dcs_chat_rate = {}
+    app.trya_dcs_token_rate = {}
     # Serializes manual starts of both radio managers. The scheduled Exp.
     # Radio start additionally checks the legacy manager before it fires.
     app.radio_start_lock = asyncio.Lock()
@@ -499,6 +504,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('radio', 'Twitch Radio'),
         ('exp_radio', 'Experimental Radio'),
         ('trya_stream', 'TrYa Stream'),
+        ('trya_dcs', 'TrYa DCS'),
         ('submission_bans', 'Submission Bans'),
         ('auto_translate', 'Auto Translate'),
         ('twitch_alerts', 'Twitch Alerts'),
@@ -546,6 +552,7 @@ def create_app(db: Database, bot=None) -> Quart:
         {"key": "radio", "endpoint": "radio_admin", "icon": "📻", "label": "Twitch", "perm": "radio"},
         {"key": "exp_radio", "endpoint": "exp_radio_admin", "icon": "🎙️", "label": "Exp. Radio", "perm": "exp_radio"},
         {"key": "trya_stream", "endpoint": "trya_stream_admin", "icon": "trya_logo", "label": "TrYa Stream", "perm": "trya_stream"},
+        {"key": "trya_dcs", "endpoint": "trya_dcs_admin", "icon": "📡", "label": "TrYa DCS", "perm": "trya_dcs"},
         {"key": "submission_bans", "endpoint": "submission_bans", "icon": "⛔", "label": "Submission Bans", "perm": "submission_bans"},
         {"key": "relic_hunt", "endpoint": "relic_hunt_admin", "icon": "🪶", "label": "Raven's Nest", "perm": "relic_hunt"},
         {"key": "twitch_alerts", "endpoint": "twitch_alerts_admin", "icon": "📣", "label": "Twitch Alerts", "perm": "twitch_alerts"},
@@ -1449,6 +1456,10 @@ def create_app(db: Database, bot=None) -> Quart:
         if trya_stream_manager.is_running or getattr(trya_stream_manager, "_loading", False):
             app.database_restore_pending = False
             await flash("Stop TrYa Stream before restoring a backup.", "error")
+            return redirect(url_for("settings"))
+        if trya_dcs_manager.is_running:
+            app.database_restore_pending = False
+            await flash("Stop TrYa DCS before restoring a backup.", "error")
             return redirect(url_for("settings"))
 
         data_dir = os.path.dirname(os.path.abspath(db.db_path))
@@ -7050,6 +7061,10 @@ def create_app(db: Database, bot=None) -> Quart:
     for _sub in ("mp3", "ass", "assets"):
         os.makedirs(os.path.join(TRYA_STREAM_DIR, _sub), exist_ok=True)
 
+    TRYA_DCS_DIR = os.path.abspath(Config.TRYA_DCS_DIR)
+    for _sub in ("incoming", "originals", "mp3", "ass", "assets", "cover_cache", "hooks"):
+        os.makedirs(os.path.join(TRYA_DCS_DIR, _sub), exist_ok=True)
+
     RIGHTS_DECLARATION_TEXT = (
         "I hereby confirm that I am the creator or rights holder of this audio track "
         "and grant a non-exclusive streaming license for a period of 14 days from the "
@@ -8366,9 +8381,17 @@ def create_app(db: Database, bot=None) -> Quart:
     exp_stream_manager = ExpStreamManager(db, EXP_RADIO_DIR)
     from bot.trya_stream_manager import TryaStreamManager
     trya_stream_manager = TryaStreamManager(db, TRYA_STREAM_DIR)
+    from bot.trya_dcs_manager import TryaDcsManager
+    trya_dcs_manager = TryaDcsManager(db, TRYA_DCS_DIR)
     if bot is not None:
         bot.exp_stream_manager = exp_stream_manager
         bot.trya_stream_manager = trya_stream_manager
+        bot.trya_dcs_manager = trya_dcs_manager
+
+    @app.after_serving
+    async def stop_trya_dcs_publisher():
+        if trya_dcs_manager.is_running:
+            await trya_dcs_manager.stop()
 
     from bot.relic_hunt import RelicHunt
     from bot.twitch_bot import TwitchBot as _TwitchBot
@@ -8646,6 +8669,846 @@ def create_app(db: Database, bot=None) -> Quart:
             prefix="[duration]",
         )
         return checked, corrected, skipped, errors
+
+    @app.route("/trya-dcs", methods=["GET", "POST"])
+    @permission_required("trya_dcs")
+    async def trya_dcs_admin():
+        """Configuration boundary for the private Discord Community Stream."""
+        admin_csrf = session.get("trya_dcs_admin_csrf")
+        if not admin_csrf:
+            admin_csrf = secrets.token_urlsafe(32)
+            session["trya_dcs_admin_csrf"] = admin_csrf
+        defaults = {
+            "trya_dcs_enabled": "off",
+            "trya_dcs_guild_id": str(Config.GUILD_ID or ""),
+            "trya_dcs_chat_channel_id": "",
+            "trya_dcs_public_url": f"{_public_web_url()}/trya-dcs/player",
+            "trya_dcs_stream_path": "trya-dcs",
+            "trya_dcs_video_bitrate_kbps": "2500",
+            "trya_dcs_audio_bitrate_kbps": "192",
+            "trya_dcs_stream_token_ttl_seconds": "600",
+            "trya_dcs_membership_recheck_seconds": "300",
+            "trya_dcs_rtmp_ingest_url": "rtmp://mediamtx:1935/trya-dcs",
+            "trya_dcs_disclaimer": "AI-generated audio and visuals.",
+            "trya_dcs_max_per_user": "4",
+            "trya_dcs_max_duration_seconds": "360",
+            "trya_dcs_max_upload_mib": "20",
+            "trya_dcs_loop_mode": "stop",
+            "trya_dcs_reuse_trya_visuals": "on",
+            "trya_dcs_stream_title": "TrYa Discord Community Stream",
+            "trya_dcs_moderation_enabled": "off",
+        }
+
+        if request.method == "POST":
+            form = await request.form
+            submitted_csrf = str(form.get("csrf_token") or "")
+            if not submitted_csrf or not hmac.compare_digest(
+                submitted_csrf, admin_csrf
+            ):
+                await flash("The DCS form expired. Please try again.", "error")
+                return redirect(request.url)
+            action = form.get("action", "save_settings")
+            if action == "start_stream":
+                actor = session.get("username") or "admin"
+                result = await trya_dcs_manager.start(created_by=actor)
+                await flash(
+                    f"DCS publisher started with {result.get('song_count')} songs."
+                    if result.get("ok") else result.get("error", "Could not start DCS."),
+                    "success" if result.get("ok") else "error",
+                )
+                return redirect(request.url)
+            if action == "safe_stop_stream":
+                result = await trya_dcs_manager.safe_stop()
+                await flash(
+                    "DCS will stop after the current song."
+                    if result.get("ok") else result.get("error", "Could not request safe stop."),
+                    "success" if result.get("ok") else "error",
+                )
+                return redirect(request.url)
+            if action == "stop_stream":
+                result = await trya_dcs_manager.stop()
+                await flash(
+                    "DCS publisher stopped." if result.get("ok") else result.get("error", "Could not stop DCS."),
+                    "success" if result.get("ok") else "error",
+                )
+                return redirect(request.url)
+            if action in {"approve_song", "reject_song"}:
+                try:
+                    song_id = int(form.get("song_id") or 0)
+                except (TypeError, ValueError):
+                    song_id = 0
+                song = await db.get_trya_dcs_song(song_id)
+                if not song:
+                    await flash("The DCS submission no longer exists.", "error")
+                    return redirect(request.url)
+                if action == "approve_song" and song.get("analysis_status") != "done":
+                    await flash("Wait for the song analysis to finish before approving it.", "error")
+                    return redirect(request.url)
+                actor = (session.get("username") or "admin")[:100]
+                if action == "approve_song":
+                    await db.update_trya_dcs_song(
+                        song_id,
+                        approval_status="approved",
+                        approved_at=time.time(),
+                        approved_by=actor,
+                    )
+                    await flash(f"Approved {song.get('title') or f'Song #{song_id}' }.", "success")
+                else:
+                    await db.update_trya_dcs_song(
+                        song_id,
+                        approval_status="rejected",
+                        approved_at=None,
+                        approved_by=actor,
+                    )
+                    await flash(f"Rejected {song.get('title') or f'Song #{song_id}' }.", "success")
+                return redirect(request.url)
+            if action == "save_settings":
+                guild_id = (form.get("guild_id") or "").strip()
+                chat_channel_id = (form.get("chat_channel_id") or "").strip()
+                if guild_id and not guild_id.isdigit():
+                    await flash("Discord Guild ID must contain digits only.", "error")
+                    return redirect(request.url)
+                if chat_channel_id and not chat_channel_id.isdigit():
+                    await flash("Chat channel ID must contain digits only.", "error")
+                    return redirect(request.url)
+
+                def bounded_int(name: str, default: int, low: int, high: int) -> int:
+                    try:
+                        return max(low, min(high, int(form.get(name, default))))
+                    except (TypeError, ValueError):
+                        return default
+
+                public_url = (form.get("public_url") or defaults["trya_dcs_public_url"]).strip()[:500]
+                rtmp_url = (form.get("rtmp_ingest_url") or defaults["trya_dcs_rtmp_ingest_url"]).strip()[:500]
+                disclaimer = (form.get("disclaimer") or "").strip()[:2000]
+                values = {
+                    "trya_dcs_enabled": "on" if form.get("enabled") else "off",
+                    "trya_dcs_guild_id": guild_id,
+                    "trya_dcs_chat_channel_id": chat_channel_id,
+                    "trya_dcs_public_url": public_url,
+                    "trya_dcs_stream_path": "trya-dcs",
+                    "trya_dcs_video_bitrate_kbps": str(
+                        bounded_int("video_bitrate_kbps", 2500, 1000, 6000)
+                    ),
+                    "trya_dcs_audio_bitrate_kbps": str(
+                        bounded_int("audio_bitrate_kbps", 192, 96, 320)
+                    ),
+                    "trya_dcs_stream_token_ttl_seconds": str(
+                        bounded_int("stream_token_ttl_seconds", 600, 300, 900)
+                    ),
+                    "trya_dcs_membership_recheck_seconds": str(
+                        bounded_int("membership_recheck_seconds", 300, 60, 900)
+                    ),
+                    "trya_dcs_rtmp_ingest_url": rtmp_url,
+                    "trya_dcs_disclaimer": disclaimer,
+                    "trya_dcs_max_per_user": str(
+                        bounded_int("max_per_user", 4, 1, 20)
+                    ),
+                    "trya_dcs_max_duration_seconds": str(
+                        bounded_int("max_duration_seconds", 360, 60, 1200)
+                    ),
+                    "trya_dcs_max_upload_mib": str(
+                        bounded_int("max_upload_mib", 20, 5, 100)
+                    ),
+                    "trya_dcs_loop_mode": (
+                        "reshuffle" if form.get("loop_mode") == "reshuffle" else "stop"
+                    ),
+                    "trya_dcs_reuse_trya_visuals": (
+                        "on" if form.get("reuse_trya_visuals") else "off"
+                    ),
+                    "trya_dcs_stream_title": (
+                        form.get("stream_title") or ""
+                    ).strip()[:200],
+                    "trya_dcs_moderation_enabled": (
+                        "on" if form.get("moderation_enabled") else "off"
+                    ),
+                }
+                for key, value in values.items():
+                    await db.set_setting(key, value)
+                if values["trya_dcs_enabled"] != "on" and trya_dcs_manager.is_running:
+                    await trya_dcs_manager.stop()
+                await flash("TrYa DCS settings saved.", "success")
+            return redirect(request.url)
+
+        settings = {}
+        for key, default in defaults.items():
+            settings[key] = await db.get_setting(key) or default
+
+        guild = get_guild()
+        text_channels = []
+        if guild:
+            text_channels = [
+                {"id": str(channel.id), "name": channel.name}
+                for channel in sorted(guild.text_channels, key=lambda item: item.position)
+            ]
+
+        mediamtx_online = False
+        mediamtx_detail = "MediaMTX service is not reachable yet."
+        try:
+            timeout = aiohttp.ClientTimeout(total=1.5)
+            async with aiohttp.ClientSession(timeout=timeout) as client:
+                async with client.get("http://mediamtx:9997/v3/paths/list") as response:
+                    mediamtx_online = response.status < 500
+                    mediamtx_detail = f"API responded with HTTP {response.status}."
+        except Exception:
+            pass
+
+        stats = await db.get_trya_dcs_admin_stats()
+        songs = await db.get_trya_dcs_songs(active_only=False)
+        stream_status = await trya_dcs_manager.get_status()
+        oauth_ready = bool(
+            Config.DISCORD_CLIENT_ID
+            and Config.DISCORD_CLIENT_SECRET
+            and settings["trya_dcs_guild_id"]
+        )
+        stream_path = settings["trya_dcs_stream_path"]
+        return await render_template(
+            "trya_dcs.html",
+            settings=settings,
+            stats=stats,
+            text_channels=text_channels,
+            mediamtx_online=mediamtx_online,
+            mediamtx_detail=mediamtx_detail,
+            oauth_ready=oauth_ready,
+            oauth_callback_url=f"{_public_web_url()}/trya-dcs/oauth/callback",
+            protected_hls_url=f"{_public_web_url()}/dcs-stream/{stream_path}/index.m3u8",
+            data_directory=TRYA_DCS_DIR,
+            songs=list(reversed(songs)),
+            stream_status=stream_status,
+            stream_log=trya_dcs_manager.get_log(max_age_secs=900),
+            admin_csrf=admin_csrf,
+        )
+
+    @app.route("/trya-dcs/api/status")
+    async def trya_dcs_public_status():
+        user_id = session.get("trya_dcs_discord_user_id")
+        guild_id = int(await db.get_setting("trya_dcs_guild_id") or Config.GUILD_ID or 0)
+        if not user_id or not await _trya_dcs_membership_valid(int(user_id), guild_id):
+            return {"error": "forbidden"}, 403
+        status = await trya_dcs_manager.get_status()
+        return {
+            "running": status["running"],
+            "safe_stop_pending": status["safe_stop_pending"],
+            "song": status["song"],
+            "song_index": status["song_index"],
+            "playlist_length": status["playlist_length"],
+            "playlist": status.get("playlist", []),
+            "listener_count": status.get("listener_count", 0),
+            "ffmpeg": status["ffmpeg"],
+        }
+
+    @app.route("/trya-dcs/upload/<token>", methods=["GET", "POST"])
+    async def trya_dcs_upload(token: str):
+        """One-time upload form issued by a Discord DCS slash command."""
+        import hashlib
+        import tempfile
+
+        from bot.trya_dcs_worker import (
+            DCS_RIGHTS_DECLARATION,
+            DCS_RIGHTS_VERSION,
+            ingest_dcs_audio,
+            process_dcs_song,
+        )
+
+        song = await db.get_trya_dcs_song_by_token(token)
+        if not song:
+            return await render_template(
+                "trya_dcs_upload.html", error="This upload link is invalid or expired."
+            ), 404
+        if time.time() - float(song.get("submitted_at") or 0) > 86400:
+            await db.delete_trya_dcs_song(int(song["id"]), user_id=int(song["user_id"]))
+            return await render_template(
+                "trya_dcs_upload.html",
+                error="This private upload slot expired after 24 hours. Run the Discord command again.",
+            ), 410
+        authenticated_user = session.get("trya_dcs_discord_user_id")
+        if not authenticated_user:
+            session["trya_dcs_oauth_next"] = request.path
+            return redirect(url_for("trya_dcs_oauth_start"))
+        if int(authenticated_user) != int(song["user_id"]):
+            return await render_template(
+                "trya_dcs_unavailable.html",
+                reason="This submission link belongs to a different Discord member.",
+            ), 403
+        if song.get("uploaded_at"):
+            return await render_template(
+                "trya_dcs_upload.html", done=True,
+                title=song.get("title") or "Your song",
+            )
+        if await db.get_setting("trya_dcs_enabled") != "on":
+            return await render_template("trya_dcs_upload.html", disabled=True), 503
+
+        configured_guild = int(await db.get_setting("trya_dcs_guild_id") or 0)
+        if not configured_guild or not await _trya_dcs_membership_valid(
+            int(authenticated_user), configured_guild
+        ):
+            return await render_template(
+                "trya_dcs_upload.html",
+                error="Your Discord account is no longer a member of the configured server.",
+            ), 403
+        if request.method == "GET":
+            return await render_template(
+                "trya_dcs_upload.html", song=song, token=token
+            )
+        origin = (request.headers.get("Origin") or "").rstrip("/")
+        if origin and origin != _public_web_url().rstrip("/"):
+            return await render_template(
+                "trya_dcs_upload.html",
+                song=song,
+                token=token,
+                error="The upload request origin was rejected.",
+            ), 403
+
+        form = await request.form
+        suno_url = (form.get("suno_url") or "").strip()
+        hook_value = (form.get("hook_value") or "").strip()
+        content_kind = (form.get("content_kind") or "").strip().lower()
+        plan_status = (form.get("suno_plan_status") or "").strip().lower()
+
+        async def upload_error(message: str, status: int = 400):
+            return await render_template(
+                "trya_dcs_upload.html", song=song, token=token,
+                form_error=message, submitted_suno_url=suno_url,
+                submitted_hook=hook_value, submitted_content_kind=content_kind,
+                submitted_plan_status=plan_status,
+            ), status
+
+        if not suno_url:
+            return await upload_error("Enter the Suno song URL.")
+        resolved_uuid = await resolve_suno_uuid(suno_url)
+        if not resolved_uuid:
+            return await upload_error(
+                "Suno could not resolve that song URL. Check the link and try again."
+            )
+        if content_kind not in {"original", "cover", "remix"}:
+            return await upload_error("Choose Original, Cover or Remix.")
+        if plan_status not in {"free", "paid", "unknown"}:
+            return await upload_error("Choose the documented Suno plan status.")
+
+        duplicate = next((
+            existing for existing in await db.get_trya_dcs_songs(active_only=True)
+            if int(existing["id"]) != int(song["id"])
+            and str(existing.get("suno_uuid") or "").lower() == resolved_uuid.lower()
+        ), None)
+        if duplicate:
+            return await upload_error(
+                "That Suno song is already active in TrYa DCS.", 409
+            )
+
+        try:
+            maximum = max(1, min(20, int(await db.get_setting("trya_dcs_max_per_user") or "4")))
+        except (TypeError, ValueError):
+            maximum = 4
+        active_count = sum(
+            1 for existing in await db.get_trya_dcs_songs_by_user(int(song["user_id"]))
+            if int(existing["id"]) != int(song["id"])
+        )
+        if not song.get("replacement_song_id") and active_count >= maximum:
+            return await upload_error(
+                f"You already have the maximum of {maximum} active DCS songs.", 409
+            )
+
+        attestation_names = (
+            "sharing_attested", "official_download_attested",
+            "material_rights_attested", "technical_processing_attested",
+            "private_playback_attested",
+        )
+        if any(not form.get(name) for name in attestation_names):
+            return await upload_error("Every rights confirmation is required.")
+
+        hook = None
+        if hook_value:
+            from bot.suno_hook import SunoHookError, resolve_suno_hook
+            try:
+                hook = await resolve_suno_hook(hook_value)
+                if hook["original_clip_id"].lower() != resolved_uuid.lower():
+                    raise SunoHookError("This Hook belongs to a different Suno song.")
+            except SunoHookError as exc:
+                return await upload_error(str(exc))
+            except Exception:
+                return await upload_error(
+                    "Suno could not validate the Hook right now. Try again shortly.", 502
+                )
+
+        accepted_at = time.time()
+        rights_hash = hashlib.sha256(
+            (
+                f"{DCS_RIGHTS_VERSION}\n{DCS_RIGHTS_DECLARATION}\n"
+                f"user={song['user_id']}\nurl={suno_url}\nuuid={resolved_uuid}\n"
+                f"content_kind={content_kind}\nplan={plan_status}\naccepted={accepted_at:.6f}"
+            ).encode("utf-8")
+        ).hexdigest()
+        update = {
+            "suno_url": suno_url,
+            "suno_uuid": resolved_uuid,
+            "content_kind": content_kind,
+            "suno_plan_status": plan_status,
+            "rights_version": DCS_RIGHTS_VERSION,
+            "rights_declaration": DCS_RIGHTS_DECLARATION,
+            "rights_hash": rights_hash,
+        }
+        if hook:
+            update.update(
+                hook_id=hook["hook_id"],
+                hook_share_url=hook["hook_share_url"],
+                hook_video_url=hook["hook_video_url"],
+            )
+        await db.update_trya_dcs_song(song["id"], **update)
+
+        files = await request.files
+        uploaded = files.get("original_audio")
+        if not uploaded or not uploaded.filename:
+            return await upload_error(
+                "Select the MP3 or M4A obtained through Suno's official Download action."
+            )
+        try:
+            max_upload_mib = max(
+                5, min(100, int(await db.get_setting("trya_dcs_max_upload_mib") or "20"))
+            )
+        except (TypeError, ValueError):
+            max_upload_mib = 20
+        try:
+            max_duration = max(
+                60,
+                min(1200, int(await db.get_setting("trya_dcs_max_duration_seconds") or "360")),
+            )
+        except (TypeError, ValueError):
+            max_duration = 360
+        incoming_dir = os.path.join(TRYA_DCS_DIR, "incoming")
+        os.makedirs(incoming_dir, exist_ok=True)
+        suffix = os.path.splitext(uploaded.filename)[1].lower()
+        if suffix not in {".mp3", ".m4a"}:
+            return await upload_error("Only .mp3 and .m4a audio uploads are accepted.")
+        fd, staged_path = tempfile.mkstemp(
+            prefix=f"dcs_{song['id']}_", suffix=suffix, dir=incoming_dir
+        )
+        os.close(fd)
+        try:
+            await uploaded.save(staged_path)
+            finalized = await ingest_dcs_audio(
+                db, song["id"], staged_path, TRYA_DCS_DIR,
+                original_filename=uploaded.filename,
+                max_upload_bytes=max_upload_mib * 1024 * 1024,
+                max_duration_seconds=max_duration,
+                content_kind=content_kind,
+                suno_plan_status=plan_status,
+                rights_hash=rights_hash,
+                accepted_at=accepted_at,
+            )
+        except Exception as exc:
+            return await upload_error(str(exc))
+        finally:
+            try:
+                os.remove(staged_path)
+            except OSError:
+                pass
+
+        asyncio.create_task(process_dcs_song(
+            db, song["id"], TRYA_DCS_DIR,
+            max_duration_seconds=max_duration,
+        ))
+        return await render_template(
+            "trya_dcs_upload.html", done=True,
+            title=finalized.get("title") or "Your song",
+        )
+
+    @app.route("/trya-dcs/consent-csv")
+    @permission_required("trya_dcs")
+    async def trya_dcs_consent_csv():
+        import csv
+        import io
+
+        rows = await db.get_trya_dcs_consent_csv_rows()
+        columns = list(rows[0].keys()) if rows else [
+            "id", "user_id", "user_name", "suno_url", "suno_uuid", "title",
+            "artist", "content_kind", "suno_plan_status", "rights_version",
+            "rights_declaration", "rights_hash", "rights_accepted_at",
+            "original_filename", "original_mime", "original_size",
+            "original_sha256", "duration", "submitted_at", "uploaded_at",
+            "active", "removed_at", "remove_reason",
+        ]
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=columns, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+        return await make_response(
+            output.getvalue(),
+            200,
+            {
+                "Content-Type": "text/csv; charset=utf-8",
+                "Content-Disposition": "attachment; filename=trya_dcs_consent.csv",
+            },
+        )
+
+    def _trya_dcs_callback_url() -> str:
+        return f"{_public_web_url()}/trya-dcs/oauth/callback"
+
+    async def _trya_dcs_membership_valid(user_id: int, guild_id: int) -> bool:
+        guild = get_guild()
+        if not guild or guild.id != guild_id:
+            return False
+        member = guild.get_member(user_id)
+        if member is not None:
+            return True
+        try:
+            await guild.fetch_member(user_id)
+            return True
+        except Exception:
+            return False
+
+    @app.route("/trya-dcs/oauth/start")
+    async def trya_dcs_oauth_start():
+        if (await db.get_setting("trya_dcs_enabled") or "off") != "on":
+            return await render_template("trya_dcs_unavailable.html", reason="The community stream is currently disabled."), 503
+        if not Config.DISCORD_CLIENT_ID or not Config.DISCORD_CLIENT_SECRET:
+            return await render_template("trya_dcs_unavailable.html", reason="Discord OAuth is not configured."), 503
+        state = secrets.token_urlsafe(32)
+        session["trya_dcs_oauth_state"] = state
+        params = {
+            "client_id": Config.DISCORD_CLIENT_ID,
+            "redirect_uri": _trya_dcs_callback_url(),
+            "response_type": "code",
+            "scope": "identify guilds",
+            "state": state,
+            "prompt": "none" if session.get("trya_dcs_discord_user_id") else "consent",
+        }
+        return redirect(f"https://discord.com/oauth2/authorize?{urlencode(params)}")
+
+    @app.route("/trya-dcs/oauth/callback")
+    async def trya_dcs_oauth_callback():
+        state = request.args.get("state", "")
+        expected_state = session.pop("trya_dcs_oauth_state", None)
+        if not expected_state or not hmac.compare_digest(state, expected_state):
+            return await render_template("trya_dcs_unavailable.html", reason="The Discord login state was invalid. Please try again."), 400
+        code = request.args.get("code", "")
+        if not code:
+            return await render_template("trya_dcs_unavailable.html", reason="Discord did not return an authorization code."), 400
+
+        token_payload = {
+            "client_id": Config.DISCORD_CLIENT_ID,
+            "client_secret": Config.DISCORD_CLIENT_SECRET,
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": _trya_dcs_callback_url(),
+        }
+        try:
+            timeout = aiohttp.ClientTimeout(total=15)
+            async with aiohttp.ClientSession(timeout=timeout) as client:
+                async with client.post(
+                    "https://discord.com/api/v10/oauth2/token", data=token_payload
+                ) as response:
+                    token_data = await response.json(content_type=None)
+                    if response.status != 200 or not token_data.get("access_token"):
+                        raise RuntimeError(f"token exchange returned HTTP {response.status}")
+                headers = {"Authorization": f"Bearer {token_data['access_token']}"}
+                async with client.get("https://discord.com/api/v10/users/@me", headers=headers) as response:
+                    identity = await response.json(content_type=None)
+                    if response.status != 200:
+                        raise RuntimeError("Discord identity lookup failed")
+                async with client.get("https://discord.com/api/v10/users/@me/guilds", headers=headers) as response:
+                    guilds = await response.json(content_type=None)
+                    if response.status != 200 or not isinstance(guilds, list):
+                        raise RuntimeError("Discord guild membership lookup failed")
+        except Exception as exc:
+            print(f"[trya-dcs-oauth] Login failed: {exc}", flush=True)
+            return await render_template("trya_dcs_unavailable.html", reason="Discord login failed. Please try again."), 502
+
+        try:
+            user_id = int(identity["id"])
+            guild_id = int(await db.get_setting("trya_dcs_guild_id") or Config.GUILD_ID)
+        except (KeyError, TypeError, ValueError):
+            return await render_template("trya_dcs_unavailable.html", reason="The configured Discord guild is invalid."), 503
+        if not any(str(item.get("id")) == str(guild_id) for item in guilds):
+            await db.revoke_trya_dcs_user_tokens(user_id)
+            return await render_template("trya_dcs_unavailable.html", reason="This private stream is available only to members of the configured Discord server."), 403
+        if not await _trya_dcs_membership_valid(user_id, guild_id):
+            return await render_template("trya_dcs_unavailable.html", reason="Your current server membership could not be verified."), 403
+
+        avatar_hash = identity.get("avatar")
+        session["trya_dcs_discord_user_id"] = user_id
+        session["trya_dcs_discord_name"] = identity.get("global_name") or identity.get("username") or "Discord member"
+        session["trya_dcs_discord_avatar"] = (
+            f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.png?size=128"
+            if avatar_hash else ""
+        )
+        session["trya_dcs_guild_id"] = guild_id
+        session["trya_dcs_membership_checked_at"] = time.time()
+        next_path = session.pop("trya_dcs_oauth_next", "")
+        if not re.fullmatch(r"/trya-dcs/upload/[A-Za-z0-9_-]{20,100}", next_path):
+            next_path = url_for("trya_dcs_player")
+        return redirect(next_path)
+
+    @app.route("/trya-dcs/logout", methods=["POST"])
+    async def trya_dcs_logout():
+        form = await request.form
+        expected_csrf = str(session.get("trya_dcs_player_csrf") or "")
+        submitted_csrf = str(form.get("csrf_token") or "")
+        if not expected_csrf or not hmac.compare_digest(
+            submitted_csrf, expected_csrf
+        ):
+            return await render_template(
+                "trya_dcs_unavailable.html",
+                reason="The sign-out request expired. Please reload the player.",
+            ), 403
+        user_id = session.get("trya_dcs_discord_user_id")
+        if user_id:
+            await db.revoke_trya_dcs_user_tokens(int(user_id))
+        for key in list(session.keys()):
+            if key.startswith("trya_dcs_"):
+                session.pop(key, None)
+        response = redirect(url_for("trya_dcs_player"))
+        response.delete_cookie("trya_dcs_stream_token", path="/dcs-stream/")
+        return response
+
+    @app.route("/trya-dcs/player")
+    async def trya_dcs_player():
+        if (await db.get_setting("trya_dcs_enabled") or "off") != "on":
+            return await render_template("trya_dcs_unavailable.html", reason="The community stream is currently disabled."), 503
+        user_id = session.get("trya_dcs_discord_user_id")
+        guild_id = int(await db.get_setting("trya_dcs_guild_id") or Config.GUILD_ID or 0)
+        if not user_id:
+            return redirect(url_for("trya_dcs_oauth_start"))
+        last_check = float(session.get("trya_dcs_membership_checked_at") or 0)
+        recheck = int(await db.get_setting("trya_dcs_membership_recheck_seconds") or "300")
+        if time.time() - last_check >= recheck:
+            if not await _trya_dcs_membership_valid(int(user_id), guild_id):
+                await db.revoke_trya_dcs_user_tokens(int(user_id))
+                return await render_template("trya_dcs_unavailable.html", reason="Discord server membership is required."), 403
+            session["trya_dcs_membership_checked_at"] = time.time()
+        player_csrf = secrets.token_urlsafe(32)
+        session["trya_dcs_player_csrf"] = player_csrf
+        return await render_template(
+            "trya_dcs_player.html",
+            discord_name=session.get("trya_dcs_discord_name"),
+            discord_avatar=session.get("trya_dcs_discord_avatar"),
+            disclaimer=await db.get_setting("trya_dcs_disclaimer") or "AI-generated audio and visuals.",
+            player_csrf=player_csrf,
+        )
+
+    @app.websocket("/trya-dcs/ws")
+    async def trya_dcs_websocket():
+        """Authenticated DCS state and Discord-backed chat transport."""
+        from bot.cogs.trya_dcs_chat import (
+            guild_emoji_payload,
+            send_web_chat_message,
+            serialize_discord_message,
+        )
+        from bot.trya_dcs_events import trya_dcs_events
+
+        if (await db.get_setting("trya_dcs_enabled") or "off") != "on":
+            await websocket.close(4403)
+            return
+        origin = (websocket.headers.get("Origin") or "").rstrip("/")
+        if origin and origin != _public_web_url().rstrip("/"):
+            await websocket.close(4403)
+            return
+        user_id = session.get("trya_dcs_discord_user_id")
+        try:
+            guild_id = int(await db.get_setting("trya_dcs_guild_id") or Config.GUILD_ID or 0)
+            channel_id = int(await db.get_setting("trya_dcs_chat_channel_id") or 0)
+        except (TypeError, ValueError):
+            await websocket.close(4403)
+            return
+        if not user_id or not await _trya_dcs_membership_valid(int(user_id), guild_id):
+            await websocket.close(4403)
+            return
+
+        guild = get_guild()
+        channel = bot.get_channel(channel_id) if bot and channel_id else None
+        if bot and channel_id and channel is None:
+            try:
+                channel = await bot.fetch_channel(channel_id)
+            except Exception:
+                channel = None
+
+        initial_messages = []
+        if channel is not None and hasattr(channel, "history"):
+            try:
+                history = [message async for message in channel.history(limit=50, oldest_first=True)]
+                initial_messages = [
+                    await serialize_discord_message(message) for message in history
+                ]
+            except Exception as exc:
+                print(f"[trya-dcs-chat] History load failed: {exc}", flush=True)
+
+        await websocket.send(json.dumps({
+            "version": 1,
+            "type": "session.ready",
+            "timestamp": time.time(),
+            "data": {
+                "user_id": str(user_id),
+                "chat_enabled": bool(channel_id and channel),
+                "emojis": await guild_emoji_payload(guild),
+                "messages": initial_messages,
+            },
+        }))
+
+        async with trya_dcs_events.subscribe() as event_queue:
+            async def push_events():
+                while True:
+                    event = await event_queue.get()
+                    await websocket.send(json.dumps(event))
+
+            push_task = asyncio.create_task(push_events())
+
+            async def membership_guard():
+                interval = max(
+                    60,
+                    min(
+                        900,
+                        int(
+                            await db.get_setting(
+                                "trya_dcs_membership_recheck_seconds"
+                            )
+                            or "300"
+                        ),
+                    ),
+                )
+                while True:
+                    await asyncio.sleep(interval)
+                    if not await _trya_dcs_membership_valid(int(user_id), guild_id):
+                        await db.revoke_trya_dcs_user_tokens(int(user_id))
+                        await websocket.close(4403)
+                        return
+
+            membership_task = asyncio.create_task(membership_guard())
+            try:
+                while True:
+                    raw = await websocket.receive()
+                    try:
+                        incoming = json.loads(raw)
+                    except (TypeError, json.JSONDecodeError):
+                        continue
+                    event_type = incoming.get("type")
+                    if event_type == "ping":
+                        await websocket.send(json.dumps({"version": 1, "type": "pong", "timestamp": time.time(), "data": {}}))
+                        continue
+                    if event_type != "chat.send" or not channel_id or bot is None:
+                        continue
+
+                    content = str((incoming.get("data") or {}).get("content") or "").strip()
+                    if not content:
+                        continue
+                    now = time.monotonic()
+                    key = int(user_id)
+                    recent = [stamp for stamp in app.trya_dcs_chat_rate.get(key, []) if now - stamp < 10]
+                    if len(recent) >= 5:
+                        await websocket.send(json.dumps({
+                            "version": 1, "type": "chat.error", "timestamp": time.time(),
+                            "data": {"message": "Please wait before sending another message."},
+                        }))
+                        app.trya_dcs_chat_rate[key] = recent
+                        continue
+                    if not await _trya_dcs_membership_valid(int(user_id), guild_id):
+                        await websocket.close(4403)
+                        return
+                    recent.append(now)
+                    app.trya_dcs_chat_rate[key] = recent
+                    try:
+                        await send_web_chat_message(bot, channel_id, int(user_id), content)
+                        await websocket.send(json.dumps({
+                            "version": 1, "type": "chat.sent", "timestamp": time.time(), "data": {},
+                        }))
+                    except Exception as exc:
+                        print(f"[trya-dcs-chat] Web message failed: {exc}", flush=True)
+                        await websocket.send(json.dumps({
+                            "version": 1, "type": "chat.error", "timestamp": time.time(),
+                            "data": {"message": "The message could not be delivered to Discord."},
+                        }))
+            finally:
+                push_task.cancel()
+                membership_task.cancel()
+                try:
+                    await push_task
+                except asyncio.CancelledError:
+                    pass
+                try:
+                    await membership_task
+                except asyncio.CancelledError:
+                    pass
+
+    @app.route("/trya-dcs/api/stream-token", methods=["POST"])
+    async def trya_dcs_stream_token():
+        if (await db.get_setting("trya_dcs_enabled") or "off") != "on":
+            return {"error": "disabled"}, 503
+        origin = (request.headers.get("Origin") or "").rstrip("/")
+        if origin and origin != _public_web_url().rstrip("/"):
+            return {"error": "invalid_origin"}, 403
+        user_id = session.get("trya_dcs_discord_user_id")
+        guild_id = int(await db.get_setting("trya_dcs_guild_id") or Config.GUILD_ID or 0)
+        if not user_id or not await _trya_dcs_membership_valid(int(user_id), guild_id):
+            return {"error": "forbidden"}, 403
+        now_mono = time.monotonic()
+        token_key = int(user_id)
+        recent = [
+            stamp
+            for stamp in app.trya_dcs_token_rate.get(token_key, [])
+            if now_mono - stamp < 60
+        ]
+        if len(recent) >= 12:
+            app.trya_dcs_token_rate[token_key] = recent
+            return {"error": "rate_limited"}, 429
+        recent.append(now_mono)
+        app.trya_dcs_token_rate[token_key] = recent
+        await db.revoke_trya_dcs_user_tokens(int(user_id))
+        await db.purge_expired_trya_dcs_tokens()
+        raw_token = secrets.token_urlsafe(48)
+        token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+        now = time.time()
+        ttl = max(300, min(900, int(await db.get_setting("trya_dcs_stream_token_ttl_seconds") or "600")))
+        forwarded_for = request.headers.get("X-Forwarded-For", request.remote_addr or "")
+        fingerprint = hashlib.sha256(
+            f"{forwarded_for.split(',')[0].strip()}|{request.headers.get('User-Agent', '')}".encode("utf-8")
+        ).hexdigest()
+        await db.issue_trya_dcs_stream_token(
+            token_hash=token_hash,
+            discord_user_id=int(user_id),
+            discord_guild_id=guild_id,
+            issued_at=now,
+            expires_at=now + ttl,
+            remote_fingerprint=fingerprint,
+        )
+        response = await make_response(
+            {"hls_url": "/dcs-stream/trya-dcs/index.m3u8", "expires_in": ttl}
+        )
+        response.set_cookie(
+            "trya_dcs_stream_token",
+            raw_token,
+            max_age=ttl,
+            secure=True,
+            httponly=True,
+            samesite="Lax",
+            path="/dcs-stream/",
+        )
+        return response
+
+    @app.route("/trya-dcs/internal/media-auth", methods=["GET", "HEAD"])
+    async def trya_dcs_media_auth():
+        raw_token = request.cookies.get("trya_dcs_stream_token", "")
+        if not raw_token or (await db.get_setting("trya_dcs_enabled") or "off") != "on":
+            return "", 401
+        token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+        token = await db.get_trya_dcs_stream_token(token_hash)
+        if not token:
+            return "", 401
+        forwarded_for = request.headers.get("X-Forwarded-For", request.remote_addr or "")
+        fingerprint = hashlib.sha256(
+            f"{forwarded_for.split(',')[0].strip()}|{request.headers.get('User-Agent', '')}".encode("utf-8")
+        ).hexdigest()
+        if token.get("remote_fingerprint") and not hmac.compare_digest(
+            token["remote_fingerprint"], fingerprint
+        ):
+            return "", 401
+        recheck = max(60, min(900, int(await db.get_setting("trya_dcs_membership_recheck_seconds") or "300")))
+        if time.time() - float(token["last_membership_check_at"]) >= recheck:
+            valid = await _trya_dcs_membership_valid(
+                int(token["discord_user_id"]), int(token["discord_guild_id"])
+            )
+            if not valid:
+                await db.revoke_trya_dcs_user_tokens(int(token["discord_user_id"]))
+                return "", 403
+            await db.touch_trya_dcs_token_membership(int(token["id"]))
+        return "", 204
 
     @app.route("/trya-stream", methods=["GET", "POST"])
     @permission_required('trya_stream')

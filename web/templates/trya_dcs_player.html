@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-[#07060b]">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex,nofollow,noarchive">
+    <title>TrYa DCS</title>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.6.13/dist/hls.min.js"></script>
+    <style>
+        :root { color-scheme: dark; --panel:#15121d; --line:#332d40; --muted:#9b93aa; --accent:#b044e4; }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; min-height: 100%; background: #07060b; color: #f1edf7; font-family: system-ui, sans-serif; }
+        body { padding: 18px; }
+        .shell { width: min(1600px, 100%); margin: 0 auto; }
+        header { min-height: 54px; display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:14px; }
+        .brand { font-size: 22px; font-weight: 750; }
+        .identity { display:flex; align-items:center; gap:9px; color:var(--muted); font-size:14px; }
+        .identity img { width:32px; height:32px; border-radius:50%; object-fit:cover; }
+        button { border:1px solid var(--line); border-radius:6px; background:#211a2d; color:#eeeaf6; padding:8px 12px; cursor:pointer; }
+        .layout { display:grid; grid-template-columns:minmax(0, 1fr) minmax(300px, 390px); gap:14px; min-height:calc(100vh - 104px); }
+        .video-panel, .chat-panel { border:1px solid var(--line); background:var(--panel); border-radius:8px; overflow:hidden; }
+        .video-wrap { position:relative; aspect-ratio:16/9; background:#000; display:grid; place-items:center; }
+        video { width:100%; height:100%; object-fit:contain; background:#000; }
+        .state { position:absolute; inset:0; display:grid; place-items:center; pointer-events:none; text-align:center; padding:24px; color:#c8c1d2; background:rgba(0,0,0,.35); }
+        .state.hidden { display:none; }
+        .meta { padding:14px 16px; display:flex; justify-content:space-between; gap:16px; border-top:1px solid var(--line); }
+        .meta-main { min-width:0; flex:1; }
+        .meta-title { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+        .meta h1 { font-size:18px; margin:0; overflow-wrap:anywhere; }
+        .meta p { margin:5px 0 0; color:var(--muted); font-size:13px; }
+        .progress { height:3px; margin-top:10px; background:#30293d; overflow:hidden; }
+        .progress span { display:block; width:0; height:100%; background:var(--accent); transition:width .45s linear; }
+        .disclosure { align-self:center; max-width:360px; text-align:right; white-space:pre-line; color:#aaa2b5; font-size:12px; }
+        .chat-panel { display:flex; flex-direction:column; }
+        .chat-head { padding:15px 16px; border-bottom:1px solid var(--line); font-weight:650; }
+        .messages { flex:1; min-height:280px; max-height:calc(100vh - 235px); padding:12px 14px; overflow-y:auto; }
+        .empty-chat { min-height:250px; display:grid; place-items:center; color:var(--muted); text-align:center; }
+        .message { display:grid; grid-template-columns:34px minmax(0,1fr); gap:9px; padding:8px 0; }
+        .message-avatar { width:34px; height:34px; border-radius:50%; object-fit:cover; background:#282230; }
+        .message-head { display:flex; align-items:baseline; gap:7px; min-width:0; }
+        .message-name { font-size:13px; font-weight:750; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .message-time { color:#70697d; font-size:10px; white-space:nowrap; }
+        .message-text { margin-top:2px; color:#d9d4e0; line-height:1.38; overflow-wrap:anywhere; white-space:pre-wrap; }
+        .message-text img.emoji { width:24px; height:24px; object-fit:contain; vertical-align:middle; }
+        .reply { color:#8f879c; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-bottom:2px; }
+        .attachment-image, .embed-image { display:block; max-width:min(100%,320px); max-height:240px; margin-top:7px; border-radius:5px; object-fit:contain; }
+        .message a { color:#7ab6ff; }
+        .chat-foot { position:relative; padding:10px 12px 12px; border-top:1px solid var(--line); }
+        .chat-form { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:7px; }
+        .chat-form input { min-width:0; width:100%; border:1px solid var(--line); border-radius:6px; background:#0c0a11; color:#eeeaf6; padding:11px; }
+        .chat-form input:disabled { color:#777080; }
+        .emoji-picker { display:none; position:absolute; left:12px; right:12px; bottom:62px; max-height:270px; padding:9px; border:1px solid var(--line); border-radius:6px; background:#0c0a11; box-shadow:0 10px 30px #000a; }
+        .emoji-picker.open { display:block; }
+        .emoji-search { width:100%; margin-bottom:8px; border:1px solid var(--line); border-radius:5px; background:#15121d; color:#eeeaf6; padding:8px 9px; }
+        .emoji-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(34px,1fr)); gap:4px; max-height:205px; overflow-y:auto; }
+        .emoji-grid button { padding:4px; height:36px; background:transparent; font-size:21px; }
+        .emoji-picker img { width:25px; height:25px; object-fit:contain; }
+        .chat-error { min-height:18px; padding:0 12px 7px; color:#f18c99; font-size:11px; }
+        dialog { width:min(560px,calc(100% - 24px)); max-height:min(720px,80vh); padding:0; color:#f1edf7; background:#15121d; border:1px solid var(--line); border-radius:8px; box-shadow:0 22px 70px #000c; }
+        dialog::backdrop { background:rgba(0,0,0,.72); }
+        .queue-head { position:sticky; top:0; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:15px 16px; background:#15121d; border-bottom:1px solid var(--line); }
+        .queue-head h2 { margin:0; font-size:17px; }
+        .queue-list { margin:0; padding:8px 0; list-style:none; overflow-y:auto; }
+        .queue-item { display:grid; grid-template-columns:34px minmax(0,1fr); gap:8px; padding:9px 16px; color:#aaa2b5; }
+        .queue-item.current { color:#fff; background:#211a2d; }
+        .queue-number { color:#746b81; font-variant-numeric:tabular-nums; }
+        .queue-song { min-width:0; }
+        .queue-title { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .queue-artist { display:block; margin-top:2px; color:#898191; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        @media (max-width: 900px) {
+            body { padding:10px; }
+            header { align-items:flex-start; }
+            .layout { grid-template-columns:1fr; min-height:auto; }
+            .chat-panel { min-height:420px; }
+            .meta { flex-direction:column; }
+            .disclosure { text-align:left; }
+            .brand { font-size:19px; }
+        }
+    </style>
+</head>
+<body>
+<div class="shell">
+    <header>
+        <div>
+            <div class="brand">TrYa Discord Community Stream</div>
+            <div style="color:var(--muted);font-size:13px;margin-top:3px">Private, non-commercial community broadcast</div>
+        </div>
+        <div class="identity">
+            {% if discord_avatar %}<img src="{{ discord_avatar }}" alt="">{% endif %}
+            <span>{{ discord_name }}</span>
+            <form method="POST" action="{{ url_for('trya_dcs_logout') }}"><input type="hidden" name="csrf_token" value="{{ player_csrf }}"><button type="submit">Sign out</button></form>
+        </div>
+    </header>
+    <main class="layout">
+        <section class="video-panel">
+            <div class="video-wrap">
+                <video id="radio-video" controls autoplay playsinline></video>
+                <div id="player-state" class="state">Connecting to the private stream...</div>
+            </div>
+            <div class="meta">
+                <div class="meta-main">
+                    <div class="meta-title">
+                        <h1 id="now-title">TrYa DCS</h1>
+                        <button id="queue-button" type="button" title="Show the current playlist">Playlist</button>
+                    </div>
+                    <p id="now-artist">Waiting for stream metadata</p>
+                    <div class="progress"><span id="song-progress"></span></div>
+                </div>
+                <div class="disclosure">{{ disclaimer }}</div>
+            </div>
+        </section>
+        <aside class="chat-panel">
+            <div class="chat-head">Discord live chat</div>
+            <div id="messages" class="messages"><div class="empty-chat">Connecting to Discord chat...</div></div>
+            <div id="chat-error" class="chat-error"></div>
+            <div class="chat-foot">
+                <div id="emoji-picker" class="emoji-picker">
+                    <input id="emoji-search" class="emoji-search" type="search" autocomplete="off" placeholder="Search emojis..." aria-label="Search emojis">
+                    <div id="emoji-grid" class="emoji-grid"></div>
+                </div>
+                <form id="chat-form" class="chat-form">
+                    <button id="emoji-button" type="button" title="Guild emojis">☺</button>
+                    <input id="chat-input" maxlength="1800" autocomplete="off" disabled value="Chat is connecting...">
+                    <button id="send-button" type="submit" disabled>Send</button>
+                </form>
+            </div>
+        </aside>
+    </main>
+</div>
+<dialog id="queue-dialog">
+    <div class="queue-head">
+        <h2>Current playlist</h2>
+        <button id="queue-close" type="button" title="Close playlist">Close</button>
+    </div>
+    <ol id="queue-list" class="queue-list"><li class="queue-item">The playlist is not available yet.</li></ol>
+</dialog>
+<script>
+const video = document.getElementById('radio-video');
+const state = document.getElementById('player-state');
+let hls = null;
+let renewTimer = null;
+let statusTimer = null;
+let socket = null;
+let socketRetry = 1000;
+let heartbeatTimer = null;
+const messages = document.getElementById('messages');
+const chatInput = document.getElementById('chat-input');
+const sendButton = document.getElementById('send-button');
+const emojiButton = document.getElementById('emoji-button');
+const emojiPicker = document.getElementById('emoji-picker');
+const emojiSearch = document.getElementById('emoji-search');
+const emojiGrid = document.getElementById('emoji-grid');
+const chatError = document.getElementById('chat-error');
+const queueDialog = document.getElementById('queue-dialog');
+const queueList = document.getElementById('queue-list');
+let currentQueue = [];
+let currentSongIndex = 0;
+
+function renderQueue() {
+    queueList.replaceChildren();
+    if (!currentQueue.length) {
+        const empty = document.createElement('li');
+        empty.className = 'queue-item';
+        empty.textContent = 'The stream playlist is not available yet.';
+        queueList.append(empty);
+        return;
+    }
+    currentQueue.forEach((song, index) => {
+        const item = document.createElement('li');
+        item.className = `queue-item${index + 1 === currentSongIndex ? ' current' : ''}`;
+        const number = document.createElement('span');
+        number.className = 'queue-number';
+        number.textContent = String(index + 1);
+        const details = document.createElement('span');
+        details.className = 'queue-song';
+        const title = document.createElement('strong');
+        title.className = 'queue-title';
+        title.textContent = song.title || 'Unknown title';
+        const artist = document.createElement('span');
+        artist.className = 'queue-artist';
+        artist.textContent = song.artist || 'Unknown artist';
+        details.append(title, artist);
+        item.append(number, details);
+        queueList.append(item);
+    });
+}
+
+function showState(message) {
+    state.textContent = message;
+    state.classList.remove('hidden');
+}
+
+async function authorizeStream(initial = false) {
+    if (initial) showState('Authorizing private stream access...');
+    const response = await fetch('{{ url_for("trya_dcs_stream_token") }}', {
+        method: 'POST', credentials: 'same-origin', headers: {'Accept': 'application/json'}
+    });
+    if (!response.ok) {
+        showState(response.status === 403 ? 'Discord membership could not be verified.' : 'The stream is currently unavailable.');
+        return;
+    }
+    const payload = await response.json();
+    if (initial) {
+        if (video.canPlayType('application/vnd.apple.mpegurl')) {
+            video.src = payload.hls_url;
+        } else if (window.Hls && Hls.isSupported()) {
+            hls = new Hls({lowLatencyMode: true, backBufferLength: 30});
+            hls.loadSource(payload.hls_url);
+            hls.attachMedia(video);
+            hls.on(Hls.Events.ERROR, (_, data) => {
+                if (data.fatal) showState('Stream connection lost. Reconnecting...');
+            });
+        } else {
+            showState('This browser does not support HLS playback.');
+            return;
+        }
+    }
+    const renewAfter = Math.max(60, Number(payload.expires_in || 600) - 90) * 1000;
+    clearTimeout(renewTimer);
+    renewTimer = setTimeout(() => authorizeStream(false), renewAfter);
+}
+
+video.addEventListener('playing', () => state.classList.add('hidden'));
+video.addEventListener('waiting', () => showState('Buffering private stream...'));
+async function refreshStatus() {
+    try {
+        const response = await fetch('{{ url_for("trya_dcs_public_status") }}', {credentials: 'same-origin'});
+        if (!response.ok) return;
+        const payload = await response.json();
+        const song = payload.song;
+        currentQueue = Array.isArray(payload.playlist) ? payload.playlist : [];
+        currentSongIndex = Number(payload.song_index || 0);
+        renderQueue();
+        document.getElementById('now-title').textContent = song && song.title ? song.title : 'TrYa DCS';
+        document.getElementById('now-artist').textContent = song
+            ? `${song.artist || 'Unknown artist'}${song.submitted_by ? ` · submitted by ${song.submitted_by}` : ''} · Song ${payload.song_index}/${payload.playlist_length}`
+            : (payload.running ? 'Preparing stream metadata' : 'The community stream is offline');
+    } catch (_) {}
+    clearTimeout(statusTimer);
+    statusTimer = setTimeout(refreshStatus, 3000);
+}
+
+function appendDiscordContent(parent, content) {
+    const pattern = /<(a?):([A-Za-z0-9_]+):(\d+)>/g;
+    let cursor = 0;
+    for (const match of content.matchAll(pattern)) {
+        parent.append(document.createTextNode(content.slice(cursor, match.index)));
+        const image = document.createElement('img');
+        image.className = 'emoji';
+        image.alt = `:${match[2]}:`;
+        image.title = image.alt;
+        image.src = `https://cdn.discordapp.com/emojis/${match[3]}.${match[1] ? 'gif' : 'png'}?size=48&quality=lossless`;
+        parent.append(image);
+        cursor = match.index + match[0].length;
+    }
+    parent.append(document.createTextNode(content.slice(cursor)));
+}
+
+function createMessage(data) {
+    const item = document.createElement('article');
+    item.className = 'message';
+    item.dataset.messageId = data.message_id;
+    const avatar = document.createElement('img');
+    avatar.className = 'message-avatar';
+    avatar.alt = '';
+    if (data.avatar_url) avatar.src = data.avatar_url;
+    const body = document.createElement('div');
+    if (data.reply) {
+        const reply = document.createElement('div');
+        reply.className = 'reply';
+        reply.textContent = `Reply to ${data.reply.author}: ${data.reply.content}`;
+        body.append(reply);
+    }
+    const head = document.createElement('div');
+    head.className = 'message-head';
+    const name = document.createElement('span');
+    name.className = 'message-name';
+    name.textContent = data.display_name || 'Discord member';
+    if (/^#[0-9a-f]{6}$/i.test(data.role_color || '')) name.style.color = data.role_color;
+    const stamp = document.createElement('time');
+    stamp.className = 'message-time';
+    stamp.textContent = new Date(Number(data.created_at || 0) * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+    head.append(name, stamp);
+    const text = document.createElement('div');
+    text.className = 'message-text';
+    appendDiscordContent(text, data.content || '');
+    body.append(head, text);
+    for (const attachment of data.attachments || []) {
+        if (attachment.is_image) {
+            const image = document.createElement('img');
+            image.className = 'attachment-image';
+            image.src = attachment.url;
+            image.alt = attachment.filename || 'Discord attachment';
+            body.append(image);
+        } else {
+            const link = document.createElement('a');
+            link.href = attachment.url;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.textContent = attachment.filename || 'Attachment';
+            body.append(link);
+        }
+    }
+    for (const embed of data.embeds || []) {
+        if (embed.image_url) {
+            const image = document.createElement('img');
+            image.className = 'embed-image';
+            image.src = embed.image_url;
+            image.alt = embed.title || 'Discord embed';
+            body.append(image);
+        }
+    }
+    item.append(avatar, body);
+    return item;
+}
+
+function upsertMessage(data) {
+    const existing = messages.querySelector(`[data-message-id="${CSS.escape(String(data.message_id))}"]`);
+    const item = createMessage(data);
+    if (existing) existing.replaceWith(item); else messages.append(item);
+    messages.scrollTop = messages.scrollHeight;
+}
+
+const unicodeEmojis = [
+    ['heart','💜'], ['love','🥰'], ['fire','🔥'], ['sparkles','✨'],
+    ['laugh','😂'], ['smile','😊'], ['wow','🤯'], ['applause','👏'],
+    ['thumbs up','👍'], ['music','🎵'], ['headphones','🎧'], ['raven','🐦‍⬛'],
+    ['party','🎉'], ['star','⭐'], ['wave','👋'], ['eyes','👀']
+];
+let availableEmojis = [];
+
+function rememberEmoji(value) {
+    try {
+        const recent = JSON.parse(localStorage.getItem('tryaDcsRecentEmojis') || '[]');
+        localStorage.setItem('tryaDcsRecentEmojis', JSON.stringify([value, ...recent.filter(item => item !== value)].slice(0, 12)));
+    } catch (_) {}
+}
+
+function insertEmoji(value) {
+    chatInput.setRangeText(value, chatInput.selectionStart, chatInput.selectionEnd, 'end');
+    rememberEmoji(value);
+    chatInput.focus();
+}
+
+function renderEmojiPicker(filter = '') {
+    const needle = filter.trim().toLowerCase();
+    emojiGrid.replaceChildren();
+    let recent = [];
+    try { recent = JSON.parse(localStorage.getItem('tryaDcsRecentEmojis') || '[]'); } catch (_) {}
+    const recentEntries = recent.map(value => availableEmojis.find(item => item.value === value)).filter(Boolean);
+    const entries = [...recentEntries, ...availableEmojis.filter(item => !recent.includes(item.value))];
+    for (const emoji of entries.filter(item => !needle || item.name.toLowerCase().includes(needle))) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.title = emoji.name;
+        if (emoji.url) {
+            const image = document.createElement('img');
+            image.alt = emoji.name;
+            image.src = emoji.url;
+            button.append(image);
+        } else {
+            button.textContent = emoji.value;
+        }
+        button.addEventListener('click', () => insertEmoji(emoji.value));
+        emojiGrid.append(button);
+    }
+}
+
+function installEmojis(emojis) {
+    availableEmojis = [
+        ...unicodeEmojis.map(([name, value]) => ({name, value})),
+        ...(emojis || []).map(emoji => ({name: emoji.name, value: emoji.markup, url: emoji.url}))
+    ];
+    renderEmojiPicker(emojiSearch.value);
+}
+
+function handleEvent(event) {
+    const data = event.data || {};
+    if (event.type === 'session.ready') {
+        messages.replaceChildren();
+        for (const message of data.messages || []) upsertMessage(message);
+        if (!(data.messages || []).length) messages.innerHTML = '<div class="empty-chat">No messages yet.</div>';
+        installEmojis(data.emojis);
+        chatInput.disabled = !data.chat_enabled;
+        sendButton.disabled = !data.chat_enabled;
+        emojiButton.disabled = !data.chat_enabled;
+        chatInput.value = '';
+        chatInput.placeholder = data.chat_enabled ? 'Message the Discord community...' : 'Discord chat is not configured';
+    } else if (event.type === 'chat.message' || event.type === 'chat.edit') {
+        const empty = messages.querySelector('.empty-chat');
+        if (empty) empty.remove();
+        upsertMessage(data);
+    } else if (event.type === 'chat.delete') {
+        messages.querySelector(`[data-message-id="${CSS.escape(String(data.message_id))}"]`)?.remove();
+    } else if (event.type === 'chat.error') {
+        chatError.textContent = data.message || 'Chat error';
+    } else if (event.type === 'radio.now_playing') {
+        currentSongIndex = Number(data.song_index || 0);
+        renderQueue();
+        document.getElementById('now-title').textContent = data.title || 'TrYa DCS';
+        document.getElementById('now-artist').textContent = `${data.artist || 'Unknown artist'}${data.submitted_by ? ` · submitted by ${data.submitted_by}` : ''} · Song ${data.song_index}/${data.playlist_length}`;
+    } else if (event.type === 'radio.progress') {
+        const percent = data.duration > 0 ? Math.max(0, Math.min(100, data.elapsed / data.duration * 100)) : 0;
+        document.getElementById('song-progress').style.width = `${percent}%`;
+    } else if (event.type === 'radio.queue_update') {
+        currentQueue = Array.isArray(data.songs) ? data.songs : [];
+        renderQueue();
+    }
+}
+
+function connectSocket() {
+    const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+    socket = new WebSocket(`${scheme}://${location.host}{{ url_for('trya_dcs_websocket') }}`);
+    socket.addEventListener('open', () => {
+        socketRetry = 1000;
+        chatError.textContent = '';
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = setInterval(() => {
+            if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({type:'ping'}));
+        }, 25000);
+    });
+    socket.addEventListener('message', event => {
+        try { handleEvent(JSON.parse(event.data)); } catch (_) {}
+    });
+    socket.addEventListener('close', () => {
+        clearInterval(heartbeatTimer);
+        chatInput.disabled = true;
+        sendButton.disabled = true;
+        chatError.textContent = 'Chat disconnected. Reconnecting...';
+        setTimeout(connectSocket, socketRetry);
+        socketRetry = Math.min(15000, socketRetry * 1.8);
+    });
+}
+
+document.getElementById('chat-form').addEventListener('submit', event => {
+    event.preventDefault();
+    const content = chatInput.value.trim();
+    if (!content || !socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({type:'chat.send', data:{content}}));
+    chatInput.value = '';
+    emojiPicker.classList.remove('open');
+});
+emojiButton.addEventListener('click', () => {
+    emojiPicker.classList.toggle('open');
+    if (emojiPicker.classList.contains('open')) emojiSearch.focus();
+});
+emojiSearch.addEventListener('input', () => renderEmojiPicker(emojiSearch.value));
+document.getElementById('queue-button').addEventListener('click', () => {
+    renderQueue();
+    queueDialog.showModal();
+});
+document.getElementById('queue-close').addEventListener('click', () => queueDialog.close());
+queueDialog.addEventListener('click', event => {
+    if (event.target === queueDialog) queueDialog.close();
+});
+authorizeStream(true).catch(() => showState('Could not initialize the stream.'));
+refreshStatus();
+connectSocket();
+</script>
+</body>
+</html>

@@ -310,6 +310,111 @@ class Database:
                 ON community_event_participants(event_id, joined_at);
         """)
         await self.db.commit()
+
+        # TrYa DCS is intentionally independent from TrYa Stream. Rights
+        # classifications are evidence here and never automatic exclusions.
+        await self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS trya_dcs_songs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                user_name TEXT NOT NULL,
+                suno_url TEXT NOT NULL,
+                suno_uuid TEXT NOT NULL,
+                title TEXT,
+                artist TEXT,
+                duration REAL,
+                mp3_filename TEXT,
+                original_archive_filename TEXT,
+                original_filename TEXT,
+                original_mime TEXT,
+                original_size INTEGER,
+                original_sha256 TEXT,
+                cover_url TEXT,
+                video_url TEXT,
+                hook_id TEXT,
+                hook_share_url TEXT,
+                hook_video_url TEXT,
+                lyrics TEXT,
+                word_timestamps TEXT NOT NULL DEFAULT '[]',
+                ass_filename TEXT,
+                analysis_status TEXT NOT NULL DEFAULT 'pending',
+                moderation_status TEXT,
+                moderation_reason TEXT,
+                approval_status TEXT NOT NULL DEFAULT 'pending',
+                approved_at REAL,
+                approved_by TEXT,
+                playlist_source TEXT NOT NULL DEFAULT 'submission',
+                content_kind TEXT NOT NULL DEFAULT 'original'
+                    CHECK (content_kind IN ('original', 'cover', 'remix')),
+                suno_plan_status TEXT NOT NULL DEFAULT 'unknown'
+                    CHECK (suno_plan_status IN ('free', 'paid', 'unknown')),
+                rights_version TEXT NOT NULL,
+                rights_declaration TEXT NOT NULL,
+                rights_hash TEXT NOT NULL,
+                sharing_attested INTEGER NOT NULL DEFAULT 0,
+                official_download_attested INTEGER NOT NULL DEFAULT 0,
+                material_rights_attested INTEGER NOT NULL DEFAULT 0,
+                technical_processing_attested INTEGER NOT NULL DEFAULT 0,
+                private_playback_attested INTEGER NOT NULL DEFAULT 0,
+                rights_accepted_at REAL NOT NULL,
+                upload_token TEXT,
+                submitted_at REAL NOT NULL DEFAULT (unixepoch()),
+                uploaded_at REAL,
+                active INTEGER NOT NULL DEFAULT 1,
+                removed_at REAL,
+                remove_reason TEXT,
+                replacement_song_id INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_trya_dcs_songs_user
+                ON trya_dcs_songs(user_id, active);
+            CREATE INDEX IF NOT EXISTS idx_trya_dcs_songs_uuid
+                ON trya_dcs_songs(suno_uuid);
+            CREATE INDEX IF NOT EXISTS idx_trya_dcs_songs_playlist
+                ON trya_dcs_songs(playlist_source, active, submitted_at);
+
+            CREATE TABLE IF NOT EXISTS trya_dcs_consent_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                song_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                consent_version TEXT NOT NULL,
+                declaration_text TEXT NOT NULL,
+                declaration_hash TEXT NOT NULL,
+                content_kind TEXT NOT NULL,
+                suno_plan_status TEXT NOT NULL,
+                accepted_at REAL NOT NULL,
+                evidence_json TEXT NOT NULL DEFAULT '{}',
+                FOREIGN KEY(song_id) REFERENCES trya_dcs_songs(id) ON DELETE RESTRICT
+            );
+            CREATE INDEX IF NOT EXISTS idx_trya_dcs_consent_song
+                ON trya_dcs_consent_events(song_id, accepted_at DESC);
+
+            CREATE TABLE IF NOT EXISTS trya_dcs_playlist_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at REAL NOT NULL DEFAULT (unixepoch()),
+                created_by TEXT NOT NULL,
+                mode TEXT NOT NULL DEFAULT 'manual',
+                songs_json TEXT NOT NULL DEFAULT '[]'
+            );
+            CREATE INDEX IF NOT EXISTS idx_trya_dcs_snapshots_created
+                ON trya_dcs_playlist_snapshots(created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS trya_dcs_stream_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                token_hash TEXT UNIQUE NOT NULL,
+                discord_user_id INTEGER NOT NULL,
+                discord_guild_id INTEGER NOT NULL,
+                issued_at REAL NOT NULL,
+                expires_at REAL NOT NULL,
+                last_membership_check_at REAL NOT NULL,
+                revoked_at REAL,
+                remote_fingerprint TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_trya_dcs_tokens_expiry
+                ON trya_dcs_stream_tokens(expires_at, revoked_at);
+            CREATE INDEX IF NOT EXISTS idx_trya_dcs_tokens_user
+                ON trya_dcs_stream_tokens(discord_user_id, expires_at DESC);
+        """)
+        await self.db.commit()
         await self.db.execute(
             """INSERT INTO exp_radio_submission_bans
                    (user_id, user_name, display_name, streams_remaining,
@@ -6015,6 +6120,343 @@ class Database:
             "SELECT * FROM trya_stream_songs ORDER BY submitted_at DESC"
         ) as cursor:
             return [dict(r) for r in await cursor.fetchall()]
+
+    async def get_trya_dcs_songs(
+        self, *, active_only: bool = True, source: str | None = None
+    ) -> list[dict]:
+        clauses = []
+        params: list[object] = []
+        if active_only:
+            clauses.append("active = 1")
+        if source:
+            clauses.append("playlist_source = ?")
+            params.append(source)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        async with self.db.execute(
+            f"SELECT * FROM trya_dcs_songs {where} ORDER BY submitted_at ASC",
+            params,
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def add_trya_dcs_song(
+        self,
+        *,
+        user_id: int,
+        user_name: str,
+        replacement_song_id: int | None = None,
+        rights_version: str,
+        rights_declaration: str,
+    ) -> tuple[int, str]:
+        """Create an inactive, single-use DCS upload slot."""
+        import secrets
+
+        upload_token = secrets.token_urlsafe(32)
+        cursor = await self.db.execute(
+            """INSERT INTO trya_dcs_songs
+                   (user_id, user_name, suno_url, suno_uuid, rights_version,
+                    rights_declaration, rights_hash, rights_accepted_at,
+                    upload_token, active, approval_status, analysis_status,
+                    replacement_song_id)
+               VALUES (?, ?, '', '', ?, ?, '', 0, ?, 0, 'pending', 'pending', ?)""",
+            (
+                int(user_id),
+                user_name,
+                rights_version,
+                rights_declaration,
+                upload_token,
+                replacement_song_id,
+            ),
+        )
+        await self.db.commit()
+        return int(cursor.lastrowid), upload_token
+
+    async def get_trya_dcs_song(self, song_id: int) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM trya_dcs_songs WHERE id = ?", (int(song_id),)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def get_trya_dcs_song_by_token(self, token: str) -> Optional[dict]:
+        async with self.db.execute(
+            """SELECT * FROM trya_dcs_songs
+               WHERE upload_token = ? AND removed_at IS NULL""",
+            (token,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def get_trya_dcs_songs_by_user(
+        self, user_id: int, *, include_pending: bool = False
+    ) -> list[dict]:
+        pending_clause = (
+            "OR (active = 0 AND uploaded_at IS NULL AND removed_at IS NULL)"
+            if include_pending else ""
+        )
+        async with self.db.execute(
+            f"""SELECT * FROM trya_dcs_songs
+                WHERE user_id = ? AND (active = 1 {pending_clause})
+                ORDER BY submitted_at DESC""",
+            (int(user_id),),
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def supersede_pending_trya_dcs_uploads(self, user_id: int) -> int:
+        cursor = await self.db.execute(
+            """UPDATE trya_dcs_songs
+               SET analysis_status = 'failed', removed_at = unixepoch(),
+                   remove_reason = 'superseded_pending_upload', upload_token = NULL
+               WHERE user_id = ? AND active = 0 AND uploaded_at IS NULL
+                 AND removed_at IS NULL""",
+            (int(user_id),),
+        )
+        await self.db.commit()
+        return max(0, int(cursor.rowcount or 0))
+
+    async def update_trya_dcs_song(self, song_id: int, **fields) -> None:
+        allowed = {
+            "suno_url", "suno_uuid", "title", "artist", "duration",
+            "mp3_filename", "original_archive_filename", "original_filename",
+            "original_mime", "original_size", "original_sha256", "cover_url",
+            "video_url", "hook_id", "hook_share_url", "hook_video_url",
+            "lyrics", "word_timestamps", "ass_filename", "analysis_status",
+            "moderation_status", "moderation_reason", "approval_status",
+            "approved_at", "approved_by", "content_kind", "suno_plan_status",
+            "rights_version", "rights_declaration", "rights_hash",
+            "sharing_attested", "official_download_attested",
+            "material_rights_attested", "technical_processing_attested",
+            "private_playback_attested", "rights_accepted_at", "uploaded_at",
+            "active", "removed_at", "remove_reason", "replacement_song_id",
+            "upload_token",
+        }
+        updates = {key: value for key, value in fields.items() if key in allowed}
+        if not updates:
+            return
+        sql = "UPDATE trya_dcs_songs SET " + ", ".join(
+            f"{key} = ?" for key in updates
+        )
+        sql += " WHERE id = ?"
+        await self.db.execute(sql, (*updates.values(), int(song_id)))
+        await self.db.commit()
+
+    async def finalize_trya_dcs_upload(
+        self,
+        song_id: int,
+        *,
+        evidence_json: str = "{}",
+        **evidence,
+    ) -> Optional[dict]:
+        """Activate a validated DCS upload and atomically retire its predecessor."""
+        song = await self.get_trya_dcs_song(song_id)
+        if not song or song.get("removed_at") is not None:
+            return None
+        required = {
+            "original_sha256", "original_filename", "original_mime",
+            "original_size", "original_archive_filename", "mp3_filename",
+            "duration", "uploaded_at", "rights_accepted_at",
+        }
+        if not required.issubset(evidence) or any(evidence[key] is None for key in required):
+            raise ValueError("incomplete DCS upload evidence")
+        if not all(
+            int(evidence.get(key) or 0) == 1
+            for key in (
+                "sharing_attested", "official_download_attested",
+                "material_rights_attested", "technical_processing_attested",
+                "private_playback_attested",
+            )
+        ):
+            raise ValueError("all DCS rights confirmations are required")
+
+        evidence.update(
+            active=1,
+            approval_status="approved",
+            approved_at=time.time(),
+            approved_by="validated-upload",
+            analysis_status="pending",
+            upload_token=None,
+        )
+        update_fields = (
+            "original_sha256", "original_filename", "original_mime",
+            "original_size", "original_archive_filename", "mp3_filename",
+            "duration", "uploaded_at", "content_kind", "suno_plan_status",
+            "rights_version", "rights_declaration", "rights_hash",
+            "rights_accepted_at", "sharing_attested",
+            "official_download_attested", "material_rights_attested",
+            "technical_processing_attested", "private_playback_attested",
+            "active", "approval_status", "approved_at", "approved_by",
+            "analysis_status", "upload_token",
+        )
+        try:
+            await self.db.execute("BEGIN IMMEDIATE")
+            await self.db.execute(
+                "UPDATE trya_dcs_songs SET "
+                + ", ".join(f"{field} = ?" for field in update_fields)
+                + " WHERE id = ? AND removed_at IS NULL",
+                tuple(evidence.get(field) for field in update_fields) + (int(song_id),),
+            )
+            await self.db.execute(
+                """INSERT INTO trya_dcs_consent_events
+                       (song_id, user_id, consent_version, declaration_text,
+                        declaration_hash, content_kind, suno_plan_status,
+                        accepted_at, evidence_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    int(song_id), int(song["user_id"]), evidence.get("rights_version")
+                    or song["rights_version"], evidence.get("rights_declaration")
+                    or song["rights_declaration"], evidence.get("rights_hash")
+                    or song["rights_hash"], evidence.get("content_kind")
+                    or song["content_kind"], evidence.get("suno_plan_status")
+                    or song["suno_plan_status"], float(evidence["rights_accepted_at"]),
+                    evidence_json,
+                ),
+            )
+            replacement_id = song.get("replacement_song_id")
+            if replacement_id:
+                await self.db.execute(
+                    """UPDATE trya_dcs_songs
+                       SET active = 0, removed_at = unixepoch(),
+                           remove_reason = ?, approval_status = 'rejected'
+                       WHERE id = ? AND id != ? AND user_id = ?""",
+                    (
+                        f"replaced_by:{song_id}", int(replacement_id), int(song_id),
+                        int(song["user_id"]),
+                    ),
+                )
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
+        return await self.get_trya_dcs_song(song_id)
+
+    async def delete_trya_dcs_song(
+        self, song_id: int, *, user_id: int | None = None
+    ) -> Optional[dict]:
+        song = await self.get_trya_dcs_song(song_id)
+        if not song or (user_id is not None and int(song["user_id"]) != int(user_id)):
+            return None
+        await self.db.execute(
+            """UPDATE trya_dcs_songs
+               SET active = 0, removed_at = COALESCE(removed_at, unixepoch()),
+                   remove_reason = COALESCE(remove_reason, 'removed_by_owner'),
+                   upload_token = NULL
+               WHERE id = ?""",
+            (int(song_id),),
+        )
+        await self.db.commit()
+        return song
+
+    async def get_trya_dcs_admin_stats(self) -> dict:
+        async with self.db.execute(
+            """SELECT
+                   COUNT(*) AS retained,
+                   SUM(CASE WHEN active = 1 THEN 1 ELSE 0 END) AS active,
+                   SUM(CASE WHEN active = 1 AND approval_status = 'pending' THEN 1 ELSE 0 END) AS pending,
+                   SUM(CASE WHEN active = 1 AND approval_status = 'approved' THEN 1 ELSE 0 END) AS approved,
+                   SUM(CASE WHEN active = 1 AND content_kind = 'remix' THEN 1 ELSE 0 END) AS remixes,
+                   SUM(CASE WHEN active = 1 AND content_kind = 'cover' THEN 1 ELSE 0 END) AS covers,
+                   SUM(CASE WHEN active = 1 AND suno_plan_status = 'free' THEN 1 ELSE 0 END) AS free_tracks
+               FROM trya_dcs_songs"""
+        ) as cursor:
+            row = await cursor.fetchone()
+        result = dict(row) if row else {}
+        return {key: int(value or 0) for key, value in result.items()}
+
+    async def get_trya_dcs_consent_csv_rows(self) -> list[dict]:
+        async with self.db.execute(
+            """SELECT s.id, s.user_id, s.user_name, s.suno_url, s.suno_uuid,
+                      s.title, s.artist, s.content_kind, s.suno_plan_status,
+                      s.rights_version, s.rights_declaration, s.rights_hash,
+                      s.rights_accepted_at, s.sharing_attested,
+                      s.official_download_attested, s.material_rights_attested,
+                      s.technical_processing_attested,
+                      s.private_playback_attested, s.original_filename,
+                      s.original_mime, s.original_size, s.original_sha256,
+                      s.duration, s.submitted_at, s.uploaded_at, s.active,
+                      s.removed_at, s.remove_reason
+               FROM trya_dcs_songs s
+               WHERE s.uploaded_at IS NOT NULL
+               ORDER BY s.submitted_at DESC"""
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def save_trya_dcs_playlist_snapshot(
+        self,
+        *,
+        created_by: str,
+        mode: str,
+        songs: list[dict],
+    ) -> int:
+        cursor = await self.db.execute(
+            """INSERT INTO trya_dcs_playlist_snapshots
+                   (created_by, mode, songs_json)
+               VALUES (?, ?, ?)""",
+            (
+                created_by[:100],
+                mode[:40],
+                json.dumps(songs, ensure_ascii=False, separators=(",", ":")),
+            ),
+        )
+        await self.db.commit()
+        return int(cursor.lastrowid)
+
+    async def purge_expired_trya_dcs_tokens(self, now: float | None = None) -> int:
+        cursor = await self.db.execute(
+            "DELETE FROM trya_dcs_stream_tokens WHERE expires_at <= ? OR revoked_at IS NOT NULL",
+            (float(now or time.time()),),
+        )
+        await self.db.commit()
+        return max(0, int(cursor.rowcount or 0))
+
+    async def issue_trya_dcs_stream_token(
+        self,
+        *,
+        token_hash: str,
+        discord_user_id: int,
+        discord_guild_id: int,
+        issued_at: float,
+        expires_at: float,
+        remote_fingerprint: str = "",
+    ) -> None:
+        await self.db.execute(
+            """INSERT INTO trya_dcs_stream_tokens
+                   (token_hash, discord_user_id, discord_guild_id, issued_at,
+                    expires_at, last_membership_check_at, remote_fingerprint)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                token_hash,
+                int(discord_user_id),
+                int(discord_guild_id),
+                float(issued_at),
+                float(expires_at),
+                float(issued_at),
+                remote_fingerprint[:200],
+            ),
+        )
+        await self.db.commit()
+
+    async def get_trya_dcs_stream_token(self, token_hash: str) -> Optional[dict]:
+        async with self.db.execute(
+            """SELECT * FROM trya_dcs_stream_tokens
+               WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > unixepoch()""",
+            (token_hash,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def touch_trya_dcs_token_membership(self, token_id: int) -> None:
+        await self.db.execute(
+            "UPDATE trya_dcs_stream_tokens SET last_membership_check_at = unixepoch() WHERE id = ?",
+            (int(token_id),),
+        )
+        await self.db.commit()
+
+    async def revoke_trya_dcs_user_tokens(self, discord_user_id: int) -> None:
+        await self.db.execute(
+            """UPDATE trya_dcs_stream_tokens SET revoked_at = unixepoch()
+               WHERE discord_user_id = ? AND revoked_at IS NULL""",
+            (int(discord_user_id),),
+        )
+        await self.db.commit()
 
     # -----------------------------------------------------------------------
     # Relic Hunt — table creation

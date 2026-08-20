@@ -25,6 +25,7 @@ services:
       - TZ=Europe/Berlin
     depends_on:
       - ollama
+      - mediamtx
 
   caddy:
     image: caddy:2-alpine
@@ -40,6 +41,16 @@ services:
       - caddy_config:/config
     depends_on:
       - slowmode-bot
+      - mediamtx
+
+  mediamtx:
+    image: bluenviron/mediamtx:1.20.0
+    container_name: slowmode-mediamtx
+    restart: unless-stopped
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    # No host ports are exposed. FFmpeg publishes over the Compose network and
+    # listeners can reach HLS only through Caddy's authenticated route.
 
   ollama:
     image: ollama/ollama:latest

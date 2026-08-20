@@ -2391,6 +2391,9 @@ class TryaStreamManager:
         legacy_pipeline: bool = False,
         audio_concat_file: str | None = None,
         media_style: dict | None = None,
+        output_url: str | None = None,
+        audio_bitrate_kbps: int = 128,
+        realtime_audio: bool = False,
     ) -> list:
         """Build ONE FFmpeg command for the full playlist.
 
@@ -2461,6 +2464,8 @@ class TryaStreamManager:
             for song in songs:
                 dur = song.get("duration") or 300
                 mp3 = os.path.join(self.trya_stream_dir, "mp3", song["mp3_filename"])
+                if realtime_audio:
+                    cmd += ["-re"]
                 cmd += ["-t", str(dur + 0.5), "-i", mp3]
                 audio_inputs.append(input_idx); input_idx += 1
 
@@ -2609,15 +2614,17 @@ class TryaStreamManager:
         # 2s apart and avoid FLV duration/file-size metadata on live RTMP.
         video_bitrate = f"{video_bitrate_kbps}k"
         video_bufsize = f"{video_bitrate_kbps * 2}k"
+        audio_bitrate = f"{max(96, min(320, int(audio_bitrate_kbps)))}k"
+        stream_target = output_url or f"{_RTMP_BASE}{twitch_key}"
         cmd += [
             "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
             "-b:v", video_bitrate, "-maxrate", video_bitrate, "-bufsize", video_bufsize,
             "-x264-params", "nal-hrd=cbr:force-cfr=1",
             "-pix_fmt", "yuv420p", "-r", str(_FPS),
             "-g", str(_FPS * 2), "-keyint_min", str(_FPS * 2), "-sc_threshold", "0",
-            "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
+            "-c:a", "aac", "-b:a", audio_bitrate, "-ar", "44100",
             "-rtmp_live", "live",
             "-flvflags", "no_duration_filesize",
-            "-f", "flv", f"{_RTMP_BASE}{twitch_key}",
+            "-f", "flv", stream_target,
         ]
         return cmd

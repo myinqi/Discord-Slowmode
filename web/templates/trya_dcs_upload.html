@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TrYa DCS - Complete Submission</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>tailwind.config={darkMode:'class',theme:{extend:{colors:{'discord-dark':'#2b2d31','discord-darker':'#1e1f22','discord-blurple':'#5865f2'}}}}</script>
+</head>
+<body class="dark bg-discord-darker min-h-screen flex items-center justify-center p-4">
+<main class="w-full max-w-2xl">
+    <div class="flex justify-center mb-5">
+        <img src="{{ url_for('static', filename='TrYa_logo.png') }}" alt="TrYa DCS" class="h-24 w-auto object-contain drop-shadow-xl">
+    </div>
+    {% if disabled %}
+    <section class="bg-yellow-900/40 border border-yellow-700/50 rounded-xl p-6 text-center">
+        <p class="text-yellow-300 font-semibold">TrYa DCS submissions are currently disabled.</p>
+    </section>
+    {% elif error %}
+    <section class="bg-red-900/40 border border-red-700/50 rounded-xl p-6 text-center">
+        <p class="text-red-300 font-semibold">{{ error }}</p>
+    </section>
+    {% elif done %}
+    <section class="bg-green-900/40 border border-green-700/50 rounded-xl p-6 text-center">
+        <p class="text-green-300 font-semibold">Private submission complete</p>
+        <p class="text-gray-400 text-sm mt-2"><strong>{{ title }}</strong> was archived and queued for analysis.</p>
+    </section>
+    {% else %}
+    <form method="POST" enctype="multipart/form-data" class="bg-discord-dark border border-gray-700/50 rounded-xl overflow-hidden shadow-xl">
+        <header class="px-6 py-5 border-b border-gray-700/50">
+            <h1 class="text-white font-bold text-lg">Complete Your TrYa DCS Submission</h1>
+            <p class="text-gray-400 text-sm mt-1">Private, non-commercial playback for members of the configured Discord community.</p>
+        </header>
+        <div class="p-6 space-y-5">
+            {% if form_error %}
+            <div class="bg-red-900/40 border border-red-700/50 rounded-lg p-4 text-red-300 text-sm">{{ form_error }}</div>
+            {% endif %}
+
+            <section class="bg-gray-800/50 rounded-lg p-4 space-y-4">
+                <label class="block">
+                    <span class="block text-sm font-medium text-gray-200 mb-2">Suno song URL</span>
+                    <input type="url" name="suno_url" required value="{{ submitted_suno_url or song.suno_url or '' }}"
+                        placeholder="https://suno.com/s/..."
+                        class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                </label>
+                <label class="block">
+                    <span class="block text-sm font-medium text-gray-200 mb-2">Suno Hook URL or ID <span class="text-gray-500 font-normal">(optional)</span></span>
+                    <input type="text" name="hook_value" value="{{ submitted_hook or '' }}"
+                        placeholder="Leave empty to use the regular song video or cover"
+                        class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
+                </label>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <label class="block">
+                        <span class="block text-sm font-medium text-gray-200 mb-2">Song status</span>
+                        <select name="content_kind" required class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm">
+                            <option value="">Select...</option>
+                            {% for value, label in [('original', 'Original'), ('cover', 'Cover'), ('remix', 'Remix')] %}
+                            <option value="{{ value }}" {% if submitted_content_kind == value %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </label>
+                    <label class="block">
+                        <span class="block text-sm font-medium text-gray-200 mb-2">Suno plan at download</span>
+                        <select name="suno_plan_status" required class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm">
+                            <option value="">Select...</option>
+                            {% for value, label in [('paid', 'Paid plan'), ('free', 'Free / Basic plan'), ('unknown', 'Unknown')] %}
+                            <option value="{{ value }}" {% if submitted_plan_status == value %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </label>
+                </div>
+                <p class="text-blue-300 text-xs">These statuses are retained as evidence. Free, Cover and Remix selections are not automatic exclusions.</p>
+            </section>
+
+            <section>
+                <label class="block text-sm font-medium text-gray-200 mb-2">Official Suno audio file</label>
+                <input type="file" name="original_audio" accept="audio/mpeg,audio/mp4,.mp3,.m4a" required
+                    class="block w-full text-sm text-gray-300 file:mr-4 file:px-4 file:py-2 file:rounded-md file:border-0 file:bg-discord-blurple file:text-white hover:file:bg-indigo-500 file:cursor-pointer">
+                <p class="text-gray-500 text-xs mt-2">Use the exact MP3 or M4A obtained through Suno's official Download action. The file signature and decoded duration are checked server-side.</p>
+            </section>
+
+            <section class="space-y-3 rounded-lg border border-gray-700/50 bg-discord-darker/50 p-4">
+                <p class="text-white text-sm font-semibold">Required confirmations</p>
+                <label class="flex items-start gap-3 text-sm text-gray-300"><input type="checkbox" name="sharing_attested" value="1" required class="mt-1 accent-discord-blurple"><span>I may share this song inside the private, non-commercial TrYa DCS community.</span></label>
+                <label class="flex items-start gap-3 text-sm text-gray-300"><input type="checkbox" name="official_download_attested" value="1" required class="mt-1 accent-discord-blurple"><span>This exact file was obtained through an official Suno download channel.</span></label>
+                <label class="flex items-start gap-3 text-sm text-gray-300"><input type="checkbox" name="material_rights_attested" value="1" required class="mt-1 accent-discord-blurple"><span>I hold the necessary rights and permissions for my lyrics, samples, voices and all other supplied material.</span></label>
+                <label class="flex items-start gap-3 text-sm text-gray-300"><input type="checkbox" name="technical_processing_attested" value="1" required class="mt-1 accent-discord-blurple"><span>I permit the technical copies and transcoding required to operate this private stream.</span></label>
+                <label class="flex items-start gap-3 text-sm text-gray-300"><input type="checkbox" name="private_playback_attested" value="1" required class="mt-1 accent-discord-blurple"><span>I permit playback inside the closed TrYa DCS service.</span></label>
+            </section>
+
+            <section class="rounded-lg border border-gray-700/50 p-4 text-xs text-gray-400 leading-relaxed">
+                The exact original, SHA-256 hash, file metadata, selected status, declaration version and acceptance time are retained for audit purposes. Removing the song from the active playlist does not erase this evidence.
+            </section>
+
+            <button type="submit" class="w-full py-3 bg-discord-blurple hover:bg-indigo-500 text-white font-semibold rounded-lg transition-colors text-sm">Archive Original &amp; Submit Privately</button>
+        </div>
+    </form>
+    {% endif %}
+</main>
+</body>
+</html>

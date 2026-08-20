@@ -1,0 +1,286 @@
+{% extends "base.html" %}
+{% block title %}TrYa DCS{% endblock %}
+{% block content %}
+<div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6">
+    <div>
+        <h2 class="text-2xl font-bold text-white">TrYa DCS</h2>
+        <p class="text-gray-400 text-sm mt-1">Private Discord Community Stream control plane.</p>
+    </div>
+    <span class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm font-medium
+        {{ 'border-green-500/30 bg-green-500/10 text-green-300' if settings.trya_dcs_enabled == 'on' else 'border-gray-600 bg-gray-700/30 text-gray-400' }}">
+        <span class="w-2 h-2 rounded-full {{ 'bg-discord-green' if settings.trya_dcs_enabled == 'on' else 'bg-gray-500' }}"></span>
+        {{ 'Enabled' if settings.trya_dcs_enabled == 'on' else 'Disabled' }}
+    </span>
+</div>
+
+<div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
+    <section class="bg-discord-dark border border-gray-700/50 rounded-lg p-4">
+        <p class="text-gray-500 text-xs uppercase">Media server</p>
+        <p class="mt-2 font-semibold {{ 'text-green-300' if mediamtx_online else 'text-yellow-300' }}">
+            {{ 'Reachable' if mediamtx_online else 'Not installed' }}
+        </p>
+        <p class="text-gray-500 text-xs mt-1">{{ mediamtx_detail }}</p>
+    </section>
+    <section class="bg-discord-dark border border-gray-700/50 rounded-lg p-4">
+        <p class="text-gray-500 text-xs uppercase">Discord OAuth</p>
+        <p class="mt-2 font-semibold {{ 'text-green-300' if oauth_ready else 'text-yellow-300' }}">
+            {{ 'Configured' if oauth_ready else 'Incomplete' }}
+        </p>
+        <p class="text-gray-500 text-xs mt-1">Guild membership will be checked server-side.</p>
+    </section>
+    <section class="bg-discord-dark border border-gray-700/50 rounded-lg p-4">
+        <p class="text-gray-500 text-xs uppercase">Active songs</p>
+        <p class="text-white text-2xl font-semibold mt-1">{{ stats.active }}</p>
+        <p class="text-gray-500 text-xs mt-1">{{ stats.approved }} approved · {{ stats.pending }} pending</p>
+    </section>
+    <section class="bg-discord-dark border border-gray-700/50 rounded-lg p-4">
+        <p class="text-gray-500 text-xs uppercase">Documented status</p>
+        <p class="text-white text-sm font-medium mt-2">{{ stats.free_tracks }} free · {{ stats.remixes }} remix · {{ stats.covers }} cover</p>
+        <p class="text-gray-500 text-xs mt-1">Status is evidence, not an automatic exclusion.</p>
+    </section>
+</div>
+
+<section class="bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden mb-6">
+    <div class="px-5 py-4 border-b border-gray-700/50 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+        <div>
+            <h3 class="text-white font-semibold">DCS publisher</h3>
+            {% if stream_status.running %}
+            <p class="text-green-300 text-sm mt-1">Live · Song {{ stream_status.song_index }}/{{ stream_status.playlist_length }}</p>
+            {% else %}
+            <p class="text-gray-500 text-sm mt-1">Offline</p>
+            {% endif %}
+        </div>
+        <div class="flex flex-wrap gap-2">
+            <form method="POST"><input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="start_stream"><button class="px-4 py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white text-sm font-medium" {% if stream_status.running %}disabled{% endif %}>Start</button></form>
+            <form method="POST"><input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="safe_stop_stream"><button class="px-4 py-2 rounded-lg bg-yellow-700 hover:bg-yellow-600 text-white text-sm font-medium" {% if not stream_status.running %}disabled{% endif %}>Safe stop</button></form>
+            <form method="POST"><input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="stop_stream"><button class="px-4 py-2 rounded-lg bg-red-800 hover:bg-red-700 text-white text-sm font-medium" {% if not stream_status.running %}disabled{% endif %}>Stop</button></form>
+        </div>
+    </div>
+    <div class="p-5 grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="bg-discord-darker border border-gray-700 rounded-lg p-4">
+            <p class="text-gray-500 text-xs uppercase">Current song</p>
+            {% if stream_status.song %}
+            <p class="text-white font-semibold mt-2">{{ stream_status.song.title }}</p>
+            <p class="text-gray-400 text-sm">{{ stream_status.song.artist }}</p>
+            {% else %}
+            <p class="text-gray-500 mt-2">No active song.</p>
+            {% endif %}
+        </div>
+        <div class="bg-discord-darker border border-gray-700 rounded-lg p-4">
+            <p class="text-gray-500 text-xs uppercase">FFmpeg health</p>
+            <p class="mt-2 font-semibold {{ 'text-green-300' if stream_status.ffmpeg.state == 'healthy' else ('text-yellow-300' if stream_status.running else 'text-gray-500') }}">{{ stream_status.ffmpeg.state|capitalize }}</p>
+            {% if stream_status.ffmpeg.out_time %}<p class="text-gray-500 text-xs mt-1">Output {{ stream_status.ffmpeg.out_time }} · {{ stream_status.ffmpeg.bitrate or 'bitrate pending' }}</p>{% endif %}
+        </div>
+        <div class="bg-discord-darker border border-gray-700 rounded-lg p-4">
+            <p class="text-gray-500 text-xs uppercase">Web listeners</p>
+            <p class="text-white text-2xl font-semibold mt-1">{{ stream_status.listener_count or 0 }}</p>
+            <p class="text-gray-500 text-xs mt-1">Authenticated player sessions currently connected.</p>
+        </div>
+    </div>
+    {% if stream_log %}
+    <details class="border-t border-gray-700/50">
+        <summary class="px-5 py-3 text-gray-300 text-sm cursor-pointer">Publisher log</summary>
+        <div class="mx-5 mb-5 max-h-52 overflow-y-auto bg-black/30 border border-gray-700 rounded-lg p-3 font-mono text-xs text-gray-400 space-y-1">
+            {% for entry in stream_log %}<p class="{{ 'text-red-300' if entry.level == 'error' else '' }}">{{ entry.line }}</p>{% endfor %}
+        </div>
+    </details>
+    {% endif %}
+</section>
+
+<form method="POST" class="space-y-6">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf }}">
+    <input type="hidden" name="action" value="save_settings">
+    <section class="bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden">
+        <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between gap-4">
+            <div>
+                <h3 class="text-white font-semibold">Access and identity</h3>
+                <p class="text-gray-500 text-sm mt-1">The player will accept members of exactly one Discord guild.</p>
+            </div>
+            <label class="inline-flex items-center gap-3 cursor-pointer select-none">
+                <input type="checkbox" name="enabled" value="1" class="sr-only peer"
+                    {% if settings.trya_dcs_enabled == 'on' %}checked{% endif %}>
+                <span class="relative w-11 h-6 rounded-full bg-gray-600 peer-checked:bg-discord-blurple transition-colors
+                    after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:w-5 after:h-5 after:bg-white after:rounded-full after:transition-transform peer-checked:after:translate-x-5"></span>
+                <span class="text-gray-300 text-sm">Enable DCS</span>
+            </label>
+        </div>
+        <div class="p-5 grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <label class="block">
+                <span class="block text-gray-400 text-xs mb-1">Discord Guild ID</span>
+                <input type="text" inputmode="numeric" name="guild_id" value="{{ settings.trya_dcs_guild_id }}"
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white focus:border-discord-blurple focus:outline-none">
+            </label>
+            <label class="block">
+                <span class="block text-gray-400 text-xs mb-1">Discord live-chat channel</span>
+                <select name="chat_channel_id"
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white focus:border-discord-blurple focus:outline-none">
+                    <option value="">Select a channel...</option>
+                    {% for channel in text_channels %}
+                    <option value="{{ channel.id }}" {% if settings.trya_dcs_chat_channel_id == channel.id %}selected{% endif %}># {{ channel.name }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label class="block lg:col-span-2">
+                <span class="block text-gray-400 text-xs mb-1">Player URL</span>
+                <input type="url" name="public_url" value="{{ settings.trya_dcs_public_url }}"
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-gray-300 font-mono text-sm focus:border-discord-blurple focus:outline-none">
+            </label>
+            <label class="block">
+                <span class="block text-gray-400 text-xs mb-1">Maximum active songs per member</span>
+                <input type="number" name="max_per_user" min="1" max="20" value="{{ settings.trya_dcs_max_per_user }}"
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white focus:border-discord-blurple focus:outline-none">
+            </label>
+            <label class="block">
+                <span class="block text-gray-400 text-xs mb-1">Maximum song duration (seconds)</span>
+                <input type="number" name="max_duration_seconds" min="60" max="1200" step="30" value="{{ settings.trya_dcs_max_duration_seconds }}"
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white focus:border-discord-blurple focus:outline-none">
+            </label>
+            <label class="block">
+                <span class="block text-gray-400 text-xs mb-1">Maximum audio upload (MiB)</span>
+                <input type="number" name="max_upload_mib" min="5" max="100" value="{{ settings.trya_dcs_max_upload_mib }}"
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white focus:border-discord-blurple focus:outline-none">
+            </label>
+            <div class="lg:col-span-2 p-3 bg-discord-darker border border-gray-700 rounded-lg text-xs space-y-1">
+                <p class="text-gray-400">Discord OAuth redirect URL</p>
+                <p class="text-blue-300 font-mono break-all select-all">{{ oauth_callback_url }}</p>
+            </div>
+        </div>
+    </section>
+
+    <section class="bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden">
+        <div class="px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">Stream distribution</h3>
+            <p class="text-gray-500 text-sm mt-1">FFmpeg publishes once; MediaMTX and Caddy distribute to listeners.</p>
+        </div>
+        <div class="p-5 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+            <label class="block sm:col-span-2">
+                <span class="block text-gray-400 text-xs mb-1">Internal RTMP ingest URL</span>
+                <input type="text" name="rtmp_ingest_url" value="{{ settings.trya_dcs_rtmp_ingest_url }}"
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-gray-300 font-mono text-sm focus:border-discord-blurple focus:outline-none">
+            </label>
+            <div class="sm:col-span-2">
+                <span class="block text-gray-400 text-xs mb-1">MediaMTX stream path</span>
+                <div class="w-full bg-discord-darker border border-gray-700 rounded-lg px-3 py-2 text-gray-400 font-mono text-sm">trya-dcs</div>
+            </div>
+            <label class="block">
+                <span class="block text-gray-400 text-xs mb-1">Video bitrate (kbps)</span>
+                <input type="number" name="video_bitrate_kbps" min="1000" max="6000" step="100" value="{{ settings.trya_dcs_video_bitrate_kbps }}"
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white focus:border-discord-blurple focus:outline-none">
+            </label>
+            <label class="block">
+                <span class="block text-gray-400 text-xs mb-1">Audio bitrate (kbps)</span>
+                <input type="number" name="audio_bitrate_kbps" min="96" max="320" step="16" value="{{ settings.trya_dcs_audio_bitrate_kbps }}"
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white focus:border-discord-blurple focus:outline-none">
+            </label>
+            <label class="block">
+                <span class="block text-gray-400 text-xs mb-1">When the playlist ends</span>
+                <select name="loop_mode" class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white focus:border-discord-blurple focus:outline-none">
+                    <option value="stop" {% if settings.trya_dcs_loop_mode == 'stop' %}selected{% endif %}>Stop the stream</option>
+                    <option value="reshuffle" {% if settings.trya_dcs_loop_mode == 'reshuffle' %}selected{% endif %}>Reshuffle and continue</option>
+                </select>
+            </label>
+            <label class="block">
+                <span class="block text-gray-400 text-xs mb-1">Stream token lifetime (seconds)</span>
+                <input type="number" name="stream_token_ttl_seconds" min="300" max="900" step="60" value="{{ settings.trya_dcs_stream_token_ttl_seconds }}"
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white focus:border-discord-blurple focus:outline-none">
+            </label>
+            <label class="block">
+                <span class="block text-gray-400 text-xs mb-1">Membership recheck (seconds)</span>
+                <input type="number" name="membership_recheck_seconds" min="60" max="900" step="60" value="{{ settings.trya_dcs_membership_recheck_seconds }}"
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white focus:border-discord-blurple focus:outline-none">
+            </label>
+            <div class="sm:col-span-2 xl:col-span-4 p-3 bg-discord-darker border border-gray-700 rounded-lg text-xs space-y-1">
+                <p class="text-gray-400">Protected HLS endpoint</p>
+                <p class="text-blue-300 font-mono break-all select-all">{{ protected_hls_url }}</p>
+                <p class="text-gray-600">Caddy authorizes every manifest and segment request before MediaMTX receives it.</p>
+            </div>
+        </div>
+    </section>
+
+    <section class="bg-discord-dark border border-gray-700/50 rounded-lg p-5">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-5">
+            <label class="flex items-start gap-3 cursor-pointer">
+                <input type="checkbox" name="reuse_trya_visuals" value="1" class="mt-1" {% if settings.trya_dcs_reuse_trya_visuals == 'on' %}checked{% endif %}>
+                <span><span class="block text-white font-semibold">Use TrYa visual setup</span><span class="block text-gray-500 text-sm mt-1">Reuses the proven background, one random overlay video, rounded corners and media border without duplicating large assets.</span></span>
+            </label>
+            <label class="block">
+                <span class="block text-gray-400 text-xs mb-1">Stream title</span>
+                <input type="text" name="stream_title" maxlength="200" value="{{ settings.trya_dcs_stream_title }}" class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white focus:border-discord-blurple focus:outline-none">
+            </label>
+        </div>
+        <label class="block">
+            <span class="block text-white font-semibold mb-1">Persistent AI disclosure</span>
+            <span class="block text-gray-500 text-sm mb-3">Shown in the private video player and stream composition.</span>
+            <textarea name="disclaimer" rows="3" maxlength="2000"
+                class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white resize-y focus:border-discord-blurple focus:outline-none">{{ settings.trya_dcs_disclaimer }}</textarea>
+        </label>
+        <label class="flex items-start gap-3 cursor-pointer mt-5 pt-5 border-t border-gray-700/50">
+            <input type="checkbox" name="moderation_enabled" value="1" class="mt-1" {% if settings.trya_dcs_moderation_enabled == 'on' %}checked{% endif %}>
+            <span>
+                <span class="block text-white font-semibold">Automated LLM lyric review</span>
+                <span class="block text-gray-500 text-sm mt-1">Uses the configured local Ollama model after Whisper. Flagged, uncertain or failed reviews require manual approval. Free, cover and remix classifications never affect this verdict.</span>
+            </span>
+        </label>
+    </section>
+
+    <div class="flex justify-end">
+        <button type="submit" class="px-5 py-2.5 bg-discord-blurple hover:bg-indigo-500 text-white rounded-lg font-medium transition-colors">
+            Save DCS settings
+        </button>
+    </div>
+</form>
+
+<section class="mt-6 bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden">
+    <div class="px-5 py-4 border-b border-gray-700/50 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+            <h3 class="text-white font-semibold">DCS submissions</h3>
+            <p class="text-gray-500 text-sm mt-1">Rights classifications are shown for review and never act as automatic exclusions.</p>
+        </div>
+        <a href="{{ url_for('trya_dcs_consent_csv') }}" class="inline-flex justify-center px-3 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm">Export evidence CSV</a>
+    </div>
+    {% if songs %}
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead class="bg-discord-darker text-gray-500 text-xs uppercase">
+                <tr><th class="text-left px-5 py-3">Song</th><th class="text-left px-5 py-3">Member</th><th class="text-left px-5 py-3">Evidence status</th><th class="text-left px-5 py-3">Pipeline</th><th class="text-left px-5 py-3">Moderation</th><th class="text-left px-5 py-3">State</th></tr>
+            </thead>
+            <tbody class="divide-y divide-gray-700/50">
+                {% for song in songs %}
+                <tr>
+                    <td class="px-5 py-3"><p class="text-white font-medium">{{ song.title or 'Pending upload' }}</p><p class="text-gray-500 text-xs">{{ song.artist or song.suno_uuid or ('Song #' ~ song.id) }}</p></td>
+                    <td class="px-5 py-3 text-gray-300">{{ song.user_name }}</td>
+                    <td class="px-5 py-3"><span class="text-blue-300 capitalize">{{ song.suno_plan_status }}</span><span class="text-gray-600"> · </span><span class="text-purple-300 capitalize">{{ song.content_kind }}</span></td>
+                    <td class="px-5 py-3 text-gray-400 capitalize">{{ song.analysis_status }}</td>
+                    <td class="px-5 py-3">
+                        <p class="mb-2 capitalize {{ 'text-green-300' if song.approval_status == 'approved' else ('text-red-300' if song.approval_status == 'rejected' else 'text-yellow-300') }}">{{ song.approval_status }}</p>
+                        {% if song.active and song.uploaded_at %}
+                        <div class="flex gap-2">
+                            <form method="POST"><input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="approve_song"><input type="hidden" name="song_id" value="{{ song.id }}"><button type="submit" class="px-2 py-1 rounded bg-green-900/50 text-green-200 hover:bg-green-800/60 disabled:opacity-40" {% if song.analysis_status != 'done' %}disabled{% endif %}>Approve</button></form>
+                            <form method="POST"><input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="reject_song"><input type="hidden" name="song_id" value="{{ song.id }}"><button type="submit" class="px-2 py-1 rounded bg-red-900/50 text-red-200 hover:bg-red-800/60">Reject</button></form>
+                        </div>
+                        {% endif %}
+                    </td>
+                    <td class="px-5 py-3"><span class="{{ 'text-green-300' if song.active else 'text-gray-500' }}">{{ 'Active' if song.active else (song.remove_reason or 'Awaiting upload') }}</span></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="px-5 py-8 text-center text-gray-500">No DCS submissions yet.</p>
+    {% endif %}
+</section>
+
+<section class="mt-6 bg-discord-dark border border-gray-700/50 rounded-lg p-5">
+    <h3 class="text-white font-semibold">Implementation status</h3>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4 text-sm">
+        <p class="text-green-300">✓ Separate permission, settings and storage boundary</p>
+        <p class="text-green-300">✓ Rights evidence and stream-token database schema</p>
+        <p class="text-green-300">✓ Discord submission, replacement, deletion and evidence flow</p>
+        <p class="text-green-300">✓ MediaMTX, protected HLS and player foundation</p>
+        <p class="text-green-300">✓ Discord OAuth membership gate</p>
+        <p class="text-green-300">✓ WebSocket Discord chat bridge and guild emoji picker</p>
+    </div>
+    <p class="text-gray-600 text-xs mt-4 font-mono break-all">Persistent data: {{ data_directory }}</p>
+</section>
+{% endblock %}

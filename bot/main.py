@@ -20,6 +20,8 @@ class SlowmodeBot(commands.Bot):
         self.config = Config
         self.exp_radio_dir = Config.EXP_RADIO_DIR
         self.trya_stream_dir = Config.TRYA_STREAM_DIR
+        self.trya_dcs_dir = Config.TRYA_DCS_DIR
+        self.trya_dcs_manager = None
         self.web_url = Config.WEB_URL.rstrip("/")
 
     async def setup_hook(self):
@@ -33,6 +35,7 @@ class SlowmodeBot(commands.Bot):
         await self.load_extension("bot.cogs.birthdays")
         await self.load_extension("bot.cogs.reminders")
         await self.load_extension("bot.cogs.events")
+        await self.load_extension("bot.cogs.trya_dcs_chat")
 
         if self.config.GUILD_ID:
             guild = discord.Object(id=self.config.GUILD_ID)

@@ -33,6 +33,9 @@ class Config:
     # TrYa Stream
     TRYA_STREAM_DIR: str = os.getenv("TRYA_STREAM_DIR", "data/radio/trya_stream")
 
+    # TrYa DCS (private Discord Community Stream)
+    TRYA_DCS_DIR: str = os.getenv("TRYA_DCS_DIR", "data/radio/trya_dcs")
+
     # LLM (Corax chat)
     OLLAMA_URL: str = os.getenv("OLLAMA_URL", "http://ollama:11434")
     LLM_MODEL: str = os.getenv("LLM_MODEL", "qwen2.5:7b-instruct")

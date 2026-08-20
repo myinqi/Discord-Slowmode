@@ -1,0 +1,29 @@
+logLevel: info
+logDestinations: [stdout]
+
+rtsp: false
+rtmp: true
+rtmpAddress: :1935
+srt: false
+
+hls: true
+hlsAddress: :8888
+hlsAllowOrigins: ["https://bot.macfreun.de"]
+hlsAlwaysRemux: true
+hlsVariant: fmp4
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+
+webrtc: true
+webrtcAddress: :8889
+
+api: true
+apiAddress: :9997
+metrics: false
+pprof: false
+playback: false
+
+paths:
+  trya-dcs:
+    source: publisher
