@@ -118,7 +118,7 @@
         <div class="bg-discord-darker border border-gray-700 rounded-lg p-4">
             <p class="text-gray-500 text-xs uppercase">FFmpeg health</p>
             <p class="mt-2 font-semibold {{ 'text-green-300' if stream_status.ffmpeg.state == 'healthy' else ('text-yellow-300' if stream_status.running else 'text-gray-500') }}">{{ stream_status.ffmpeg.state|capitalize }}</p>
-            {% if stream_status.ffmpeg.out_time %}<p class="text-gray-500 text-xs mt-1">Output {{ stream_status.ffmpeg.out_time }} · {{ stream_status.ffmpeg.bitrate or 'bitrate pending' }}</p>{% endif %}
+            {% if stream_status.ffmpeg.out_time %}<p class="text-gray-500 text-xs mt-1">Output {{ stream_status.ffmpeg.out_time }} · {{ stream_status.ffmpeg.bitrate or 'bitrate pending' }} · {{ stream_status.ffmpeg.speed or 'speed pending' }}</p>{% endif %}
         </div>
         <div class="bg-discord-darker border border-gray-700 rounded-lg p-4">
             <p class="text-gray-500 text-xs uppercase">Web listeners</p>

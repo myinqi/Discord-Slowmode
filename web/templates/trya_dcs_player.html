@@ -266,11 +266,11 @@ async function authorizeStream(initial = false) {
             hls = new Hls({
                 lowLatencyMode: false,
                 backBufferLength: 30,
-                maxBufferLength: 20,
-                maxMaxBufferLength: 30,
-                liveSyncDurationCount: 4,
-                liveMaxLatencyDurationCount: 8,
-                maxLiveSyncPlaybackRate: 1.05
+                maxBufferLength: 30,
+                maxMaxBufferLength: 60,
+                liveSyncDuration: 12,
+                liveMaxLatencyDuration: 36,
+                maxLiveSyncPlaybackRate: 1.03
             });
             hls.loadSource(payload.hls_url);
             hls.attachMedia(video);
