@@ -2,9 +2,11 @@
 
 import hashlib
 import json
+import math
 import os
 import time
 
+from bot.trya_dcs_manager import log_dcs_event
 from bot.trya_stream_worker import (
     _align_to_lyrics,
     _normalize_original_to_mp3,
@@ -61,6 +63,7 @@ async def ingest_dcs_audio(
         raise ValueError("invalid Suno plan status")
 
     ensure_dcs_dirs(base_dir)
+    log_dcs_event(f"Upload #{song_id} validation started: {original_filename}")
     size = os.path.getsize(uploaded_path)
     if size <= 0:
         raise ValueError("audio upload is empty")
@@ -135,13 +138,153 @@ async def ingest_dcs_audio(
         )
         if not finalized:
             raise ValueError("DCS upload could not be finalized")
+        log_dcs_event(f"Upload #{song_id} archived and normalized ({duration:.1f}s).")
         return finalized
-    except Exception:
+    except Exception as exc:
+        log_dcs_event(f"Upload #{song_id} failed: {exc}", "error")
         try:
             os.remove(work_path)
         except OSError:
             pass
         raise
+
+
+async def moderate_dcs_song(db, song_id: int) -> None:
+    song = await db.get_trya_dcs_song(song_id)
+    if not song or not song.get("active"):
+        raise ValueError("active DCS song not found")
+    lyrics = clean_lyrics(song.get("lyrics") or "")
+    if not lyrics:
+        raise ValueError("the song has no lyrics to moderate")
+    title = song.get("title") or "Unknown"
+    artist = song.get("artist") or song.get("user_name") or "Unknown"
+    await db.update_trya_dcs_song(
+        song_id,
+        moderation_status="processing",
+        moderation_reason="Automated lyric review is running.",
+        approval_status="pending",
+        approved_at=None,
+        approved_by=None,
+    )
+    log_dcs_event(f"Moderation #{song_id} started: {title} — {artist}")
+    try:
+        from bot.exp_moderation import moderate_lyrics
+        from bot.llm import OllamaClient
+        from bot.llm_mod_queue import PRIO_RADIO, enqueue_moderation
+        from config import Config
+
+        timeout = 600
+        client = OllamaClient(
+            base_url=Config.OLLAMA_URL,
+            model=Config.LLM_MODEL,
+            timeout=timeout,
+        )
+        verdict = await enqueue_moderation(
+            PRIO_RADIO,
+            lambda: moderate_lyrics(
+                client,
+                lyrics=lyrics,
+                title=title,
+                artist=artist,
+                timeout=timeout,
+            ),
+        )
+        status = verdict.get("status") or "pending"
+        update = {
+            "moderation_status": status,
+            "moderation_reason": verdict.get("reason") or "",
+        }
+        if status == "passed":
+            update.update(
+                approval_status="approved",
+                approved_at=time.time(),
+                approved_by="automated-llm",
+            )
+        else:
+            update.update(
+                approval_status="pending",
+                approved_at=None,
+                approved_by=None,
+            )
+        await db.update_trya_dcs_song(song_id, **update)
+        log_dcs_event(f"Moderation #{song_id} finished: {status}")
+    except Exception as exc:
+        log_dcs_event(f"Moderation #{song_id} failed: {exc}", "error")
+        await db.update_trya_dcs_song(
+            song_id,
+            moderation_status="pending",
+            moderation_reason=f"Automated lyric review failed: {exc}",
+            approval_status="pending",
+            approved_at=None,
+            approved_by=None,
+        )
+
+
+async def import_dcs_transcript(
+    db, song_id: int, base_dir: str, transcript_json: str
+) -> int:
+    song = await db.get_trya_dcs_song(song_id)
+    if not song or not song.get("active") or not song.get("uploaded_at"):
+        raise ValueError("active uploaded DCS song not found")
+    try:
+        raw_words = json.loads(transcript_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"transcript is not valid JSON: {exc.msg}") from exc
+    if not isinstance(raw_words, list) or not raw_words or len(raw_words) > 20000:
+        raise ValueError("transcript must be a non-empty array with at most 20,000 words")
+    duration = float(song.get("duration") or 0)
+    words = []
+    previous_start = -1.0
+    for index, item in enumerate(raw_words):
+        if not isinstance(item, dict) or set(item) != {"word", "start", "end"}:
+            raise ValueError(f"word #{index + 1} must contain exactly word, start and end")
+        word = str(item.get("word") or "").strip()
+        try:
+            start = float(item["start"])
+            end = float(item["end"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"word #{index + 1} has invalid timestamps") from exc
+        if (
+            not word or len(word) > 200
+            or not math.isfinite(start) or not math.isfinite(end)
+            or start < 0 or end <= start
+        ):
+            raise ValueError(f"word #{index + 1} is empty or has an invalid time range")
+        if start < previous_start or (duration > 0 and end > duration + 5):
+            raise ValueError(f"word #{index + 1} is out of chronological or song range")
+        words.append({"word": word, "start": round(start, 3), "end": round(end, 3)})
+        previous_start = start
+    ensure_dcs_dirs(base_dir)
+    ass_filename = os.path.basename(
+        song.get("ass_filename") or f"{song.get('suno_uuid') or song_id}.ass"
+    )
+    with open(os.path.join(base_dir, "ass", ass_filename), "w", encoding="utf-8") as handle:
+        handle.write(
+            build_ass(
+                words,
+                title=song.get("title") or "Unknown",
+                artist=song.get("artist") or song.get("user_name") or "Unknown",
+            )
+        )
+    moderation_enabled = (
+        await db.get_setting("trya_dcs_moderation_enabled") or "off"
+    ) == "on"
+    update = {
+        "word_timestamps": json.dumps(words, ensure_ascii=False, separators=(",", ":")),
+        "ass_filename": ass_filename,
+        "analysis_status": "done",
+        "moderation_status": "pending" if moderation_enabled else None,
+        "moderation_reason": (
+            "External transcript imported; run moderation again."
+            if moderation_enabled else ""
+        ),
+        "approval_status": "pending" if moderation_enabled else "approved",
+        "approved_at": None if moderation_enabled else time.time(),
+        "approved_by": None if moderation_enabled else "moderation-disabled",
+    }
+    await db.update_trya_dcs_song(song_id, **update)
+    log_dcs_event(f"External transcript imported for #{song_id}: {len(words)} words")
+    return len(words)
 
 
 async def process_dcs_song(
@@ -150,12 +293,14 @@ async def process_dcs_song(
     base_dir: str,
     *,
     max_duration_seconds: int,
+    run_moderation: bool | None = None,
 ) -> None:
     """Resolve metadata and create Whisper timestamps for one DCS song."""
     song = await db.get_trya_dcs_song(song_id)
     if not song or not song.get("active"):
         return
     await db.update_trya_dcs_song(song_id, analysis_status="processing")
+    log_dcs_event(f"Analysis #{song_id} started: {song.get('title') or 'pending metadata'}")
     try:
         mp3_path = os.path.join(base_dir, "mp3", song["mp3_filename"])
         duration = await get_duration(mp3_path)
@@ -189,10 +334,10 @@ async def process_dcs_song(
             duration=duration,
         )
 
-        words = await run_whisper(
-            mp3_path,
-            language=detect_lyrics_language(lyrics),
-        )
+        language = detect_lyrics_language(lyrics)
+        log_dcs_event(f"Whisper #{song_id} started (language={language or 'auto'}).")
+        words = await run_whisper(mp3_path, language=language)
+        log_dcs_event(f"Whisper #{song_id} finished: {len(words)} words.")
         if lyrics:
             words = _align_to_lyrics(words, lyrics)
         ass_filename = f"{real_uuid or song_id}.ass"
@@ -201,8 +346,9 @@ async def process_dcs_song(
         ) as handle:
             handle.write(build_ass(words, title=title, artist=artist))
         moderation_enabled = (
-            await db.get_setting("trya_dcs_moderation_enabled") or "off"
-        ) == "on"
+            (await db.get_setting("trya_dcs_moderation_enabled") or "off") == "on"
+            if run_moderation is None else bool(run_moderation)
+        )
         analysis_update = {
             "word_timestamps": json.dumps(words),
             "ass_filename": ass_filename,
@@ -216,63 +362,19 @@ async def process_dcs_song(
                 approved_at=None,
                 approved_by=None,
             )
+        else:
+            analysis_update.update(
+                moderation_status=None,
+                moderation_reason="",
+                approval_status="approved",
+                approved_at=time.time(),
+                approved_by="moderation-disabled",
+            )
         await db.update_trya_dcs_song(song_id, **analysis_update)
 
+        log_dcs_event(f"Analysis #{song_id} finished: ASS={ass_filename}")
         if moderation_enabled:
-            try:
-                from bot.exp_moderation import moderate_lyrics
-                from bot.llm import OllamaClient
-                from bot.llm_mod_queue import PRIO_RADIO, enqueue_moderation
-                from config import Config
-
-                timeout = 600
-                client = OllamaClient(
-                    base_url=Config.OLLAMA_URL,
-                    model=Config.LLM_MODEL,
-                    timeout=timeout,
-                )
-                verdict = await enqueue_moderation(
-                    PRIO_RADIO,
-                    lambda: moderate_lyrics(
-                        client,
-                        lyrics=lyrics,
-                        title=title,
-                        artist=artist,
-                        timeout=timeout,
-                    ),
-                )
-                status = verdict.get("status") or "pending"
-                update = {
-                    "moderation_status": status,
-                    "moderation_reason": verdict.get("reason") or "",
-                }
-                if status == "passed":
-                    update.update(
-                        approval_status="approved",
-                        approved_at=time.time(),
-                        approved_by="automated-llm",
-                    )
-                else:
-                    update.update(
-                        approval_status="pending",
-                        approved_at=None,
-                        approved_by=None,
-                    )
-                await db.update_trya_dcs_song(song_id, **update)
-                print(f"[trya-dcs] Moderation #{song_id}: {status}", flush=True)
-            except Exception as exc:
-                print(
-                    f"[trya-dcs] Moderation #{song_id} failed: {exc}",
-                    flush=True,
-                )
-                await db.update_trya_dcs_song(
-                    song_id,
-                    moderation_status="pending",
-                    moderation_reason=f"Automated lyric review failed: {exc}",
-                    approval_status="pending",
-                    approved_at=None,
-                    approved_by=None,
-                )
+            await moderate_dcs_song(db, song_id)
     except Exception as exc:
-        print(f"[trya-dcs] Song #{song_id} processing failed: {exc}", flush=True)
+        log_dcs_event(f"Song #{song_id} processing failed: {exc}", "error")
         await db.update_trya_dcs_song(song_id, analysis_status="failed")

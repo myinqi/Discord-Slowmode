@@ -8725,6 +8725,83 @@ def create_app(db: Database, bot=None) -> Quart:
                 await flash("The DCS form expired. Please try again.", "error")
                 return redirect(request.url)
             action = form.get("action", "save_settings")
+            if action == "upload_offline_image":
+                files = await request.files
+                uploaded = files.get("offline_image")
+                if not uploaded or not uploaded.filename:
+                    await flash("Select a PNG, JPEG or WebP offline image.", "error")
+                    return redirect(request.url)
+                assets_dir = os.path.join(TRYA_DCS_DIR, "assets")
+                os.makedirs(assets_dir, exist_ok=True)
+                import tempfile
+                fd, staged_path = tempfile.mkstemp(prefix="offline_", dir=assets_dir)
+                os.close(fd)
+                try:
+                    await uploaded.save(staged_path)
+                    size = os.path.getsize(staged_path)
+                    if size <= 0 or size > 10 * 1024 * 1024:
+                        raise ValueError("Offline images must be between 1 byte and 10 MiB.")
+                    with open(staged_path, "rb") as handle:
+                        signature = handle.read(16)
+                    if signature.startswith(b"\x89PNG\r\n\x1a\n"):
+                        extension = ".png"
+                    elif signature.startswith(b"\xff\xd8\xff"):
+                        extension = ".jpg"
+                    elif signature[:4] == b"RIFF" and signature[8:12] == b"WEBP":
+                        extension = ".webp"
+                    else:
+                        raise ValueError("The file signature is not PNG, JPEG or WebP.")
+                    process = await asyncio.create_subprocess_exec(
+                        "ffprobe", "-v", "error", "-select_streams", "v:0",
+                        "-show_entries", "stream=codec_name,width,height",
+                        "-of", "json", staged_path,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    stdout, _ = await asyncio.wait_for(process.communicate(), timeout=20)
+                    probe = json.loads(stdout.decode("utf-8") or "{}") if process.returncode == 0 else {}
+                    stream = (probe.get("streams") or [{}])[0]
+                    width = int(stream.get("width") or 0)
+                    height = int(stream.get("height") or 0)
+                    if not width or not height or width > 8192 or height > 8192:
+                        raise ValueError("The image could not be decoded or exceeds 8192×8192 pixels.")
+                    filename = f"offline_{secrets.token_hex(8)}{extension}"
+                    final_path = os.path.join(assets_dir, filename)
+                    os.replace(staged_path, final_path)
+                    old_filename = os.path.basename(
+                        await db.get_setting("trya_dcs_offline_image_filename") or ""
+                    )
+                    await db.set_setting("trya_dcs_offline_image_filename", filename)
+                    if old_filename and old_filename != filename:
+                        try:
+                            os.remove(os.path.join(assets_dir, old_filename))
+                        except FileNotFoundError:
+                            pass
+                    from bot.trya_dcs_manager import log_dcs_event
+                    log_dcs_event(f"Offline image updated: {filename} ({width}x{height}).")
+                    await flash("DCS offline image saved.", "success")
+                except (ValueError, OSError, asyncio.TimeoutError, json.JSONDecodeError) as exc:
+                    await flash(str(exc) or "The offline image could not be validated.", "error")
+                finally:
+                    try:
+                        os.remove(staged_path)
+                    except FileNotFoundError:
+                        pass
+                return redirect(request.url)
+            if action == "remove_offline_image":
+                filename = os.path.basename(
+                    await db.get_setting("trya_dcs_offline_image_filename") or ""
+                )
+                await db.set_setting("trya_dcs_offline_image_filename", "")
+                if filename:
+                    try:
+                        os.remove(os.path.join(TRYA_DCS_DIR, "assets", filename))
+                    except FileNotFoundError:
+                        pass
+                from bot.trya_dcs_manager import log_dcs_event
+                log_dcs_event("Offline image removed.")
+                await flash("DCS offline image removed.", "success")
+                return redirect(request.url)
             if action == "start_stream":
                 actor = session.get("username") or "admin"
                 result = await trya_dcs_manager.start(created_by=actor)
@@ -8748,6 +8825,81 @@ def create_app(db: Database, bot=None) -> Quart:
                     "DCS publisher stopped." if result.get("ok") else result.get("error", "Could not stop DCS."),
                     "success" if result.get("ok") else "error",
                 )
+                return redirect(request.url)
+            if action in {"remove_song", "retry_whisper", "retry_moderation", "import_transcript"}:
+                try:
+                    song_id = int(form.get("song_id") or 0)
+                except (TypeError, ValueError):
+                    song_id = 0
+                song = await db.get_trya_dcs_song(song_id)
+                if not song:
+                    await flash("The DCS submission no longer exists.", "error")
+                    return redirect(request.url)
+                if trya_dcs_manager.is_running:
+                    await flash("Stop TrYa DCS before changing or reprocessing playlist songs.", "error")
+                    return redirect(request.url)
+                from bot.trya_dcs_manager import log_dcs_event
+                if action == "remove_song":
+                    if not song.get("active"):
+                        await flash("This song is already outside the active playlists.", "error")
+                    else:
+                        await db.delete_trya_dcs_song(song_id)
+                        log_dcs_event(f"Admin removed #{song_id} from the active playlists.")
+                        await flash("Song removed from the active playlists; evidence and files were retained.", "success")
+                    return redirect(request.url)
+                if not song.get("active") or not song.get("uploaded_at") or not song.get("mp3_filename"):
+                    await flash("Only active, completed uploads can be reprocessed.", "error")
+                    return redirect(request.url)
+                from bot.trya_dcs_worker import (
+                    import_dcs_transcript,
+                    moderate_dcs_song,
+                    process_dcs_song,
+                )
+                if action == "retry_whisper":
+                    try:
+                        max_duration = max(
+                            60,
+                            min(1200, int(await db.get_setting("trya_dcs_max_duration_seconds") or "360")),
+                        )
+                    except (TypeError, ValueError):
+                        max_duration = 360
+                    await db.update_trya_dcs_song(
+                        song_id,
+                        analysis_status="pending",
+                        approval_status="pending",
+                        approved_at=None,
+                        approved_by=None,
+                    )
+                    log_dcs_event(f"Admin queued Whisper retry for #{song_id}.")
+                    asyncio.create_task(
+                        process_dcs_song(
+                            db, song_id, TRYA_DCS_DIR,
+                            max_duration_seconds=max_duration,
+                            run_moderation=False,
+                        )
+                    )
+                    await flash("Whisper transcription queued again.", "success")
+                elif action == "retry_moderation":
+                    if (await db.get_setting("trya_dcs_moderation_enabled") or "off") != "on":
+                        await flash("Enable automated LLM lyric review before retrying moderation.", "error")
+                        return redirect(request.url)
+                    if not str(song.get("lyrics") or "").strip():
+                        await flash("This song has no lyrics to moderate. Import or retry its transcription first.", "error")
+                        return redirect(request.url)
+                    log_dcs_event(f"Admin queued moderation retry for #{song_id}.")
+                    asyncio.create_task(moderate_dcs_song(db, song_id))
+                    await flash("Lyric moderation queued again.", "success")
+                else:
+                    transcript_json = str(form.get("transcript_json") or "")
+                    try:
+                        word_count = await import_dcs_transcript(
+                            db, song_id, TRYA_DCS_DIR, transcript_json
+                        )
+                    except ValueError as exc:
+                        log_dcs_event(f"External transcript for #{song_id} rejected: {exc}", "error")
+                        await flash(str(exc), "error")
+                    else:
+                        await flash(f"External transcript imported with {word_count} words.", "success")
                 return redirect(request.url)
             if action == "save_wlm_url":
                 try:
@@ -8849,6 +9001,9 @@ def create_app(db: Database, bot=None) -> Quart:
                     await flash(f"Song assigned to the {source} playlist.", "success")
                 return redirect(request.url)
             if action in {"approve_song", "reject_song"}:
+                if (await db.get_setting("trya_dcs_moderation_enabled") or "off") != "on":
+                    await flash("Manual approval is disabled because automated moderation is off.", "error")
+                    return redirect(request.url)
                 try:
                     song_id = int(form.get("song_id") or 0)
                 except (TypeError, ValueError):
@@ -8967,6 +9122,25 @@ def create_app(db: Database, bot=None) -> Quart:
                 }
                 for key, value in values.items():
                     await db.set_setting(key, value)
+                if values["trya_dcs_moderation_enabled"] != "on":
+                    await db.db.execute(
+                        """UPDATE trya_dcs_songs
+                           SET approval_status = 'approved', approved_at = unixepoch(),
+                               approved_by = 'moderation-disabled', moderation_status = NULL,
+                               moderation_reason = ''
+                           WHERE active = 1 AND analysis_status = 'done'"""
+                    )
+                    await db.db.commit()
+                else:
+                    await db.db.execute(
+                        """UPDATE trya_dcs_songs
+                           SET approval_status = 'pending', approved_at = NULL,
+                               approved_by = NULL, moderation_status = 'pending',
+                               moderation_reason = 'Moderation was enabled; review is required.'
+                           WHERE active = 1 AND analysis_status = 'done'
+                             AND approved_by = 'moderation-disabled'"""
+                    )
+                    await db.db.commit()
                 if values["trya_dcs_enabled"] != "on" and trya_dcs_manager.is_running:
                     await trya_dcs_manager.stop()
                 await flash("TrYa DCS settings saved.", "success")
@@ -8996,14 +9170,29 @@ def create_app(db: Database, bot=None) -> Quart:
             pass
 
         stats = await db.get_trya_dcs_admin_stats()
+        offline_image_filename = os.path.basename(
+            await db.get_setting("trya_dcs_offline_image_filename") or ""
+        )
+        offline_image_configured = bool(
+            offline_image_filename
+            and os.path.isfile(os.path.join(TRYA_DCS_DIR, "assets", offline_image_filename))
+        )
         songs = await db.get_trya_dcs_songs(active_only=False)
         songs_desc = list(reversed(songs))
+        for song in songs_desc:
+            song["public_suno_url"] = trya_dcs_manager._public_suno_url(song)
         submission_songs = [
             song for song in songs_desc
             if (song.get("playlist_source") or "submission") not in {"intro", "outro"}
         ]
-        intro_songs = [song for song in songs_desc if song.get("playlist_source") == "intro"]
-        outro_songs = [song for song in songs_desc if song.get("playlist_source") == "outro"]
+        intro_songs = [
+            song for song in songs_desc
+            if song.get("active") and song.get("playlist_source") == "intro"
+        ]
+        outro_songs = [
+            song for song in songs_desc
+            if song.get("active") and song.get("playlist_source") == "outro"
+        ]
         stream_status = await trya_dcs_manager.get_status()
         oauth_ready = bool(
             Config.DISCORD_CLIENT_ID
@@ -9022,6 +9211,7 @@ def create_app(db: Database, bot=None) -> Quart:
             oauth_callback_url=f"{_public_web_url()}/trya-dcs/oauth/callback",
             protected_hls_url=f"{_public_web_url()}/dcs-stream/{stream_path}/index.m3u8",
             data_directory=TRYA_DCS_DIR,
+            offline_image_configured=offline_image_configured,
             songs=songs_desc,
             submission_songs=submission_songs,
             intro_songs=intro_songs,
@@ -9030,6 +9220,16 @@ def create_app(db: Database, bot=None) -> Quart:
             stream_log=trya_dcs_manager.get_log(max_age_secs=900),
             admin_csrf=admin_csrf,
         )
+
+    @app.route("/trya-dcs/stream/log")
+    @permission_required("trya_dcs")
+    async def trya_dcs_stream_log():
+        try:
+            since = float(request.args.get("since") or 0)
+        except (TypeError, ValueError):
+            since = 0
+        from bot.trya_dcs_manager import get_dcs_log
+        return {"entries": get_dcs_log(since_ts=since, max_age_secs=3600)}
 
     @app.route("/trya-dcs/api/status")
     async def trya_dcs_public_status():
@@ -9426,6 +9626,23 @@ def create_app(db: Database, bot=None) -> Quart:
         response.delete_cookie("trya_dcs_stream_token", path="/dcs-stream/")
         return response
 
+    @app.route("/trya-dcs/offline-image")
+    async def trya_dcs_offline_image():
+        from quart import send_file
+        user_id = session.get("trya_dcs_discord_user_id")
+        guild_id = int(await db.get_setting("trya_dcs_guild_id") or Config.GUILD_ID or 0)
+        if not user_id or not await _trya_dcs_membership_valid(int(user_id), guild_id):
+            return "", 403
+        filename = os.path.basename(
+            await db.get_setting("trya_dcs_offline_image_filename") or ""
+        )
+        path = os.path.join(TRYA_DCS_DIR, "assets", filename) if filename else ""
+        if not path or not os.path.isfile(path):
+            return "", 404
+        response = await send_file(path, conditional=True)
+        response.headers["Cache-Control"] = "private, max-age=300"
+        return response
+
     @app.route("/trya-dcs/player")
     async def trya_dcs_player():
         if (await db.get_setting("trya_dcs_enabled") or "off") != "on":
@@ -9443,12 +9660,22 @@ def create_app(db: Database, bot=None) -> Quart:
             session["trya_dcs_membership_checked_at"] = time.time()
         player_csrf = secrets.token_urlsafe(32)
         session["trya_dcs_player_csrf"] = player_csrf
+        offline_filename = os.path.basename(
+            await db.get_setting("trya_dcs_offline_image_filename") or ""
+        )
+        offline_image_url = (
+            url_for("trya_dcs_offline_image")
+            if offline_filename and os.path.isfile(
+                os.path.join(TRYA_DCS_DIR, "assets", offline_filename)
+            ) else ""
+        )
         return await render_template(
             "trya_dcs_player.html",
             discord_name=session.get("trya_dcs_discord_name"),
             discord_avatar=session.get("trya_dcs_discord_avatar"),
             disclaimer=await db.get_setting("trya_dcs_disclaimer") or "AI-generated audio and visuals.",
             player_csrf=player_csrf,
+            offline_image_url=offline_image_url,
         )
 
     @app.websocket("/trya-dcs/ws")

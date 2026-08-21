@@ -42,6 +42,13 @@ The current implementation includes:
   the normal submission table;
 - permanent Admin UI cleanup for failed or unfinished uploads, including their
   database rows and associated files;
+- evidence-preserving removal of active submission, intro and outro songs;
+- compact Admin actions for Whisper and moderation retries plus validated external
+  word-timestamp JSON imports that regenerate ASS subtitles;
+- a central live activity log for publishing, uploads, Whisper, moderation and
+  Admin actions, with polling and clipboard copy;
+- a configurable, validated offline player image stored outside the public web
+  root and served only to authenticated guild members;
 - a dedicated OBS contribution listener at `rtmp://HOST:1937/live` with a
   per-installation stream key and automatic local-overlay fallback.
 
@@ -64,6 +71,18 @@ authenticated Discord ID must match the member who invoked the slash command.
 The configured guild, feature switch, maximum songs, upload size and decoded
 duration are enforced server-side. File extensions, signatures and audio
 streams are validated independently of browser-provided MIME headers.
+
+An Admin can replace a failed transcription with a JSON array in the stored
+word-timestamp format:
+
+```json
+[{"word":"Hello","start":0.5,"end":0.9}]
+```
+
+Entries must contain exactly `word`, `start` and `end`, remain chronological and
+fit the decoded song duration. A successful import replaces `word_timestamps`,
+regenerates the ASS file. With LLM moderation enabled the song returns to pending
+approval and moderation; otherwise it is immediately eligible for playback.
 
 ## Discord application
 

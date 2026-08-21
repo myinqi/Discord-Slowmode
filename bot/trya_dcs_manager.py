@@ -14,22 +14,35 @@ from bot.suno_urls import SUNO_UUID_RE, UUID_RE
 from config import Config
 
 
+_DCS_LOG_BUFFER = deque(maxlen=2000)
+
+
+def log_dcs_event(line: str, level: str = "info") -> None:
+    _DCS_LOG_BUFFER.append((time.time(), level, str(line)))
+    print(f"[trya-dcs] {line}", flush=True)
+
+
+def get_dcs_log(since_ts: float = 0.0, max_age_secs: float = 3600.0) -> list[dict]:
+    cutoff = max(float(since_ts or 0), time.time() - max_age_secs)
+    return [
+        {"ts": ts, "level": level, "line": line}
+        for ts, level, line in _DCS_LOG_BUFFER
+        if ts > cutoff
+    ]
+
+
 class TryaDcsManager(TryaStreamManager):
     """Publish DCS songs to MediaMTX without Twitch runtime dependencies."""
 
-    _LOG_BUFFER_MAX = 800
-
     def __init__(self, db, base_dir: str):
         super().__init__(db, base_dir)
-        self._log_buffer = deque(maxlen=self._LOG_BUFFER_MAX)
         self._output_url = ""
         self._regular_playlist: list[dict] = []
         self._intro_song: dict | None = None
         self._outro_song: dict | None = None
 
     def _log(self, line: str, level: str = "info") -> None:
-        self._log_buffer.append((time.time(), level, line))
-        print(f"[trya-dcs] {line}", flush=True)
+        log_dcs_event(line, level)
 
     @staticmethod
     def _public_suno_url(song: dict | None) -> str:
@@ -77,12 +90,7 @@ class TryaDcsManager(TryaStreamManager):
                 pass
 
     def get_log(self, since_ts: float = 0.0, max_age_secs: float = 600.0) -> list[dict]:
-        cutoff = max(float(since_ts or 0), time.time() - max_age_secs)
-        return [
-            {"ts": ts, "level": level, "line": line}
-            for ts, level, line in self._log_buffer
-            if ts > cutoff
-        ]
+        return get_dcs_log(since_ts=since_ts, max_age_secs=max_age_secs)
 
     async def start(self, *, created_by: str = "admin") -> dict:
         async with self._start_lock:
@@ -92,13 +100,19 @@ class TryaDcsManager(TryaStreamManager):
                 return {"ok": False, "error": "Enable TrYa DCS before starting the stream."}
 
             songs = await self.db.get_trya_dcs_songs(active_only=True)
+            moderation_enabled = (
+                await self.db.get_setting("trya_dcs_moderation_enabled") or "off"
+            ) == "on"
             ready = []
             for stored in songs:
                 filename = stored.get("mp3_filename")
                 path = os.path.join(self.trya_stream_dir, "mp3", filename or "")
                 if (
                     stored.get("analysis_status") == "done"
-                    and stored.get("approval_status") == "approved"
+                    and (
+                        not moderation_enabled
+                        or stored.get("approval_status") == "approved"
+                    )
                     and filename
                     and os.path.isfile(path)
                 ):
@@ -116,7 +130,8 @@ class TryaDcsManager(TryaStreamManager):
             intro_pool = [song for song in ready if song.get("playlist_source") == "intro"]
             outro_pool = [song for song in ready if song.get("playlist_source") == "outro"]
             if not regular:
-                return {"ok": False, "error": "No approved and analyzed DCS playlist songs are ready."}
+                requirement = "approved and analyzed" if moderation_enabled else "analyzed"
+                return {"ok": False, "error": f"No {requirement} DCS playlist songs are ready."}
 
             def select_special(pool: list[dict], selection: str) -> dict | None:
                 if not pool:

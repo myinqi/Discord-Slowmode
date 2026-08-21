@@ -25,7 +25,8 @@
         .video-panel, .chat-panel { border:1px solid var(--line); background:var(--panel); border-radius:8px; overflow:hidden; }
         .video-wrap { position:relative; aspect-ratio:16/9; background:#000; display:grid; place-items:center; }
         video { width:100%; height:100%; object-fit:contain; background:#000; }
-        .state { position:absolute; inset:0; display:grid; place-items:center; pointer-events:none; text-align:center; padding:24px; color:#c8c1d2; background:rgba(0,0,0,.35); }
+        .offline-image { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; background:#000; }
+        .state { position:absolute; z-index:2; inset:0; display:grid; place-items:center; pointer-events:none; text-align:center; padding:24px; color:#c8c1d2; background:rgba(0,0,0,.35); }
         .state.hidden { display:none; }
         .meta { padding:14px 16px; display:flex; justify-content:space-between; gap:16px; border-top:1px solid var(--line); }
         .meta-main { min-width:0; flex:1; }
@@ -107,6 +108,7 @@
         <section class="video-panel">
             <div class="video-wrap">
                 <video id="radio-video" controls autoplay playsinline></video>
+                <img id="offline-image" class="offline-image" src="{{ offline_image_url }}" alt="The community stream is offline" hidden>
                 <div id="player-state" class="state">Connecting to the private stream...</div>
             </div>
             <div class="meta">
@@ -153,6 +155,9 @@
 <script>
 const video = document.getElementById('radio-video');
 const state = document.getElementById('player-state');
+const offlineImage = document.getElementById('offline-image');
+let offlineImageAvailable = Boolean(offlineImage.getAttribute('src'));
+let streamIsRunning = null;
 let hls = null;
 let renewTimer = null;
 let statusTimer = null;
@@ -213,6 +218,37 @@ function showState(message) {
     state.classList.remove('hidden');
 }
 
+function applyStreamMode(running) {
+    const wasRunning = streamIsRunning;
+    streamIsRunning = Boolean(running);
+    if (!streamIsRunning) {
+        video.pause();
+        video.hidden = true;
+        if (offlineImageAvailable) {
+            offlineImage.hidden = false;
+            state.classList.add('hidden');
+        } else {
+            offlineImage.hidden = true;
+            showState('The community stream is currently offline.');
+        }
+        return;
+    }
+    offlineImage.hidden = true;
+    video.hidden = false;
+    if (wasRunning === false) {
+        showState('Connecting to the private stream...');
+        if (hls) hls.startLoad();
+        else authorizeStream(true).catch(() => showState('Could not initialize the stream.'));
+        video.play().catch(() => {});
+    }
+}
+
+offlineImage.addEventListener('error', () => {
+    offlineImageAvailable = false;
+    offlineImage.hidden = true;
+    if (streamIsRunning === false) showState('The community stream is currently offline.');
+});
+
 async function authorizeStream(initial = false) {
     if (initial) showState('Authorizing private stream access...');
     const response = await fetch('{{ url_for("trya_dcs_stream_token") }}', {
@@ -240,6 +276,10 @@ async function authorizeStream(initial = false) {
             hls.attachMedia(video);
             hls.on(Hls.Events.ERROR, (_, data) => {
                 if (!data.fatal) return;
+                if (streamIsRunning === false) {
+                    applyStreamMode(false);
+                    return;
+                }
                 showState('Stream connection lost. Reconnecting...');
                 if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
                     setTimeout(() => hls && hls.startLoad(), 2000);
@@ -265,7 +305,9 @@ video.addEventListener('playing', () => {
     state.classList.add('hidden');
     if (preferChatFallback) startChatFallback(); else connectSocket();
 });
-video.addEventListener('waiting', () => showState('Buffering private stream...'));
+video.addEventListener('waiting', () => {
+    if (streamIsRunning !== false) showState('Buffering private stream...');
+});
 function updateWlmLink(value) {
     try {
         const url = new URL(value);
@@ -293,6 +335,7 @@ async function refreshStatus() {
         const response = await fetch('{{ url_for("trya_dcs_public_status") }}', {credentials: 'same-origin'});
         if (!response.ok) return;
         const payload = await response.json();
+        applyStreamMode(Boolean(payload.running));
         const song = payload.song;
         updateWlmLink(song && song.wlm_url ? song.wlm_url : '');
         updateSunoLink(song && song.suno_url ? song.suno_url : '');

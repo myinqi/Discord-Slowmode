@@ -11,19 +11,41 @@
     </form>
 </details>
 {% endmacro %}
-{% macro special_song_row(song, csrf) %}
-<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-lg border border-gray-700 bg-discord-darker/60 p-3">
-    <div class="min-w-0">
-        <p class="text-white font-medium truncate">{{ song.title or ('Song #' ~ song.id) }}</p>
-        <p class="text-gray-500 text-xs truncate">{{ song.artist or song.user_name }} · {{ song.approval_status|capitalize }} · {{ song.analysis_status|capitalize }}</p>
-    </div>
-    <div class="flex flex-wrap items-start gap-2">
-        {% if song.uploaded_at %}{{ wlm_editor(song, csrf) }}{% endif %}
-        <form method="POST" class="mt-2">
-            <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="action" value="set_playlist_source"><input type="hidden" name="song_id" value="{{ song.id }}"><input type="hidden" name="playlist_source" value="submission">
-            <button type="submit" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs">Move to submissions</button>
+{% macro analysis_tools(song, csrf) %}
+{% if song.active and song.uploaded_at %}
+<div class="flex flex-wrap items-start gap-1 mt-2">
+    <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="action" value="retry_whisper"><input type="hidden" name="song_id" value="{{ song.id }}"><button type="submit" class="px-2 py-1 rounded bg-sky-950/60 hover:bg-sky-900/70 text-sky-300 text-xs">Retry Whisper</button></form>
+    {% if settings.trya_dcs_moderation_enabled == 'on' %}<form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="action" value="retry_moderation"><input type="hidden" name="song_id" value="{{ song.id }}"><button type="submit" class="px-2 py-1 rounded bg-violet-950/60 hover:bg-violet-900/70 text-violet-300 text-xs">Retry moderation</button></form>{% endif %}
+    <details>
+        <summary class="list-none cursor-pointer px-2 py-1 rounded bg-gray-700/70 hover:bg-gray-600 text-gray-300 text-xs">Import transcript</summary>
+        <form method="POST" class="mt-2 w-[34rem] max-w-[82vw] rounded-lg border border-gray-600 bg-discord-darker p-3 space-y-2">
+            <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="action" value="import_transcript"><input type="hidden" name="song_id" value="{{ song.id }}">
+            <label class="block text-gray-300 text-xs font-medium">Word timestamps JSON</label>
+            <textarea name="transcript_json" rows="8" maxlength="1500000" required placeholder='[{"word":"Hello","start":0.5,"end":0.9}]' class="w-full bg-discord-dark border border-gray-600 rounded p-2 text-gray-200 font-mono text-xs"></textarea>
+            <p class="text-gray-500 text-[11px]">This replaces the stored word timestamps and ASS subtitles. Every item must contain exactly word, start and end.</p>
+            <div class="flex justify-end"><button type="submit" class="px-2 py-1 rounded bg-gray-600 hover:bg-gray-500 text-white text-xs">Validate and replace</button></div>
         </form>
+    </details>
+    <form method="POST" onsubmit="return confirm('Remove this song from its active playlist? Original files and rights evidence will be retained.')"><input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="action" value="remove_song"><input type="hidden" name="song_id" value="{{ song.id }}"><button type="submit" class="px-2 py-1 rounded border border-amber-700/60 bg-amber-950/50 hover:bg-amber-900/60 text-amber-300 text-xs">Remove</button></form>
+</div>
+{% endif %}
+{% endmacro %}
+{% macro special_song_row(song, csrf) %}
+<div class="rounded-lg border border-gray-700 bg-discord-darker/60 p-3">
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div class="min-w-0">
+            <p class="text-white font-medium truncate">{% if song.public_suno_url %}<a href="{{ song.public_suno_url }}" target="_blank" rel="noopener noreferrer" class="hover:text-purple-300 hover:underline" title="Open this song in Suno">{{ song.title or ('Song #' ~ song.id) }}</a>{% else %}{{ song.title or ('Song #' ~ song.id) }}{% endif %}</p>
+            <p class="text-gray-500 text-xs truncate">{{ song.artist or song.user_name }}{% if settings.trya_dcs_moderation_enabled == 'on' %} · {{ song.approval_status|capitalize }}{% endif %} · {{ song.analysis_status|capitalize }}</p>
+        </div>
+        <div class="flex flex-wrap items-start gap-2">
+            {% if song.uploaded_at %}{{ wlm_editor(song, csrf) }}{% endif %}
+            <form method="POST" class="mt-2">
+                <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="action" value="set_playlist_source"><input type="hidden" name="song_id" value="{{ song.id }}"><input type="hidden" name="playlist_source" value="submission">
+                <button type="submit" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs">Move to submissions</button>
+            </form>
+        </div>
     </div>
+    {{ analysis_tools(song, csrf) }}
 </div>
 {% endmacro %}
 {% block title %}TrYa DCS{% endblock %}
@@ -109,14 +131,15 @@
             <p class="text-gray-500 text-xs mt-1">Dedicated RTMP listener on port 1937.</p>
         </div>
     </div>
-    {% if stream_log %}
-    <details class="border-t border-gray-700/50">
-        <summary class="px-5 py-3 text-gray-300 text-sm cursor-pointer">Publisher log</summary>
-        <div class="mx-5 mb-5 max-h-52 overflow-y-auto bg-black/30 border border-gray-700 rounded-lg p-3 font-mono text-xs text-gray-400 space-y-1">
-            {% for entry in stream_log %}<p class="{{ 'text-red-300' if entry.level == 'error' else '' }}">{{ entry.line }}</p>{% endfor %}
+    <div class="border-t border-gray-700/50 p-5">
+        <div class="flex items-center justify-between gap-3 mb-3">
+            <div><h4 class="text-gray-200 text-sm font-semibold">Live activity log</h4><p class="text-gray-600 text-xs mt-1">Publisher, upload, Whisper, moderation and admin actions.</p></div>
+            <button id="dcs-log-copy" type="button" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs">Copy log</button>
         </div>
-    </details>
-    {% endif %}
+        <div id="dcs-live-log" class="max-h-64 overflow-y-auto bg-black/30 border border-gray-700 rounded-lg p-3 font-mono text-xs text-gray-400 space-y-1">
+            {% for entry in stream_log %}<p data-ts="{{ entry.ts }}" class="{{ 'text-red-300' if entry.level == 'error' else ('text-yellow-300' if entry.level == 'warning' else '') }}">{{ entry.line }}</p>{% else %}<p id="dcs-log-empty" class="text-gray-600">No DCS activity logged yet.</p>{% endfor %}
+        </div>
+    </div>
 </section>
 
 <form method="POST" class="space-y-6">
@@ -321,6 +344,21 @@
 </form>
 
 <section class="mt-6 bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden">
+    <div class="px-5 py-4 border-b border-gray-700/50">
+        <h3 class="text-white font-semibold">Offline player image</h3>
+        <p class="text-gray-500 text-sm mt-1">Displayed in the private player while no DCS publisher is live. PNG, JPEG or WebP; maximum 10 MiB and 8192×8192 pixels.</p>
+    </div>
+    <div class="p-5 flex flex-col lg:flex-row lg:items-end gap-4">
+        <form method="POST" enctype="multipart/form-data" class="flex-1 flex flex-col sm:flex-row sm:items-end gap-3">
+            <input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="upload_offline_image">
+            <label class="block flex-1"><span class="block text-gray-400 text-xs mb-1">Offline image</span><input type="file" name="offline_image" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" required class="block w-full text-sm text-gray-300 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-700 file:text-gray-200 hover:file:bg-gray-600"></label>
+            <button type="submit" class="px-3 py-2 rounded bg-discord-blurple hover:bg-indigo-500 text-white text-sm">{{ 'Replace image' if offline_image_configured else 'Upload image' }}</button>
+        </form>
+        {% if offline_image_configured %}<form method="POST" onsubmit="return confirm('Remove the configured DCS offline image?')"><input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="remove_offline_image"><button type="submit" class="px-3 py-2 rounded border border-red-700/60 bg-red-950/50 hover:bg-red-900/60 text-red-300 text-sm">Remove image</button></form>{% endif %}
+    </div>
+</section>
+
+<section class="mt-6 bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden">
     <div class="px-5 py-4 border-b border-gray-700/50 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
             <h3 class="text-white font-semibold">DCS submissions</h3>
@@ -332,15 +370,16 @@
     <div class="overflow-x-auto">
         <table class="w-full text-sm">
             <thead class="bg-discord-darker text-gray-500 text-xs uppercase">
-                <tr><th class="text-left px-5 py-3">Song</th><th class="text-left px-5 py-3">Member</th><th class="text-left px-5 py-3">Evidence status</th><th class="text-left px-5 py-3">Pipeline</th><th class="text-left px-5 py-3">Moderation</th><th class="text-left px-5 py-3">State</th></tr>
+                <tr><th class="text-left px-5 py-3">Song</th><th class="text-left px-5 py-3">Member</th><th class="text-left px-5 py-3">Evidence status</th><th class="text-left px-5 py-3">Pipeline</th>{% if settings.trya_dcs_moderation_enabled == 'on' %}<th class="text-left px-5 py-3">Moderation</th>{% endif %}<th class="text-left px-5 py-3">State</th></tr>
             </thead>
             <tbody class="divide-y divide-gray-700/50">
                 {% for song in submission_songs %}
                 <tr>
-                    <td class="px-5 py-3"><p class="text-white font-medium">{{ song.title or 'Pending upload' }}</p><p class="text-gray-500 text-xs">{{ song.artist or song.suno_uuid or ('Song #' ~ song.id) }}</p></td>
+                    <td class="px-5 py-3"><p class="text-white font-medium">{% if song.public_suno_url %}<a href="{{ song.public_suno_url }}" target="_blank" rel="noopener noreferrer" class="hover:text-purple-300 hover:underline" title="Open this song in Suno">{{ song.title or 'Pending upload' }}</a>{% else %}{{ song.title or 'Pending upload' }}{% endif %}</p><p class="text-gray-500 text-xs">{{ song.artist or song.suno_uuid or ('Song #' ~ song.id) }}</p></td>
                     <td class="px-5 py-3 text-gray-300">{{ song.user_name }}</td>
                     <td class="px-5 py-3"><span class="text-blue-300 capitalize">{{ song.suno_plan_status }}</span><span class="text-gray-600"> · </span><span class="text-purple-300 capitalize">{{ song.content_kind }}</span></td>
                     <td class="px-5 py-3 text-gray-400 capitalize">{{ song.analysis_status }}</td>
+                    {% if settings.trya_dcs_moderation_enabled == 'on' %}
                     <td class="px-5 py-3">
                         <p class="mb-2 capitalize {{ 'text-green-300' if song.approval_status == 'approved' else ('text-red-300' if song.approval_status == 'rejected' else 'text-yellow-300') }}">{{ song.approval_status }}</p>
                         {% if song.active and song.uploaded_at %}
@@ -350,6 +389,7 @@
                         </div>
                         {% endif %}
                     </td>
+                    {% endif %}
                     <td class="px-5 py-3">
                         <span class="{{ 'text-green-300' if song.active else 'text-gray-500' }}">{{ 'Active' if song.active else (song.remove_reason or 'Awaiting upload') }}</span>
                         {% if song.active and song.uploaded_at %}
@@ -362,6 +402,7 @@
                         </form>
                         {% endif %}
                         {% if song.uploaded_at %}{{ wlm_editor(song, admin_csrf) }}{% endif %}
+                        {{ analysis_tools(song, admin_csrf) }}
                         {% if song.analysis_status == 'failed' or (not song.active and not song.uploaded_at) %}
                         <form method="POST" class="mt-2" onsubmit="return confirm('Permanently remove this failed upload, its evidence row and all associated files? This cannot be undone.')">
                             <input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="purge_failed_upload"><input type="hidden" name="song_id" value="{{ song.id }}">
@@ -399,4 +440,47 @@
         </div>
     </div>
 </section>
+<script>
+const dcsLog = document.getElementById('dcs-live-log');
+let dcsLogSince = 0;
+function formatDcsLogLine(element) {
+    const stamp = Number(element.dataset.ts || 0);
+    if (!stamp || element.dataset.formatted) return;
+    element.textContent = `[${new Date(stamp * 1000).toLocaleTimeString()}] ${element.textContent}`;
+    element.dataset.formatted = '1';
+    dcsLogSince = Math.max(dcsLogSince, stamp);
+}
+for (const line of dcsLog.querySelectorAll('[data-ts]')) formatDcsLogLine(line);
+async function pollDcsLog() {
+    try {
+        const response = await fetch(`{{ url_for('trya_dcs_stream_log') }}?since=${encodeURIComponent(dcsLogSince)}`, {credentials: 'same-origin'});
+        if (response.ok) {
+            const payload = await response.json();
+            for (const entry of payload.entries || []) {
+                document.getElementById('dcs-log-empty')?.remove();
+                const line = document.createElement('p');
+                line.dataset.ts = String(entry.ts || 0);
+                line.className = entry.level === 'error' ? 'text-red-300' : (entry.level === 'warning' ? 'text-yellow-300' : '');
+                line.textContent = entry.line || '';
+                dcsLog.append(line);
+                formatDcsLogLine(line);
+            }
+            while (dcsLog.children.length > 500) dcsLog.firstElementChild.remove();
+            if ((payload.entries || []).length) dcsLog.scrollTop = dcsLog.scrollHeight;
+        }
+    } catch (_) {}
+    setTimeout(pollDcsLog, 2000);
+}
+document.getElementById('dcs-log-copy').addEventListener('click', async event => {
+    const text = Array.from(dcsLog.querySelectorAll('p')).map(line => line.textContent).join('\n');
+    try {
+        await navigator.clipboard.writeText(text);
+        event.currentTarget.textContent = 'Copied';
+        setTimeout(() => { event.currentTarget.textContent = 'Copy log'; }, 1500);
+    } catch (_) {
+        event.currentTarget.textContent = 'Copy failed';
+    }
+});
+setTimeout(pollDcsLog, 1000);
+</script>
 {% endblock %}
