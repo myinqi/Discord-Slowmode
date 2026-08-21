@@ -154,6 +154,7 @@ let chatFallbackActive = false;
 let chatFallbackInitialized = false;
 let chatFallbackAfter = '';
 const chatCsrf = {{ player_csrf|tojson }};
+const preferChatFallback = /Firefox\//.test(navigator.userAgent);
 const messages = document.getElementById('messages');
 const chatInput = document.getElementById('chat-input');
 const sendButton = document.getElementById('send-button');
@@ -243,7 +244,7 @@ async function authorizeStream(initial = false) {
 
 video.addEventListener('playing', () => {
     state.classList.add('hidden');
-    connectSocket();
+    if (preferChatFallback) startChatFallback(); else connectSocket();
 });
 video.addEventListener('waiting', () => showState('Buffering private stream...'));
 async function refreshStatus() {
@@ -495,7 +496,11 @@ function connectSocket() {
     });
 }
 
-setTimeout(connectSocket, 15000);
+if (preferChatFallback) {
+    setTimeout(startChatFallback, 250);
+} else {
+    setTimeout(connectSocket, 250);
+}
 
 document.getElementById('chat-form').addEventListener('submit', async event => {
     event.preventDefault();
