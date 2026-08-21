@@ -1,4 +1,31 @@
 {% extends "base.html" %}
+{% macro wlm_editor(song, csrf) %}
+<details class="relative inline-block mt-2">
+    <summary class="list-none cursor-pointer inline-flex px-2 py-1 rounded border border-fuchsia-700/50 bg-fuchsia-950/40 hover:bg-fuchsia-900/50 text-fuchsia-300 text-xs">{{ 'Edit WLM' if song.wlm_url else '+ WLM' }}</summary>
+    <form method="POST" class="mt-2 w-80 max-w-[80vw] rounded-lg border border-gray-600 bg-discord-darker p-3 space-y-2">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="action" value="save_wlm_url"><input type="hidden" name="song_id" value="{{ song.id }}">
+        <label class="block text-gray-400 text-xs">WeLoveMusic track URL</label>
+        <input type="url" name="wlm_url" value="{{ song.wlm_url or '' }}" placeholder="https://www.welovemusic.ai/track/..." class="w-full bg-discord-dark border border-gray-600 rounded px-2 py-1.5 text-white text-xs">
+        <div class="flex justify-end gap-2"><button type="submit" class="px-2 py-1 rounded bg-fuchsia-800 hover:bg-fuchsia-700 text-white text-xs">Save</button></div>
+        <p class="text-gray-600 text-[11px]">Save an empty field to remove the link.</p>
+    </form>
+</details>
+{% endmacro %}
+{% macro special_song_row(song, csrf) %}
+<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-lg border border-gray-700 bg-discord-darker/60 p-3">
+    <div class="min-w-0">
+        <p class="text-white font-medium truncate">{{ song.title or ('Song #' ~ song.id) }}</p>
+        <p class="text-gray-500 text-xs truncate">{{ song.artist or song.user_name }} · {{ song.approval_status|capitalize }} · {{ song.analysis_status|capitalize }}</p>
+    </div>
+    <div class="flex flex-wrap items-start gap-2">
+        {% if song.uploaded_at %}{{ wlm_editor(song, csrf) }}{% endif %}
+        <form method="POST" class="mt-2">
+            <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="action" value="set_playlist_source"><input type="hidden" name="song_id" value="{{ song.id }}"><input type="hidden" name="playlist_source" value="submission">
+            <button type="submit" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs">Move to submissions</button>
+        </form>
+    </div>
+</div>
+{% endmacro %}
 {% block title %}TrYa DCS{% endblock %}
 {% block content %}
 <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6">
@@ -301,14 +328,14 @@
         </div>
         <a href="{{ url_for('trya_dcs_consent_csv') }}" class="inline-flex justify-center px-3 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm">Export evidence CSV</a>
     </div>
-    {% if songs %}
+    {% if submission_songs %}
     <div class="overflow-x-auto">
         <table class="w-full text-sm">
             <thead class="bg-discord-darker text-gray-500 text-xs uppercase">
                 <tr><th class="text-left px-5 py-3">Song</th><th class="text-left px-5 py-3">Member</th><th class="text-left px-5 py-3">Evidence status</th><th class="text-left px-5 py-3">Pipeline</th><th class="text-left px-5 py-3">Moderation</th><th class="text-left px-5 py-3">State</th></tr>
             </thead>
             <tbody class="divide-y divide-gray-700/50">
-                {% for song in songs %}
+                {% for song in submission_songs %}
                 <tr>
                     <td class="px-5 py-3"><p class="text-white font-medium">{{ song.title or 'Pending upload' }}</p><p class="text-gray-500 text-xs">{{ song.artist or song.suno_uuid or ('Song #' ~ song.id) }}</p></td>
                     <td class="px-5 py-3 text-gray-300">{{ song.user_name }}</td>
@@ -334,6 +361,7 @@
                             <button type="submit" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs">Set</button>
                         </form>
                         {% endif %}
+                        {% if song.uploaded_at %}{{ wlm_editor(song, admin_csrf) }}{% endif %}
                         {% if song.analysis_status == 'failed' or (not song.active and not song.uploaded_at) %}
                         <form method="POST" class="mt-2" onsubmit="return confirm('Permanently remove this failed upload, its evidence row and all associated files? This cannot be undone.')">
                             <input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="purge_failed_upload"><input type="hidden" name="song_id" value="{{ song.id }}">
@@ -351,18 +379,24 @@
     {% endif %}
 </section>
 
-<section class="mt-6 bg-discord-dark border border-gray-700/50 rounded-lg p-5">
-    <h3 class="text-white font-semibold">Implementation status</h3>
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4 text-sm">
-        <p class="text-green-300">✓ Separate permission, settings and storage boundary</p>
-        <p class="text-green-300">✓ Rights evidence and stream-token database schema</p>
-        <p class="text-green-300">✓ Discord submission, replacement, deletion and evidence flow</p>
-        <p class="text-green-300">✓ MediaMTX, protected HLS and player foundation</p>
-        <p class="text-green-300">✓ Discord OAuth membership gate</p>
-        <p class="text-green-300">✓ WebSocket Discord chat bridge and guild emoji picker</p>
-        <p class="text-green-300">✓ Intro/outro pools and safe-stop outro</p>
-        <p class="text-green-300">✓ Dedicated OBS RTMP overlay contribution</p>
+<section class="mt-6 bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden">
+    <div class="px-5 py-4 border-b border-gray-700/50">
+        <h3 class="text-white font-semibold">Intro and outro playlists</h3>
+        <p class="text-gray-500 text-sm mt-1">Special songs are kept out of the normal submission playlist and played in their configured positions.</p>
     </div>
-    <p class="text-gray-600 text-xs mt-4 font-mono break-all">Persistent data: {{ data_directory }}</p>
+    <div class="p-5 space-y-6">
+        <div>
+            <div class="flex items-center justify-between gap-3 mb-3"><h4 class="text-purple-300 font-semibold">Intros</h4><span class="text-gray-600 text-xs">{{ intro_songs|length }} song(s)</span></div>
+            <div class="space-y-2">
+                {% for song in intro_songs %}{{ special_song_row(song, admin_csrf) }}{% else %}<p class="text-gray-600 text-sm">No songs are assigned to the intro playlist.</p>{% endfor %}
+            </div>
+        </div>
+        <div class="pt-5 border-t border-gray-700/50">
+            <div class="flex items-center justify-between gap-3 mb-3"><h4 class="text-fuchsia-300 font-semibold">Outros</h4><span class="text-gray-600 text-xs">{{ outro_songs|length }} song(s)</span></div>
+            <div class="space-y-2">
+                {% for song in outro_songs %}{{ special_song_row(song, admin_csrf) }}{% else %}<p class="text-gray-600 text-sm">No songs are assigned to the outro playlist.</p>{% endfor %}
+            </div>
+        </div>
+    </div>
 </section>
 {% endblock %}

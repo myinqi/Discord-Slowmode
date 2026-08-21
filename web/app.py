@@ -8749,6 +8749,39 @@ def create_app(db: Database, bot=None) -> Quart:
                     "success" if result.get("ok") else "error",
                 )
                 return redirect(request.url)
+            if action == "save_wlm_url":
+                try:
+                    song_id = int(form.get("song_id") or 0)
+                except (TypeError, ValueError):
+                    song_id = 0
+                song = await db.get_trya_dcs_song(song_id)
+                wlm_url = (form.get("wlm_url") or "").strip()
+                if not song:
+                    await flash("The DCS submission no longer exists.", "error")
+                    return redirect(request.url)
+                if wlm_url:
+                    wlm_match = re.fullmatch(
+                        r"https://www\.welovemusic\.ai/track/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/?",
+                        wlm_url,
+                    )
+                    if not wlm_match:
+                        await flash("Enter a valid WeLoveMusic track URL or leave it empty.", "error")
+                        return redirect(request.url)
+                    wlm_url = f"https://www.welovemusic.ai/track/{wlm_match.group(1).lower()}"
+                await db.update_trya_dcs_song(song_id, wlm_url=wlm_url)
+                for playlist_song in trya_dcs_manager.playlist:
+                    if int(playlist_song.get("id") or 0) == song_id:
+                        playlist_song["wlm_url"] = wlm_url
+                if (
+                    trya_dcs_manager.current_song
+                    and int(trya_dcs_manager.current_song.get("id") or 0) == song_id
+                ):
+                    trya_dcs_manager.current_song["wlm_url"] = wlm_url
+                await flash(
+                    "WeLoveMusic URL saved." if wlm_url else "WeLoveMusic URL removed.",
+                    "success",
+                )
+                return redirect(request.url)
             if action == "purge_failed_upload":
                 try:
                     song_id = int(form.get("song_id") or 0)
@@ -8964,6 +8997,13 @@ def create_app(db: Database, bot=None) -> Quart:
 
         stats = await db.get_trya_dcs_admin_stats()
         songs = await db.get_trya_dcs_songs(active_only=False)
+        songs_desc = list(reversed(songs))
+        submission_songs = [
+            song for song in songs_desc
+            if (song.get("playlist_source") or "submission") not in {"intro", "outro"}
+        ]
+        intro_songs = [song for song in songs_desc if song.get("playlist_source") == "intro"]
+        outro_songs = [song for song in songs_desc if song.get("playlist_source") == "outro"]
         stream_status = await trya_dcs_manager.get_status()
         oauth_ready = bool(
             Config.DISCORD_CLIENT_ID
@@ -8982,7 +9022,10 @@ def create_app(db: Database, bot=None) -> Quart:
             oauth_callback_url=f"{_public_web_url()}/trya-dcs/oauth/callback",
             protected_hls_url=f"{_public_web_url()}/dcs-stream/{stream_path}/index.m3u8",
             data_directory=TRYA_DCS_DIR,
-            songs=list(reversed(songs)),
+            songs=songs_desc,
+            submission_songs=submission_songs,
+            intro_songs=intro_songs,
+            outro_songs=outro_songs,
             stream_status=stream_status,
             stream_log=trya_dcs_manager.get_log(max_age_secs=900),
             admin_csrf=admin_csrf,

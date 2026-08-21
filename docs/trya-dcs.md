@@ -37,7 +37,9 @@ The current implementation includes:
 - admin-assigned intro/outro pools, with intro played once and outro on stop-mode
   completion or safe stop;
 - optional validated WeLoveMusic track links alongside canonical Suno links in the
-  private player;
+  private player, editable during submission or later from the Admin UI;
+- separate Admin UI lists for intro songs followed by outro songs, excluded from
+  the normal submission table;
 - permanent Admin UI cleanup for failed or unfinished uploads, including their
   database rows and associated files;
 - a dedicated OBS contribution listener at `rtmp://HOST:1937/live` with a
