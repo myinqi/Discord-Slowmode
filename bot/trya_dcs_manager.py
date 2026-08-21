@@ -402,6 +402,8 @@ class TryaDcsManager(TryaStreamManager):
             stream_title_text=stream_title,
             disclaimer_enabled=bool(disclaimer),
             disclaimer_text=disclaimer,
+            now_playing_enabled=False,
+            stream_title_top_left=True,
         )
         video_bitrate = await self._bounded_setting(
             "trya_dcs_video_bitrate_kbps", 2500, 1000, 6000

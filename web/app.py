@@ -9934,7 +9934,6 @@ def create_app(db: Database, bot=None) -> Quart:
             return {"error": "rate_limited"}, 429
         recent.append(now_mono)
         app.trya_dcs_token_rate[token_key] = recent
-        await db.revoke_trya_dcs_user_tokens(int(user_id))
         await db.purge_expired_trya_dcs_tokens()
         raw_token = secrets.token_urlsafe(48)
         token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()

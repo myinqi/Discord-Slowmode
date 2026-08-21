@@ -2253,6 +2253,8 @@ class TryaStreamManager:
         stream_title_text: str = "",
         disclaimer_enabled: bool = False,
         disclaimer_text: str = "",
+        now_playing_enabled: bool = True,
+        stream_title_top_left: bool = False,
     ) -> str | None:
         """Merge all per-song ASS files into one with time offsets.
         Adds a NowPlaying title card at the start of each song.
@@ -2302,10 +2304,11 @@ class TryaStreamManager:
             title  = _strip_emoji(song.get("title")  or "Unknown").replace("\\", "\\\\").replace("{", "\\{")
             artist = _strip_emoji(song.get("artist") or "").replace("\\", "\\\\").replace("{", "\\{")
             label  = f"\\N{artist}" if artist else ""
-            events.append(
-                f"Dialogue: 2,{t_start},{t_end},NowPlaying,,0,0,0,,"
-                f"{{\\pos(20,20)\\an7\\fad(600,600)}}♪  {title}{label}  ♪"
-            )
+            if now_playing_enabled:
+                events.append(
+                    f"Dialogue: 2,{t_start},{t_end},NowPlaying,,0,0,0,,"
+                    f"{{\\pos(20,20)\\an7\\fad(600,600)}}♪  {title}{label}  ♪"
+                )
 
             # Progress info card: bottom-right, e.g. "4:33  ·  Song 9/30  ·  ~1h 12m left"
             if show_progress:
@@ -2363,10 +2366,16 @@ class TryaStreamManager:
             if disclaimer_enabled and disclaimer_text:
                 disclaimer_lines = max(1, len(disclaimer_text.splitlines()))
             title_margin_v = 72 + (disclaimer_lines * 36) + (16 if disclaimer_lines else 0)
-            events.append(
-                f"Dialogue: 4,{_cs_to_ts(0)},{_cs_to_ts(offset_cs)},StreamTitle,,0,0,{title_margin_v},,"
-                f"{{\\fad(300,300)}}{stream_title}"
-            )
+            if stream_title_top_left:
+                events.append(
+                    f"Dialogue: 4,{_cs_to_ts(0)},{_cs_to_ts(offset_cs)},StreamTitle,,0,0,0,,"
+                    f"{{\\pos(20,20)\\an7\\fad(300,300)}}{stream_title}"
+                )
+            else:
+                events.append(
+                    f"Dialogue: 4,{_cs_to_ts(0)},{_cs_to_ts(offset_cs)},StreamTitle,,0,0,{title_margin_v},,"
+                    f"{{\\fad(300,300)}}{stream_title}"
+                )
 
         try:
             with open(out_path, "w", encoding="utf-8") as f:

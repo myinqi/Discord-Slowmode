@@ -150,7 +150,9 @@ small authorization endpoint. The bot never proxies the media body.
 4. The token is stored hashed in SQLite and raw only in a Secure, HttpOnly,
    SameSite cookie scoped to `/dcs-stream/`.
 5. Caddy checks each HLS request with the bot before proxying to MediaMTX.
-6. The player renews the token before expiry without reloading playback.
+6. The player renews the token before expiry without reloading playback. The old
+   token remains valid only until its original expiry so in-flight HLS segment
+   requests are not interrupted during cookie rotation.
 7. Guild membership is rechecked periodically. Leaving the guild revokes all
    active DCS stream tokens for that Discord user.
 
