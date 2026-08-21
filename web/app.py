@@ -10137,6 +10137,45 @@ def create_app(db: Database, bot=None) -> Quart:
             offline_image_url=offline_image_url,
         )
 
+    @app.route("/trya-dcs/api/events")
+    async def trya_dcs_event_stream():
+        from quart import Response
+        from bot.trya_dcs_events import trya_dcs_events
+
+        if (await db.get_setting("trya_dcs_enabled") or "off") != "on":
+            return {"error": "disabled"}, 503
+        origin = (request.headers.get("Origin") or "").rstrip("/")
+        if origin and origin != _public_web_url().rstrip("/"):
+            return {"error": "invalid_origin"}, 403
+        user_id = session.get("trya_dcs_discord_user_id")
+        try:
+            guild_id = int(await db.get_setting("trya_dcs_guild_id") or Config.GUILD_ID or 0)
+        except (TypeError, ValueError):
+            return {"error": "invalid_configuration"}, 503
+        if not user_id or not await _trya_dcs_membership_valid(int(user_id), guild_id):
+            return {"error": "forbidden"}, 403
+
+        async def events():
+            async with trya_dcs_events.subscribe() as queue:
+                while True:
+                    try:
+                        event = await asyncio.wait_for(queue.get(), timeout=30)
+                    except asyncio.TimeoutError:
+                        if not await _trya_dcs_membership_valid(int(user_id), guild_id):
+                            return
+                        yield ": heartbeat\n\n"
+                        continue
+                    yield f"data: {json.dumps(event, ensure_ascii=False, separators=(',', ':'))}\n\n"
+
+        return Response(
+            events(),
+            content_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     @app.websocket("/trya-dcs/ws")
     async def trya_dcs_websocket():
         """Authenticated DCS state and Discord-backed chat transport."""

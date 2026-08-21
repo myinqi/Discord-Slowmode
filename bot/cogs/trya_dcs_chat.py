@@ -48,6 +48,17 @@ async def serialize_discord_message(message: discord.Message) -> dict:
             "is_image": content_type.startswith("image/"),
         })
 
+    mentions = []
+    for mentioned in message.mentions:
+        mention_color = ""
+        if isinstance(mentioned, discord.Member) and mentioned.color.value:
+            mention_color = f"#{mentioned.color.value:06x}"
+        mentions.append({
+            "id": str(mentioned.id),
+            "display_name": getattr(mentioned, "display_name", mentioned.name),
+            "role_color": mention_color,
+        })
+
     embeds = []
     for embed in message.embeds:
         image_url = ""
@@ -74,6 +85,7 @@ async def serialize_discord_message(message: discord.Message) -> dict:
         "edited_at": message.edited_at.timestamp() if message.edited_at else None,
         "web_origin": bool(message.webhook_id),
         "reply": reply,
+        "mentions": mentions,
         "attachments": attachments,
         "embeds": embeds,
     }
