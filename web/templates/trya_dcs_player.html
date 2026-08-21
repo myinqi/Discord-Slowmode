@@ -325,15 +325,15 @@ function applyStreamMode(running) {
     }
 }
 
-function maintainLivePosition(force = false) {
+function maintainLivePosition() {
     if (streamIsRunning !== true || !video.seekable.length || video.readyState < 1) return;
     const range = video.seekable.length - 1;
     const liveStart = video.seekable.start(range);
     const liveEdge = video.seekable.end(range);
     const latency = liveEdge - video.currentTime;
     const now = Date.now();
-    if (!force && latency >= 7 && latency <= 30) return;
-    if (!force && now - lastLiveCorrection < 5000) return;
+    if (latency >= 7 && latency <= 30) return;
+    if (now - lastLiveCorrection < 5000) return;
     const target = Math.max(liveStart + 0.25, liveEdge - 12);
     if (Math.abs(video.currentTime - target) < 1) return;
     lastLiveCorrection = now;
@@ -401,16 +401,16 @@ async function authorizeStream(initial = false) {
     renewTimer = setTimeout(() => authorizeStream(false), renewAfter);
 }
 
-video.addEventListener('canplay', () => maintainLivePosition(true));
+video.addEventListener('canplay', maintainLivePosition);
 video.addEventListener('playing', () => {
     state.classList.add('hidden');
-    maintainLivePosition(true);
+    maintainLivePosition();
     if (preferChatFallback) startChatFallback(); else connectSocket();
 });
 video.addEventListener('waiting', () => {
     if (streamIsRunning !== false) {
         showState('Buffering private stream...');
-        maintainLivePosition(true);
+        maintainLivePosition();
     }
 });
 function updateWlmLink(value) {
