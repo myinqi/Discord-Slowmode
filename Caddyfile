@@ -5,7 +5,9 @@ bot.macfreun.de {
 		forward_auth slowmode-bot:5000 {
 			uri /trya-dcs/internal/media-auth
 		}
-		reverse_proxy mediamtx:8888
+		reverse_proxy mediamtx:8888 {
+			header_down Location "^/(.*)$" "/dcs-stream/$1"
+		}
 	}
 
 	handle {

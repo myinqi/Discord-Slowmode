@@ -676,7 +676,11 @@ def create_app(db: Database, bot=None) -> Quart:
         configured = Config.WEB_URL.strip().rstrip("/")
         if configured:
             return configured
-        return request.url_root.rstrip("/")
+        try:
+            return request.url_root.rstrip("/")
+        except RuntimeError:
+            scheme = "https" if websocket.scheme == "wss" else "http"
+            return f"{scheme}://{websocket.host}".rstrip("/")
 
     def _player_discord_callback_url() -> str:
         return f"{_public_web_url()}/player/discord/callback"
@@ -9350,22 +9354,29 @@ def create_app(db: Database, bot=None) -> Quart:
         )
         from bot.trya_dcs_events import trya_dcs_events
 
-        if (await db.get_setting("trya_dcs_enabled") or "off") != "on":
+        async def reject(reason: str) -> None:
+            print(f"[trya-dcs-ws] Rejected: {reason}", flush=True)
             await websocket.close(4403)
+
+        if (await db.get_setting("trya_dcs_enabled") or "off") != "on":
+            await reject("DCS is disabled")
             return
         origin = (websocket.headers.get("Origin") or "").rstrip("/")
         if origin and origin != _public_web_url().rstrip("/"):
-            await websocket.close(4403)
+            await reject(f"unexpected origin {origin!r}")
             return
         user_id = session.get("trya_dcs_discord_user_id")
         try:
             guild_id = int(await db.get_setting("trya_dcs_guild_id") or Config.GUILD_ID or 0)
             channel_id = int(await db.get_setting("trya_dcs_chat_channel_id") or 0)
         except (TypeError, ValueError):
-            await websocket.close(4403)
+            await reject("invalid guild or channel configuration")
             return
-        if not user_id or not await _trya_dcs_membership_valid(int(user_id), guild_id):
-            await websocket.close(4403)
+        if not user_id:
+            await reject("Discord session is missing")
+            return
+        if not await _trya_dcs_membership_valid(int(user_id), guild_id):
+            await reject("Discord membership validation failed")
             return
 
         guild = get_guild()
@@ -9376,16 +9387,10 @@ def create_app(db: Database, bot=None) -> Quart:
             except Exception:
                 channel = None
 
-        initial_messages = []
-        if channel is not None and hasattr(channel, "history"):
-            try:
-                history = [message async for message in channel.history(limit=50, oldest_first=True)]
-                initial_messages = [
-                    await serialize_discord_message(message) for message in history
-                ]
-            except Exception as exc:
-                print(f"[trya-dcs-chat] History load failed: {exc}", flush=True)
-
+        print(
+            f"[trya-dcs-ws] Connected user={user_id} channel={channel_id} available={bool(channel)}",
+            flush=True,
+        )
         await websocket.send(json.dumps({
             "version": 1,
             "type": "session.ready",
@@ -9394,9 +9399,23 @@ def create_app(db: Database, bot=None) -> Quart:
                 "user_id": str(user_id),
                 "chat_enabled": bool(channel_id and channel),
                 "emojis": await guild_emoji_payload(guild),
-                "messages": initial_messages,
+                "messages": [],
             },
         }))
+
+        if channel is not None and hasattr(channel, "history"):
+            try:
+                history = [message async for message in channel.history(limit=50, oldest_first=True)]
+                for message in history:
+                    await websocket.send(json.dumps({
+                        "version": 1,
+                        "type": "chat.message",
+                        "timestamp": time.time(),
+                        "data": await serialize_discord_message(message),
+                    }))
+                print(f"[trya-dcs-ws] Sent {len(history)} history message(s).", flush=True)
+            except Exception as exc:
+                print(f"[trya-dcs-chat] History load failed: {exc}", flush=True)
 
         async with trya_dcs_events.subscribe() as event_queue:
             async def push_events():
@@ -9481,6 +9500,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     await membership_task
                 except asyncio.CancelledError:
                     pass
+                print(f"[trya-dcs-ws] Disconnected user={user_id}", flush=True)
 
     @app.route("/trya-dcs/api/stream-token", methods=["POST"])
     async def trya_dcs_stream_token():
