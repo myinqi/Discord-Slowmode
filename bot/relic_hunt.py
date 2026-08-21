@@ -8,6 +8,7 @@ in the relic_* tables of the shared SQLite database.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import random
 import time
@@ -243,44 +244,91 @@ class RelicHunt:
 
     def __init__(self, db, stream_kind: str = "exp"):
         self.db = db
-        self.stream_kind = "trya" if stream_kind == "trya" else "exp"
+        self.stream_kind = stream_kind if stream_kind in {"exp", "trya", "dcs"} else "exp"
         self._bot = None
         self._running = False
         self._watcher_task = None
+        self._prepare_lock = asyncio.Lock()
+        self._prepared = False
+        self._response_sender = contextvars.ContextVar(
+            f"relic_response_sender_{id(self)}", default=None
+        )
 
     # ------------------------------------------------------------------ #
     # Lifecycle                                                            #
     # ------------------------------------------------------------------ #
+    def _command_handlers(self) -> dict:
+        return {
+            "raven": self._cmd_raven,
+            "nest": self._cmd_nest,
+            "items": self._cmd_items,
+            "top": self._cmd_top,
+            "rank": self._cmd_rank,
+            "daily": self._cmd_daily,
+            "ritual": self._cmd_ritual,
+            "combine": self._cmd_combine,
+            "village": self._cmd_village,
+            "entertain": self._cmd_village_donate,
+            "teach": self._cmd_village_donate,
+            "trade": self._cmd_village_donate,
+            "invest": self._cmd_village_donate,
+            "nextvillage": self._cmd_next_village,
+            "phrase": self._cmd_phrase,
+            "solve": self._cmd_solve,
+            "relichelp": self._cmd_help,
+            "relic": self._cmd_admin,
+        }
+
+    async def prepare(self) -> None:
+        async with self._prepare_lock:
+            if self._prepared:
+                return
+            await self.db.ensure_relic_tables()
+            await self._seed_if_empty()
+            self._prepared = True
+
+    async def dispatch_message(self, text: str, context: dict, sender) -> bool:
+        await self.prepare()
+        clean = str(text or "").strip()
+        prefix = (await self.db.relic_get_setting("command_prefix")) or "!"
+        if not clean.startswith(prefix):
+            return False
+        parts = clean[len(prefix):].split(None, 1)
+        command = parts[0].lower() if parts else ""
+        args = parts[1] if len(parts) > 1 else ""
+        handler = self._command_handlers().get(command)
+        context = {
+            **context,
+            "text": clean,
+            "args": args,
+        }
+        token = self._response_sender.set(sender)
+        try:
+            if handler:
+                if command == "relic":
+                    await handler(context)
+                else:
+                    await self._subscriber_guard(handler)(context)
+                return True
+            custom = await self.db.relic_get_custom_command(command)
+            if custom and custom.get("enabled") and custom.get("response"):
+                await self._send(custom["response"])
+                return True
+            return False
+        finally:
+            self._response_sender.reset(token)
+
     async def start(self, twitch_bot) -> None:
         self._bot = twitch_bot
         self._running = True
-        await self.db.ensure_relic_tables()
-        await self._seed_if_empty()
+        await self.prepare()
 
         prefix = (await self.db.relic_get_setting("command_prefix")) or "!"
         p = prefix.rstrip("!")
 
-        for cmd, handler in [
-            (f"{p}raven",      self._cmd_raven),
-            (f"{p}nest",       self._cmd_nest),
-            (f"{p}items",      self._cmd_items),
-            (f"{p}top",        self._cmd_top),
-            (f"{p}rank",       self._cmd_rank),
-            (f"{p}daily",      self._cmd_daily),
-            (f"{p}ritual",     self._cmd_ritual),
-            (f"{p}combine",    self._cmd_combine),
-            (f"{p}village",    self._cmd_village),
-            (f"{p}entertain",  self._cmd_village_donate),
-            (f"{p}teach",      self._cmd_village_donate),
-            (f"{p}trade",      self._cmd_village_donate),
-            (f"{p}invest",     self._cmd_village_donate),
-            (f"{p}nextvillage", self._cmd_next_village),
-            (f"{p}phrase",     self._cmd_phrase),
-            (f"{p}solve",      self._cmd_solve),
-            (f"{p}relichelp",  self._cmd_help),
-            (f"{p}relic",      self._cmd_admin),
-        ]:
-            if getattr(handler, "__name__", "") == "_cmd_admin":
+        for command, handler in self._command_handlers().items():
+            cmd = f"{p}{command}"
+            if command == "relic":
                 twitch_bot.register_command(cmd, handler)
             else:
                 twitch_bot.register_command(cmd, self._subscriber_guard(handler))
@@ -447,7 +495,10 @@ class RelicHunt:
         _rlog(f"Hrafnathorp payout: {detail}")
 
     async def _send(self, msg: str) -> None:
-        if self._bot:
+        sender = self._response_sender.get()
+        if sender:
+            await sender(msg)
+        elif self._bot:
             await self._bot.send(msg)
 
     # ------------------------------------------------------------------ #

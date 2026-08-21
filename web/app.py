@@ -8721,6 +8721,15 @@ def create_app(db: Database, bot=None) -> Quart:
             "trya_dcs_obs_enabled": "off",
             "trya_dcs_obs_stream_key": "",
             "trya_dcs_obs_fps": "20",
+            "trya_dcs_relic_hunt_enabled": "on",
+            "trya_dcs_info_top_hunters": "on",
+            "trya_dcs_info_commands": "on",
+            "trya_dcs_info_recent_finds": "on",
+            "trya_dcs_info_recent_combines": "on",
+            "trya_dcs_info_custom_enabled": "off",
+            "trya_dcs_info_custom_title": "Community information",
+            "trya_dcs_info_custom_text": "",
+            "trya_dcs_info_rotation_seconds": "12",
         }
 
         async def get_dcs_loop_videos() -> list[dict]:
@@ -8760,6 +8769,28 @@ def create_app(db: Database, bot=None) -> Quart:
                 await flash("The DCS form expired. Please try again.", "error")
                 return redirect(request.url)
             action = form.get("action", "save_settings")
+            if action == "save_dcs_relic_display":
+                try:
+                    rotation_seconds = max(5, min(60, int(form.get("info_rotation_seconds") or "12")))
+                except (TypeError, ValueError):
+                    rotation_seconds = 12
+                values = {
+                    "trya_dcs_relic_hunt_enabled": "on" if form.get("relic_hunt_enabled") else "off",
+                    "trya_dcs_info_top_hunters": "on" if form.get("info_top_hunters") else "off",
+                    "trya_dcs_info_commands": "on" if form.get("info_commands") else "off",
+                    "trya_dcs_info_recent_finds": "on" if form.get("info_recent_finds") else "off",
+                    "trya_dcs_info_recent_combines": "on" if form.get("info_recent_combines") else "off",
+                    "trya_dcs_info_custom_enabled": "on" if form.get("info_custom_enabled") else "off",
+                    "trya_dcs_info_custom_title": str(form.get("info_custom_title") or "Community information").strip()[:100],
+                    "trya_dcs_info_custom_text": str(form.get("info_custom_text") or "").strip()[:3000],
+                    "trya_dcs_info_rotation_seconds": str(rotation_seconds),
+                }
+                for key, value in values.items():
+                    await db.set_setting(key, value)
+                from bot.trya_dcs_manager import log_dcs_event
+                log_dcs_event("DCS Raven's Nest display settings saved.")
+                await flash("DCS Raven's Nest display settings saved.", "success")
+                return redirect(request.url)
             if action == "upload_dcs_loop_video":
                 if trya_dcs_manager.is_running:
                     await flash("Stop TrYa DCS before changing overlay videos.", "error")
@@ -9520,6 +9551,109 @@ def create_app(db: Database, bot=None) -> Quart:
             since = 0
         from bot.trya_dcs_manager import get_dcs_log
         return {"entries": get_dcs_log(since_ts=since, max_age_secs=3600)}
+
+    async def _trya_dcs_relic_payload() -> dict:
+        await db.ensure_relic_tables()
+        leaderboard = await db.relic_get_leaderboard(5)
+        recent = await db.relic_get_recent_log(30)
+        ritual = await db.relic_get_ritual()
+        phrase = await db.relic_get_phrase_puzzle()
+        active_events = await db.relic_get_active_events()
+        event_defs = {
+            event["id"]: event for event in await db.relic_get_all_events()
+        }
+        village = await db.relic_get_village_areas()
+        prefix = (await db.relic_get_setting("command_prefix")) or "!"
+        try:
+            rotation_seconds = max(
+                5,
+                min(60, int(await db.get_setting("trya_dcs_info_rotation_seconds") or "12")),
+            )
+        except (TypeError, ValueError):
+            rotation_seconds = 12
+        return {
+            "enabled": (
+                (await db.relic_get_setting("enabled")) != "false"
+                and (await db.get_setting("trya_dcs_relic_hunt_enabled") or "on") == "on"
+            ),
+            "updated_at": time.time(),
+            "top_hunters": [
+                {
+                    "username": row.get("username") or "Unknown",
+                    "points": int(row.get("points") or 0),
+                    "level": int(row.get("level") or 1),
+                }
+                for row in leaderboard
+            ],
+            "recent_finds": [
+                {
+                    "username": row.get("username") or "Unknown",
+                    "item_name": row.get("item_name") or "Unknown relic",
+                    "rarity": row.get("rarity") or "common",
+                    "created_at": float(row.get("created_at") or 0),
+                }
+                for row in recent if row.get("result_type") == "found"
+            ][:6],
+            "recent_combines": [
+                {
+                    "username": row.get("username") or "Unknown",
+                    "activity": row.get("item_name") or "Unknown combination",
+                    "rarity": row.get("rarity") or "common",
+                    "created_at": float(row.get("created_at") or 0),
+                }
+                for row in recent if row.get("result_type") == "combine"
+            ][:6],
+            "commands": [
+                f"{prefix}{command}" for command in (
+                    "raven", "nest", "items", "top", "rank", "daily",
+                    "ritual", "combine", "village", "phrase", "solve", "relichelp",
+                )
+            ],
+            "ritual": {
+                "energy": int(ritual.get("energy") or 0),
+                "goal": max(1, int(ritual.get("goal") or 1)),
+            },
+            "phrase": {
+                "enabled": bool(phrase.get("enabled")),
+                "progress": phrase.get("revealed_mask") or "",
+            },
+            "events": [
+                {
+                    "id": active.get("event_id"),
+                    "name": event_defs.get(active.get("event_id"), {}).get("name")
+                    or active.get("event_id") or "Event",
+                    "ends_at": float(active.get("ends_at") or 0),
+                }
+                for active in active_events
+            ],
+            "village": [
+                {
+                    "name": area.get("name") or area.get("area_id"),
+                    "level": int(area.get("level") or 0),
+                    "progress": int(area.get("progress") or 0),
+                    "max_level": int(area.get("max_level") or 5),
+                }
+                for area in village
+            ],
+            "display": {
+                "top_hunters": (await db.get_setting("trya_dcs_info_top_hunters") or "on") == "on",
+                "commands": (await db.get_setting("trya_dcs_info_commands") or "on") == "on",
+                "recent_finds": (await db.get_setting("trya_dcs_info_recent_finds") or "on") == "on",
+                "recent_combines": (await db.get_setting("trya_dcs_info_recent_combines") or "on") == "on",
+                "custom_enabled": (await db.get_setting("trya_dcs_info_custom_enabled") or "off") == "on",
+                "custom_title": await db.get_setting("trya_dcs_info_custom_title") or "Community information",
+                "custom_text": await db.get_setting("trya_dcs_info_custom_text") or "",
+                "rotation_seconds": rotation_seconds,
+            },
+        }
+
+    @app.route("/trya-dcs/api/relic-status")
+    async def trya_dcs_relic_status():
+        user_id = session.get("trya_dcs_discord_user_id")
+        guild_id = int(await db.get_setting("trya_dcs_guild_id") or Config.GUILD_ID or 0)
+        if not user_id or not await _trya_dcs_membership_valid(int(user_id), guild_id):
+            return {"error": "forbidden"}, 403
+        return await _trya_dcs_relic_payload()
 
     @app.route("/trya-dcs/api/status")
     async def trya_dcs_public_status():

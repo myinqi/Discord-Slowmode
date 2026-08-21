@@ -54,6 +54,24 @@
         .dashboard-stats { margin-top:6px; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px 12px; }
         .dashboard-stat strong { display:block; color:#e9e4ef; font-size:13px; }
         .dashboard-stat span { display:block; margin-top:1px; color:#756d80; font-size:10px; }
+        .community-grid { display:grid; grid-template-columns:1fr 1fr; min-height:260px; margin:0 16px; }
+        .community-panel { min-width:0; padding:18px 16px; }
+        .community-panel:first-child { padding-left:0; border-right:1px solid var(--line); }
+        .community-panel:last-child { padding-right:0; }
+        .community-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:13px; }
+        .community-head h2 { margin:0; color:#eee9f4; font-size:14px; }
+        .community-kicker { color:#756d80; font-size:10px; letter-spacing:.08em; text-transform:uppercase; }
+        .community-list { display:grid; gap:7px; }
+        .community-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:7px 9px; border:1px solid #2b2535; border-radius:5px; background:#0d0b12; font-size:11px; }
+        .community-row strong { color:#dcd5e5; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .community-row span { color:#8d8498; flex:none; }
+        .community-empty { color:#706878; font-size:12px; line-height:1.5; }
+        .command-cloud { display:flex; flex-wrap:wrap; gap:6px; }
+        .command-cloud code { padding:4px 7px; border:1px solid #3a3047; border-radius:4px; color:#c8b5dc; background:#100d16; font-size:10px; }
+        .relic-progress { height:7px; overflow:hidden; border-radius:999px; background:#2b2535; }
+        .relic-progress span { display:block; height:100%; width:0; background:linear-gradient(90deg,#7c3aed,#d946ef); transition:width .4s ease; }
+        .relic-meta { display:flex; justify-content:space-between; gap:12px; margin:5px 0 12px; color:#8d8498; font-size:10px; }
+        .relic-event { margin-bottom:8px; padding:8px 9px; border:1px solid #55306d; border-radius:5px; color:#d8b4fe; background:#24112f; font-size:11px; }
         .chat-panel { display:flex; flex-direction:column; }
         .chat-head { padding:15px 16px; border-bottom:1px solid var(--line); font-weight:650; }
         .messages { flex:1; min-height:280px; max-height:calc(100vh - 235px); padding:12px 14px; overflow-y:auto; }
@@ -102,6 +120,9 @@
             .stream-dashboard { grid-template-columns:1fr; gap:12px; }
             .dashboard-cell { padding:0 0 12px; border-right:0; border-bottom:1px solid var(--line); }
             .dashboard-cell:last-child { padding-bottom:0; border-bottom:0; }
+            .community-grid { grid-template-columns:1fr; }
+            .community-panel:first-child { padding-left:0; padding-right:0; border-right:0; border-bottom:1px solid var(--line); }
+            .community-panel:last-child { padding-left:0; padding-right:0; }
             .brand { font-size:19px; }
         }
         @media (max-width: 520px) {
@@ -174,6 +195,21 @@
                     </div>
                 </div>
             </section>
+            <section class="community-grid" aria-label="Community and Relic Hunt">
+                <div class="community-panel">
+                    <div class="community-head"><div><div class="community-kicker">Community</div><h2 id="community-info-title">Loading information</h2></div><span id="community-info-page" class="community-kicker"></span></div>
+                    <div id="community-info-content" class="community-empty">Loading configured community information...</div>
+                </div>
+                <div class="community-panel">
+                    <div class="community-head"><div><div class="community-kicker">Live game</div><h2>Raven's Nest: Relic Hunt</h2></div><span id="relic-status-label" class="community-kicker">Loading</span></div>
+                    <div id="relic-events"></div>
+                    <div class="community-kicker">Ritual energy</div>
+                    <div class="relic-progress"><span id="relic-ritual-progress"></span></div>
+                    <div class="relic-meta"><span id="relic-ritual-label">0 / 1</span><span id="relic-phrase-label">Phrase inactive</span></div>
+                    <div class="community-kicker">Recent activity</div>
+                    <div id="relic-activity" class="community-list"><div class="community-empty">No activity yet.</div></div>
+                </div>
+            </section>
         </section>
         <aside class="chat-panel">
             <div class="chat-head">Discord live chat</div>
@@ -237,6 +273,10 @@ let currentSongIndex = 0;
 let currentSongRemaining = 0;
 let currentStreamRemaining = 0;
 let currentListenerCount = 0;
+let relicStatusTimer = null;
+let relicInfoTimer = null;
+let relicInfoIndex = 0;
+let relicPayload = null;
 
 function formatRemaining(seconds) {
     const value = Math.max(0, Math.round(Number(seconds || 0)));
@@ -275,6 +315,132 @@ function renderDashboard() {
     document.getElementById('stat-song-remaining').textContent = currentSongIndex ? formatRemaining(currentSongRemaining) : '—';
     document.getElementById('stat-stream-remaining').textContent = currentSongIndex ? formatRemaining(currentStreamRemaining) : '—';
     document.getElementById('stat-listeners').textContent = String(currentListenerCount);
+}
+
+function relicRows(container, rows, emptyText) {
+    container.replaceChildren();
+    if (!rows.length) {
+        const empty = document.createElement('div');
+        empty.className = 'community-empty';
+        empty.textContent = emptyText;
+        container.append(empty);
+        return;
+    }
+    for (const row of rows) {
+        const item = document.createElement('div');
+        item.className = 'community-row';
+        const primary = document.createElement('strong');
+        primary.textContent = row.primary;
+        const secondary = document.createElement('span');
+        secondary.textContent = row.secondary;
+        item.append(primary, secondary);
+        container.append(item);
+    }
+}
+
+function configuredInfoPanels(payload) {
+    const display = payload.display || {};
+    const panels = [];
+    if (display.top_hunters) panels.push({
+        title: 'Top Hunters',
+        type: 'rows',
+        rows: (payload.top_hunters || []).map((hunter, index) => ({primary: `${index + 1}. ${hunter.username}`, secondary: `${hunter.points} pts · L${hunter.level}`})),
+        empty: 'No hunters have joined yet.'
+    });
+    if (display.commands) panels.push({title: 'Available commands', type: 'commands', commands: payload.commands || []});
+    if (display.recent_finds) panels.push({
+        title: 'Recent Finds',
+        type: 'rows',
+        rows: (payload.recent_finds || []).map(find => ({primary: `${find.username} found ${find.item_name}`, secondary: find.rarity})),
+        empty: 'No relics have been found yet.'
+    });
+    if (display.recent_combines) panels.push({
+        title: 'Recent Combines',
+        type: 'rows',
+        rows: (payload.recent_combines || []).map(combine => ({primary: `${combine.username}: ${combine.activity}`, secondary: combine.rarity})),
+        empty: 'No relics have been combined yet.'
+    });
+    if (display.custom_enabled && display.custom_text) panels.push({title: display.custom_title || 'Community information', type: 'text', text: display.custom_text});
+    return panels;
+}
+
+function renderCommunityInfo() {
+    if (!relicPayload) return;
+    const panels = configuredInfoPanels(relicPayload);
+    const content = document.getElementById('community-info-content');
+    content.replaceChildren();
+    content.style.whiteSpace = '';
+    if (!panels.length) {
+        document.getElementById('community-info-title').textContent = 'Community information';
+        document.getElementById('community-info-page').textContent = '';
+        content.className = 'community-empty';
+        content.textContent = 'No information panels are enabled.';
+        return;
+    }
+    relicInfoIndex %= panels.length;
+    const panel = panels[relicInfoIndex];
+    document.getElementById('community-info-title').textContent = panel.title;
+    document.getElementById('community-info-page').textContent = panels.length > 1 ? `${relicInfoIndex + 1} / ${panels.length}` : '';
+    if (panel.type === 'rows') {
+        content.className = 'community-list';
+        relicRows(content, panel.rows, panel.empty);
+    } else if (panel.type === 'commands') {
+        content.className = 'command-cloud';
+        for (const command of panel.commands) {
+            const item = document.createElement('code');
+            item.textContent = command;
+            content.append(item);
+        }
+    } else {
+        content.className = 'community-empty';
+        content.style.whiteSpace = 'pre-wrap';
+        content.textContent = panel.text;
+    }
+}
+
+function scheduleInfoRotation() {
+    clearTimeout(relicInfoTimer);
+    const seconds = Math.max(5, Math.min(60, Number(relicPayload?.display?.rotation_seconds || 12)));
+    relicInfoTimer = setTimeout(() => {
+        relicInfoIndex += 1;
+        renderCommunityInfo();
+        scheduleInfoRotation();
+    }, seconds * 1000);
+}
+
+function renderRelicStatus(payload) {
+    relicPayload = payload;
+    document.getElementById('relic-status-label').textContent = payload.enabled ? 'Active' : 'Disabled';
+    const events = document.getElementById('relic-events');
+    events.replaceChildren();
+    for (const event of payload.events || []) {
+        const item = document.createElement('div');
+        item.className = 'relic-event';
+        item.textContent = `${event.name} · ${formatRemaining(Math.max(0, event.ends_at - Date.now() / 1000))} remaining`;
+        events.append(item);
+    }
+    const ritual = payload.ritual || {energy: 0, goal: 1};
+    const percent = Math.max(0, Math.min(100, Number(ritual.energy || 0) / Math.max(1, Number(ritual.goal || 1)) * 100));
+    document.getElementById('relic-ritual-progress').style.width = `${percent}%`;
+    document.getElementById('relic-ritual-label').textContent = `${ritual.energy || 0} / ${ritual.goal || 1}`;
+    const phrase = payload.phrase || {};
+    document.getElementById('relic-phrase-label').textContent = phrase.enabled && phrase.progress ? `Phrase: ${phrase.progress}` : 'Phrase inactive';
+    const activity = [
+        ...(payload.recent_finds || []).map(item => ({created_at: item.created_at, primary: `${item.username} found ${item.item_name}`, secondary: item.rarity})),
+        ...(payload.recent_combines || []).map(item => ({created_at: item.created_at, primary: `${item.username}: ${item.activity}`, secondary: 'combine'}))
+    ].sort((a, b) => b.created_at - a.created_at).slice(0, 5);
+    relicRows(document.getElementById('relic-activity'), activity, 'No Relic Hunt activity yet.');
+    renderCommunityInfo();
+    if (!relicInfoTimer) scheduleInfoRotation();
+}
+
+async function refreshRelicStatus() {
+    try {
+        const response = await fetch('{{ url_for("trya_dcs_relic_status") }}', {credentials: 'same-origin'});
+        if (response.ok) renderRelicStatus(await response.json());
+    } catch (_) {}
+    clearTimeout(relicStatusTimer);
+    relicStatusTimer = setTimeout(refreshRelicStatus, 3000);
 }
 
 function renderQueue() {
@@ -663,6 +829,8 @@ function handleEvent(event) {
         currentQueue = Array.isArray(data.songs) ? data.songs : [];
         renderQueue();
         renderDashboard();
+    } else if (event.type === 'relic.update') {
+        refreshRelicStatus();
     }
 }
 
@@ -772,6 +940,7 @@ queueDialog.addEventListener('click', event => {
 });
 authorizeStream(true).catch(() => showState('Could not initialize the stream.'));
 refreshStatus();
+refreshRelicStatus();
 </script>
 </body>
 </html>

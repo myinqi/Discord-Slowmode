@@ -54,6 +54,10 @@ The current implementation includes:
   root and served only to authenticated guild members;
 - a live dashboard below the player with previous/next-song links, playlist
   position, song/rotation remaining time and in-memory active-listener presence;
+- a configurable rotating community panel and live Raven's Nest panel with
+  leaderboard, commands, finds, combines, ritual, phrase and event state;
+- transport-neutral Raven's Nest command dispatch from native Discord and the
+  authenticated web chat into the existing shared `relic_*` database tables;
 - a dedicated OBS contribution listener at `rtmp://HOST:1937/live` with a
   per-installation stream key and automatic local-overlay fallback.
 
@@ -88,6 +92,18 @@ Entries must contain exactly `word`, `start` and `end`, remain chronological and
 fit the decoded song duration. A successful import replaces `word_timestamps`,
 regenerates the ASS file. With LLM moderation enabled the song returns to pending
 approval and moderation; otherwise it is immediately eligible for playback.
+
+## Raven's Nest transport
+
+The existing Raven's Nest configuration page remains the sole game-rules control
+plane. DCS only controls whether commands are accepted in its configured chat and
+which informational panels rotate in the player.
+
+Native messages in the configured Discord channel and authenticated web-chat
+messages dispatch through the same game handlers as Twitch. Discord-backed players
+use `discord:<user-id>` keys in the existing `relic_users` and related tables, avoiding
+ID collisions while sharing items, recipes, events, ritual, phrase, village and
+leaderboard state. Webhook echoes and bot responses are excluded from command parsing.
 
 ## Discord application
 

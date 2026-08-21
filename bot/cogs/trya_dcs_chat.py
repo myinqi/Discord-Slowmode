@@ -3,6 +3,7 @@
 import discord
 from discord.ext import commands
 
+from bot.relic_hunt import RelicHunt
 from bot.trya_dcs_events import trya_dcs_events
 
 
@@ -131,23 +132,90 @@ async def send_web_chat_message(bot, channel_id: int, user_id: int, content: str
             allowed_mentions=allowed_mentions,
             wait=True,
         )
-        return
+    else:
+        await channel.send(
+            f"**{member.display_name} · Web:** {clean}",
+            allowed_mentions=allowed_mentions,
+        )
 
-    await channel.send(
-        f"**{member.display_name} · Web:** {clean}",
-        allowed_mentions=allowed_mentions,
-    )
+    cog = bot.get_cog("TryaDcsChat")
+    if cog:
+        await cog.process_web_relic_command(member, channel, clean)
 
 
 class TryaDcsChat(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.relic_hunt = RelicHunt(bot.db, stream_kind="dcs")
+
+    async def cog_load(self) -> None:
+        await self.relic_hunt.prepare()
 
     async def _configured_channel_id(self) -> int:
         try:
             return int(await self.bot.db.get_setting("trya_dcs_chat_channel_id") or 0)
         except (TypeError, ValueError):
             return 0
+
+    async def _relic_enabled(self) -> bool:
+        return (
+            (await self.bot.db.get_setting("trya_dcs_relic_hunt_enabled") or "on") == "on"
+            and (await self.bot.db.relic_get_setting("enabled")) != "false"
+        )
+
+    async def _dispatch_relic_command(
+        self,
+        member: discord.Member,
+        channel,
+        content: str,
+    ) -> bool:
+        if not await self._relic_enabled():
+            return False
+        permissions = getattr(member, "guild_permissions", None)
+        is_staff = bool(
+            permissions
+            and (
+                permissions.administrator
+                or permissions.manage_guild
+                or permissions.manage_messages
+            )
+        )
+
+        async def send(response: str) -> None:
+            await channel.send(
+                str(response)[:1950],
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+        handled = await self.relic_hunt.dispatch_message(
+            content,
+            {
+                "username": member.display_name,
+                "user_id": f"discord:{member.id}",
+                "is_mod": is_staff,
+                "is_sub": True,
+                "is_vip": False,
+                "is_broadcaster": bool(
+                    permissions and permissions.administrator
+                ),
+                "tags": {"transport": "discord"},
+            },
+            send,
+        )
+        if handled:
+            await trya_dcs_events.publish(
+                "relic.update",
+                {"user_id": str(member.id), "updated_at": discord.utils.utcnow().timestamp()},
+            )
+        return handled
+
+    async def process_web_relic_command(
+        self,
+        member: discord.Member,
+        channel,
+        content: str,
+    ) -> bool:
+        return await self._dispatch_relic_command(member, channel, content)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -157,6 +225,13 @@ class TryaDcsChat(commands.Cog):
         await trya_dcs_events.publish(
             "chat.message", await serialize_discord_message(message)
         )
+        if message.webhook_id or message.author.bot:
+            return
+        member = message.author
+        if not isinstance(member, discord.Member):
+            member = message.guild.get_member(message.author.id) if message.guild else None
+        if member:
+            await self._dispatch_relic_command(member, message.channel, message.content)
 
     @commands.Cog.listener()
     async def on_raw_message_edit(self, payload: discord.RawMessageUpdateEvent):
