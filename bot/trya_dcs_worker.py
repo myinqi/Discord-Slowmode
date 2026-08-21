@@ -127,6 +127,7 @@ async def ingest_dcs_audio(
                     "original_mime": mime,
                     "original_size": size,
                     "original_sha256": sha256,
+                    "wlm_url": song.get("wlm_url") or "",
                 },
                 separators=(",", ":"),
             ),

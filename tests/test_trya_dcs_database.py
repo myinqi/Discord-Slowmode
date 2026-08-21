@@ -98,6 +98,35 @@ class TryaDcsDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(removed["user_id"], 100)
         self.assertIsNone(await self.db.get_trya_dcs_song_by_token(token))
 
+    async def test_optional_wlm_url_is_stored(self):
+        song_id, _ = await self._new_slot(user_id=100)
+        wlm_url = "https://www.welovemusic.ai/track/39a09dfb-bf72-4852-b813-49c3a02d3aaa"
+
+        await self.db.update_trya_dcs_song(song_id, wlm_url=wlm_url)
+
+        self.assertEqual((await self.db.get_trya_dcs_song(song_id))["wlm_url"], wlm_url)
+
+    async def test_failed_upload_can_be_purged_with_consent_event(self):
+        song_id, _ = await self._new_slot(user_id=100)
+        await self._finalize(song_id, "failed")
+        await self.db.update_trya_dcs_song(song_id, analysis_status="failed")
+
+        removed = await self.db.purge_failed_trya_dcs_song(song_id)
+
+        self.assertEqual(removed["id"], song_id)
+        self.assertIsNone(await self.db.get_trya_dcs_song(song_id))
+        async with self.db.db.execute(
+            "SELECT COUNT(*) FROM trya_dcs_consent_events WHERE song_id = ?", (song_id,)
+        ) as cursor:
+            self.assertEqual((await cursor.fetchone())[0], 0)
+
+    async def test_completed_upload_cannot_be_purged(self):
+        song_id, _ = await self._new_slot(user_id=100)
+        await self._finalize(song_id, "complete")
+
+        self.assertIsNone(await self.db.purge_failed_trya_dcs_song(song_id))
+        self.assertIsNotNone(await self.db.get_trya_dcs_song(song_id))
+
     async def test_playlist_source_can_be_assigned_after_upload(self):
         song_id, _ = await self._new_slot(user_id=100)
         await self._finalize(song_id, "intro")

@@ -44,6 +44,12 @@
                         class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
                 </label>
                 <label class="block">
+                    <span class="block text-sm font-medium text-gray-200 mb-2">WeLoveMusic track URL <span class="text-gray-500 font-normal">(optional)</span></span>
+                    <input type="url" name="wlm_url" value="{{ submitted_wlm_url or song.wlm_url or '' }}"
+                        placeholder="https://www.welovemusic.ai/track/..."
+                        class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-fuchsia-500 focus:outline-none">
+                </label>
+                <label class="block">
                     <span class="block text-sm font-medium text-gray-200 mb-2">Suno Hook URL or ID <span class="text-gray-500 font-normal">(optional)</span></span>
                     <input type="text" name="hook_value" value="{{ submitted_hook or '' }}"
                         placeholder="Leave empty to use the regular song video or cover"

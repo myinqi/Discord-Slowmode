@@ -334,6 +334,12 @@
                             <button type="submit" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs">Set</button>
                         </form>
                         {% endif %}
+                        {% if song.analysis_status == 'failed' or (not song.active and not song.uploaded_at) %}
+                        <form method="POST" class="mt-2" onsubmit="return confirm('Permanently remove this failed upload, its evidence row and all associated files? This cannot be undone.')">
+                            <input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="purge_failed_upload"><input type="hidden" name="song_id" value="{{ song.id }}">
+                            <button type="submit" class="px-2 py-1 rounded border border-red-700/60 bg-red-950/60 hover:bg-red-900/70 text-red-300 text-xs">Remove permanently</button>
+                        </form>
+                        {% endif %}
                     </td>
                 </tr>
                 {% endfor %}

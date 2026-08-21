@@ -40,6 +40,19 @@ class TryaDcsManager(TryaStreamManager):
             match = UUID_RE.fullmatch(str(song.get("suno_uuid") or "").strip())
         return f"https://suno.com/song/{match.group(1).lower()}" if match else ""
 
+    @staticmethod
+    def _public_wlm_url(song: dict | None) -> str:
+        if not song:
+            return ""
+        match = re.fullmatch(
+            r"https://www\.welovemusic\.ai/track/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/?",
+            str(song.get("wlm_url") or "").strip(),
+        )
+        return (
+            f"https://www.welovemusic.ai/track/{match.group(1).lower()}"
+            if match else ""
+        )
+
     def _obs_listen_port(self) -> int:
         return 1937
 
@@ -255,6 +268,7 @@ class TryaDcsManager(TryaStreamManager):
         if status.get("song") and self.current_song:
             status["song"]["submitted_by"] = self.current_song.get("user_name") or ""
             status["song"]["suno_url"] = self._public_suno_url(self.current_song)
+            status["song"]["wlm_url"] = self._public_wlm_url(self.current_song)
         return status
 
     async def _stream_loop(self):
@@ -463,6 +477,7 @@ class TryaDcsManager(TryaStreamManager):
                     "artist": song.get("artist") or "Unknown",
                     "submitted_by": song.get("user_name") or "",
                     "suno_url": self._public_suno_url(song),
+                    "wlm_url": self._public_wlm_url(song),
                     "duration": duration,
                     "song_index": index + 1,
                     "playlist_length": len(songs),

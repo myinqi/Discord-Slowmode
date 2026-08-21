@@ -320,6 +320,7 @@ class Database:
                 user_name TEXT NOT NULL,
                 suno_url TEXT NOT NULL,
                 suno_uuid TEXT NOT NULL,
+                wlm_url TEXT,
                 title TEXT,
                 artist TEXT,
                 duration REAL,
@@ -451,6 +452,12 @@ class Database:
             wu_columns = [row[1] async for row in cursor]
         if "permissions" not in wu_columns:
             await self.db.execute("ALTER TABLE web_users ADD COLUMN permissions TEXT DEFAULT '[]'")
+            await self.db.commit()
+
+        async with self.db.execute("PRAGMA table_info(trya_dcs_songs)") as cursor:
+            dcs_song_columns = [row[1] async for row in cursor]
+        if "wlm_url" not in dcs_song_columns:
+            await self.db.execute("ALTER TABLE trya_dcs_songs ADD COLUMN wlm_url TEXT")
             await self.db.commit()
 
         async with self.db.execute(
@@ -6215,7 +6222,7 @@ class Database:
 
     async def update_trya_dcs_song(self, song_id: int, **fields) -> None:
         allowed = {
-            "suno_url", "suno_uuid", "title", "artist", "duration",
+            "suno_url", "suno_uuid", "wlm_url", "title", "artist", "duration",
             "mp3_filename", "original_archive_filename", "original_filename",
             "original_mime", "original_size", "original_sha256", "cover_url",
             "video_url", "hook_id", "hook_share_url", "hook_video_url",
@@ -6345,6 +6352,35 @@ class Database:
         await self.db.commit()
         return song
 
+    async def purge_failed_trya_dcs_song(self, song_id: int) -> Optional[dict]:
+        song = await self.get_trya_dcs_song(song_id)
+        if not song or (
+            song.get("analysis_status") != "failed"
+            and song.get("uploaded_at") is not None
+        ):
+            return None
+        try:
+            await self.db.execute("BEGIN IMMEDIATE")
+            await self.db.execute(
+                "DELETE FROM trya_dcs_consent_events WHERE song_id = ?",
+                (int(song_id),),
+            )
+            await self.db.execute(
+                "UPDATE trya_dcs_songs SET replacement_song_id = NULL WHERE replacement_song_id = ?",
+                (int(song_id),),
+            )
+            cursor = await self.db.execute(
+                "DELETE FROM trya_dcs_songs WHERE id = ?",
+                (int(song_id),),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("failed DCS upload no longer exists")
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
+        return song
+
     async def get_trya_dcs_admin_stats(self) -> dict:
         async with self.db.execute(
             """SELECT
@@ -6364,7 +6400,7 @@ class Database:
     async def get_trya_dcs_consent_csv_rows(self) -> list[dict]:
         async with self.db.execute(
             """SELECT s.id, s.user_id, s.user_name, s.suno_url, s.suno_uuid,
-                      s.title, s.artist, s.content_kind, s.suno_plan_status,
+                      s.wlm_url, s.title, s.artist, s.content_kind, s.suno_plan_status,
                       s.rights_version, s.rights_declaration, s.rights_hash,
                       s.rights_accepted_at, s.sharing_attested,
                       s.official_download_attested, s.material_rights_attested,

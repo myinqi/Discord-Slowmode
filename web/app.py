@@ -8749,6 +8749,56 @@ def create_app(db: Database, bot=None) -> Quart:
                     "success" if result.get("ok") else "error",
                 )
                 return redirect(request.url)
+            if action == "purge_failed_upload":
+                try:
+                    song_id = int(form.get("song_id") or 0)
+                except (TypeError, ValueError):
+                    song_id = 0
+                if trya_dcs_manager.is_running:
+                    await flash("Stop TrYa DCS before permanently removing an upload.", "error")
+                    return redirect(request.url)
+                removed = await db.purge_failed_trya_dcs_song(song_id)
+                if not removed:
+                    await flash("Only failed or incomplete DCS uploads can be permanently removed.", "error")
+                    return redirect(request.url)
+                import glob
+                targets = []
+                for directory, field in (
+                    ("originals", "original_archive_filename"),
+                    ("mp3", "mp3_filename"),
+                    ("ass", "ass_filename"),
+                ):
+                    filename = os.path.basename(str(removed.get(field) or ""))
+                    if filename:
+                        targets.append(os.path.join(TRYA_DCS_DIR, directory, filename))
+                targets.extend(glob.glob(os.path.join(TRYA_DCS_DIR, "incoming", f"dcs_{song_id}_*")))
+                targets.extend(glob.glob(os.path.join(TRYA_DCS_DIR, "cover_cache", f"hook_{song_id}_*")))
+                remaining = await db.get_trya_dcs_songs(active_only=False)
+                song_uuid = str(removed.get("suno_uuid") or "").strip()
+                if song_uuid and not any(
+                    str(item.get("suno_uuid") or "").strip().lower() == song_uuid.lower()
+                    for item in remaining
+                ):
+                    for extension in (".jpg", ".mp4"):
+                        targets.append(os.path.join(TRYA_DCS_DIR, "cover_cache", f"{song_uuid}{extension}"))
+                deleted_files = 0
+                allowed_root = os.path.abspath(TRYA_DCS_DIR)
+                for path in targets:
+                    absolute = os.path.abspath(path)
+                    if os.path.commonpath((absolute, allowed_root)) != allowed_root:
+                        continue
+                    try:
+                        os.remove(absolute)
+                        deleted_files += 1
+                    except FileNotFoundError:
+                        pass
+                    except OSError as exc:
+                        print(f"[trya-dcs] Failed to remove {absolute}: {exc}", flush=True)
+                await flash(
+                    f"Permanently removed failed upload #{song_id} and {deleted_files} file(s).",
+                    "success",
+                )
+                return redirect(request.url)
             if action == "set_playlist_source":
                 try:
                     song_id = int(form.get("song_id") or 0)
@@ -9020,6 +9070,7 @@ def create_app(db: Database, bot=None) -> Quart:
 
         form = await request.form
         suno_url = (form.get("suno_url") or "").strip()
+        wlm_url = (form.get("wlm_url") or "").strip()
         hook_value = (form.get("hook_value") or "").strip()
         content_kind = (form.get("content_kind") or "").strip().lower()
         plan_status = (form.get("suno_plan_status") or "").strip().lower()
@@ -9028,7 +9079,8 @@ def create_app(db: Database, bot=None) -> Quart:
             return await render_template(
                 "trya_dcs_upload.html", song=song, token=token,
                 form_error=message, submitted_suno_url=suno_url,
-                submitted_hook=hook_value, submitted_content_kind=content_kind,
+                submitted_wlm_url=wlm_url, submitted_hook=hook_value,
+                submitted_content_kind=content_kind,
                 submitted_plan_status=plan_status,
             ), status
 
@@ -9039,6 +9091,16 @@ def create_app(db: Database, bot=None) -> Quart:
             return await upload_error(
                 "Suno could not resolve that song URL. Check the link and try again."
             )
+        if wlm_url:
+            wlm_match = re.fullmatch(
+                r"https://www\.welovemusic\.ai/track/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/?",
+                wlm_url,
+            )
+            if not wlm_match:
+                return await upload_error(
+                    "Enter a valid WeLoveMusic track URL or leave the field empty."
+                )
+            wlm_url = f"https://www.welovemusic.ai/track/{wlm_match.group(1).lower()}"
         if content_kind not in {"original", "cover", "remix"}:
             return await upload_error("Choose Original, Cover or Remix.")
         if plan_status not in {"free", "paid", "unknown"}:
@@ -9094,12 +9156,14 @@ def create_app(db: Database, bot=None) -> Quart:
             (
                 f"{DCS_RIGHTS_VERSION}\n{DCS_RIGHTS_DECLARATION}\n"
                 f"user={song['user_id']}\nurl={suno_url}\nuuid={resolved_uuid}\n"
-                f"content_kind={content_kind}\nplan={plan_status}\naccepted={accepted_at:.6f}"
+                f"wlm_url={wlm_url}\ncontent_kind={content_kind}\n"
+                f"plan={plan_status}\naccepted={accepted_at:.6f}"
             ).encode("utf-8")
         ).hexdigest()
         update = {
             "suno_url": suno_url,
             "suno_uuid": resolved_uuid,
+            "wlm_url": wlm_url,
             "content_kind": content_kind,
             "suno_plan_status": plan_status,
             "rights_version": DCS_RIGHTS_VERSION,
@@ -9179,7 +9243,7 @@ def create_app(db: Database, bot=None) -> Quart:
 
         rows = await db.get_trya_dcs_consent_csv_rows()
         columns = list(rows[0].keys()) if rows else [
-            "id", "user_id", "user_name", "suno_url", "suno_uuid", "title",
+            "id", "user_id", "user_name", "suno_url", "suno_uuid", "wlm_url", "title",
             "artist", "content_kind", "suno_plan_status", "rights_version",
             "rights_declaration", "rights_hash", "rights_accepted_at",
             "original_filename", "original_mime", "original_size",
