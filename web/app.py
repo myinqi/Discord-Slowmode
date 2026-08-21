@@ -8705,7 +8705,13 @@ def create_app(db: Database, bot=None) -> Quart:
             "trya_dcs_max_duration_seconds": "360",
             "trya_dcs_max_upload_mib": "20",
             "trya_dcs_loop_mode": "stop",
-            "trya_dcs_reuse_trya_visuals": "on",
+            "trya_dcs_bg_filename": "",
+            "trya_dcs_bg_type": "image",
+            "trya_dcs_media_corners_enabled": "off",
+            "trya_dcs_media_corner_radius": "28",
+            "trya_dcs_media_border_enabled": "off",
+            "trya_dcs_media_border_width": "3",
+            "trya_dcs_media_border_color": "#A855F7",
             "trya_dcs_stream_title": "TrYa Discord Community Stream",
             "trya_dcs_moderation_enabled": "off",
             "trya_dcs_intro_enabled": "off",
@@ -8870,6 +8876,118 @@ def create_app(db: Database, bot=None) -> Quart:
                 from bot.trya_dcs_manager import log_dcs_event
                 log_dcs_event(f"DCS overlay mode saved: {selection} (count={count}).")
                 await flash("DCS overlay selection saved.", "success")
+                return redirect(request.url)
+            if action == "save_dcs_visuals":
+                if trya_dcs_manager.is_running:
+                    await flash("Stop TrYa DCS before changing background or media-frame settings.", "error")
+                    return redirect(request.url)
+                def visual_int(name: str, default: int, low: int, high: int) -> int:
+                    try:
+                        return max(low, min(high, int(form.get(name) or default)))
+                    except (TypeError, ValueError):
+                        return default
+                radius = visual_int("media_corner_radius", 28, 1, 120)
+                border_width = visual_int("media_border_width", 3, 1, 20)
+                border_color = str(form.get("media_border_color") or "#A855F7").strip().upper()
+                if not re.fullmatch(r"#[0-9A-F]{6}", border_color):
+                    await flash("Media border color must use #RRGGBB format.", "error")
+                    return redirect(request.url)
+                files = await request.files
+                uploaded = files.get("dcs_background")
+                staged_path = ""
+                new_filename = ""
+                new_type = ""
+                if uploaded and uploaded.filename:
+                    extension = os.path.splitext(uploaded.filename)[1].lower()
+                    allowed = {".jpg", ".jpeg", ".png", ".webp", ".mp4", ".webm"}
+                    if extension not in allowed:
+                        await flash("Background must be PNG, JPEG, WebP, MP4 or WebM.", "error")
+                        return redirect(request.url)
+                    new_type = "video" if extension in {".mp4", ".webm"} else "image"
+                    assets_dir = os.path.join(TRYA_DCS_DIR, "assets")
+                    os.makedirs(assets_dir, exist_ok=True)
+                    import tempfile
+                    fd, staged_path = tempfile.mkstemp(prefix="dcs_bg_upload_", suffix=extension, dir=assets_dir)
+                    os.close(fd)
+                    try:
+                        await uploaded.save(staged_path)
+                        size = os.path.getsize(staged_path)
+                        maximum = 200 * 1024 * 1024 if new_type == "video" else 20 * 1024 * 1024
+                        if size <= 0 or size > maximum:
+                            raise ValueError(
+                                f"Background must be between 1 byte and {maximum // (1024 * 1024)} MiB."
+                            )
+                        with open(staged_path, "rb") as handle:
+                            signature = handle.read(16)
+                        valid_signature = (
+                            extension in {".jpg", ".jpeg"} and signature.startswith(b"\xff\xd8\xff")
+                            or extension == ".png" and signature.startswith(b"\x89PNG\r\n\x1a\n")
+                            or extension == ".webp" and signature[:4] == b"RIFF" and signature[8:12] == b"WEBP"
+                            or extension == ".mp4" and signature[4:8] == b"ftyp"
+                            or extension == ".webm" and signature.startswith(b"\x1aE\xdf\xa3")
+                        )
+                        if not valid_signature:
+                            raise ValueError("Background file signature does not match its extension.")
+                        probe = await asyncio.create_subprocess_exec(
+                            "ffprobe", "-v", "error", "-select_streams", "v:0",
+                            "-show_entries", "stream=width,height:format=duration",
+                            "-of", "json", staged_path,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                        )
+                        stdout, _ = await asyncio.wait_for(probe.communicate(), timeout=30)
+                        metadata = json.loads(stdout.decode("utf-8") or "{}") if probe.returncode == 0 else {}
+                        stream = (metadata.get("streams") or [{}])[0]
+                        width = int(stream.get("width") or 0)
+                        height = int(stream.get("height") or 0)
+                        if not width or not height or width > 8192 or height > 8192:
+                            raise ValueError("Background could not be decoded or exceeds 8192×8192 pixels.")
+                        if new_type == "video":
+                            duration = float((metadata.get("format") or {}).get("duration") or 0)
+                            if duration <= 0 or duration > 3600:
+                                raise ValueError("Background video duration must be between 0 and 60 minutes.")
+                        new_filename = f"dcs_bg_{secrets.token_hex(12)}{extension}"
+                        os.replace(staged_path, os.path.join(assets_dir, new_filename))
+                    except (ValueError, OSError, asyncio.TimeoutError, json.JSONDecodeError) as exc:
+                        await flash(str(exc) or "The background could not be validated.", "error")
+                        return redirect(request.url)
+                    finally:
+                        if staged_path:
+                            try:
+                                os.remove(staged_path)
+                            except FileNotFoundError:
+                                pass
+                old_filename = os.path.basename(
+                    await db.get_setting("trya_dcs_bg_filename") or ""
+                )
+                remove_background = bool(form.get("remove_background"))
+                if new_filename:
+                    await db.set_setting("trya_dcs_bg_filename", new_filename)
+                    await db.set_setting("trya_dcs_bg_type", new_type)
+                elif remove_background:
+                    await db.set_setting("trya_dcs_bg_filename", "")
+                    await db.set_setting("trya_dcs_bg_type", "image")
+                await db.set_setting(
+                    "trya_dcs_media_corners_enabled",
+                    "on" if form.get("media_corners_enabled") else "off",
+                )
+                await db.set_setting("trya_dcs_media_corner_radius", str(radius))
+                await db.set_setting(
+                    "trya_dcs_media_border_enabled",
+                    "on" if form.get("media_border_enabled") else "off",
+                )
+                await db.set_setting("trya_dcs_media_border_width", str(border_width))
+                await db.set_setting("trya_dcs_media_border_color", border_color)
+                if old_filename and (new_filename or remove_background):
+                    try:
+                        os.remove(os.path.join(TRYA_DCS_DIR, "assets", old_filename))
+                    except FileNotFoundError:
+                        pass
+                from bot.trya_dcs_manager import log_dcs_event
+                log_dcs_event(
+                    f"DCS visuals saved: background={new_filename or ('none' if remove_background else old_filename or 'none')}, corners={bool(form.get('media_corners_enabled'))}, border={bool(form.get('media_border_enabled'))}."
+                )
+                await flash("DCS background and media-frame settings saved.", "success")
                 return redirect(request.url)
             if action == "upload_offline_image":
                 files = await request.files
@@ -9237,9 +9355,6 @@ def create_app(db: Database, bot=None) -> Quart:
                     "trya_dcs_loop_mode": (
                         "reshuffle" if form.get("loop_mode") == "reshuffle" else "stop"
                     ),
-                    "trya_dcs_reuse_trya_visuals": (
-                        "on" if form.get("reuse_trya_visuals") else "off"
-                    ),
                     "trya_dcs_stream_title": (
                         form.get("stream_title") or ""
                     ).strip()[:200],
@@ -9317,6 +9432,11 @@ def create_app(db: Database, bot=None) -> Quart:
 
         stats = await db.get_trya_dcs_admin_stats()
         dcs_loop_videos = await get_dcs_loop_videos()
+        dcs_background_filename = os.path.basename(settings["trya_dcs_bg_filename"])
+        dcs_background_configured = bool(
+            dcs_background_filename
+            and os.path.isfile(os.path.join(TRYA_DCS_DIR, "assets", dcs_background_filename))
+        )
         dcs_loop_selection = await db.get_setting("trya_dcs_loop_selection") or "shuffle"
         try:
             dcs_loop_random_count = int(
@@ -9379,6 +9499,7 @@ def create_app(db: Database, bot=None) -> Quart:
             data_directory=TRYA_DCS_DIR,
             offline_image_configured=offline_image_configured,
             dcs_loop_videos=dcs_loop_videos,
+            dcs_background_configured=dcs_background_configured,
             dcs_loop_selection=dcs_loop_selection,
             dcs_loop_random_count=dcs_loop_random_count,
             songs=songs_desc,

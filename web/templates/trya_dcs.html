@@ -50,6 +50,12 @@
 {% endmacro %}
 {% block title %}TrYa DCS{% endblock %}
 {% block content %}
+<style>
+.dcs-section-title { display:flex; align-items:center; gap:.65rem; }
+.dcs-collapse-toggle { flex:none; margin-left:auto; border:1px solid rgba(107,114,128,.55); border-radius:.35rem; background:rgba(55,65,81,.55); color:#b8b5bf; padding:.2rem .5rem; font-size:.68rem; font-weight:500; line-height:1.2; cursor:pointer; }
+.dcs-collapse-toggle:hover { background:rgba(75,85,99,.75); color:#fff; }
+.dcs-section-collapsed > .dcs-section-header { border-bottom-color:transparent; }
+</style>
 <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6">
     <div>
         <h2 class="text-2xl font-bold text-white">TrYa DCS</h2>
@@ -89,8 +95,8 @@
     </section>
 </div>
 
-<section class="bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden mb-6">
-    <div class="px-5 py-4 border-b border-gray-700/50 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+<section class="bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden mb-6" data-dcs-collapse="publisher">
+    <div class="dcs-section-header px-5 py-4 border-b border-gray-700/50 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <div>
             <h3 class="text-white font-semibold">DCS publisher</h3>
             {% if stream_status.running %}
@@ -145,8 +151,8 @@
 <form method="POST" class="space-y-6">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf }}">
     <input type="hidden" name="action" value="save_settings">
-    <section class="bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden">
-        <div class="px-5 py-4 border-b border-gray-700/50 flex items-center justify-between gap-4">
+    <section class="bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden" data-dcs-collapse="access">
+        <div class="dcs-section-header px-5 py-4 border-b border-gray-700/50 flex items-center justify-between gap-4">
             <div>
                 <h3 class="text-white font-semibold">Access and identity</h3>
                 <p class="text-gray-500 text-sm mt-1">The player will accept members of exactly one Discord guild.</p>
@@ -202,8 +208,8 @@
         </div>
     </section>
 
-    <section class="bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden">
-        <div class="px-5 py-4 border-b border-gray-700/50">
+    <section class="bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden" data-dcs-collapse="distribution">
+        <div class="dcs-section-header px-5 py-4 border-b border-gray-700/50">
             <h3 class="text-white font-semibold">Stream distribution</h3>
             <p class="text-gray-500 text-sm mt-1">FFmpeg publishes once; MediaMTX and Caddy distribute to listeners.</p>
         </div>
@@ -252,8 +258,8 @@
         </div>
     </section>
 
-    <section class="bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden">
-        <div class="px-5 py-4 border-b border-gray-700/50">
+    <section class="bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden" data-dcs-collapse="intro-outro-obs">
+        <div class="dcs-section-header px-5 py-4 border-b border-gray-700/50">
             <h3 class="text-white font-semibold">Intro, outro and OBS contribution</h3>
             <p class="text-gray-500 text-sm mt-1">Intro plays once at startup. Outro plays only when the playlist is configured to stop. OBS temporarily replaces the local top-right overlay.</p>
         </div>
@@ -310,20 +316,19 @@
         </div>
     </section>
 
-    <section class="bg-discord-dark border border-gray-700/50 rounded-lg p-5">
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-5">
-            <label class="flex items-start gap-3 cursor-pointer">
-                <input type="checkbox" name="reuse_trya_visuals" value="1" class="mt-1" {% if settings.trya_dcs_reuse_trya_visuals == 'on' %}checked{% endif %}>
-                <span><span class="block text-white font-semibold">Use TrYa background and media frame</span><span class="block text-gray-500 text-sm mt-1">Reuses the background, rounded corners and media border. Top-right overlay videos are managed independently below.</span></span>
-            </label>
-            <label class="block">
-                <span class="block text-gray-400 text-xs mb-1">Stream title</span>
-                <input type="text" name="stream_title" maxlength="200" value="{{ settings.trya_dcs_stream_title }}" class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white focus:border-discord-blurple focus:outline-none">
-            </label>
+    <section class="bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden" data-dcs-collapse="identity-moderation">
+        <div class="dcs-section-header px-5 py-4 border-b border-gray-700/50">
+            <h3 class="text-white font-semibold">Stream identity and moderation</h3>
+            <p class="text-gray-500 text-sm mt-1">Stream title, player disclosure and optional lyric review.</p>
         </div>
+        <div class="p-5">
+        <label class="block mb-5">
+            <span class="block text-gray-400 text-xs mb-1">Stream title</span>
+            <input type="text" name="stream_title" maxlength="200" value="{{ settings.trya_dcs_stream_title }}" class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white focus:border-discord-blurple focus:outline-none">
+        </label>
         <label class="block">
             <span class="block text-white font-semibold mb-1">Persistent AI disclosure</span>
-            <span class="block text-gray-500 text-sm mb-3">Shown in the private video player and stream composition.</span>
+            <span class="block text-gray-500 text-sm mb-3">Shown once in the private video player.</span>
             <textarea name="disclaimer" rows="3" maxlength="2000"
                 class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white resize-y focus:border-discord-blurple focus:outline-none">{{ settings.trya_dcs_disclaimer }}</textarea>
         </label>
@@ -334,6 +339,7 @@
                 <span class="block text-gray-500 text-sm mt-1">Uses the configured local Ollama model after Whisper. Flagged, uncertain or failed reviews require manual approval. Free, cover and remix classifications never affect this verdict.</span>
             </span>
         </label>
+        </div>
     </section>
 
     <div class="flex justify-end">
@@ -343,8 +349,39 @@
     </div>
 </form>
 
-<section class="mt-6 bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden">
-    <div class="px-5 py-4 border-b border-gray-700/50">
+<section class="mt-6 bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden" data-dcs-collapse="visual-composition">
+    <div class="dcs-section-header px-5 py-4 border-b border-gray-700/50">
+        <h3 class="text-white font-semibold">DCS background and media frame</h3>
+        <p class="text-gray-500 text-sm mt-1">Independent background asset and styling for the bottom-left song media.</p>
+    </div>
+    <form method="POST" enctype="multipart/form-data" class="p-5 grid grid-cols-1 xl:grid-cols-2 gap-6">
+        <input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="save_dcs_visuals">
+        <div class="space-y-3">
+            <p class="text-gray-300 text-sm font-medium">Background</p>
+            <p class="text-gray-500 text-xs">{{ ('Configured: ' ~ settings.trya_dcs_bg_type|capitalize ~ ' · ' ~ settings.trya_dcs_bg_filename) if dcs_background_configured else 'No DCS background configured. The composition falls back to black.' }}</p>
+            <input type="file" name="dcs_background" accept="image/png,image/jpeg,image/webp,video/mp4,video/webm,.png,.jpg,.jpeg,.webp,.mp4,.webm" class="block w-full text-sm text-gray-300 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-700 file:text-gray-200 hover:file:bg-gray-600">
+            <p class="text-gray-600 text-[11px]">Images: maximum 20 MiB. Videos: maximum 200 MiB and 60 minutes. A new upload replaces the previous DCS background.</p>
+            {% if dcs_background_configured %}<label class="flex items-center gap-2 text-red-300 text-xs"><input type="checkbox" name="remove_background" value="1">Remove the current background without replacement</label>{% endif %}
+        </div>
+        <div class="space-y-4">
+            <div class="rounded-lg border border-gray-700 bg-discord-darker/50 p-3 space-y-3">
+                <label class="flex items-center gap-2 text-gray-300 text-sm"><input type="checkbox" name="media_corners_enabled" value="1" {% if settings.trya_dcs_media_corners_enabled == 'on' %}checked{% endif %}>Rounded media corners</label>
+                <label class="block"><span class="block text-gray-500 text-xs mb-1">Corner radius</span><input type="number" name="media_corner_radius" min="1" max="120" value="{{ settings.trya_dcs_media_corner_radius }}" class="w-full bg-discord-dark border border-gray-600 rounded px-3 py-2 text-white text-sm"></label>
+            </div>
+            <div class="rounded-lg border border-gray-700 bg-discord-darker/50 p-3 space-y-3">
+                <label class="flex items-center gap-2 text-gray-300 text-sm"><input type="checkbox" name="media_border_enabled" value="1" {% if settings.trya_dcs_media_border_enabled == 'on' %}checked{% endif %}>Media border</label>
+                <div class="grid grid-cols-2 gap-3">
+                    <label class="block"><span class="block text-gray-500 text-xs mb-1">Border width</span><input type="number" name="media_border_width" min="1" max="20" value="{{ settings.trya_dcs_media_border_width }}" class="w-full bg-discord-dark border border-gray-600 rounded px-3 py-2 text-white text-sm"></label>
+                    <label class="block"><span class="block text-gray-500 text-xs mb-1">Border color</span><input type="color" name="media_border_color" value="{{ settings.trya_dcs_media_border_color }}" class="w-full h-10 bg-discord-dark border border-gray-600 rounded p-1"></label>
+                </div>
+            </div>
+            <button type="submit" class="w-full px-3 py-2 rounded bg-discord-blurple hover:bg-indigo-500 text-white text-sm">Save DCS visuals</button>
+        </div>
+    </form>
+</section>
+
+<section class="mt-6 bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden" data-dcs-collapse="offline-image">
+    <div class="dcs-section-header px-5 py-4 border-b border-gray-700/50">
         <h3 class="text-white font-semibold">Offline player image</h3>
         <p class="text-gray-500 text-sm mt-1">Displayed in the private player while no DCS publisher is live. PNG, JPEG or WebP; maximum 10 MiB and 8192×8192 pixels.</p>
     </div>
@@ -358,8 +395,8 @@
     </div>
 </section>
 
-<section class="mt-6 bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden">
-    <div class="px-5 py-4 border-b border-gray-700/50">
+<section class="mt-6 bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden" data-dcs-collapse="overlay-videos">
+    <div class="dcs-section-header px-5 py-4 border-b border-gray-700/50">
         <h3 class="text-white font-semibold">DCS overlay videos</h3>
         <p class="text-gray-500 text-sm mt-1">Independent top-right overlay assets. Combined modes build and validate a dedicated 720p CFR30 cache when the publisher starts.</p>
     </div>
@@ -404,8 +441,8 @@
     </div>
 </section>
 
-<section class="mt-6 bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden">
-    <div class="px-5 py-4 border-b border-gray-700/50 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+<section class="mt-6 bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden" data-dcs-collapse="submissions">
+    <div class="dcs-section-header px-5 py-4 border-b border-gray-700/50 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
             <h3 class="text-white font-semibold">DCS submissions</h3>
             <p class="text-gray-500 text-sm mt-1">Rights classifications are shown for review and never act as automatic exclusions.</p>
@@ -466,8 +503,8 @@
     {% endif %}
 </section>
 
-<section class="mt-6 bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden">
-    <div class="px-5 py-4 border-b border-gray-700/50">
+<section class="mt-6 bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden" data-dcs-collapse="special-playlists">
+    <div class="dcs-section-header px-5 py-4 border-b border-gray-700/50">
         <h3 class="text-white font-semibold">Intro and outro playlists</h3>
         <p class="text-gray-500 text-sm mt-1">Special songs are kept out of the normal submission playlist and played in their configured positions.</p>
     </div>
@@ -487,6 +524,33 @@
     </div>
 </section>
 <script>
+for (const section of document.querySelectorAll('[data-dcs-collapse]')) {
+    const key = `tryaDcsAdminCollapse:v1:${section.dataset.dcsCollapse}`;
+    const header = section.querySelector(':scope > .dcs-section-header');
+    const title = header && header.querySelector('h3');
+    if (!header || !title) continue;
+    title.classList.add('dcs-section-title');
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'dcs-collapse-toggle';
+    title.append(button);
+    const content = Array.from(section.children).filter(element => element !== header);
+    let collapsed = false;
+    try { collapsed = localStorage.getItem(key) === 'collapsed'; } catch (_) {}
+    const render = () => {
+        for (const element of content) element.hidden = collapsed;
+        section.classList.toggle('dcs-section-collapsed', collapsed);
+        button.textContent = collapsed ? 'Expand' : 'Collapse';
+        button.setAttribute('aria-expanded', String(!collapsed));
+    };
+    button.addEventListener('click', () => {
+        collapsed = !collapsed;
+        try { localStorage.setItem(key, collapsed ? 'collapsed' : 'expanded'); } catch (_) {}
+        render();
+    });
+    render();
+}
+
 const dcsLog = document.getElementById('dcs-live-log');
 let dcsLogSince = 0;
 function formatDcsLogLine(element) {

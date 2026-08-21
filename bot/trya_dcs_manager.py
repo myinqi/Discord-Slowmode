@@ -11,7 +11,6 @@ from collections import deque
 from bot.trya_stream_manager import TryaStreamManager
 from bot.trya_dcs_events import trya_dcs_events
 from bot.suno_urls import SUNO_UUID_RE, UUID_RE
-from config import Config
 
 
 _DCS_LOG_BUFFER = deque(maxlen=2000)
@@ -403,47 +402,38 @@ class TryaDcsManager(TryaStreamManager):
         return os.path.join(assets_dir, fallback)
 
     async def _play_dcs_playlist(self, songs: list[dict]) -> None:
-        reuse_visuals = (
-            await self.db.get_setting("trya_dcs_reuse_trya_visuals") or "on"
-        ) == "on"
-        bg_path = None
-        bg_type = "image"
+        asset_dir = os.path.join(self.trya_stream_dir, "assets")
+        bg_filename = os.path.basename(
+            await self.db.get_setting("trya_dcs_bg_filename") or ""
+        )
+        bg_type = await self.db.get_setting("trya_dcs_bg_type") or "image"
+        bg_candidate = os.path.join(asset_dir, bg_filename) if bg_filename else ""
+        bg_path = bg_candidate if bg_candidate and os.path.isfile(bg_candidate) else None
         loop_path = await self._resolve_dcs_loop_path()
-        media_style = None
-        if reuse_visuals:
-            asset_dir = os.path.join(Config.TRYA_STREAM_DIR, "assets")
-            bg_filename = os.path.basename(
-                await self.db.get_setting("trya_stream_bg_filename") or ""
-            )
-            bg_type = await self.db.get_setting("trya_stream_bg_type") or "image"
-            candidate = os.path.join(asset_dir, bg_filename) if bg_filename else ""
-            if candidate and os.path.isfile(candidate):
-                bg_path = candidate
-
-            corners = (
-                await self.db.get_setting("trya_stream_media_corners_enabled") or "off"
-            ) == "on"
-            border = (
-                await self.db.get_setting("trya_stream_media_border_enabled") or "off"
-            ) == "on"
-            radius = await self._bounded_setting(
-                "trya_stream_media_corner_radius", 28, 1, 120
-            )
-            border_width = await self._bounded_setting(
-                "trya_stream_media_border_width", 3, 1, 20
-            )
-            border_color = (
-                await self.db.get_setting("trya_stream_media_border_color") or "#A855F7"
-            ).strip().upper()
-            if not re.fullmatch(r"#[0-9A-F]{6}", border_color):
-                border_color = "#A855F7"
-            media_style = {
-                "enabled": corners,
-                "radius": radius,
-                "border_enabled": border,
-                "border_width": border_width,
-                "border_color": border_color,
-            }
+        corners = (
+            await self.db.get_setting("trya_dcs_media_corners_enabled") or "off"
+        ) == "on"
+        border = (
+            await self.db.get_setting("trya_dcs_media_border_enabled") or "off"
+        ) == "on"
+        radius = await self._bounded_setting(
+            "trya_dcs_media_corner_radius", 28, 1, 120
+        )
+        border_width = await self._bounded_setting(
+            "trya_dcs_media_border_width", 3, 1, 20
+        )
+        border_color = (
+            await self.db.get_setting("trya_dcs_media_border_color") or "#A855F7"
+        ).strip().upper()
+        if not re.fullmatch(r"#[0-9A-F]{6}", border_color):
+            border_color = "#A855F7"
+        media_style = {
+            "enabled": corners,
+            "radius": radius,
+            "border_enabled": border,
+            "border_width": border_width,
+            "border_color": border_color,
+        }
 
         obs_overlay_path = None
         obs_overlay_fps = await self._bounded_setting(

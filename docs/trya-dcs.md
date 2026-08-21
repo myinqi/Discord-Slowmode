@@ -32,7 +32,7 @@ The current implementation includes:
 - live player metadata and a Discord-backed WebSocket chat with guild emojis,
   attachments, replies, edits and deletions;
 - managed webhook posting for authenticated web users, marked with `· Web`;
-- optional reuse of the established TrYa background and media-frame setup;
+- independent DCS background uploads and media-frame corner/border settings;
 - independent DCS top-right overlay uploads with fixed, single-shuffle,
   ordered/random concat-all and rotating random-subset modes plus validated
   cached 720p CFR30 combined videos;
@@ -49,6 +49,7 @@ The current implementation includes:
   word-timestamp JSON imports that regenerate ASS subtitles;
 - a central live activity log for publishing, uploads, Whisper, moderation and
   Admin actions, with polling and clipboard copy;
+- independently collapsible Admin UI sections whose state persists per browser;
 - a configurable, validated offline player image stored outside the public web
   root and served only to authenticated guild members;
 - a live dashboard below the player with previous/next-song links, playlist
