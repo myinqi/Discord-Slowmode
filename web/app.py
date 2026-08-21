@@ -9184,6 +9184,7 @@ def create_app(db: Database, bot=None) -> Quart:
         submission_songs = [
             song for song in songs_desc
             if (song.get("playlist_source") or "submission") not in {"intro", "outro"}
+            and song.get("remove_reason") != "removed_by_owner"
         ]
         intro_songs = [
             song for song in songs_desc
