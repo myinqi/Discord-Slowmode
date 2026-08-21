@@ -90,12 +90,17 @@ Build and start the complete stack:
 docker compose up -d --build
 ```
 
-Update only the application container after pulling changes:
+Update the complete stack after pulling changes so Caddy and MediaMTX also reload
+routing and media configuration:
 
 ```bash
 git pull
-docker compose up -d --build slowmode-bot
+docker compose up -d --build
 ```
+
+Rebuilding only `slowmode-bot` is safe only when the update does not modify
+`Caddyfile`, `mediamtx.yml`, or `docker-compose.yml`. In particular, TrYa DCS
+media-route changes require the complete command above.
 
 Inspect logs:
 

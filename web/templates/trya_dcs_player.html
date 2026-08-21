@@ -208,7 +208,17 @@ async function authorizeStream(initial = false) {
             hls.loadSource(payload.hls_url);
             hls.attachMedia(video);
             hls.on(Hls.Events.ERROR, (_, data) => {
-                if (data.fatal) showState('Stream connection lost. Reconnecting...');
+                if (!data.fatal) return;
+                showState('Stream connection lost. Reconnecting...');
+                if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                    setTimeout(() => hls && hls.startLoad(), 2000);
+                } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                    hls.recoverMediaError();
+                } else {
+                    hls.destroy();
+                    hls = null;
+                    setTimeout(() => authorizeStream(true), 2000);
+                }
             });
         } else {
             showState('This browser does not support HLS playback.');
@@ -422,11 +432,13 @@ function connectSocket() {
     socket.addEventListener('message', event => {
         try { handleEvent(JSON.parse(event.data)); } catch (_) {}
     });
-    socket.addEventListener('close', () => {
+    socket.addEventListener('close', event => {
         clearInterval(heartbeatTimer);
         chatInput.disabled = true;
         sendButton.disabled = true;
-        chatError.textContent = 'Chat disconnected. Reconnecting...';
+        chatError.textContent = event.code === 4403
+            ? 'Chat authorization failed. Reload the page to verify your Discord membership.'
+            : 'Chat disconnected. Reconnecting...';
         setTimeout(connectSocket, socketRetry);
         socketRetry = Math.min(15000, socketRetry * 1.8);
     });
