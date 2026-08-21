@@ -103,7 +103,10 @@ Native messages in the configured Discord channel and authenticated web-chat
 messages dispatch through the same game handlers as Twitch. Discord-backed players
 use `discord:<user-id>` keys in the existing `relic_users` and related tables, avoiding
 ID collisions while sharing items, recipes, events, ritual, phrase, village and
-leaderboard state. Webhook echoes and bot responses are excluded from command parsing.
+leaderboard state. Built-in game responses are written to the shared hunt log and
+rendered as detailed DCS activity instead of flooding chat. Configured custom-command
+responses remain visible chat messages. Webhook echoes and bot responses are excluded
+from command parsing.
 
 ## Discord application
 

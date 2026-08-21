@@ -181,17 +181,23 @@ class TryaDcsChat(commands.Cog):
             )
         )
 
-        async def send(response: str) -> None:
+        feedback = []
+
+        async def capture(response: str) -> None:
+            feedback.append(str(response)[:1950])
+
+        async def send_custom(response: str) -> None:
             await channel.send(
                 str(response)[:1950],
                 allowed_mentions=discord.AllowedMentions.none(),
             )
 
+        relic_user_id = f"discord:{member.id}"
         handled = await self.relic_hunt.dispatch_message(
             content,
             {
                 "username": member.display_name,
-                "user_id": f"discord:{member.id}",
+                "user_id": relic_user_id,
                 "is_mod": is_staff,
                 "is_sub": True,
                 "is_vip": False,
@@ -200,12 +206,37 @@ class TryaDcsChat(commands.Cog):
                 ),
                 "tags": {"transport": "discord"},
             },
-            send,
+            capture,
+            custom_sender=send_custom,
         )
         if handled:
+            now = discord.utils.utcnow().timestamp()
+            recent = await self.bot.db.relic_get_recent_log(20)
+            existing = {
+                row.get("message")
+                for row in recent
+                if row.get("twitch_user_id") == relic_user_id
+                and now - float(row.get("created_at") or 0) < 5
+            }
+            command = (str(content or "").split(None, 1)[0] or "command").lower()
+            for response in feedback:
+                if response in existing:
+                    continue
+                await self.bot.db.relic_log_hunt({
+                    "twitch_user_id": relic_user_id,
+                    "username": member.display_name,
+                    "item_id": None,
+                    "item_name": command,
+                    "rarity": "info",
+                    "points_awarded": 0,
+                    "xp_awarded": 0,
+                    "result_type": "dcs_feedback",
+                    "message": response,
+                    "created_at": now,
+                })
             await trya_dcs_events.publish(
                 "relic.update",
-                {"user_id": str(member.id), "updated_at": discord.utils.utcnow().timestamp()},
+                {"user_id": str(member.id), "updated_at": now},
             )
         return handled
 

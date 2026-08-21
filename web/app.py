@@ -8726,6 +8726,8 @@ def create_app(db: Database, bot=None) -> Quart:
             "trya_dcs_info_commands": "on",
             "trya_dcs_info_recent_finds": "on",
             "trya_dcs_info_recent_combines": "on",
+            "trya_dcs_info_ritual": "on",
+            "trya_dcs_info_phrase": "on",
             "trya_dcs_info_custom_enabled": "off",
             "trya_dcs_info_custom_title": "Community information",
             "trya_dcs_info_custom_text": "",
@@ -8780,6 +8782,8 @@ def create_app(db: Database, bot=None) -> Quart:
                     "trya_dcs_info_commands": "on" if form.get("info_commands") else "off",
                     "trya_dcs_info_recent_finds": "on" if form.get("info_recent_finds") else "off",
                     "trya_dcs_info_recent_combines": "on" if form.get("info_recent_combines") else "off",
+                    "trya_dcs_info_ritual": "on" if form.get("info_ritual") else "off",
+                    "trya_dcs_info_phrase": "on" if form.get("info_phrase") else "off",
                     "trya_dcs_info_custom_enabled": "on" if form.get("info_custom_enabled") else "off",
                     "trya_dcs_info_custom_title": str(form.get("info_custom_title") or "Community information").strip()[:100],
                     "trya_dcs_info_custom_text": str(form.get("info_custom_text") or "").strip()[:3000],
@@ -9558,6 +9562,14 @@ def create_app(db: Database, bot=None) -> Quart:
         recent = await db.relic_get_recent_log(30)
         ritual = await db.relic_get_ritual()
         phrase = await db.relic_get_phrase_puzzle()
+        from bot.relic_hunt import _phrase_progress
+        phrase_display = (
+            _phrase_progress(
+                str(phrase.get("phrase") or ""),
+                str(phrase.get("revealed_mask") or ""),
+            )
+            if phrase.get("enabled") else ""
+        )
         active_events = await db.relic_get_active_events()
         event_defs = {
             event["id"]: event for event in await db.relic_get_all_events()
@@ -9603,6 +9615,18 @@ def create_app(db: Database, bot=None) -> Quart:
                 }
                 for row in recent if row.get("result_type") == "combine"
             ][:6],
+            "recent_activity": [
+                {
+                    "username": row.get("username") or "Unknown",
+                    "message": row.get("message") or row.get("item_name") or "Relic Hunt activity",
+                    "type": row.get("result_type") or "activity",
+                    "rarity": row.get("rarity") or "",
+                    "points": int(row.get("points_awarded") or 0),
+                    "xp": int(row.get("xp_awarded") or 0),
+                    "created_at": float(row.get("created_at") or 0),
+                }
+                for row in recent
+            ][:10],
             "commands": [
                 f"{prefix}{command}" for command in (
                     "raven", "nest", "items", "top", "rank", "daily",
@@ -9615,7 +9639,7 @@ def create_app(db: Database, bot=None) -> Quart:
             },
             "phrase": {
                 "enabled": bool(phrase.get("enabled")),
-                "progress": phrase.get("revealed_mask") or "",
+                "progress": phrase_display,
             },
             "events": [
                 {
@@ -9640,6 +9664,8 @@ def create_app(db: Database, bot=None) -> Quart:
                 "commands": (await db.get_setting("trya_dcs_info_commands") or "on") == "on",
                 "recent_finds": (await db.get_setting("trya_dcs_info_recent_finds") or "on") == "on",
                 "recent_combines": (await db.get_setting("trya_dcs_info_recent_combines") or "on") == "on",
+                "ritual": (await db.get_setting("trya_dcs_info_ritual") or "on") == "on",
+                "phrase": (await db.get_setting("trya_dcs_info_phrase") or "on") == "on",
                 "custom_enabled": (await db.get_setting("trya_dcs_info_custom_enabled") or "off") == "on",
                 "custom_title": await db.get_setting("trya_dcs_info_custom_title") or "Community information",
                 "custom_text": await db.get_setting("trya_dcs_info_custom_text") or "",

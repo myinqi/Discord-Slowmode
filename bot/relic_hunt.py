@@ -287,7 +287,13 @@ class RelicHunt:
             await self._seed_if_empty()
             self._prepared = True
 
-    async def dispatch_message(self, text: str, context: dict, sender) -> bool:
+    async def dispatch_message(
+        self,
+        text: str,
+        context: dict,
+        sender,
+        custom_sender=None,
+    ) -> bool:
         await self.prepare()
         clean = str(text or "").strip()
         prefix = (await self.db.relic_get_setting("command_prefix")) or "!"
@@ -312,7 +318,10 @@ class RelicHunt:
                 return True
             custom = await self.db.relic_get_custom_command(command)
             if custom and custom.get("enabled") and custom.get("response"):
-                await self._send(custom["response"])
+                if custom_sender:
+                    await custom_sender(custom["response"])
+                else:
+                    await self._send(custom["response"])
                 return True
             return False
         finally:

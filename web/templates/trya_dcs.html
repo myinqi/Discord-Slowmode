@@ -395,6 +395,8 @@
             <label class="flex items-center gap-2 text-gray-300 text-sm"><input type="checkbox" name="info_commands" value="1" {% if settings.trya_dcs_info_commands == 'on' %}checked{% endif %}>Available commands</label>
             <label class="flex items-center gap-2 text-gray-300 text-sm"><input type="checkbox" name="info_recent_finds" value="1" {% if settings.trya_dcs_info_recent_finds == 'on' %}checked{% endif %}>Recent Finds</label>
             <label class="flex items-center gap-2 text-gray-300 text-sm"><input type="checkbox" name="info_recent_combines" value="1" {% if settings.trya_dcs_info_recent_combines == 'on' %}checked{% endif %}>Recent Combines</label>
+            <label class="flex items-center gap-2 text-gray-300 text-sm"><input type="checkbox" name="info_ritual" value="1" {% if settings.trya_dcs_info_ritual == 'on' %}checked{% endif %}>Ritual energy</label>
+            <label class="flex items-center gap-2 text-gray-300 text-sm"><input type="checkbox" name="info_phrase" value="1" {% if settings.trya_dcs_info_phrase == 'on' %}checked{% endif %}>Phrase Puzzle progress</label>
             <label class="block"><span class="block text-gray-500 text-xs mb-1">Rotation interval in seconds</span><input type="number" name="info_rotation_seconds" min="5" max="60" value="{{ settings.trya_dcs_info_rotation_seconds }}" class="w-full bg-discord-darker border border-gray-600 rounded px-3 py-2 text-white text-sm"></label>
         </div>
         <div class="space-y-3">

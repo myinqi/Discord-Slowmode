@@ -65,6 +65,9 @@
         .community-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:7px 9px; border:1px solid #2b2535; border-radius:5px; background:#0d0b12; font-size:11px; }
         .community-row strong { color:#dcd5e5; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .community-row span { color:#8d8498; flex:none; }
+        .feedback-row { align-items:flex-start; flex-direction:column; gap:4px; }
+        .feedback-row strong { white-space:normal; line-height:1.4; }
+        .feedback-row span { font-size:9px; }
         .community-empty { color:#706878; font-size:12px; line-height:1.5; }
         .command-cloud { display:flex; flex-wrap:wrap; gap:6px; }
         .command-cloud code { padding:4px 7px; border:1px solid #3a3047; border-radius:4px; color:#c8b5dc; background:#100d16; font-size:10px; }
@@ -203,10 +206,7 @@
                 <div class="community-panel">
                     <div class="community-head"><div><div class="community-kicker">Live game</div><h2>Raven's Nest: Relic Hunt</h2></div><span id="relic-status-label" class="community-kicker">Loading</span></div>
                     <div id="relic-events"></div>
-                    <div class="community-kicker">Ritual energy</div>
-                    <div class="relic-progress"><span id="relic-ritual-progress"></span></div>
-                    <div class="relic-meta"><span id="relic-ritual-label">0 / 1</span><span id="relic-phrase-label">Phrase inactive</span></div>
-                    <div class="community-kicker">Recent activity</div>
+                    <div class="community-kicker">Recent game feedback</div>
                     <div id="relic-activity" class="community-list"><div class="community-empty">No activity yet.</div></div>
                 </div>
             </section>
@@ -329,6 +329,7 @@ function relicRows(container, rows, emptyText) {
     for (const row of rows) {
         const item = document.createElement('div');
         item.className = 'community-row';
+        if (row.className) item.classList.add(row.className);
         const primary = document.createElement('strong');
         primary.textContent = row.primary;
         const secondary = document.createElement('span');
@@ -360,6 +361,8 @@ function configuredInfoPanels(payload) {
         rows: (payload.recent_combines || []).map(combine => ({primary: `${combine.username}: ${combine.activity}`, secondary: combine.rarity})),
         empty: 'No relics have been combined yet.'
     });
+    if (display.ritual) panels.push({title: 'Ritual Energy', type: 'ritual', ritual: payload.ritual || {energy: 0, goal: 1}});
+    if (display.phrase) panels.push({title: 'Phrase Puzzle', type: 'phrase', phrase: payload.phrase || {enabled: false, progress: ''}});
     if (display.custom_enabled && display.custom_text) panels.push({title: display.custom_title || 'Community information', type: 'text', text: display.custom_text});
     return panels;
 }
@@ -370,6 +373,7 @@ function renderCommunityInfo() {
     const content = document.getElementById('community-info-content');
     content.replaceChildren();
     content.style.whiteSpace = '';
+    content.style.fontFamily = '';
     if (!panels.length) {
         document.getElementById('community-info-title').textContent = 'Community information';
         document.getElementById('community-info-page').textContent = '';
@@ -391,6 +395,24 @@ function renderCommunityInfo() {
             item.textContent = command;
             content.append(item);
         }
+    } else if (panel.type === 'ritual') {
+        content.className = '';
+        const ritual = panel.ritual;
+        const percent = Math.max(0, Math.min(100, Number(ritual.energy || 0) / Math.max(1, Number(ritual.goal || 1)) * 100));
+        const progress = document.createElement('div');
+        progress.className = 'relic-progress';
+        const fill = document.createElement('span');
+        fill.style.width = `${percent}%`;
+        progress.append(fill);
+        const meta = document.createElement('div');
+        meta.className = 'relic-meta';
+        meta.textContent = `${ritual.energy || 0} / ${ritual.goal || 1} energy`;
+        content.append(progress, meta);
+    } else if (panel.type === 'phrase') {
+        content.className = 'community-empty';
+        content.style.whiteSpace = 'pre-wrap';
+        content.style.fontFamily = 'ui-monospace, monospace';
+        content.textContent = panel.phrase.enabled && panel.phrase.progress ? panel.phrase.progress : 'No Phrase Puzzle is active.';
     } else {
         content.className = 'community-empty';
         content.style.whiteSpace = 'pre-wrap';
@@ -419,16 +441,17 @@ function renderRelicStatus(payload) {
         item.textContent = `${event.name} · ${formatRemaining(Math.max(0, event.ends_at - Date.now() / 1000))} remaining`;
         events.append(item);
     }
-    const ritual = payload.ritual || {energy: 0, goal: 1};
-    const percent = Math.max(0, Math.min(100, Number(ritual.energy || 0) / Math.max(1, Number(ritual.goal || 1)) * 100));
-    document.getElementById('relic-ritual-progress').style.width = `${percent}%`;
-    document.getElementById('relic-ritual-label').textContent = `${ritual.energy || 0} / ${ritual.goal || 1}`;
-    const phrase = payload.phrase || {};
-    document.getElementById('relic-phrase-label').textContent = phrase.enabled && phrase.progress ? `Phrase: ${phrase.progress}` : 'Phrase inactive';
-    const activity = [
-        ...(payload.recent_finds || []).map(item => ({created_at: item.created_at, primary: `${item.username} found ${item.item_name}`, secondary: item.rarity})),
-        ...(payload.recent_combines || []).map(item => ({created_at: item.created_at, primary: `${item.username}: ${item.activity}`, secondary: 'combine'}))
-    ].sort((a, b) => b.created_at - a.created_at).slice(0, 5);
+    const activity = (payload.recent_activity || []).slice(0, 7).map(item => {
+        const rewards = [
+            item.points ? `+${item.points} pts` : '',
+            item.xp ? `+${item.xp} XP` : ''
+        ].filter(Boolean).join(' · ');
+        return {
+            primary: item.message,
+            secondary: `${item.username} · ${item.type}${item.rarity && item.rarity !== 'info' ? ` · ${item.rarity}` : ''}${rewards ? ` · ${rewards}` : ''}`,
+            className: 'feedback-row'
+        };
+    });
     relicRows(document.getElementById('relic-activity'), activity, 'No Relic Hunt activity yet.');
     renderCommunityInfo();
     if (!relicInfoTimer) scheduleInfoRotation();
