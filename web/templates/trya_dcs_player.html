@@ -90,6 +90,8 @@
         .queue-song { min-width:0; }
         .queue-title { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .queue-artist { display:block; margin-top:2px; color:#898191; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .queue-links { min-height:0; margin-top:4px; }
+        .queue-links a { padding:2px 6px; font-size:9px; }
         @media (max-width: 900px) {
             body { padding:10px; }
             header { align-items:flex-start; }
@@ -197,6 +199,9 @@ const state = document.getElementById('player-state');
 const offlineImage = document.getElementById('offline-image');
 let offlineImageAvailable = Boolean(offlineImage.getAttribute('src'));
 let streamIsRunning = null;
+let livePositionInitialized = false;
+let rebuildingLiveBuffer = false;
+let lastObservedLiveEdge = 0;
 let lastLiveCorrection = 0;
 let hls = null;
 let renewTimer = null;
@@ -289,7 +294,10 @@ function renderQueue() {
         const artist = document.createElement('span');
         artist.className = 'queue-artist';
         artist.textContent = song.artist || 'Unknown artist';
-        details.append(title, artist);
+        const links = document.createElement('span');
+        links.className = 'dashboard-links queue-links';
+        renderDashboardLinks(links, song);
+        details.append(title, artist, links);
         item.append(number, details);
         queueList.append(item);
     });
@@ -305,7 +313,11 @@ function applyStreamMode(running) {
     streamIsRunning = Boolean(running);
     if (!streamIsRunning) {
         video.pause();
+        video.playbackRate = 1;
         video.hidden = true;
+        livePositionInitialized = false;
+        rebuildingLiveBuffer = false;
+        lastObservedLiveEdge = 0;
         if (offlineImageAvailable) {
             offlineImage.hidden = false;
             state.classList.add('hidden');
@@ -318,6 +330,9 @@ function applyStreamMode(running) {
     offlineImage.hidden = true;
     video.hidden = false;
     if (wasRunning === false) {
+        livePositionInitialized = false;
+        rebuildingLiveBuffer = false;
+        lastObservedLiveEdge = 0;
         showState('Connecting to the private stream...');
         if (hls) hls.startLoad();
         else authorizeStream(true).catch(() => showState('Could not initialize the stream.'));
@@ -330,15 +345,34 @@ function maintainLivePosition() {
     const range = video.seekable.length - 1;
     const liveStart = video.seekable.start(range);
     const liveEdge = video.seekable.end(range);
+    if (lastObservedLiveEdge && liveEdge < lastObservedLiveEdge - 5) {
+        livePositionInitialized = false;
+        rebuildingLiveBuffer = false;
+    }
+    lastObservedLiveEdge = liveEdge;
     const latency = liveEdge - video.currentTime;
-    const now = Date.now();
-    if (latency >= 7 && latency <= 30) return;
-    if (now - lastLiveCorrection < 5000) return;
-    const target = Math.max(liveStart + 0.25, liveEdge - 12);
-    if (Math.abs(video.currentTime - target) < 1) return;
-    lastLiveCorrection = now;
-    video.currentTime = target;
-    video.play().catch(() => {});
+    const target = Math.max(liveStart + 0.25, liveEdge - 20);
+    if (!livePositionInitialized) {
+        livePositionInitialized = true;
+        video.playbackRate = 1;
+        if (Math.abs(video.currentTime - target) >= 1) video.currentTime = target;
+        return;
+    }
+    if (latency > 45) {
+        const now = Date.now();
+        if (now - lastLiveCorrection >= 5000) {
+            lastLiveCorrection = now;
+            rebuildingLiveBuffer = false;
+            video.playbackRate = 1;
+            video.currentTime = target;
+        }
+        return;
+    }
+    if (latency < 12) rebuildingLiveBuffer = true;
+    if (rebuildingLiveBuffer && latency >= 20) rebuildingLiveBuffer = false;
+    if (rebuildingLiveBuffer) video.playbackRate = 0.97;
+    else if (latency > 30) video.playbackRate = 1.03;
+    else video.playbackRate = 1;
 }
 
 setInterval(maintainLivePosition, 2000);
@@ -366,10 +400,10 @@ async function authorizeStream(initial = false) {
             hls = new Hls({
                 lowLatencyMode: false,
                 backBufferLength: 30,
-                maxBufferLength: 30,
-                maxMaxBufferLength: 60,
-                liveSyncDuration: 12,
-                liveMaxLatencyDuration: 36,
+                maxBufferLength: 45,
+                maxMaxBufferLength: 90,
+                liveSyncDuration: 20,
+                liveMaxLatencyDuration: 45,
                 maxLiveSyncPlaybackRate: 1.03
             });
             hls.loadSource(payload.hls_url);

@@ -11,7 +11,7 @@ hlsAddress: :8888
 hlsAllowOrigins: ["https://bot.macfreun.de"]
 hlsAlwaysRemux: true
 hlsVariant: fmp4
-hlsSegmentCount: 24
+hlsSegmentCount: 36
 hlsSegmentDuration: 1s
 hlsPartDuration: 200ms
 
