@@ -440,6 +440,11 @@ function connectSocket() {
     socket.addEventListener('message', event => {
         try { handleEvent(JSON.parse(event.data)); } catch (_) {}
     });
+    socket.addEventListener('error', () => {
+        chatError.textContent = 'Chat connection failed. Retrying...';
+        try { socket.close(); } catch (_) {}
+        setTimeout(connectSocket, socketRetry);
+    });
     socket.addEventListener('close', event => {
         clearInterval(heartbeatTimer);
         chatInput.disabled = true;
@@ -452,7 +457,7 @@ function connectSocket() {
     });
 }
 
-setTimeout(connectSocket, 0);
+setTimeout(connectSocket, 3000);
 
 document.getElementById('chat-form').addEventListener('submit', event => {
     event.preventDefault();
