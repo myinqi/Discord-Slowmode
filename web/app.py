@@ -8717,6 +8717,34 @@ def create_app(db: Database, bot=None) -> Quart:
             "trya_dcs_obs_fps": "20",
         }
 
+        async def get_dcs_loop_videos() -> list[dict]:
+            try:
+                raw = json.loads(await db.get_setting("trya_dcs_loop_videos") or "[]")
+            except (TypeError, json.JSONDecodeError):
+                raw = []
+            videos = []
+            for item in raw if isinstance(raw, list) else []:
+                if not isinstance(item, dict):
+                    continue
+                filename = os.path.basename(str(item.get("filename") or ""))
+                if filename and os.path.isfile(os.path.join(TRYA_DCS_DIR, "assets", filename)):
+                    videos.append({
+                        "filename": filename,
+                        "label": str(item.get("label") or filename)[:100],
+                    })
+            return videos
+
+        def invalidate_dcs_loop_cache() -> None:
+            assets_dir = os.path.join(TRYA_DCS_DIR, "assets")
+            for filename in (
+                "_concat_all.mp4", "_concat_all.hash",
+                "_concat_all_random.mp4", "_concat_all_random.hash",
+            ):
+                try:
+                    os.remove(os.path.join(assets_dir, filename))
+                except FileNotFoundError:
+                    pass
+
         if request.method == "POST":
             form = await request.form
             submitted_csrf = str(form.get("csrf_token") or "")
@@ -8726,6 +8754,123 @@ def create_app(db: Database, bot=None) -> Quart:
                 await flash("The DCS form expired. Please try again.", "error")
                 return redirect(request.url)
             action = form.get("action", "save_settings")
+            if action == "upload_dcs_loop_video":
+                if trya_dcs_manager.is_running:
+                    await flash("Stop TrYa DCS before changing overlay videos.", "error")
+                    return redirect(request.url)
+                files = await request.files
+                uploaded = files.get("dcs_loop_file")
+                if not uploaded or not uploaded.filename:
+                    await flash("Select an MP4 or WebM overlay video.", "error")
+                    return redirect(request.url)
+                extension = os.path.splitext(uploaded.filename)[1].lower()
+                if extension not in {".mp4", ".webm"}:
+                    await flash("Only MP4 and WebM overlay videos are accepted.", "error")
+                    return redirect(request.url)
+                assets_dir = os.path.join(TRYA_DCS_DIR, "assets")
+                os.makedirs(assets_dir, exist_ok=True)
+                import tempfile
+                fd, staged_path = tempfile.mkstemp(prefix="dcs_loop_upload_", suffix=extension, dir=assets_dir)
+                os.close(fd)
+                try:
+                    await uploaded.save(staged_path)
+                    size = os.path.getsize(staged_path)
+                    if size <= 0 or size > 200 * 1024 * 1024:
+                        raise ValueError("Overlay videos must be between 1 byte and 200 MiB.")
+                    with open(staged_path, "rb") as handle:
+                        signature = handle.read(16)
+                    if extension == ".mp4" and signature[4:8] != b"ftyp":
+                        raise ValueError("The uploaded file does not have a valid MP4 signature.")
+                    if extension == ".webm" and not signature.startswith(b"\x1aE\xdf\xa3"):
+                        raise ValueError("The uploaded file does not have a valid WebM signature.")
+                    probe = await asyncio.create_subprocess_exec(
+                        "ffprobe", "-v", "error", "-select_streams", "v:0",
+                        "-show_entries", "stream=width,height:format=duration",
+                        "-of", "json", staged_path,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    stdout, _ = await asyncio.wait_for(probe.communicate(), timeout=30)
+                    metadata = json.loads(stdout.decode("utf-8") or "{}") if probe.returncode == 0 else {}
+                    stream = (metadata.get("streams") or [{}])[0]
+                    width = int(stream.get("width") or 0)
+                    height = int(stream.get("height") or 0)
+                    duration = float((metadata.get("format") or {}).get("duration") or 0)
+                    if not width or not height or width > 7680 or height > 4320:
+                        raise ValueError("The overlay video could not be decoded or exceeds 7680×4320 pixels.")
+                    if duration <= 0 or duration > 3600:
+                        raise ValueError("Overlay video duration must be between 0 and 60 minutes.")
+                    filename = f"dcs_loop_{secrets.token_hex(12)}{extension}"
+                    os.replace(staged_path, os.path.join(assets_dir, filename))
+                    videos = await get_dcs_loop_videos()
+                    videos.append({
+                        "filename": filename,
+                        "label": (form.get("dcs_loop_label") or uploaded.filename).strip()[:100],
+                    })
+                    await db.set_setting("trya_dcs_loop_videos", json.dumps(videos))
+                    await db.set_setting("trya_dcs_loop_random_rotation", "{}")
+                    if len(videos) == 1:
+                        await db.set_setting("trya_dcs_loop_selection", filename)
+                    invalidate_dcs_loop_cache()
+                    from bot.trya_dcs_manager import log_dcs_event
+                    log_dcs_event(
+                        f"DCS overlay uploaded: {filename} ({width}x{height}, {duration:.1f}s)."
+                    )
+                    await flash("DCS overlay video uploaded.", "success")
+                except (ValueError, OSError, asyncio.TimeoutError, json.JSONDecodeError) as exc:
+                    await flash(str(exc) or "The overlay video could not be validated.", "error")
+                finally:
+                    try:
+                        os.remove(staged_path)
+                    except FileNotFoundError:
+                        pass
+                return redirect(request.url)
+            if action == "delete_dcs_loop_video":
+                if trya_dcs_manager.is_running:
+                    await flash("Stop TrYa DCS before deleting overlay videos.", "error")
+                    return redirect(request.url)
+                filename = os.path.basename(str(form.get("loop_filename") or ""))
+                videos = await get_dcs_loop_videos()
+                if not filename or not any(video["filename"] == filename for video in videos):
+                    await flash("The DCS overlay video no longer exists.", "error")
+                    return redirect(request.url)
+                videos = [video for video in videos if video["filename"] != filename]
+                await db.set_setting("trya_dcs_loop_videos", json.dumps(videos))
+                await db.set_setting("trya_dcs_loop_random_rotation", "{}")
+                selection = await db.get_setting("trya_dcs_loop_selection") or "shuffle"
+                if selection == filename:
+                    await db.set_setting("trya_dcs_loop_selection", "shuffle")
+                try:
+                    os.remove(os.path.join(TRYA_DCS_DIR, "assets", filename))
+                except FileNotFoundError:
+                    pass
+                invalidate_dcs_loop_cache()
+                from bot.trya_dcs_manager import log_dcs_event
+                log_dcs_event(f"DCS overlay deleted: {filename}.")
+                await flash("DCS overlay video deleted.", "success")
+                return redirect(request.url)
+            if action == "set_dcs_loop_selection":
+                if trya_dcs_manager.is_running:
+                    await flash("Stop TrYa DCS before changing the overlay mode.", "error")
+                    return redirect(request.url)
+                videos = await get_dcs_loop_videos()
+                selection = str(form.get("dcs_loop_selection") or "shuffle")
+                modes = {"shuffle", "concat_all", "concat_all_random", "concat_random_subset"}
+                filenames = {video["filename"] for video in videos}
+                if selection not in modes and selection not in filenames:
+                    selection = "shuffle"
+                try:
+                    count = int(form.get("dcs_loop_random_count") or "10")
+                except (TypeError, ValueError):
+                    count = 10
+                count = max(1, min(count, len(videos))) if videos else 1
+                await db.set_setting("trya_dcs_loop_selection", selection)
+                await db.set_setting("trya_dcs_loop_random_count", str(count))
+                await db.set_setting("trya_dcs_loop_random_rotation", "{}")
+                from bot.trya_dcs_manager import log_dcs_event
+                log_dcs_event(f"DCS overlay mode saved: {selection} (count={count}).")
+                await flash("DCS overlay selection saved.", "success")
+                return redirect(request.url)
             if action == "upload_offline_image":
                 files = await request.files
                 uploaded = files.get("offline_image")
@@ -9171,6 +9316,18 @@ def create_app(db: Database, bot=None) -> Quart:
             pass
 
         stats = await db.get_trya_dcs_admin_stats()
+        dcs_loop_videos = await get_dcs_loop_videos()
+        dcs_loop_selection = await db.get_setting("trya_dcs_loop_selection") or "shuffle"
+        try:
+            dcs_loop_random_count = int(
+                await db.get_setting("trya_dcs_loop_random_count") or "10"
+            )
+        except (TypeError, ValueError):
+            dcs_loop_random_count = 10
+        if dcs_loop_videos:
+            dcs_loop_random_count = max(1, min(dcs_loop_random_count, len(dcs_loop_videos)))
+        else:
+            dcs_loop_random_count = 1
         offline_image_filename = os.path.basename(
             await db.get_setting("trya_dcs_offline_image_filename") or ""
         )
@@ -9221,6 +9378,9 @@ def create_app(db: Database, bot=None) -> Quart:
             protected_hls_url=f"{_public_web_url()}/dcs-stream/{stream_path}/index.m3u8",
             data_directory=TRYA_DCS_DIR,
             offline_image_configured=offline_image_configured,
+            dcs_loop_videos=dcs_loop_videos,
+            dcs_loop_selection=dcs_loop_selection,
+            dcs_loop_random_count=dcs_loop_random_count,
             songs=songs_desc,
             submission_songs=submission_songs,
             intro_songs=intro_songs,

@@ -314,7 +314,7 @@
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-5">
             <label class="flex items-start gap-3 cursor-pointer">
                 <input type="checkbox" name="reuse_trya_visuals" value="1" class="mt-1" {% if settings.trya_dcs_reuse_trya_visuals == 'on' %}checked{% endif %}>
-                <span><span class="block text-white font-semibold">Use TrYa visual setup</span><span class="block text-gray-500 text-sm mt-1">Reuses the proven background, one random overlay video, rounded corners and media border without duplicating large assets.</span></span>
+                <span><span class="block text-white font-semibold">Use TrYa background and media frame</span><span class="block text-gray-500 text-sm mt-1">Reuses the background, rounded corners and media border. Top-right overlay videos are managed independently below.</span></span>
             </label>
             <label class="block">
                 <span class="block text-gray-400 text-xs mb-1">Stream title</span>
@@ -355,6 +355,52 @@
             <button type="submit" class="px-3 py-2 rounded bg-discord-blurple hover:bg-indigo-500 text-white text-sm">{{ 'Replace image' if offline_image_configured else 'Upload image' }}</button>
         </form>
         {% if offline_image_configured %}<form method="POST" onsubmit="return confirm('Remove the configured DCS offline image?')"><input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="remove_offline_image"><button type="submit" class="px-3 py-2 rounded border border-red-700/60 bg-red-950/50 hover:bg-red-900/60 text-red-300 text-sm">Remove image</button></form>{% endif %}
+    </div>
+</section>
+
+<section class="mt-6 bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden">
+    <div class="px-5 py-4 border-b border-gray-700/50">
+        <h3 class="text-white font-semibold">DCS overlay videos</h3>
+        <p class="text-gray-500 text-sm mt-1">Independent top-right overlay assets. Combined modes build and validate a dedicated 720p CFR30 cache when the publisher starts.</p>
+    </div>
+    <div class="p-5 grid grid-cols-1 xl:grid-cols-2 gap-6">
+        <div class="space-y-4">
+            <form method="POST" class="space-y-3 rounded-lg border border-gray-700 bg-discord-darker/50 p-4">
+                <input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="set_dcs_loop_selection">
+                <p class="text-gray-300 text-sm font-medium">Playback mode</p>
+                <label class="flex items-center gap-2 text-gray-300 text-xs"><input type="radio" name="dcs_loop_selection" value="shuffle" {% if dcs_loop_selection == 'shuffle' %}checked{% endif %}>Shuffle one video per stream start</label>
+                {% if dcs_loop_videos|length > 1 %}
+                <label class="flex items-center gap-2 text-gray-300 text-xs"><input type="radio" name="dcs_loop_selection" value="concat_all" {% if dcs_loop_selection == 'concat_all' %}checked{% endif %}>Concatenate all videos in upload order</label>
+                <label class="flex items-center gap-2 text-gray-300 text-xs"><input type="radio" name="dcs_loop_selection" value="concat_all_random" {% if dcs_loop_selection == 'concat_all_random' %}checked{% endif %}>Concatenate all videos in random order</label>
+                <div class="flex flex-wrap items-center gap-2">
+                    <label class="flex items-center gap-2 text-gray-300 text-xs"><input type="radio" name="dcs_loop_selection" value="concat_random_subset" {% if dcs_loop_selection == 'concat_random_subset' %}checked{% endif %}>Concatenate random subset</label>
+                    <input type="number" name="dcs_loop_random_count" value="{{ dcs_loop_random_count }}" min="1" max="{{ dcs_loop_videos|length }}" class="w-16 bg-discord-dark border border-gray-600 rounded px-2 py-1 text-white text-xs text-center">
+                    <span class="text-gray-500 text-xs">of {{ dcs_loop_videos|length }}</span>
+                </div>
+                {% endif %}
+                {% for video in dcs_loop_videos %}
+                <label class="flex items-center gap-2 text-gray-300 text-xs"><input type="radio" name="dcs_loop_selection" value="{{ video.filename }}" {% if dcs_loop_selection == video.filename %}checked{% endif %}><span class="truncate" title="{{ video.filename }}">Fixed: {{ video.label }}</span></label>
+                {% endfor %}
+                <button type="submit" class="px-3 py-2 rounded bg-discord-blurple hover:bg-indigo-500 text-white text-sm" {% if not dcs_loop_videos %}disabled{% endif %}>Save overlay mode</button>
+                <p class="text-gray-600 text-[11px]">Random subset rotation cycles through uploaded videos before repeating them. Build progress appears in the DCS live log.</p>
+            </form>
+            <div class="space-y-2">
+                <p class="text-gray-400 text-xs uppercase tracking-wide">Uploaded videos</p>
+                {% for video in dcs_loop_videos %}
+                <div class="flex items-center justify-between gap-3 rounded bg-discord-darker/60 border border-gray-700 px-3 py-2">
+                    <span class="text-gray-300 text-xs truncate" title="{{ video.filename }}">{{ video.label }}</span>
+                    <form method="POST" onsubmit="return confirm('Delete this DCS overlay video?')"><input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="delete_dcs_loop_video"><input type="hidden" name="loop_filename" value="{{ video.filename }}"><button type="submit" class="text-red-400 hover:text-red-300 text-xs">Delete</button></form>
+                </div>
+                {% else %}<p class="text-gray-600 text-sm">No DCS overlay videos uploaded yet.</p>{% endfor %}
+            </div>
+        </div>
+        <form method="POST" enctype="multipart/form-data" class="space-y-3 rounded-lg border border-gray-700 bg-discord-darker/50 p-4 self-start">
+            <input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="upload_dcs_loop_video">
+            <p class="text-gray-300 text-sm font-medium">Upload overlay video</p>
+            <label class="block"><span class="block text-gray-500 text-xs mb-1">Label</span><input type="text" name="dcs_loop_label" maxlength="100" placeholder="Optional display name" class="w-full bg-discord-dark border border-gray-600 rounded px-3 py-2 text-white text-sm"></label>
+            <label class="block"><span class="block text-gray-500 text-xs mb-1">MP4 or WebM, maximum 200 MiB</span><input type="file" name="dcs_loop_file" accept="video/mp4,video/webm,.mp4,.webm" required class="block w-full text-sm text-gray-300 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-700 file:text-gray-200 hover:file:bg-gray-600"></label>
+            <button type="submit" class="w-full px-3 py-2 rounded bg-gray-700 hover:bg-gray-600 text-white text-sm">Upload DCS overlay</button>
+        </form>
     </div>
 </section>
 

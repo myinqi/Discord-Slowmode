@@ -32,8 +32,10 @@ The current implementation includes:
 - live player metadata and a Discord-backed WebSocket chat with guild emojis,
   attachments, replies, edits and deletions;
 - managed webhook posting for authenticated web users, marked with `· Web`;
-- optional reuse of the established TrYa background, overlay and media-frame
-  setup without duplicating the large visual assets;
+- optional reuse of the established TrYa background and media-frame setup;
+- independent DCS top-right overlay uploads with fixed, single-shuffle,
+  ordered/random concat-all and rotating random-subset modes plus validated
+  cached 720p CFR30 combined videos;
 - admin-assigned intro/outro pools, with intro played once and outro on stop-mode
   completion or safe stop;
 - optional validated WeLoveMusic track links alongside canonical Suno links in the

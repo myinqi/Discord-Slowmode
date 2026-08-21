@@ -2006,11 +2006,16 @@ class TryaStreamManager:
 
     # ── Concat-all loop video builder ─────────────────────────────────────────
 
-    async def _select_random_loop_video_subset(self, loop_vids: list, count: int) -> list:
+    async def _select_random_loop_video_subset(
+        self,
+        loop_vids: list,
+        count: int,
+        rotation_setting_key: str = "trya_stream_loop_random_rotation",
+    ) -> list:
         """Draw a random subset while cycling through every uploaded video."""
         filenames = [video.get("filename") for video in loop_vids if video.get("filename")]
         available = set(filenames)
-        state_raw = await self.db.get_setting("trya_stream_loop_random_rotation") or "{}"
+        state_raw = await self.db.get_setting(rotation_setting_key) or "{}"
         try:
             state = json.loads(state_raw)
             if not isinstance(state, dict):
@@ -2052,7 +2057,7 @@ class TryaStreamManager:
                 selected.append(filename)
 
         await self.db.set_setting(
-            "trya_stream_loop_random_rotation",
+            rotation_setting_key,
             json.dumps({"known": filenames, "remaining": remaining}),
         )
         videos_by_filename = {video.get("filename"): video for video in loop_vids}

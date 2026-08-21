@@ -328,13 +328,87 @@ class TryaDcsManager(TryaStreamManager):
             self._log(f"Publisher failed: {exc}", "error")
             await self.stop()
 
+    async def _resolve_dcs_loop_path(self) -> str | None:
+        assets_dir = os.path.join(self.trya_stream_dir, "assets")
+        try:
+            configured = json.loads(
+                await self.db.get_setting("trya_dcs_loop_videos") or "[]"
+            )
+        except (TypeError, json.JSONDecodeError):
+            configured = []
+        videos = []
+        for item in configured if isinstance(configured, list) else []:
+            if not isinstance(item, dict):
+                continue
+            filename = os.path.basename(str(item.get("filename") or ""))
+            path = os.path.join(assets_dir, filename) if filename else ""
+            if path and os.path.isfile(path):
+                videos.append({"filename": filename, "label": str(item.get("label") or filename)[:100]})
+        if not videos:
+            self._log("No DCS overlay videos configured; continuing without a top-right local overlay.")
+            return None
+        selection = (
+            await self.db.get_setting("trya_dcs_loop_selection") or "shuffle"
+        ).strip()
+        selected_filename = ""
+        built_path = None
+        if selection == "concat_all":
+            if len(videos) == 1:
+                selected_filename = videos[0]["filename"]
+            else:
+                built_path = await self._build_concat_all_video(videos)
+        elif selection == "concat_all_random":
+            if len(videos) == 1:
+                selected_filename = videos[0]["filename"]
+            else:
+                shuffled = list(videos)
+                random.shuffle(shuffled)
+                built_path = await self._build_concat_all_video(shuffled, random_order=True)
+        elif selection == "concat_random_subset":
+            try:
+                count = int(await self.db.get_setting("trya_dcs_loop_random_count") or "10")
+            except (TypeError, ValueError):
+                count = 10
+            count = max(1, min(count, len(videos)))
+            selected = await self._select_random_loop_video_subset(
+                videos,
+                count,
+                rotation_setting_key="trya_dcs_loop_random_rotation",
+            )
+            self._log(f"DCS overlay random subset: selected {len(selected)} of {len(videos)} videos.")
+            if len(selected) == 1:
+                selected_filename = selected[0]["filename"]
+            else:
+                built_path = await self._build_concat_all_video(selected, random_order=True)
+        elif selection == "shuffle":
+            selected_filename = random.choice(videos)["filename"]
+            self._log(f"DCS overlay shuffle selected: {selected_filename}")
+        else:
+            match = next(
+                (video for video in videos if video["filename"] == selection),
+                None,
+            )
+            selected_filename = (match or videos[0])["filename"]
+            if match is None:
+                self._log(
+                    f"Configured DCS overlay is unavailable; using {selected_filename}.",
+                    "error",
+                )
+        if built_path and os.path.isfile(built_path):
+            return built_path
+        if built_path is None and selected_filename:
+            return os.path.join(assets_dir, selected_filename)
+        fallback = random.choice(videos)["filename"]
+        self._log(f"DCS overlay build failed; using {fallback}.", "error")
+        return os.path.join(assets_dir, fallback)
+
     async def _play_dcs_playlist(self, songs: list[dict]) -> None:
         reuse_visuals = (
             await self.db.get_setting("trya_dcs_reuse_trya_visuals") or "on"
         ) == "on"
         bg_path = None
         bg_type = "image"
-        loop_path = None
+        loop_path = await self._resolve_dcs_loop_path()
         media_style = None
         if reuse_visuals:
             asset_dir = os.path.join(Config.TRYA_STREAM_DIR, "assets")
@@ -345,21 +419,6 @@ class TryaDcsManager(TryaStreamManager):
             candidate = os.path.join(asset_dir, bg_filename) if bg_filename else ""
             if candidate and os.path.isfile(candidate):
                 bg_path = candidate
-
-            try:
-                loop_videos = json.loads(
-                    await self.db.get_setting("trya_stream_loop_videos") or "[]"
-                )
-            except (TypeError, json.JSONDecodeError):
-                loop_videos = []
-            valid_loops = []
-            for item in loop_videos if isinstance(loop_videos, list) else []:
-                filename = os.path.basename(str(item.get("filename") or ""))
-                candidate = os.path.join(asset_dir, filename) if filename else ""
-                if candidate and os.path.isfile(candidate):
-                    valid_loops.append(candidate)
-            if valid_loops:
-                loop_path = random.choice(valid_loops)
 
             corners = (
                 await self.db.get_setting("trya_stream_media_corners_enabled") or "off"
