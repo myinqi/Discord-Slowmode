@@ -2408,6 +2408,8 @@ class TryaStreamManager:
         output_url: str | None = None,
         audio_bitrate_kbps: int = 128,
         realtime_audio: bool = False,
+        video_preset: str = "veryfast",
+        filter_complex_threads: int = 0,
     ) -> list:
         """Build ONE FFmpeg command for the full playlist.
 
@@ -2419,7 +2421,11 @@ class TryaStreamManager:
           4: Combined ASS subtitles (lyrics + NowPlaying title cards)
         """
         W, H = _W, _H
+        if video_preset not in {"ultrafast", "superfast", "veryfast", "faster", "fast"}:
+            video_preset = "veryfast"
         cmd = ["ffmpeg", "-y"]
+        if filter_complex_threads > 0:
+            cmd += ["-filter_complex_threads", str(max(1, min(16, int(filter_complex_threads))))]
         if not legacy_pipeline:
             cmd += ["-nostats", "-progress", "pipe:2"]
 
@@ -2631,7 +2637,7 @@ class TryaStreamManager:
         audio_bitrate = f"{max(96, min(320, int(audio_bitrate_kbps)))}k"
         stream_target = output_url or f"{_RTMP_BASE}{twitch_key}"
         cmd += [
-            "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
+            "-c:v", "libx264", "-preset", video_preset, "-tune", "zerolatency",
             "-b:v", video_bitrate, "-maxrate", video_bitrate, "-bufsize", video_bufsize,
             "-x264-params", "nal-hrd=cbr:force-cfr=1",
             "-pix_fmt", "yuv420p", "-r", str(_FPS),

@@ -131,6 +131,10 @@ OBS contribution listener on host port `1937`. Internally MediaMTX uses:
 - HLS: `mediamtx:8888/trya-dcs/index.m3u8`
 - Control API: `mediamtx:9997`
 
+The ARM64 DCS publisher uses x264 `ultrafast` with up to ten complex-filter threads
+to keep sustained output at or above real time; TrYa Stream and Exp. Radio retain
+their existing encoder preset.
+
 The HLS playlist retains 36 segments. Browser playback initially starts 20 seconds
 behind the live edge and can buffer up to 45 seconds; this trades latency for stable
 playback during short network or encoding fluctuations. Playback remains fixed at

@@ -447,6 +447,8 @@ class TryaDcsManager(TryaStreamManager):
             output_url=self._output_url,
             audio_bitrate_kbps=audio_bitrate,
             realtime_audio=True,
+            video_preset="ultrafast",
+            filter_complex_threads=min(10, os.cpu_count() or 1),
         )
         self._reset_ffmpeg_health("starting")
         self._process = await asyncio.create_subprocess_exec(

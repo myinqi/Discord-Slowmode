@@ -104,6 +104,13 @@
             .dashboard-cell:last-child { padding-bottom:0; border-bottom:0; }
             .brand { font-size:19px; }
         }
+        @media (max-width: 520px) {
+            .meta-title { flex-direction:column; align-items:stretch; }
+            .meta-title h1 { width:100%; }
+            .meta-actions { width:100%; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); }
+            .meta-actions > * { min-width:0; padding:7px 4px; font-size:10px; text-align:center; white-space:nowrap; }
+            .action-prefix { display:none; }
+        }
     </style>
 </head>
 <body>
@@ -134,8 +141,8 @@
                     <div class="meta-title">
                         <h1 id="now-title">TrYa DCS</h1>
                         <div class="meta-actions">
-                            <a id="wlm-link" class="wlm-link" href="#" target="_blank" rel="noopener noreferrer" hidden>Open in WLM ↗</a>
-                            <a id="suno-link" class="suno-link" href="#" target="_blank" rel="noopener noreferrer" hidden>Open in Suno ↗</a>
+                            <a id="wlm-link" class="wlm-link" href="#" target="_blank" rel="noopener noreferrer" hidden><span class="action-prefix">Open in </span>WLM ↗</a>
+                            <a id="suno-link" class="suno-link" href="#" target="_blank" rel="noopener noreferrer" hidden><span class="action-prefix">Open in </span>Suno ↗</a>
                             <button id="queue-button" type="button" title="Show the current playlist">Playlist</button>
                         </div>
                     </div>
