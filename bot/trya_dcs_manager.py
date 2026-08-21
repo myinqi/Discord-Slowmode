@@ -284,6 +284,26 @@ class TryaDcsManager(TryaStreamManager):
             status["song"]["submitted_by"] = self.current_song.get("user_name") or ""
             status["song"]["suno_url"] = self._public_suno_url(self.current_song)
             status["song"]["wlm_url"] = self._public_wlm_url(self.current_song)
+            status["song"]["duration"] = float(self.current_song.get("duration") or 0)
+        status["playlist"] = [
+            {
+                "title": song.get("title") or "Unknown title",
+                "artist": song.get("artist") or "Unknown artist",
+                "duration": float(song.get("duration") or 0),
+                "suno_url": self._public_suno_url(song),
+                "wlm_url": self._public_wlm_url(song),
+            }
+            for song in self.playlist
+        ] if self.is_running else []
+        song_remaining = (
+            max(0.0, self._current_song_end_time - time.monotonic())
+            if self.is_running and self.current_song else 0.0
+        )
+        upcoming = self.playlist[self._current_song_index:] if self.is_running else []
+        status["song_remaining_seconds"] = song_remaining
+        status["stream_remaining_seconds"] = song_remaining + sum(
+            float(song.get("duration") or 0) for song in upcoming
+        )
         return status
 
     async def _stream_loop(self):
@@ -396,7 +416,7 @@ class TryaDcsManager(TryaStreamManager):
         stream_title = (await self.db.get_setting("trya_dcs_stream_title") or "").strip()
         ass_path = self._build_combined_ass(
             songs,
-            show_progress=True,
+            show_progress=False,
             progress_total_count=len(songs),
             stream_title_enabled=bool(stream_title),
             stream_title_text=stream_title,

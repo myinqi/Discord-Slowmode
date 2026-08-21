@@ -456,6 +456,7 @@ def create_app(db: Database, bot=None) -> Quart:
     app.song_rating_sync_task = None
     app.trya_dcs_chat_rate = {}
     app.trya_dcs_token_rate = {}
+    app.trya_dcs_presence = {}
     # Serializes manual starts of both radio managers. The scheduled Exp.
     # Radio start additionally checks the legacy manager before it fires.
     app.radio_start_lock = asyncio.Lock()
@@ -9195,6 +9196,13 @@ def create_app(db: Database, bot=None) -> Quart:
             if song.get("active") and song.get("playlist_source") == "outro"
         ]
         stream_status = await trya_dcs_manager.get_status()
+        presence_now = time.monotonic()
+        app.trya_dcs_presence = {
+            member_id: seen_at
+            for member_id, seen_at in app.trya_dcs_presence.items()
+            if presence_now - seen_at < 15
+        }
+        stream_status["listener_count"] = len(app.trya_dcs_presence)
         oauth_ready = bool(
             Config.DISCORD_CLIENT_ID
             and Config.DISCORD_CLIENT_SECRET
@@ -9238,6 +9246,13 @@ def create_app(db: Database, bot=None) -> Quart:
         guild_id = int(await db.get_setting("trya_dcs_guild_id") or Config.GUILD_ID or 0)
         if not user_id or not await _trya_dcs_membership_valid(int(user_id), guild_id):
             return {"error": "forbidden"}, 403
+        now = time.monotonic()
+        app.trya_dcs_presence[int(user_id)] = now
+        app.trya_dcs_presence = {
+            member_id: seen_at
+            for member_id, seen_at in app.trya_dcs_presence.items()
+            if now - seen_at < 15
+        }
         status = await trya_dcs_manager.get_status()
         return {
             "running": status["running"],
@@ -9246,7 +9261,9 @@ def create_app(db: Database, bot=None) -> Quart:
             "song_index": status["song_index"],
             "playlist_length": status["playlist_length"],
             "playlist": status.get("playlist", []),
-            "listener_count": status.get("listener_count", 0),
+            "song_remaining_seconds": status.get("song_remaining_seconds", 0),
+            "stream_remaining_seconds": status.get("stream_remaining_seconds", 0),
+            "listener_count": len(app.trya_dcs_presence),
             "ffmpeg": status["ffmpeg"],
         }
 

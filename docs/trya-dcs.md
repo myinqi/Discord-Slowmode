@@ -49,6 +49,8 @@ The current implementation includes:
   Admin actions, with polling and clipboard copy;
 - a configurable, validated offline player image stored outside the public web
   root and served only to authenticated guild members;
+- a live dashboard below the player with previous/next-song links, playlist
+  position, song/rotation remaining time and in-memory active-listener presence;
 - a dedicated OBS contribution listener at `rtmp://HOST:1937/live` with a
   per-installation stream key and automatic local-overlay fallback.
 

@@ -41,6 +41,19 @@
         .progress { height:3px; margin-top:10px; background:#30293d; overflow:hidden; }
         .progress span { display:block; width:0; height:100%; background:var(--accent); transition:width .45s linear; }
         .disclosure { align-self:center; max-width:360px; text-align:right; white-space:pre-line; color:#aaa2b5; font-size:12px; }
+        .stream-dashboard { display:grid; grid-template-columns:1fr 1fr 1.25fr; margin:0 16px; padding:15px 0; border-bottom:1px solid var(--line); }
+        .dashboard-cell { min-width:0; padding:0 16px; border-right:1px solid var(--line); }
+        .dashboard-cell:first-child { padding-left:0; }
+        .dashboard-cell:last-child { padding-right:0; border-right:0; }
+        .dashboard-label { color:#756d80; font-size:10px; font-weight:750; letter-spacing:.08em; text-transform:uppercase; }
+        .dashboard-title { margin-top:5px; color:#e9e4ef; font-size:13px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .dashboard-artist { margin-top:2px; color:#91899b; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .dashboard-links { min-height:20px; margin-top:7px; display:flex; gap:6px; }
+        .dashboard-links a { padding:3px 7px; border:1px solid var(--line); border-radius:4px; color:#cfc7d8; font-size:10px; text-decoration:none; }
+        .dashboard-links a:hover { color:#fff; border-color:#755e89; }
+        .dashboard-stats { margin-top:6px; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px 12px; }
+        .dashboard-stat strong { display:block; color:#e9e4ef; font-size:13px; }
+        .dashboard-stat span { display:block; margin-top:1px; color:#756d80; font-size:10px; }
         .chat-panel { display:flex; flex-direction:column; }
         .chat-head { padding:15px 16px; border-bottom:1px solid var(--line); font-weight:650; }
         .messages { flex:1; min-height:280px; max-height:calc(100vh - 235px); padding:12px 14px; overflow-y:auto; }
@@ -84,6 +97,9 @@
             .chat-panel { min-height:420px; }
             .meta { flex-direction:column; }
             .disclosure { text-align:left; }
+            .stream-dashboard { grid-template-columns:1fr; gap:12px; }
+            .dashboard-cell { padding:0 0 12px; border-right:0; border-bottom:1px solid var(--line); }
+            .dashboard-cell:last-child { padding-bottom:0; border-bottom:0; }
             .brand { font-size:19px; }
         }
     </style>
@@ -126,6 +142,29 @@
                 </div>
                 <div class="disclosure">{{ disclaimer }}</div>
             </div>
+            <section class="stream-dashboard" aria-label="Stream context">
+                <div class="dashboard-cell">
+                    <div class="dashboard-label">Previous song</div>
+                    <div id="previous-title" class="dashboard-title">No previous song</div>
+                    <div id="previous-artist" class="dashboard-artist"></div>
+                    <div id="previous-links" class="dashboard-links"></div>
+                </div>
+                <div class="dashboard-cell">
+                    <div class="dashboard-label">Next song</div>
+                    <div id="next-title" class="dashboard-title">Waiting for playlist</div>
+                    <div id="next-artist" class="dashboard-artist"></div>
+                    <div id="next-links" class="dashboard-links"></div>
+                </div>
+                <div class="dashboard-cell">
+                    <div class="dashboard-label">Stream statistics</div>
+                    <div class="dashboard-stats">
+                        <div class="dashboard-stat"><strong id="stat-position">—</strong><span>Song position</span></div>
+                        <div class="dashboard-stat"><strong id="stat-song-remaining">—</strong><span>Song remaining</span></div>
+                        <div class="dashboard-stat"><strong id="stat-stream-remaining">—</strong><span>Stream remaining</span></div>
+                        <div class="dashboard-stat"><strong id="stat-listeners">0</strong><span>Listeners</span></div>
+                    </div>
+                </div>
+            </section>
         </section>
         <aside class="chat-panel">
             <div class="chat-head">Discord live chat</div>
@@ -183,6 +222,48 @@ const wlmLink = document.getElementById('wlm-link');
 const sunoLink = document.getElementById('suno-link');
 let currentQueue = [];
 let currentSongIndex = 0;
+let currentSongRemaining = 0;
+let currentStreamRemaining = 0;
+let currentListenerCount = 0;
+
+function formatRemaining(seconds) {
+    const value = Math.max(0, Math.round(Number(seconds || 0)));
+    const hours = Math.floor(value / 3600);
+    const minutes = Math.floor((value % 3600) / 60);
+    const secs = value % 60;
+    return hours ? `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}` : `${minutes}:${String(secs).padStart(2, '0')}`;
+}
+
+function renderDashboardLinks(container, song) {
+    container.replaceChildren();
+    for (const [label, value, host] of [['WLM', song && song.wlm_url, 'www.welovemusic.ai'], ['Suno', song && song.suno_url, 'suno.com']]) {
+        try {
+            const url = new URL(value);
+            if (url.protocol !== 'https:' || (host === 'suno.com' ? !['suno.com', 'app.suno.com'].includes(url.hostname) : url.hostname !== host)) continue;
+            const link = document.createElement('a');
+            link.href = url.href;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.textContent = `${label} ↗`;
+            container.append(link);
+        } catch (_) {}
+    }
+}
+
+function renderDashboard() {
+    const previous = currentSongIndex > 1 ? currentQueue[currentSongIndex - 2] : null;
+    const next = currentSongIndex > 0 && currentSongIndex < currentQueue.length ? currentQueue[currentSongIndex] : null;
+    document.getElementById('previous-title').textContent = previous ? previous.title : 'No previous song';
+    document.getElementById('previous-artist').textContent = previous ? previous.artist : '';
+    renderDashboardLinks(document.getElementById('previous-links'), previous);
+    document.getElementById('next-title').textContent = next ? next.title : (currentSongIndex ? 'End of current playlist' : 'Waiting for playlist');
+    document.getElementById('next-artist').textContent = next ? next.artist : '';
+    renderDashboardLinks(document.getElementById('next-links'), next);
+    document.getElementById('stat-position').textContent = currentSongIndex && currentQueue.length ? `${currentSongIndex} / ${currentQueue.length}` : '—';
+    document.getElementById('stat-song-remaining').textContent = currentSongIndex ? formatRemaining(currentSongRemaining) : '—';
+    document.getElementById('stat-stream-remaining').textContent = currentSongIndex ? formatRemaining(currentStreamRemaining) : '—';
+    document.getElementById('stat-listeners').textContent = String(currentListenerCount);
+}
 
 function renderQueue() {
     queueList.replaceChildren();
@@ -341,7 +422,11 @@ async function refreshStatus() {
         updateSunoLink(song && song.suno_url ? song.suno_url : '');
         currentQueue = Array.isArray(payload.playlist) ? payload.playlist : [];
         currentSongIndex = Number(payload.song_index || 0);
+        currentSongRemaining = Number(payload.song_remaining_seconds || 0);
+        currentStreamRemaining = Number(payload.stream_remaining_seconds || 0);
+        currentListenerCount = Number(payload.listener_count || 0);
         renderQueue();
+        renderDashboard();
         document.getElementById('now-title').textContent = song && song.title ? song.title : 'TrYa DCS';
         document.getElementById('now-artist').textContent = song
             ? `${song.artist || 'Unknown artist'}${song.submitted_by ? ` · submitted by ${song.submitted_by}` : ''} · Song ${payload.song_index}/${payload.playlist_length}`
@@ -507,7 +592,9 @@ function handleEvent(event) {
         chatError.textContent = data.message || 'Chat error';
     } else if (event.type === 'radio.now_playing') {
         currentSongIndex = Number(data.song_index || 0);
+        currentSongRemaining = Number(data.duration || 0);
         renderQueue();
+        renderDashboard();
         document.getElementById('now-title').textContent = data.title || 'TrYa DCS';
         document.getElementById('now-artist').textContent = `${data.artist || 'Unknown artist'}${data.submitted_by ? ` · submitted by ${data.submitted_by}` : ''} · Song ${data.song_index}/${data.playlist_length}`;
         updateWlmLink(data.wlm_url || '');
@@ -515,9 +602,12 @@ function handleEvent(event) {
     } else if (event.type === 'radio.progress') {
         const percent = data.duration > 0 ? Math.max(0, Math.min(100, data.elapsed / data.duration * 100)) : 0;
         document.getElementById('song-progress').style.width = `${percent}%`;
+        currentSongRemaining = Math.max(0, Number(data.duration || 0) - Number(data.elapsed || 0));
+        renderDashboard();
     } else if (event.type === 'radio.queue_update') {
         currentQueue = Array.isArray(data.songs) ? data.songs : [];
         renderQueue();
+        renderDashboard();
     }
 }
 
