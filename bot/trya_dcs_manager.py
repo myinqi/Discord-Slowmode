@@ -412,7 +412,6 @@ class TryaDcsManager(TryaStreamManager):
             media_paths.append(path)
             self._log(f"Media ready: {song.get('title') or song['id']}")
 
-        disclaimer = (await self.db.get_setting("trya_dcs_disclaimer") or "").strip()
         stream_title = (await self.db.get_setting("trya_dcs_stream_title") or "").strip()
         ass_path = self._build_combined_ass(
             songs,
@@ -420,8 +419,8 @@ class TryaDcsManager(TryaStreamManager):
             progress_total_count=len(songs),
             stream_title_enabled=bool(stream_title),
             stream_title_text=stream_title,
-            disclaimer_enabled=bool(disclaimer),
-            disclaimer_text=disclaimer,
+            disclaimer_enabled=False,
+            disclaimer_text="",
             now_playing_enabled=False,
             stream_title_top_left=True,
         )

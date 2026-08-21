@@ -133,7 +133,9 @@ OBS contribution listener on host port `1937`. Internally MediaMTX uses:
 
 The HLS playlist retains 24 segments. Browser playback intentionally follows 12
 seconds behind the live edge and can buffer up to 30 seconds; this trades latency for
-stable playback during short network or encoding fluctuations.
+stable playback during short network or encoding fluctuations. A browser-independent
+controller corrects playback back to 12 seconds whenever it drifts below 7 seconds or
+beyond 30 seconds, including native-HLS implementations that ignore hls.js settings.
 
 Caddy is the only public entry point:
 
