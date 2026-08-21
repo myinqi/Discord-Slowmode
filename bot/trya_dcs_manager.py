@@ -10,6 +10,7 @@ from collections import deque
 
 from bot.trya_stream_manager import TryaStreamManager
 from bot.trya_dcs_events import trya_dcs_events
+from bot.suno_urls import SUNO_UUID_RE, UUID_RE
 from config import Config
 
 
@@ -29,6 +30,15 @@ class TryaDcsManager(TryaStreamManager):
     def _log(self, line: str, level: str = "info") -> None:
         self._log_buffer.append((time.time(), level, line))
         print(f"[trya-dcs] {line}", flush=True)
+
+    @staticmethod
+    def _public_suno_url(song: dict | None) -> str:
+        if not song:
+            return ""
+        match = SUNO_UUID_RE.search(str(song.get("suno_url") or ""))
+        if not match:
+            match = UUID_RE.fullmatch(str(song.get("suno_uuid") or "").strip())
+        return f"https://suno.com/song/{match.group(1).lower()}" if match else ""
 
     def _obs_listen_port(self) -> int:
         return 1937
@@ -244,6 +254,7 @@ class TryaDcsManager(TryaStreamManager):
         status["listener_count"] = trya_dcs_events.listener_count
         if status.get("song") and self.current_song:
             status["song"]["submitted_by"] = self.current_song.get("user_name") or ""
+            status["song"]["suno_url"] = self._public_suno_url(self.current_song)
         return status
 
     async def _stream_loop(self):
@@ -451,6 +462,7 @@ class TryaDcsManager(TryaStreamManager):
                     "title": song.get("title") or "Unknown",
                     "artist": song.get("artist") or "Unknown",
                     "submitted_by": song.get("user_name") or "",
+                    "suno_url": self._public_suno_url(song),
                     "duration": duration,
                     "song_index": index + 1,
                     "playlist_length": len(songs),
