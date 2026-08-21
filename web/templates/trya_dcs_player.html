@@ -216,7 +216,15 @@ async function authorizeStream(initial = false) {
         if (video.canPlayType('application/vnd.apple.mpegurl')) {
             video.src = payload.hls_url;
         } else if (window.Hls && Hls.isSupported()) {
-            hls = new Hls({lowLatencyMode: true, backBufferLength: 30});
+            hls = new Hls({
+                lowLatencyMode: false,
+                backBufferLength: 30,
+                maxBufferLength: 20,
+                maxMaxBufferLength: 30,
+                liveSyncDurationCount: 4,
+                liveMaxLatencyDurationCount: 8,
+                maxLiveSyncPlaybackRate: 1.05
+            });
             hls.loadSource(payload.hls_url);
             hls.attachMedia(video);
             hls.on(Hls.Events.ERROR, (_, data) => {
