@@ -148,8 +148,12 @@ let hls = null;
 let renewTimer = null;
 let statusTimer = null;
 let socket = null;
-let socketRetry = 1000;
 let heartbeatTimer = null;
+let chatFallbackTimer = null;
+let chatFallbackActive = false;
+let chatFallbackInitialized = false;
+let chatFallbackAfter = '';
+const chatCsrf = {{ player_csrf|tojson }};
 const messages = document.getElementById('messages');
 const chatInput = document.getElementById('chat-input');
 const sendButton = document.getElementById('send-button');
@@ -428,12 +432,44 @@ function handleEvent(event) {
     }
 }
 
+async function pollChatFallback() {
+    if (!chatFallbackActive) return;
+    try {
+        const suffix = chatFallbackAfter ? `?after=${encodeURIComponent(chatFallbackAfter)}` : '';
+        const response = await fetch(`{{ url_for('trya_dcs_chat_fallback') }}${suffix}`, {
+            credentials: 'same-origin', headers: {'Accept': 'application/json'}
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        const incoming = Array.isArray(payload.messages) ? payload.messages : [];
+        if (!chatFallbackInitialized) {
+            handleEvent({type: 'session.ready', data: payload});
+            chatFallbackInitialized = true;
+        } else {
+            for (const message of incoming) handleEvent({type: 'chat.message', data: message});
+        }
+        if (incoming.length) chatFallbackAfter = String(incoming[incoming.length - 1].message_id || '');
+        chatError.textContent = 'Connected through compatible chat mode.';
+    } catch (_) {
+        chatError.textContent = 'Chat fallback disconnected. Retrying...';
+    }
+    clearTimeout(chatFallbackTimer);
+    chatFallbackTimer = setTimeout(pollChatFallback, 3000);
+}
+
+function startChatFallback() {
+    if (chatFallbackActive) return;
+    chatFallbackActive = true;
+    chatError.textContent = 'Switching to compatible chat mode...';
+    pollChatFallback();
+}
+
 function connectSocket() {
+    if (chatFallbackActive) return;
     if (socket && (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN)) return;
     const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
     socket = new WebSocket(`${scheme}://${location.host}{{ url_for('trya_dcs_websocket') }}`);
     socket.addEventListener('open', () => {
-        socketRetry = 1000;
         chatError.textContent = '';
         clearInterval(heartbeatTimer);
         heartbeatTimer = setInterval(() => {
@@ -444,9 +480,9 @@ function connectSocket() {
         try { handleEvent(JSON.parse(event.data)); } catch (_) {}
     });
     socket.addEventListener('error', () => {
-        chatError.textContent = 'Chat connection failed. Retrying...';
+        chatError.textContent = 'Chat connection failed. Switching transport...';
         try { socket.close(); } catch (_) {}
-        setTimeout(connectSocket, socketRetry);
+        startChatFallback();
     });
     socket.addEventListener('close', event => {
         clearInterval(heartbeatTimer);
@@ -454,19 +490,32 @@ function connectSocket() {
         sendButton.disabled = true;
         chatError.textContent = event.code === 4403
             ? 'Chat authorization failed. Reload the page to verify your Discord membership.'
-            : 'Chat disconnected. Reconnecting...';
-        setTimeout(connectSocket, socketRetry);
-        socketRetry = Math.min(15000, socketRetry * 1.8);
+            : 'Chat disconnected. Switching transport...';
+        if (event.code !== 4403) startChatFallback();
     });
 }
 
 setTimeout(connectSocket, 15000);
 
-document.getElementById('chat-form').addEventListener('submit', event => {
+document.getElementById('chat-form').addEventListener('submit', async event => {
     event.preventDefault();
     const content = chatInput.value.trim();
-    if (!content || !socket || socket.readyState !== WebSocket.OPEN) return;
-    socket.send(JSON.stringify({type:'chat.send', data:{content}}));
+    if (!content) return;
+    if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({type:'chat.send', data:{content}}));
+    } else if (chatFallbackActive) {
+        const response = await fetch('{{ url_for('trya_dcs_chat_fallback') }}', {
+            method: 'POST', credentials: 'same-origin',
+            headers: {'Content-Type': 'application/json', 'X-CSRF-Token': chatCsrf},
+            body: JSON.stringify({content})
+        });
+        if (!response.ok) {
+            chatError.textContent = 'The message could not be delivered.';
+            return;
+        }
+    } else {
+        return;
+    }
     chatInput.value = '';
     emojiPicker.classList.remove('open');
 });

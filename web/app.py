@@ -9502,6 +9502,80 @@ def create_app(db: Database, bot=None) -> Quart:
                     pass
                 print(f"[trya-dcs-ws] Disconnected user={user_id}", flush=True)
 
+    @app.route("/trya-dcs/api/chat", methods=["GET", "POST"])
+    async def trya_dcs_chat_fallback():
+        from bot.cogs.trya_dcs_chat import (
+            guild_emoji_payload,
+            send_web_chat_message,
+            serialize_discord_message,
+        )
+
+        if (await db.get_setting("trya_dcs_enabled") or "off") != "on":
+            return {"error": "disabled"}, 503
+        user_id = session.get("trya_dcs_discord_user_id")
+        try:
+            guild_id = int(await db.get_setting("trya_dcs_guild_id") or Config.GUILD_ID or 0)
+            channel_id = int(await db.get_setting("trya_dcs_chat_channel_id") or 0)
+        except (TypeError, ValueError):
+            return {"error": "invalid_configuration"}, 503
+        if not user_id or not await _trya_dcs_membership_valid(int(user_id), guild_id):
+            return {"error": "forbidden"}, 403
+        channel = bot.get_channel(channel_id) if bot and channel_id else None
+        if bot and channel_id and channel is None:
+            try:
+                channel = await bot.fetch_channel(channel_id)
+            except Exception:
+                channel = None
+        if request.method == "POST":
+            csrf = str(request.headers.get("X-CSRF-Token") or "")
+            expected = str(session.get("trya_dcs_player_csrf") or "")
+            if not expected or not hmac.compare_digest(csrf, expected):
+                return {"error": "invalid_csrf"}, 403
+            payload = await request.get_json(silent=True) or {}
+            content = str(payload.get("content") or "").strip()[:1800]
+            if not content or not channel_id or bot is None:
+                return {"error": "invalid_message"}, 400
+            now = time.monotonic()
+            key = int(user_id)
+            recent = [stamp for stamp in app.trya_dcs_chat_rate.get(key, []) if now - stamp < 10]
+            if len(recent) >= 5:
+                app.trya_dcs_chat_rate[key] = recent
+                return {"error": "rate_limited"}, 429
+            recent.append(now)
+            app.trya_dcs_chat_rate[key] = recent
+            try:
+                await send_web_chat_message(bot, channel_id, int(user_id), content)
+            except Exception as exc:
+                print(f"[trya-dcs-chat] Fallback message failed: {exc}", flush=True)
+                return {"error": "delivery_failed"}, 502
+            return {"ok": True}
+
+        messages = []
+        if channel is not None and hasattr(channel, "history"):
+            try:
+                after_id = int(request.args.get("after") or 0)
+            except (TypeError, ValueError):
+                after_id = 0
+            try:
+                if after_id:
+                    import discord
+                    history = [
+                        message async for message in channel.history(
+                            limit=50, after=discord.Object(id=after_id), oldest_first=True
+                        )
+                    ]
+                else:
+                    history = [message async for message in channel.history(limit=50)]
+                    history.reverse()
+                messages = [await serialize_discord_message(message) for message in history]
+            except Exception as exc:
+                print(f"[trya-dcs-chat] Fallback history failed: {exc}", flush=True)
+        return {
+            "chat_enabled": bool(channel_id and channel),
+            "emojis": await guild_emoji_payload(get_guild()),
+            "messages": messages,
+        }
+
     @app.route("/trya-dcs/api/stream-token", methods=["POST"])
     async def trya_dcs_stream_token():
         if (await db.get_setting("trya_dcs_enabled") or "off") != "on":
