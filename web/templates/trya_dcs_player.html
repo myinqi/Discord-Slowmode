@@ -426,6 +426,7 @@ function handleEvent(event) {
 }
 
 function connectSocket() {
+    if (socket && (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN)) return;
     const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
     socket = new WebSocket(`${scheme}://${location.host}{{ url_for('trya_dcs_websocket') }}`);
     socket.addEventListener('open', () => {
@@ -451,6 +452,8 @@ function connectSocket() {
     });
 }
 
+setTimeout(connectSocket, 0);
+
 document.getElementById('chat-form').addEventListener('submit', event => {
     event.preventDefault();
     const content = chatInput.value.trim();
@@ -474,7 +477,6 @@ queueDialog.addEventListener('click', event => {
 });
 authorizeStream(true).catch(() => showState('Could not initialize the stream.'));
 refreshStatus();
-connectSocket();
 </script>
 </body>
 </html>
