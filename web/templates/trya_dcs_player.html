@@ -237,7 +237,10 @@ async function authorizeStream(initial = false) {
     renewTimer = setTimeout(() => authorizeStream(false), renewAfter);
 }
 
-video.addEventListener('playing', () => state.classList.add('hidden'));
+video.addEventListener('playing', () => {
+    state.classList.add('hidden');
+    connectSocket();
+});
 video.addEventListener('waiting', () => showState('Buffering private stream...'));
 async function refreshStatus() {
     try {
@@ -457,7 +460,7 @@ function connectSocket() {
     });
 }
 
-setTimeout(connectSocket, 3000);
+setTimeout(connectSocket, 15000);
 
 document.getElementById('chat-form').addEventListener('submit', event => {
     event.preventDefault();
