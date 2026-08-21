@@ -127,7 +127,10 @@ small authorization endpoint. The bot never proxies the media body.
 
 ## Server rollout
 
-A normal server rebuild pulls the pinned MediaMTX image and updates Caddy:
+A normal server rebuild pulls the pinned MediaMTX image and the Caddy 2.10.2
+compatibility image. Caddy 2.11.4 is not used because its `forward_auth` plus
+`reverse_proxy` connection-reuse regression can route authorized HLS requests to
+the authentication upstream instead of MediaMTX:
 
 ```bash
 docker compose up -d --build

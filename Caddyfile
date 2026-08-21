@@ -1,14 +1,14 @@
 bot.macfreun.de {
-    # Media bytes bypass the Python application. The bot authorizes each HLS
-    # request, then Caddy proxies it directly to internal MediaMTX.
-    handle_path /dcs-stream/* {
-        forward_auth slowmode-bot:5000 {
-            uri /trya-dcs/internal/media-auth
-        }
-        reverse_proxy mediamtx:8888
-    }
+	# Media bytes bypass the Python application. The bot authorizes each HLS
+	# request, then Caddy proxies it directly to internal MediaMTX.
+	handle_path /dcs-stream/* {
+		forward_auth slowmode-bot:5000 {
+			uri /trya-dcs/internal/media-auth
+		}
+		reverse_proxy mediamtx:8888
+	}
 
-    handle {
-        reverse_proxy slowmode-bot:5000
-    }
+	handle {
+		reverse_proxy slowmode-bot:5000
+	}
 }

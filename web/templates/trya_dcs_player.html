@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="robots" content="noindex,nofollow,noarchive">
     <title>TrYa DCS</title>
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='TrYa_logo.png') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='TrYa_logo.png') }}">
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1.6.13/dist/hls.min.js"></script>
     <style>
         :root { color-scheme: dark; --panel:#15121d; --line:#332d40; --muted:#9b93aa; --accent:#b044e4; }
@@ -13,7 +15,9 @@
         body { padding: 18px; }
         .shell { width: min(1600px, 100%); margin: 0 auto; }
         header { min-height: 54px; display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:14px; }
-        .brand { font-size: 22px; font-weight: 750; }
+        .brand-lockup { display:flex; align-items:center; gap:11px; }
+        .brand-logo { width:42px; height:42px; border-radius:9px; object-fit:contain; }
+        .brand { font-size:22px; font-weight:750; }
         .identity { display:flex; align-items:center; gap:9px; color:var(--muted); font-size:14px; }
         .identity img { width:32px; height:32px; border-radius:50%; object-fit:cover; }
         button { border:1px solid var(--line); border-radius:6px; background:#211a2d; color:#eeeaf6; padding:8px 12px; cursor:pointer; }
@@ -81,9 +85,12 @@
 <body>
 <div class="shell">
     <header>
-        <div>
-            <div class="brand">TrYa Discord Community Stream</div>
-            <div style="color:var(--muted);font-size:13px;margin-top:3px">Private, non-commercial community broadcast</div>
+        <div class="brand-lockup">
+            <img class="brand-logo" src="{{ url_for('static', filename='TrYa_logo.png') }}" alt="TrYa">
+            <div>
+                <div class="brand">TrYa Discord Community Stream</div>
+                <div style="color:var(--muted);font-size:13px;margin-top:3px">Private, non-commercial community broadcast</div>
+            </div>
         </div>
         <div class="identity">
             {% if discord_avatar %}<img src="{{ discord_avatar }}" alt="">{% endif %}

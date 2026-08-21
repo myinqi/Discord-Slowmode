@@ -29,7 +29,7 @@ services:
       - mediamtx
 
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2.10.2-alpine
     container_name: slowmode-caddy
     restart: unless-stopped
     ports:
