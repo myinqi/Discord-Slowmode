@@ -200,7 +200,6 @@ const offlineImage = document.getElementById('offline-image');
 let offlineImageAvailable = Boolean(offlineImage.getAttribute('src'));
 let streamIsRunning = null;
 let livePositionInitialized = false;
-let rebuildingLiveBuffer = false;
 let lastObservedLiveEdge = 0;
 let lastLiveCorrection = 0;
 let hls = null;
@@ -316,7 +315,6 @@ function applyStreamMode(running) {
         video.playbackRate = 1;
         video.hidden = true;
         livePositionInitialized = false;
-        rebuildingLiveBuffer = false;
         lastObservedLiveEdge = 0;
         if (offlineImageAvailable) {
             offlineImage.hidden = false;
@@ -331,7 +329,6 @@ function applyStreamMode(running) {
     video.hidden = false;
     if (wasRunning === false) {
         livePositionInitialized = false;
-        rebuildingLiveBuffer = false;
         lastObservedLiveEdge = 0;
         showState('Connecting to the private stream...');
         if (hls) hls.startLoad();
@@ -347,9 +344,9 @@ function maintainLivePosition() {
     const liveEdge = video.seekable.end(range);
     if (lastObservedLiveEdge && liveEdge < lastObservedLiveEdge - 5) {
         livePositionInitialized = false;
-        rebuildingLiveBuffer = false;
     }
     lastObservedLiveEdge = liveEdge;
+    if (video.playbackRate !== 1) video.playbackRate = 1;
     const latency = liveEdge - video.currentTime;
     const target = Math.max(liveStart + 0.25, liveEdge - 20);
     if (!livePositionInitialized) {
@@ -362,17 +359,10 @@ function maintainLivePosition() {
         const now = Date.now();
         if (now - lastLiveCorrection >= 5000) {
             lastLiveCorrection = now;
-            rebuildingLiveBuffer = false;
-            video.playbackRate = 1;
             video.currentTime = target;
         }
         return;
     }
-    if (latency < 12) rebuildingLiveBuffer = true;
-    if (rebuildingLiveBuffer && latency >= 20) rebuildingLiveBuffer = false;
-    if (rebuildingLiveBuffer) video.playbackRate = 0.97;
-    else if (latency > 30) video.playbackRate = 1.03;
-    else video.playbackRate = 1;
 }
 
 setInterval(maintainLivePosition, 2000);
@@ -404,7 +394,7 @@ async function authorizeStream(initial = false) {
                 maxMaxBufferLength: 90,
                 liveSyncDuration: 20,
                 liveMaxLatencyDuration: 45,
-                maxLiveSyncPlaybackRate: 1.03
+                maxLiveSyncPlaybackRate: 1
             });
             hls.loadSource(payload.hls_url);
             hls.attachMedia(video);
