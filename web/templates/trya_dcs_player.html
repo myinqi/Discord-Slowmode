@@ -23,8 +23,8 @@
         button { border:1px solid var(--line); border-radius:6px; background:#211a2d; color:#eeeaf6; padding:8px 12px; cursor:pointer; }
         .layout { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0, 1fr) minmax(300px, 390px); gap:14px; }
         .video-panel, .chat-panel { min-height:0; border:1px solid var(--line); background:var(--panel); border-radius:8px; overflow:hidden; }
-        .video-panel { display:flex; flex-direction:column; }
-        .video-wrap { position:relative; flex:1 1 0; min-height:160px; background:#000; display:grid; place-items:center; }
+        .video-panel { display:grid; grid-template-rows:minmax(160px, 1fr) auto auto minmax(0, 1fr); }
+        .video-wrap { position:relative; min-height:160px; overflow:hidden; background:#000; display:grid; place-items:center; }
         video { width:100%; height:100%; object-fit:contain; background:#000; }
         .offline-image { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; background:#000; }
         .state { position:absolute; z-index:2; inset:0; display:grid; place-items:center; pointer-events:none; text-align:center; padding:24px; color:#c8c1d2; background:rgba(0,0,0,.35); }
@@ -55,7 +55,7 @@
         .dashboard-stats { margin-top:6px; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px 12px; }
         .dashboard-stat strong { display:block; color:#e9e4ef; font-size:13px; }
         .dashboard-stat span { display:block; margin-top:1px; color:#756d80; font-size:10px; }
-        .community-grid { flex:1 1 0; min-height:0; display:grid; grid-template-columns:1fr 1fr; margin:0 16px; }
+        .community-grid { min-height:0; display:grid; grid-template-columns:1fr 1fr; margin:0 16px 12px; }
         .community-panel { display:flex; flex-direction:column; min-width:0; min-height:0; padding:14px 16px 16px; overflow:hidden; }
         .community-panel:first-child { padding-left:0; border-right:1px solid var(--line); }
         .community-panel:last-child { padding-right:0; }
@@ -66,7 +66,7 @@
         .community-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:13px; }
         .community-head h2 { margin:0; color:#eee9f4; font-size:14px; }
         .community-kicker { color:#756d80; font-size:10px; letter-spacing:.08em; text-transform:uppercase; }
-        .community-list { display:grid; gap:7px; }
+        .community-list { display:grid; gap:7px; align-content:start; grid-auto-rows:min-content; }
         .community-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:7px 9px; border:1px solid #2b2535; border-radius:5px; background:#0d0b12; font-size:11px; }
         .community-row strong { color:#dcd5e5; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .community-row span { color:#8d8498; flex:none; }
@@ -74,8 +74,8 @@
         .feedback-row strong { white-space:normal; line-height:1.4; }
         .feedback-row span { font-size:9px; }
         .community-empty { color:#706878; font-size:12px; line-height:1.5; }
-        .command-cloud { display:flex; flex-wrap:wrap; gap:6px; }
-        .command-cloud code { padding:4px 7px; border:1px solid #3a3047; border-radius:4px; color:#c8b5dc; background:#100d16; font-size:10px; }
+        .command-cloud { display:flex; flex-wrap:wrap; align-content:flex-start; align-items:flex-start; gap:6px; }
+        .command-cloud code { flex:0 0 auto; align-self:flex-start; height:auto; padding:4px 7px; border:1px solid #3a3047; border-radius:4px; color:#c8b5dc; background:#100d16; font-size:10px; }
         .relic-progress { height:7px; overflow:hidden; border-radius:999px; background:#2b2535; }
         .relic-progress span { display:block; height:100%; width:0; background:linear-gradient(90deg,#7c3aed,#d946ef); transition:width .4s ease; }
         .relic-meta { display:flex; justify-content:space-between; gap:12px; margin:5px 0 12px; color:#8d8498; font-size:10px; }
@@ -141,8 +141,9 @@
             .shell { height:auto; }
             header { align-items:flex-start; }
             .layout { grid-template-columns:1fr; height:auto; min-height:auto; }
+            .video-panel { display:flex; flex-direction:column; }
             .video-wrap { flex:none; aspect-ratio:16/9; min-height:0; }
-            .community-grid { flex:none; }
+            .community-grid { flex:none; margin-bottom:0; }
             #community-info-content, #relic-activity { overflow:visible; }
             .chat-panel { min-height:420px; }
             .meta { flex-direction:column; }
@@ -325,6 +326,8 @@ let relicInfoTimer = null;
 let relicInfoIndex = 0;
 let relicPayload = null;
 let galleryTimer = null;
+let galleryIndex = 0;
+let communityInfoRendered = false;
 
 function getPlaybackLatency() {
     // Metadata follows FFmpeg. HLS is held behind the live edge on purpose
@@ -543,16 +546,16 @@ function renderCommunityInfo() {
     } else if (panel.type === 'gallery') {
         content.className = 'community-gallery';
         const images = panel.images || [];
+        galleryIndex = 0;
         const image = document.createElement('img');
-        image.alt = images[0] && images[0].label ? images[0].label : 'Gallery image';
-        image.src = images[0].url;
+        image.alt = images[galleryIndex] && images[galleryIndex].label ? images[galleryIndex].label : 'Gallery image';
+        image.src = images[galleryIndex].url;
         content.append(image);
         if (panel.mode === 'slideshow' && images.length > 1) {
-            let index = 0;
             const tick = () => {
-                index = (index + 1) % images.length;
-                image.src = images[index].url;
-                image.alt = images[index].label || 'Gallery image';
+                galleryIndex = (galleryIndex + 1) % images.length;
+                image.src = images[galleryIndex].url;
+                image.alt = images[galleryIndex].label || 'Gallery image';
                 galleryTimer = setTimeout(tick, panel.interval * 1000);
             };
             galleryTimer = setTimeout(tick, panel.interval * 1000);
@@ -596,7 +599,13 @@ function renderRelicStatus(payload) {
         };
     });
     relicRows(document.getElementById('relic-activity'), activity, 'No Relic Hunt activity yet.');
-    renderCommunityInfo();
+    const panels = configuredInfoPanels(payload);
+    const current = panels.length ? panels[relicInfoIndex % panels.length] : null;
+    const galleryShowing = current && current.type === 'gallery';
+    if (!communityInfoRendered || !galleryShowing) {
+        renderCommunityInfo();
+        communityInfoRendered = true;
+    }
     if (!relicInfoTimer) scheduleInfoRotation();
 }
 
