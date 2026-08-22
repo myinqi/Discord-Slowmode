@@ -7508,7 +7508,17 @@ class Database:
             await self.db.rollback()
             raise
 
-    async def relic_get_leaderboard(self, limit: int = 10) -> list[dict]:
+    async def relic_get_leaderboard(
+        self, limit: int = 10, *, user_id_prefix: str | None = None
+    ) -> list[dict]:
+        if user_id_prefix:
+            async with self.db.execute(
+                """SELECT * FROM relic_users
+                   WHERE twitch_user_id LIKE ?
+                   ORDER BY points DESC LIMIT ?""",
+                (f"{user_id_prefix}%", int(limit)),
+            ) as cur:
+                return [dict(r) for r in await cur.fetchall()]
         async with self.db.execute(
             "SELECT * FROM relic_users ORDER BY points DESC LIMIT ?", (limit,)
         ) as cur:
@@ -7682,7 +7692,17 @@ class Database:
         """, entry)
         await self.db.commit()
 
-    async def relic_get_recent_log(self, limit: int = 50) -> list[dict]:
+    async def relic_get_recent_log(
+        self, limit: int = 50, *, user_id_prefix: str | None = None
+    ) -> list[dict]:
+        if user_id_prefix:
+            async with self.db.execute(
+                """SELECT * FROM relic_hunt_log
+                   WHERE twitch_user_id LIKE ?
+                   ORDER BY created_at DESC LIMIT ?""",
+                (f"{user_id_prefix}%", int(limit)),
+            ) as cur:
+                return [dict(r) for r in await cur.fetchall()]
         async with self.db.execute(
             "SELECT * FROM relic_hunt_log ORDER BY created_at DESC LIMIT ?", (limit,)
         ) as cur:

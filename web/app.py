@@ -8889,6 +8889,7 @@ def create_app(db: Database, bot=None) -> Quart:
             "trya_dcs_obs_stream_key": "",
             "trya_dcs_obs_fps": "20",
             "trya_dcs_relic_hunt_enabled": "on",
+            "trya_dcs_relic_discord_only": "off",
             "trya_dcs_info_top_hunters": "on",
             "trya_dcs_info_commands": "on",
             "trya_dcs_info_recent_finds": "on",
@@ -8899,6 +8900,10 @@ def create_app(db: Database, bot=None) -> Quart:
             "trya_dcs_info_custom_title": "Community information",
             "trya_dcs_info_custom_text": "",
             "trya_dcs_info_rotation_seconds": "12",
+            "trya_dcs_info_gallery_enabled": "off",
+            "trya_dcs_info_gallery_title": "Gallery",
+            "trya_dcs_info_gallery_mode": "static",
+            "trya_dcs_info_gallery_interval_seconds": "5",
         }
 
         async def get_dcs_loop_videos() -> list[dict]:
@@ -8917,6 +8922,28 @@ def create_app(db: Database, bot=None) -> Quart:
                         "label": str(item.get("label") or filename)[:100],
                     })
             return videos
+
+        async def get_dcs_gallery_images() -> list[dict]:
+            try:
+                raw = json.loads(
+                    await db.get_setting("trya_dcs_info_gallery_images") or "[]"
+                )
+            except (TypeError, json.JSONDecodeError):
+                raw = []
+            images = []
+            assets_dir = os.path.join(TRYA_DCS_DIR, "assets")
+            for item in raw if isinstance(raw, list) else []:
+                if not isinstance(item, dict):
+                    continue
+                filename = os.path.basename(str(item.get("filename") or ""))
+                if not re.fullmatch(r"gallery_[0-9a-f]{16}\.(png|jpg|webp)", filename):
+                    continue
+                if filename and os.path.isfile(os.path.join(assets_dir, filename)):
+                    images.append({
+                        "filename": filename,
+                        "label": str(item.get("label") or filename)[:100],
+                    })
+            return images
 
         def invalidate_dcs_loop_cache() -> None:
             assets_dir = os.path.join(TRYA_DCS_DIR, "assets")
@@ -8943,8 +8970,15 @@ def create_app(db: Database, bot=None) -> Quart:
                     rotation_seconds = max(5, min(60, int(form.get("info_rotation_seconds") or "12")))
                 except (TypeError, ValueError):
                     rotation_seconds = 12
+                try:
+                    gallery_interval = max(
+                        2, min(20, int(form.get("info_gallery_interval_seconds") or "5"))
+                    )
+                except (TypeError, ValueError):
+                    gallery_interval = 5
                 values = {
                     "trya_dcs_relic_hunt_enabled": "on" if form.get("relic_hunt_enabled") else "off",
+                    "trya_dcs_relic_discord_only": "on" if form.get("relic_discord_only") else "off",
                     "trya_dcs_info_top_hunters": "on" if form.get("info_top_hunters") else "off",
                     "trya_dcs_info_commands": "on" if form.get("info_commands") else "off",
                     "trya_dcs_info_recent_finds": "on" if form.get("info_recent_finds") else "off",
@@ -8955,12 +8989,98 @@ def create_app(db: Database, bot=None) -> Quart:
                     "trya_dcs_info_custom_title": str(form.get("info_custom_title") or "Community information").strip()[:100],
                     "trya_dcs_info_custom_text": str(form.get("info_custom_text") or "").strip()[:3000],
                     "trya_dcs_info_rotation_seconds": str(rotation_seconds),
+                    "trya_dcs_info_gallery_enabled": "on" if form.get("info_gallery_enabled") else "off",
+                    "trya_dcs_info_gallery_title": str(
+                        form.get("info_gallery_title") or "Gallery"
+                    ).strip()[:100] or "Gallery",
+                    "trya_dcs_info_gallery_mode": (
+                        "slideshow" if form.get("info_gallery_mode") == "slideshow" else "static"
+                    ),
+                    "trya_dcs_info_gallery_interval_seconds": str(gallery_interval),
                 }
                 for key, value in values.items():
                     await db.set_setting(key, value)
                 from bot.trya_dcs_manager import log_dcs_event
                 log_dcs_event("DCS Raven's Nest display settings saved.")
                 await flash("DCS Raven's Nest display settings saved.", "success")
+                return redirect(request.url)
+            if action == "upload_dcs_gallery_image":
+                images = await get_dcs_gallery_images()
+                if len(images) >= 12:
+                    await flash("A maximum of 12 carousel images can be stored.", "error")
+                    return redirect(request.url)
+                files = await request.files
+                uploaded = files.get("gallery_image")
+                if not uploaded or not uploaded.filename:
+                    await flash("Select a PNG, JPEG or WebP image.", "error")
+                    return redirect(request.url)
+                assets_dir = os.path.join(TRYA_DCS_DIR, "assets")
+                os.makedirs(assets_dir, exist_ok=True)
+                import tempfile
+                fd, staged_path = tempfile.mkstemp(prefix="gallery_", dir=assets_dir)
+                os.close(fd)
+                try:
+                    await uploaded.save(staged_path)
+                    size = os.path.getsize(staged_path)
+                    if size <= 0 or size > 10 * 1024 * 1024:
+                        raise ValueError("Carousel images must be between 1 byte and 10 MiB.")
+                    with open(staged_path, "rb") as handle:
+                        signature = handle.read(16)
+                    if signature.startswith(b"\x89PNG\r\n\x1a\n"):
+                        extension = ".png"
+                    elif signature.startswith(b"\xff\xd8\xff"):
+                        extension = ".jpg"
+                    elif signature[:4] == b"RIFF" and signature[8:12] == b"WEBP":
+                        extension = ".webp"
+                    else:
+                        raise ValueError("The file signature is not PNG, JPEG or WebP.")
+                    process = await asyncio.create_subprocess_exec(
+                        "ffprobe", "-v", "error", "-select_streams", "v:0",
+                        "-show_entries", "stream=codec_name,width,height",
+                        "-of", "json", staged_path,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    stdout, _ = await asyncio.wait_for(process.communicate(), timeout=20)
+                    probe = json.loads(stdout.decode("utf-8") or "{}") if process.returncode == 0 else {}
+                    stream = (probe.get("streams") or [{}])[0]
+                    width = int(stream.get("width") or 0)
+                    height = int(stream.get("height") or 0)
+                    if not width or not height or width > 8192 or height > 8192:
+                        raise ValueError("The image could not be decoded or exceeds 8192×8192 pixels.")
+                    filename = f"gallery_{secrets.token_hex(8)}{extension}"
+                    os.replace(staged_path, os.path.join(assets_dir, filename))
+                    images.append({
+                        "filename": filename,
+                        "label": (form.get("gallery_label") or uploaded.filename).strip()[:100],
+                    })
+                    await db.set_setting("trya_dcs_info_gallery_images", json.dumps(images))
+                    from bot.trya_dcs_manager import log_dcs_event
+                    log_dcs_event(f"Carousel image uploaded: {filename} ({width}x{height}).")
+                    await flash("Carousel image uploaded.", "success")
+                except (ValueError, OSError, asyncio.TimeoutError, json.JSONDecodeError) as exc:
+                    await flash(str(exc) or "The carousel image could not be validated.", "error")
+                finally:
+                    try:
+                        os.remove(staged_path)
+                    except FileNotFoundError:
+                        pass
+                return redirect(request.url)
+            if action == "delete_dcs_gallery_image":
+                filename = os.path.basename(str(form.get("gallery_filename") or ""))
+                images = await get_dcs_gallery_images()
+                if not filename or not any(image["filename"] == filename for image in images):
+                    await flash("The carousel image no longer exists.", "error")
+                    return redirect(request.url)
+                images = [image for image in images if image["filename"] != filename]
+                await db.set_setting("trya_dcs_info_gallery_images", json.dumps(images))
+                try:
+                    os.remove(os.path.join(TRYA_DCS_DIR, "assets", filename))
+                except FileNotFoundError:
+                    pass
+                from bot.trya_dcs_manager import log_dcs_event
+                log_dcs_event(f"Carousel image deleted: {filename}.")
+                await flash("Carousel image deleted.", "success")
                 return redirect(request.url)
             if action == "upload_dcs_loop_video":
                 if trya_dcs_manager.is_running:
@@ -9733,6 +9853,7 @@ def create_app(db: Database, bot=None) -> Quart:
             intro_songs=intro_songs,
             outro_songs=outro_songs,
             stream_status=stream_status,
+            gallery_images=await get_dcs_gallery_images(),
             stream_log=trya_dcs_manager.get_log(max_age_secs=900),
             admin_csrf=admin_csrf,
         )
@@ -9749,8 +9870,15 @@ def create_app(db: Database, bot=None) -> Quart:
 
     async def _trya_dcs_relic_payload() -> dict:
         await db.ensure_relic_tables()
-        leaderboard = await db.relic_get_leaderboard(5)
-        recent = await db.relic_get_recent_log(30)
+        discord_only = (
+            await db.get_setting("trya_dcs_relic_discord_only") or "off"
+        ) == "on"
+        player_prefix = "discord:" if discord_only else None
+        leaderboard = await db.relic_get_leaderboard(7, user_id_prefix=player_prefix)
+        recent = await db.relic_get_recent_log(
+            30 if not discord_only else 80,
+            user_id_prefix=player_prefix,
+        )
         ritual = await db.relic_get_ritual()
         phrase = await db.relic_get_phrase_puzzle()
         from bot.relic_hunt import _phrase_progress
@@ -9774,6 +9902,38 @@ def create_app(db: Database, bot=None) -> Quart:
             )
         except (TypeError, ValueError):
             rotation_seconds = 12
+        try:
+            gallery_interval = max(
+                2,
+                min(
+                    20,
+                    int(
+                        await db.get_setting("trya_dcs_info_gallery_interval_seconds")
+                        or "5"
+                    ),
+                ),
+            )
+        except (TypeError, ValueError):
+            gallery_interval = 5
+        gallery_images = []
+        try:
+            raw_gallery = json.loads(
+                await db.get_setting("trya_dcs_info_gallery_images") or "[]"
+            )
+        except (TypeError, json.JSONDecodeError):
+            raw_gallery = []
+        assets_dir = os.path.join(TRYA_DCS_DIR, "assets")
+        for item in raw_gallery if isinstance(raw_gallery, list) else []:
+            if not isinstance(item, dict):
+                continue
+            filename = os.path.basename(str(item.get("filename") or ""))
+            if not re.fullmatch(r"gallery_[0-9a-f]{16}\.(png|jpg|webp)", filename):
+                continue
+            if os.path.isfile(os.path.join(assets_dir, filename)):
+                gallery_images.append({
+                    "url": url_for("trya_dcs_gallery_image", filename=filename),
+                    "label": str(item.get("label") or filename)[:100],
+                })
         return {
             "enabled": (
                 (await db.relic_get_setting("enabled")) != "false"
@@ -9796,7 +9956,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     "created_at": float(row.get("created_at") or 0),
                 }
                 for row in recent if row.get("result_type") == "found"
-            ][:6],
+            ][:8],
             "recent_combines": [
                 {
                     "username": row.get("username") or "Unknown",
@@ -9805,7 +9965,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     "created_at": float(row.get("created_at") or 0),
                 }
                 for row in recent if row.get("result_type") == "combine"
-            ][:6],
+            ][:8],
             "recent_activity": [
                 {
                     "username": row.get("username") or "Unknown",
@@ -9861,6 +10021,20 @@ def create_app(db: Database, bot=None) -> Quart:
                 "custom_title": await db.get_setting("trya_dcs_info_custom_title") or "Community information",
                 "custom_text": await db.get_setting("trya_dcs_info_custom_text") or "",
                 "rotation_seconds": rotation_seconds,
+                "gallery_enabled": (
+                    await db.get_setting("trya_dcs_info_gallery_enabled") or "off"
+                ) == "on",
+                "gallery_title": (
+                    await db.get_setting("trya_dcs_info_gallery_title") or "Gallery"
+                ),
+                "gallery_mode": (
+                    "slideshow"
+                    if (await db.get_setting("trya_dcs_info_gallery_mode") or "static")
+                    == "slideshow"
+                    else "static"
+                ),
+                "gallery_interval_seconds": gallery_interval,
+                "gallery_images": gallery_images,
             },
         }
 
@@ -10299,6 +10473,23 @@ def create_app(db: Database, bot=None) -> Quart:
         )
         path = os.path.join(TRYA_DCS_DIR, "assets", filename) if filename else ""
         if not path or not os.path.isfile(path):
+            return "", 404
+        response = await send_file(path, conditional=True)
+        response.headers["Cache-Control"] = "private, max-age=300"
+        return response
+
+    @app.route("/trya-dcs/gallery/<filename>")
+    async def trya_dcs_gallery_image(filename: str):
+        from quart import send_file
+        user_id = session.get("trya_dcs_discord_user_id")
+        guild_id = int(await db.get_setting("trya_dcs_guild_id") or Config.GUILD_ID or 0)
+        if not user_id or not await _trya_dcs_membership_valid(int(user_id), guild_id):
+            return "", 403
+        safe_name = os.path.basename(filename)
+        if not re.fullmatch(r"gallery_[0-9a-f]{16}\.(png|jpg|webp)", safe_name):
+            return "", 404
+        path = os.path.join(TRYA_DCS_DIR, "assets", safe_name)
+        if not os.path.isfile(path):
             return "", 404
         response = await send_file(path, conditional=True)
         response.headers["Cache-Control"] = "private, max-age=300"

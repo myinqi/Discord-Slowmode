@@ -33,6 +33,47 @@ def is_public_channel_message(message: discord.Message) -> bool:
     return True
 
 
+def _mention_entry(user) -> dict:
+    mention_color = ""
+    if isinstance(user, discord.Member) and user.color.value:
+        mention_color = f"#{user.color.value:06x}"
+    return {
+        "id": str(user.id),
+        "display_name": getattr(user, "display_name", None) or user.name,
+        "role_color": mention_color,
+    }
+
+
+async def _serialize_mentions(message: discord.Message) -> list[dict]:
+    """Resolve <@id> mentions even when Discord omits them on webhook messages."""
+    by_id: dict[str, dict] = {}
+    for mentioned in message.mentions:
+        by_id[str(mentioned.id)] = _mention_entry(mentioned)
+
+    ids = {str(user_id) for user_id in getattr(message, "raw_mentions", []) or []}
+    ids.update(_USER_MENTION_RE.findall(message.content or ""))
+    guild = message.guild
+    for raw_id in ids:
+        if raw_id in by_id:
+            continue
+        member = None
+        if guild is not None:
+            try:
+                user_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            member = guild.get_member(user_id)
+            if member is None:
+                try:
+                    member = await guild.fetch_member(user_id)
+                except (discord.HTTPException, discord.NotFound, discord.Forbidden):
+                    member = None
+        if member is not None:
+            by_id[raw_id] = _mention_entry(member)
+
+    return list(by_id.values())
+
+
 async def serialize_discord_message(message: discord.Message) -> dict:
     author = message.author
     role_color = ""
@@ -66,16 +107,7 @@ async def serialize_discord_message(message: discord.Message) -> dict:
             "is_image": content_type.startswith("image/"),
         })
 
-    mentions = []
-    for mentioned in message.mentions:
-        mention_color = ""
-        if isinstance(mentioned, discord.Member) and mentioned.color.value:
-            mention_color = f"#{mentioned.color.value:06x}"
-        mentions.append({
-            "id": str(mentioned.id),
-            "display_name": getattr(mentioned, "display_name", mentioned.name),
-            "role_color": mention_color,
-        })
+    mentions = await _serialize_mentions(message)
 
     embeds = []
     for embed in message.embeds:
@@ -355,28 +387,37 @@ class TryaDcsChat(commands.Cog):
         if handled:
             now = discord.utils.utcnow().timestamp()
             recent = await self.bot.db.relic_get_recent_log(20)
-            existing = {
-                row.get("message")
+            already_logged = any(
+                row.get("twitch_user_id") == relic_user_id
+                and now - float(row.get("created_at") or 0) < 8
+                and (row.get("result_type") or "") != "dcs_feedback"
                 for row in recent
-                if row.get("twitch_user_id") == relic_user_id
-                and now - float(row.get("created_at") or 0) < 5
-            }
-            command = (str(content or "").split(None, 1)[0] or "command").lower()
-            for response in feedback:
-                if response in existing:
-                    continue
-                await self.bot.db.relic_log_hunt({
-                    "twitch_user_id": relic_user_id,
-                    "username": member.display_name,
-                    "item_id": None,
-                    "item_name": command,
-                    "rarity": "info",
-                    "points_awarded": 0,
-                    "xp_awarded": 0,
-                    "result_type": "dcs_feedback",
-                    "message": response,
-                    "created_at": now,
-                })
+            )
+            # Combine/find/ritual already write a hunt log. A second
+            # dcs_feedback row would duplicate the same action in the player.
+            if not already_logged:
+                existing = {
+                    row.get("message")
+                    for row in recent
+                    if row.get("twitch_user_id") == relic_user_id
+                    and now - float(row.get("created_at") or 0) < 8
+                }
+                command = (str(content or "").split(None, 1)[0] or "command").lower()
+                for response in feedback:
+                    if response in existing:
+                        continue
+                    await self.bot.db.relic_log_hunt({
+                        "twitch_user_id": relic_user_id,
+                        "username": member.display_name,
+                        "item_id": None,
+                        "item_name": command,
+                        "rarity": "info",
+                        "points_awarded": 0,
+                        "xp_awarded": 0,
+                        "result_type": "dcs_feedback",
+                        "message": response,
+                        "created_at": now,
+                    })
             await trya_dcs_events.publish(
                 "relic.update",
                 {"user_id": str(member.id), "updated_at": now},

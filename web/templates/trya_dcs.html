@@ -429,6 +429,7 @@
         <input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="save_dcs_relic_display">
         <div class="space-y-3">
             <label class="flex items-start gap-3 text-gray-300 text-sm"><input type="checkbox" name="relic_hunt_enabled" value="1" class="mt-1" {% if settings.trya_dcs_relic_hunt_enabled == 'on' %}checked{% endif %}><span><span class="block font-medium">Enable Relic Hunt in DCS chat</span><span class="block text-gray-500 text-xs mt-1">Native Discord and authenticated web-chat commands use the shared Raven's Nest database.</span></span></label>
+            <label class="flex items-start gap-3 text-gray-300 text-sm"><input type="checkbox" name="relic_discord_only" value="1" class="mt-1" {% if settings.trya_dcs_relic_discord_only == 'on' %}checked{% endif %}><span><span class="block font-medium">Show only Discord players</span><span class="block text-gray-500 text-xs mt-1">Hides Twitch Relic Hunt users from DCS Top Hunters, finds, combines and live feedback. Ritual, phrase and village remain shared.</span></span></label>
             <p class="text-gray-400 text-xs font-medium pt-2">Rotating left-side information</p>
             <label class="flex items-center gap-2 text-gray-300 text-sm"><input type="checkbox" name="info_top_hunters" value="1" {% if settings.trya_dcs_info_top_hunters == 'on' %}checked{% endif %}>Top Hunters</label>
             <label class="flex items-center gap-2 text-gray-300 text-sm"><input type="checkbox" name="info_commands" value="1" {% if settings.trya_dcs_info_commands == 'on' %}checked{% endif %}>Available commands</label>
@@ -436,15 +437,38 @@
             <label class="flex items-center gap-2 text-gray-300 text-sm"><input type="checkbox" name="info_recent_combines" value="1" {% if settings.trya_dcs_info_recent_combines == 'on' %}checked{% endif %}>Recent Combines</label>
             <label class="flex items-center gap-2 text-gray-300 text-sm"><input type="checkbox" name="info_ritual" value="1" {% if settings.trya_dcs_info_ritual == 'on' %}checked{% endif %}>Ritual energy</label>
             <label class="flex items-center gap-2 text-gray-300 text-sm"><input type="checkbox" name="info_phrase" value="1" {% if settings.trya_dcs_info_phrase == 'on' %}checked{% endif %}>Phrase Puzzle progress</label>
+            <label class="flex items-center gap-2 text-gray-300 text-sm"><input type="checkbox" name="info_gallery_enabled" value="1" {% if settings.trya_dcs_info_gallery_enabled == 'on' %}checked{% endif %}>Image gallery</label>
             <label class="block"><span class="block text-gray-500 text-xs mb-1">Rotation interval in seconds</span><input type="number" name="info_rotation_seconds" min="5" max="60" value="{{ settings.trya_dcs_info_rotation_seconds }}" class="w-full bg-discord-darker border border-gray-600 rounded px-3 py-2 text-white text-sm"></label>
         </div>
         <div class="space-y-3">
             <label class="flex items-center gap-2 text-gray-300 text-sm"><input type="checkbox" name="info_custom_enabled" value="1" {% if settings.trya_dcs_info_custom_enabled == 'on' %}checked{% endif %}>Include custom information</label>
             <label class="block"><span class="block text-gray-500 text-xs mb-1">Custom title</span><input type="text" name="info_custom_title" maxlength="100" value="{{ settings.trya_dcs_info_custom_title }}" class="w-full bg-discord-darker border border-gray-600 rounded px-3 py-2 text-white text-sm"></label>
             <label class="block"><span class="block text-gray-500 text-xs mb-1">Custom text</span><textarea name="info_custom_text" maxlength="3000" rows="8" class="w-full bg-discord-darker border border-gray-600 rounded px-3 py-2 text-white text-sm resize-y">{{ settings.trya_dcs_info_custom_text }}</textarea></label>
+            <p class="text-gray-400 text-xs font-medium pt-2">Image gallery slide</p>
+            <label class="block"><span class="block text-gray-500 text-xs mb-1">Gallery title</span><input type="text" name="info_gallery_title" maxlength="100" value="{{ settings.trya_dcs_info_gallery_title }}" class="w-full bg-discord-darker border border-gray-600 rounded px-3 py-2 text-white text-sm"></label>
+            <label class="flex items-center gap-2 text-gray-300 text-sm"><input type="radio" name="info_gallery_mode" value="static" {% if settings.trya_dcs_info_gallery_mode != 'slideshow' %}checked{% endif %}>Static image</label>
+            <label class="flex items-center gap-2 text-gray-300 text-sm"><input type="radio" name="info_gallery_mode" value="slideshow" {% if settings.trya_dcs_info_gallery_mode == 'slideshow' %}checked{% endif %}>Slideshow while this card is shown</label>
+            <label class="block"><span class="block text-gray-500 text-xs mb-1">Slideshow interval in seconds</span><input type="number" name="info_gallery_interval_seconds" min="2" max="20" value="{{ settings.trya_dcs_info_gallery_interval_seconds }}" class="w-full bg-discord-darker border border-gray-600 rounded px-3 py-2 text-white text-sm"></label>
             <button type="submit" class="w-full px-3 py-2 rounded bg-discord-blurple hover:bg-indigo-500 text-white text-sm">Save Raven's Nest display</button>
         </div>
     </form>
+    <div class="px-5 pb-5 space-y-3 border-t border-gray-700/50 pt-4">
+        <p class="text-gray-400 text-xs">PNG, JPEG or WebP. Maximum 12 images, 10 MiB and 8192×8192 pixels each. Upload after saving the gallery settings above.</p>
+        <form method="POST" enctype="multipart/form-data" class="flex flex-col sm:flex-row sm:items-end gap-3">
+            <input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="upload_dcs_gallery_image">
+            <label class="block flex-1"><span class="block text-gray-400 text-xs mb-1">Carousel image</span><input type="file" name="gallery_image" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" required class="block w-full text-sm text-gray-300 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-700 file:text-gray-200 hover:file:bg-gray-600"></label>
+            <label class="block sm:w-56"><span class="block text-gray-400 text-xs mb-1">Label</span><input type="text" name="gallery_label" maxlength="100" class="w-full bg-discord-darker border border-gray-600 rounded px-3 py-2 text-white text-sm"></label>
+            <button type="submit" class="px-3 py-2 rounded bg-discord-blurple hover:bg-indigo-500 text-white text-sm">Upload image</button>
+        </form>
+        <div class="space-y-2">
+            {% for image in gallery_images %}
+            <div class="flex items-center justify-between gap-3 rounded bg-discord-darker/60 border border-gray-700 px-3 py-2">
+                <span class="text-gray-300 text-xs truncate" title="{{ image.filename }}">{{ image.label }}</span>
+                <form method="POST" onsubmit="return confirm('Delete this carousel image?')"><input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="delete_dcs_gallery_image"><input type="hidden" name="gallery_filename" value="{{ image.filename }}"><button type="submit" class="text-red-400 hover:text-red-300 text-xs">Delete</button></form>
+            </div>
+            {% else %}<p class="text-gray-600 text-sm">No carousel images uploaded yet.</p>{% endfor %}
+        </div>
+    </div>
 </section>
 
 <section class="mt-6 bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden" data-dcs-collapse="offline-image">

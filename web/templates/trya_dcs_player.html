@@ -11,24 +11,25 @@
     <style>
         :root { color-scheme: dark; --panel:#15121d; --line:#332d40; --muted:#9b93aa; --accent:#b044e4; }
         * { box-sizing: border-box; }
-        html, body { margin: 0; min-height: 100%; background: #07060b; color: #f1edf7; font-family: system-ui, sans-serif; }
-        body { padding: 18px; }
-        .shell { width: min(1600px, 100%); margin: 0 auto; }
-        header { min-height: 54px; display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:14px; }
+        html, body { margin: 0; height: 100%; background: #07060b; color: #f1edf7; font-family: system-ui, sans-serif; }
+        body { display:flex; flex-direction:column; height:100vh; height:100dvh; padding:18px; overflow:hidden; }
+        .shell { display:flex; flex-direction:column; flex:1; min-height:0; width: min(1600px, 100%); margin: 0 auto; }
+        header { flex:none; min-height: 54px; display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:14px; }
         .brand-lockup { display:flex; align-items:center; gap:11px; }
         .brand-logo { width:42px; height:42px; border-radius:9px; object-fit:contain; }
         .brand { font-size:22px; font-weight:750; }
         .identity { display:flex; align-items:center; gap:9px; color:var(--muted); font-size:14px; }
         .identity img { width:32px; height:32px; border-radius:50%; object-fit:cover; }
         button { border:1px solid var(--line); border-radius:6px; background:#211a2d; color:#eeeaf6; padding:8px 12px; cursor:pointer; }
-        .layout { display:grid; grid-template-columns:minmax(0, 1fr) minmax(300px, 390px); gap:14px; min-height:calc(100vh - 104px); }
-        .video-panel, .chat-panel { border:1px solid var(--line); background:var(--panel); border-radius:8px; overflow:hidden; }
-        .video-wrap { position:relative; aspect-ratio:16/9; background:#000; display:grid; place-items:center; }
+        .layout { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0, 1fr) minmax(300px, 390px); gap:14px; }
+        .video-panel, .chat-panel { min-height:0; border:1px solid var(--line); background:var(--panel); border-radius:8px; overflow:hidden; }
+        .video-panel { display:flex; flex-direction:column; }
+        .video-wrap { position:relative; flex:1 1 0; min-height:160px; background:#000; display:grid; place-items:center; }
         video { width:100%; height:100%; object-fit:contain; background:#000; }
         .offline-image { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; background:#000; }
         .state { position:absolute; z-index:2; inset:0; display:grid; place-items:center; pointer-events:none; text-align:center; padding:24px; color:#c8c1d2; background:rgba(0,0,0,.35); }
         .state.hidden { display:none; }
-        .meta { padding:14px 16px; display:flex; justify-content:space-between; gap:16px; border-top:1px solid var(--line); }
+        .meta { flex:none; padding:14px 16px; display:flex; justify-content:space-between; gap:16px; border-top:1px solid var(--line); }
         .meta-main { min-width:0; flex:1; }
         .meta-title { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
         .meta-actions { display:flex; align-items:center; gap:8px; flex-shrink:0; }
@@ -41,7 +42,7 @@
         .progress { height:3px; margin-top:10px; background:#30293d; overflow:hidden; }
         .progress span { display:block; width:0; height:100%; background:var(--accent); transition:width .45s linear; }
         .disclosure { align-self:center; max-width:360px; text-align:right; white-space:pre-line; color:#aaa2b5; font-size:12px; }
-        .stream-dashboard { display:grid; grid-template-columns:1fr 1fr 1.25fr; margin:0 16px; padding:15px 0; border-bottom:1px solid var(--line); }
+        .stream-dashboard { flex:none; display:grid; grid-template-columns:1fr 1fr 1.25fr; margin:0 16px; padding:15px 0; border-bottom:1px solid var(--line); }
         .dashboard-cell { min-width:0; padding:0 16px; border-right:1px solid var(--line); }
         .dashboard-cell:first-child { padding-left:0; }
         .dashboard-cell:last-child { padding-right:0; border-right:0; }
@@ -54,10 +55,14 @@
         .dashboard-stats { margin-top:6px; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px 12px; }
         .dashboard-stat strong { display:block; color:#e9e4ef; font-size:13px; }
         .dashboard-stat span { display:block; margin-top:1px; color:#756d80; font-size:10px; }
-        .community-grid { display:grid; grid-template-columns:1fr 1fr; min-height:260px; margin:0 16px; }
-        .community-panel { min-width:0; padding:18px 16px; }
+        .community-grid { flex:1 1 0; min-height:0; display:grid; grid-template-columns:1fr 1fr; margin:0 16px; }
+        .community-panel { display:flex; flex-direction:column; min-width:0; min-height:0; padding:14px 16px 16px; overflow:hidden; }
         .community-panel:first-child { padding-left:0; border-right:1px solid var(--line); }
         .community-panel:last-child { padding-right:0; }
+        #community-info-content, #relic-activity { flex:1; min-height:0; overflow-y:auto; }
+        #community-info-content.community-gallery { display:flex; align-items:center; justify-content:center; overflow:hidden; }
+        .community-gallery img { max-width:100%; max-height:100%; width:auto; height:auto; object-fit:contain; border-radius:6px; }
+        #relic-events { flex:none; }
         .community-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:13px; }
         .community-head h2 { margin:0; color:#eee9f4; font-size:14px; }
         .community-kicker { color:#756d80; font-size:10px; letter-spacing:.08em; text-transform:uppercase; }
@@ -75,10 +80,10 @@
         .relic-progress span { display:block; height:100%; width:0; background:linear-gradient(90deg,#7c3aed,#d946ef); transition:width .4s ease; }
         .relic-meta { display:flex; justify-content:space-between; gap:12px; margin:5px 0 12px; color:#8d8498; font-size:10px; }
         .relic-event { margin-bottom:8px; padding:8px 9px; border:1px solid #55306d; border-radius:5px; color:#d8b4fe; background:#24112f; font-size:11px; }
-        .chat-panel { display:flex; flex-direction:column; }
-        .chat-head { padding:15px 16px; border-bottom:1px solid var(--line); font-weight:650; }
-        .messages { flex:1; min-height:280px; max-height:calc(100vh - 235px); padding:12px 14px; overflow-y:auto; }
-        .empty-chat { min-height:250px; display:grid; place-items:center; color:var(--muted); text-align:center; }
+        .chat-panel { display:flex; flex-direction:column; min-height:0; }
+        .chat-head { flex:none; padding:15px 16px; border-bottom:1px solid var(--line); font-weight:650; }
+        .messages { flex:1; min-height:0; padding:12px 14px; overflow-y:auto; }
+        .empty-chat { min-height:0; height:100%; display:grid; place-items:center; color:var(--muted); text-align:center; }
         .message { display:grid; grid-template-columns:34px minmax(0,1fr); gap:9px; padding:8px 0; }
         .message-avatar { width:34px; height:34px; border-radius:50%; object-fit:cover; background:#282230; }
         .message-head { display:flex; align-items:baseline; gap:7px; min-width:0; }
@@ -131,9 +136,14 @@
         .queue-links { min-height:0; margin-top:4px; }
         .queue-links a { padding:2px 6px; font-size:9px; }
         @media (max-width: 900px) {
-            body { padding:10px; }
+            html, body { height:auto; }
+            body { height:auto; overflow:auto; padding:10px; }
+            .shell { height:auto; }
             header { align-items:flex-start; }
-            .layout { grid-template-columns:1fr; min-height:auto; }
+            .layout { grid-template-columns:1fr; height:auto; min-height:auto; }
+            .video-wrap { flex:none; aspect-ratio:16/9; min-height:0; }
+            .community-grid { flex:none; }
+            #community-info-content, #relic-activity { overflow:visible; }
             .chat-panel { min-height:420px; }
             .meta { flex-direction:column; }
             .disclosure { text-align:left; }
@@ -221,9 +231,8 @@
                     <div id="community-info-content" class="community-empty">Loading configured community information...</div>
                 </div>
                 <div class="community-panel">
-                    <div class="community-head"><div><div class="community-kicker">Live game</div><h2>Raven's Nest: Relic Hunt</h2></div><span id="relic-status-label" class="community-kicker">Loading</span></div>
+                    <div class="community-kicker" style="margin-bottom:10px">Recent game feedback</div>
                     <div id="relic-events"></div>
-                    <div class="community-kicker">Recent game feedback</div>
                     <div id="relic-activity" class="community-list"><div class="community-empty">No activity yet.</div></div>
                 </div>
             </section>
@@ -315,6 +324,7 @@ let relicStatusTimer = null;
 let relicInfoTimer = null;
 let relicInfoIndex = 0;
 let relicPayload = null;
+let galleryTimer = null;
 
 function getPlaybackLatency() {
     // Metadata follows FFmpeg. HLS is held behind the live edge on purpose
@@ -468,11 +478,24 @@ function configuredInfoPanels(payload) {
     if (display.ritual) panels.push({title: 'Ritual Energy', type: 'ritual', ritual: payload.ritual || {energy: 0, goal: 1}});
     if (display.phrase) panels.push({title: 'Phrase Puzzle', type: 'phrase', phrase: payload.phrase || {enabled: false, progress: ''}});
     if (display.custom_enabled && display.custom_text) panels.push({title: display.custom_title || 'Community information', type: 'text', text: display.custom_text});
+    if (display.gallery_enabled && (display.gallery_images || []).length) panels.push({
+        title: display.gallery_title || 'Gallery',
+        type: 'gallery',
+        mode: display.gallery_mode === 'slideshow' ? 'slideshow' : 'static',
+        interval: Math.max(2, Math.min(20, Number(display.gallery_interval_seconds || 5))),
+        images: display.gallery_images
+    });
     return panels;
+}
+
+function stopGallerySlideshow() {
+    clearTimeout(galleryTimer);
+    galleryTimer = null;
 }
 
 function renderCommunityInfo() {
     if (!relicPayload) return;
+    stopGallerySlideshow();
     const panels = configuredInfoPanels(relicPayload);
     const content = document.getElementById('community-info-content');
     content.replaceChildren();
@@ -517,6 +540,23 @@ function renderCommunityInfo() {
         content.style.whiteSpace = 'pre-wrap';
         content.style.fontFamily = 'ui-monospace, monospace';
         content.textContent = panel.phrase.enabled && panel.phrase.progress ? panel.phrase.progress : 'No Phrase Puzzle is active.';
+    } else if (panel.type === 'gallery') {
+        content.className = 'community-gallery';
+        const images = panel.images || [];
+        const image = document.createElement('img');
+        image.alt = images[0] && images[0].label ? images[0].label : 'Gallery image';
+        image.src = images[0].url;
+        content.append(image);
+        if (panel.mode === 'slideshow' && images.length > 1) {
+            let index = 0;
+            const tick = () => {
+                index = (index + 1) % images.length;
+                image.src = images[index].url;
+                image.alt = images[index].label || 'Gallery image';
+                galleryTimer = setTimeout(tick, panel.interval * 1000);
+            };
+            galleryTimer = setTimeout(tick, panel.interval * 1000);
+        }
     } else {
         content.className = 'community-empty';
         content.style.whiteSpace = 'pre-wrap';
@@ -536,7 +576,6 @@ function scheduleInfoRotation() {
 
 function renderRelicStatus(payload) {
     relicPayload = payload;
-    document.getElementById('relic-status-label').textContent = payload.enabled ? 'Active' : 'Disabled';
     const events = document.getElementById('relic-events');
     events.replaceChildren();
     for (const event of payload.events || []) {
@@ -545,7 +584,7 @@ function renderRelicStatus(payload) {
         item.textContent = `${event.name} · ${formatRemaining(Math.max(0, event.ends_at - Date.now() / 1000))} remaining`;
         events.append(item);
     }
-    const activity = (payload.recent_activity || []).slice(0, 7).map(item => {
+    const activity = (payload.recent_activity || []).slice(0, 5).map(item => {
         const rewards = [
             item.points ? `+${item.points} pts` : '',
             item.xp ? `+${item.xp} XP` : ''
@@ -803,7 +842,7 @@ function appendDiscordContent(parent, content, mentions = []) {
     for (const match of content.matchAll(pattern)) {
         parent.append(document.createTextNode(content.slice(cursor, match.index)));
         if (match[4]) {
-            const mention = mentionsById.get(match[4]);
+            const mention = mentionsById.get(match[4]) || chatMembers.get(match[4]);
             const element = document.createElement('span');
             element.className = 'mention';
             element.textContent = `@${mention && mention.display_name ? mention.display_name : 'Unknown member'}`;
