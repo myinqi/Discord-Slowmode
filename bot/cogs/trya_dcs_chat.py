@@ -1,5 +1,7 @@
 """Discord side of the TrYa DCS live-chat bridge."""
 
+import re
+
 import discord
 from discord.ext import commands
 
@@ -8,11 +10,27 @@ from bot.trya_dcs_events import trya_dcs_events
 
 
 _WEBHOOK_NAME = "TrYa DCS Web Chat"
+_USER_MENTION_RE = re.compile(r"<@!?(\d{17,20})>")
+_ROLE_MENTION_RE = re.compile(r"<@&\d{17,20}>")
+_EVERYONE_RE = re.compile(r"@(everyone|here)\b", re.IGNORECASE)
 
 
 def _avatar_url(author) -> str:
     avatar = getattr(author, "display_avatar", None)
     return str(avatar.url) if avatar else ""
+
+
+def is_public_channel_message(message: discord.Message) -> bool:
+    """Skip Discord-only ephemeral interaction replies.
+
+    Translate and similar commands are ephemeral in the channel, but the bot
+    still receives them on the gateway. Relaying those would show private
+    bot feedback to every DCS web listener.
+    """
+    flags = getattr(message, "flags", None)
+    if flags is not None and getattr(flags, "ephemeral", False):
+        return False
+    return True
 
 
 async def serialize_discord_message(message: discord.Message) -> dict:
@@ -108,7 +126,97 @@ async def guild_emoji_payload(guild: discord.Guild | None) -> list[dict]:
     ]
 
 
-async def send_web_chat_message(bot, channel_id: int, user_id: int, content: str) -> None:
+def parse_web_chat_payload(payload: dict | None) -> tuple[str, str | None, list[str]]:
+    data = payload if isinstance(payload, dict) else {}
+    content = str(data.get("content") or "").strip()
+    reply_to = str(data.get("reply_to") or "").strip() or None
+    if reply_to and not reply_to.isdigit():
+        reply_to = None
+    mention_ids = []
+    raw_ids = data.get("mention_ids") if isinstance(data.get("mention_ids"), list) else []
+    for raw in raw_ids[:20]:
+        value = str(raw).strip()
+        if value.isdigit() and value not in mention_ids:
+            mention_ids.append(value)
+    return content, reply_to, mention_ids
+
+
+def neutralize_mass_mentions(content: str) -> str:
+    """Prevent @everyone/@here and role pings from untrusted web input."""
+    clean = _ROLE_MENTION_RE.sub(lambda match: match.group(0).replace("@", "@\u200b", 1), content)
+    return _EVERYONE_RE.sub(lambda match: "@\u200b" + match.group(1).lower(), clean)
+
+
+async def _resolve_guild_member(guild: discord.Guild, user_id: int):
+    member = guild.get_member(user_id)
+    if member is not None:
+        return member
+    try:
+        return await guild.fetch_member(user_id)
+    except (discord.HTTPException, discord.NotFound, discord.Forbidden):
+        return None
+
+
+async def prepare_web_chat_content(
+    guild: discord.Guild,
+    content: str,
+    mention_ids: list | None = None,
+) -> tuple[str, list]:
+    """Keep only current guild-member mentions and insert Discord mention markup."""
+    clean = neutralize_mass_mentions(str(content or "").strip())[:1800]
+    allowed: list = []
+    seen: set[int] = set()
+
+    async def allow(user_id: int):
+        if user_id in seen:
+            return
+        member = await _resolve_guild_member(guild, user_id)
+        if member is None or getattr(member, "bot", False):
+            return
+        seen.add(user_id)
+        allowed.append(member)
+
+    for match in _USER_MENTION_RE.finditer(clean):
+        await allow(int(match.group(1)))
+
+    for raw_id in mention_ids or []:
+        try:
+            user_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        member = await _resolve_guild_member(guild, user_id)
+        if member is None or getattr(member, "bot", False):
+            continue
+        await allow(user_id)
+        mention = f"<@{user_id}>"
+        if mention in clean:
+            continue
+        for token in (f"@{member.display_name}", f"@{member.name}"):
+            if token and token in clean:
+                clean = clean.replace(token, mention, 1)
+                break
+        else:
+            clean = f"{mention} {clean}".strip()
+
+    def keep_user_mention(match: re.Match) -> str:
+        user_id = int(match.group(1))
+        if user_id in seen:
+            return f"<@{user_id}>"
+        return match.group(0).replace("@", "@\u200b", 1)
+
+    clean = _USER_MENTION_RE.sub(keep_user_mention, clean).strip()[:1800]
+    return clean, allowed
+
+
+async def send_web_chat_message(
+    bot,
+    channel_id: int,
+    user_id: int,
+    content: str,
+    *,
+    reply_to: str | int | None = None,
+    mention_ids: list | None = None,
+) -> None:
     """Send as the authenticated member through a clearly marked webhook."""
     channel = bot.get_channel(channel_id)
     if not isinstance(channel, discord.TextChannel):
@@ -118,11 +226,31 @@ async def send_web_chat_message(bot, channel_id: int, user_id: int, content: str
     if member is None:
         member = await guild.fetch_member(user_id)
 
-    clean = str(content or "").strip()
+    clean, mentioned = await prepare_web_chat_content(guild, content, mention_ids)
     if not clean:
         raise ValueError("Message is empty.")
-    clean = clean[:1800]
-    allowed_mentions = discord.AllowedMentions.none()
+    command_text = clean
+
+    reference = None
+    if reply_to:
+        try:
+            reference = await channel.fetch_message(int(reply_to))
+        except (TypeError, ValueError, discord.HTTPException, discord.NotFound, discord.Forbidden):
+            reference = None
+        if reference is not None and reference.channel.id != channel.id:
+            reference = None
+        if reference is not None:
+            snippet = re.sub(r"\s+", " ", reference.content or "").strip()[:80]
+            author_name = getattr(reference.author, "display_name", reference.author.name)
+            quote = f"> **{author_name}:** {snippet}" if snippet else f"> **{author_name}**"
+            clean = f"{quote}\n{clean}"[:1800]
+
+    allowed_mentions = discord.AllowedMentions(
+        everyone=False,
+        roles=False,
+        users=mentioned,
+        replied_user=False,
+    )
 
     webhook = None
     try:
@@ -145,14 +273,17 @@ async def send_web_chat_message(bot, channel_id: int, user_id: int, content: str
             wait=True,
         )
     else:
-        await channel.send(
-            f"**{member.display_name} · Web:** {clean}",
-            allowed_mentions=allowed_mentions,
-        )
+        send_kwargs = {
+            "content": f"**{member.display_name} · Web:** {clean}",
+            "allowed_mentions": allowed_mentions,
+        }
+        if reference is not None:
+            send_kwargs["reference"] = reference
+        await channel.send(**send_kwargs)
 
     cog = bot.get_cog("TryaDcsChat")
     if cog:
-        await cog.process_web_relic_command(member, channel, clean)
+        await cog.process_web_relic_command(member, channel, command_text)
 
 
 class TryaDcsChat(commands.Cog):
@@ -265,6 +396,8 @@ class TryaDcsChat(commands.Cog):
         channel_id = await self._configured_channel_id()
         if not channel_id or message.channel.id != channel_id:
             return
+        if not is_public_channel_message(message):
+            return
         await trya_dcs_events.publish(
             "chat.message", await serialize_discord_message(message)
         )
@@ -286,6 +419,8 @@ class TryaDcsChat(commands.Cog):
             return
         try:
             message = await channel.fetch_message(payload.message_id)
+            if not is_public_channel_message(message):
+                return
             await trya_dcs_events.publish(
                 "chat.edit", await serialize_discord_message(message)
             )

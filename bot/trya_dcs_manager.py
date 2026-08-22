@@ -196,6 +196,9 @@ class TryaDcsManager(TryaStreamManager):
                     "title": song.get("title"),
                     "artist": song.get("artist"),
                     "duration": song.get("duration"),
+                    "submitted_by": song.get("user_name") or "",
+                    "suno_url": self._public_suno_url(song),
+                    "wlm_url": self._public_wlm_url(song),
                 }
                 for song in first_playlist
             ]
@@ -300,6 +303,7 @@ class TryaDcsManager(TryaStreamManager):
                 "title": song.get("title") or "Unknown title",
                 "artist": song.get("artist") or "Unknown artist",
                 "duration": float(song.get("duration") or 0),
+                "submitted_by": song.get("user_name") or "",
                 "suno_url": self._public_suno_url(song),
                 "wlm_url": self._public_wlm_url(song),
             }

@@ -455,6 +455,7 @@ def create_app(db: Database, bot=None) -> Quart:
     }
     app.song_rating_sync_task = None
     app.trya_dcs_chat_rate = {}
+    app.trya_dcs_member_rate = {}
     app.trya_dcs_token_rate = {}
     app.trya_dcs_presence = {}
     # Serializes manual starts of both radio managers. The scheduled Exp.
@@ -8176,7 +8177,10 @@ def create_app(db: Database, bot=None) -> Quart:
         )
         while True:
             try:
+                manager_enabled = await db.get_setting("trya_stream_enabled") or "on"
                 enabled = await db.get_setting("trya_stream_schedule_enabled") or "off"
+                if manager_enabled != "on":
+                    enabled = "off"
                 days_csv = await db.get_setting("trya_stream_schedule_days") or ""
                 hhmm = (await db.get_setting("trya_stream_schedule_time") or "").strip()
                 config_signature = (enabled, days_csv, hhmm)
@@ -8423,7 +8427,10 @@ def create_app(db: Database, bot=None) -> Quart:
         )
         while True:
             try:
+                manager_enabled = await db.get_setting("trya_dcs_enabled") or "off"
                 enabled = await db.get_setting("trya_dcs_schedule_enabled") or "off"
+                if manager_enabled != "on":
+                    enabled = "off"
                 days_csv = await db.get_setting("trya_dcs_schedule_days") or ""
                 hhmm = (await db.get_setting("trya_dcs_schedule_time") or "").strip()
                 config_signature = (enabled, days_csv, hhmm)
@@ -9493,6 +9500,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     await flash(f"Rejected {song.get('title') or f'Song #{song_id}' }.", "success")
                 return redirect(request.url)
             if action == "save_settings":
+                previous_dcs_enabled = await db.get_setting("trya_dcs_enabled") or "off"
                 guild_id = (form.get("guild_id") or "").strip()
                 chat_channel_id = (form.get("chat_channel_id") or "").strip()
                 if guild_id and not guild_id.isdigit():
@@ -9595,6 +9603,8 @@ def create_app(db: Database, bot=None) -> Quart:
                         values["trya_dcs_schedule_time"] = f"{hour:02d}:{minute:02d}"
                     else:
                         values["trya_dcs_schedule_time"] = ""
+                if values["trya_dcs_enabled"] != "on":
+                    values["trya_dcs_schedule_enabled"] = "off"
                 for key, value in values.items():
                     await db.set_setting(key, value)
                 if values["trya_dcs_moderation_enabled"] != "on":
@@ -9619,6 +9629,8 @@ def create_app(db: Database, bot=None) -> Quart:
                 if values["trya_dcs_enabled"] != "on" and trya_dcs_manager.is_running:
                     await trya_dcs_manager.stop()
                 await flash("TrYa DCS settings saved.", "success")
+                if bot is not None and previous_dcs_enabled != values["trya_dcs_enabled"]:
+                    asyncio.create_task(bot.refresh_feature_slash_commands())
             return redirect(request.url)
 
         settings = {}
@@ -10001,18 +10013,24 @@ def create_app(db: Database, bot=None) -> Quart:
                 "That Suno song is already active in TrYa DCS.", 409
             )
 
+        playlist_source = str(song.get("playlist_source") or "submission").strip().lower()
+        if playlist_source not in {"submission", "intro", "outro"}:
+            playlist_source = "submission"
         try:
             maximum = max(1, min(20, int(await db.get_setting("trya_dcs_max_per_user") or "4")))
         except (TypeError, ValueError):
             maximum = 4
-        active_count = sum(
-            1 for existing in await db.get_trya_dcs_songs_by_user(int(song["user_id"]))
-            if int(existing["id"]) != int(song["id"])
-        )
-        if not song.get("replacement_song_id") and active_count >= maximum:
-            return await upload_error(
-                f"You already have the maximum of {maximum} active DCS songs.", 409
+        if playlist_source == "submission" and not song.get("replacement_song_id"):
+            active_count = sum(
+                1 for existing in await db.get_trya_dcs_songs_by_user(
+                    int(song["user_id"]), playlist_source="submission"
+                )
+                if int(existing["id"]) != int(song["id"])
             )
+            if active_count >= maximum:
+                return await upload_error(
+                    f"You already have the maximum of {maximum} active DCS songs.", 409
+                )
 
         attestation_names = (
             "sharing_attested", "official_download_attested",
@@ -10042,7 +10060,8 @@ def create_app(db: Database, bot=None) -> Quart:
                 f"{DCS_RIGHTS_VERSION}\n{DCS_RIGHTS_DECLARATION}\n"
                 f"user={song['user_id']}\nurl={suno_url}\nuuid={resolved_uuid}\n"
                 f"wlm_url={wlm_url}\ncontent_kind={content_kind}\n"
-                f"plan={plan_status}\naccepted={accepted_at:.6f}"
+                f"plan={plan_status}\ndestination={playlist_source}\n"
+                f"accepted={accepted_at:.6f}"
             ).encode("utf-8")
         ).hexdigest()
         update = {
@@ -10364,6 +10383,7 @@ def create_app(db: Database, bot=None) -> Quart:
         """Authenticated DCS state and Discord-backed chat transport."""
         from bot.cogs.trya_dcs_chat import (
             guild_emoji_payload,
+            is_public_channel_message,
             send_web_chat_message,
             serialize_discord_message,
         )
@@ -10422,6 +10442,8 @@ def create_app(db: Database, bot=None) -> Quart:
             try:
                 history = [message async for message in channel.history(limit=50, oldest_first=True)]
                 for message in history:
+                    if not is_public_channel_message(message):
+                        continue
                     await websocket.send(json.dumps({
                         "version": 1,
                         "type": "chat.message",
@@ -10475,7 +10497,8 @@ def create_app(db: Database, bot=None) -> Quart:
                     if event_type != "chat.send" or not channel_id or bot is None:
                         continue
 
-                    content = str((incoming.get("data") or {}).get("content") or "").strip()
+                    from bot.cogs.trya_dcs_chat import parse_web_chat_payload
+                    content, reply_to, mention_ids = parse_web_chat_payload(incoming.get("data") or {})
                     if not content:
                         continue
                     now = time.monotonic()
@@ -10494,7 +10517,14 @@ def create_app(db: Database, bot=None) -> Quart:
                     recent.append(now)
                     app.trya_dcs_chat_rate[key] = recent
                     try:
-                        await send_web_chat_message(bot, channel_id, int(user_id), content)
+                        await send_web_chat_message(
+                            bot,
+                            channel_id,
+                            int(user_id),
+                            content,
+                            reply_to=reply_to,
+                            mention_ids=mention_ids,
+                        )
                         await websocket.send(json.dumps({
                             "version": 1, "type": "chat.sent", "timestamp": time.time(), "data": {},
                         }))
@@ -10521,6 +10551,7 @@ def create_app(db: Database, bot=None) -> Quart:
     async def trya_dcs_chat_fallback():
         from bot.cogs.trya_dcs_chat import (
             guild_emoji_payload,
+            is_public_channel_message,
             send_web_chat_message,
             serialize_discord_message,
         )
@@ -10547,7 +10578,9 @@ def create_app(db: Database, bot=None) -> Quart:
             if not expected or not hmac.compare_digest(csrf, expected):
                 return {"error": "invalid_csrf"}, 403
             payload = await request.get_json(silent=True) or {}
-            content = str(payload.get("content") or "").strip()[:1800]
+            from bot.cogs.trya_dcs_chat import parse_web_chat_payload
+            content, reply_to, mention_ids = parse_web_chat_payload(payload)
+            content = content[:1800]
             if not content or not channel_id or bot is None:
                 return {"error": "invalid_message"}, 400
             now = time.monotonic()
@@ -10559,7 +10592,14 @@ def create_app(db: Database, bot=None) -> Quart:
             recent.append(now)
             app.trya_dcs_chat_rate[key] = recent
             try:
-                await send_web_chat_message(bot, channel_id, int(user_id), content)
+                await send_web_chat_message(
+                    bot,
+                    channel_id,
+                    int(user_id),
+                    content,
+                    reply_to=reply_to,
+                    mention_ids=mention_ids,
+                )
             except Exception as exc:
                 print(f"[trya-dcs-chat] Fallback message failed: {exc}", flush=True)
                 return {"error": "delivery_failed"}, 502
@@ -10582,7 +10622,11 @@ def create_app(db: Database, bot=None) -> Quart:
                 else:
                     history = [message async for message in channel.history(limit=50)]
                     history.reverse()
-                messages = [await serialize_discord_message(message) for message in history]
+                messages = [
+                    await serialize_discord_message(message)
+                    for message in history
+                    if is_public_channel_message(message)
+                ]
             except Exception as exc:
                 print(f"[trya-dcs-chat] Fallback history failed: {exc}", flush=True)
         return {
@@ -10590,6 +10634,59 @@ def create_app(db: Database, bot=None) -> Quart:
             "emojis": await guild_emoji_payload(get_guild()),
             "messages": messages,
         }
+
+    @app.route("/trya-dcs/api/chat/members")
+    async def trya_dcs_chat_members():
+        if (await db.get_setting("trya_dcs_enabled") or "off") != "on":
+            return {"error": "disabled"}, 503
+        user_id = session.get("trya_dcs_discord_user_id")
+        try:
+            guild_id = int(await db.get_setting("trya_dcs_guild_id") or Config.GUILD_ID or 0)
+        except (TypeError, ValueError):
+            return {"error": "invalid_configuration"}, 503
+        if not user_id or not await _trya_dcs_membership_valid(int(user_id), guild_id):
+            return {"error": "forbidden"}, 403
+        now = time.monotonic()
+        key = int(user_id)
+        recent = [stamp for stamp in app.trya_dcs_member_rate.get(key, []) if now - stamp < 10]
+        if len(recent) >= 8:
+            app.trya_dcs_member_rate[key] = recent
+            return {"error": "rate_limited"}, 429
+        recent.append(now)
+        app.trya_dcs_member_rate[key] = recent
+        query = str(request.args.get("q") or "").strip().lower()
+        if len(query) < 1 or len(query) > 32:
+            return {"members": []}
+        guild = get_guild()
+        if guild is None:
+            return {"members": []}
+        members = []
+        for member in guild.members:
+            if member.bot:
+                continue
+            haystack = " ".join(
+                part for part in (
+                    member.display_name,
+                    member.name,
+                    getattr(member, "global_name", None) or "",
+                ) if part
+            ).lower()
+            if query not in haystack:
+                continue
+            role_color = ""
+            if member.color.value:
+                role_color = f"#{member.color.value:06x}"
+            avatar = getattr(member, "display_avatar", None)
+            members.append({
+                "id": str(member.id),
+                "display_name": member.display_name,
+                "username": member.name,
+                "role_color": role_color,
+                "avatar_url": str(avatar.url) if avatar else "",
+            })
+            if len(members) >= 12:
+                break
+        return {"members": members}
 
     @app.route("/trya-dcs/api/stream-token", methods=["POST"])
     async def trya_dcs_stream_token():
@@ -11317,12 +11414,16 @@ def create_app(db: Database, bot=None) -> Quart:
                 announcement_ch = form.get("exp_announcement_channel_id", "").strip()
                 announcement_msg = (form.get("exp_announcement_message") or "").strip()
                 stream_url_v = form.get("exp_stream_url", "").strip()
+                previous_enabled = await db.get_setting("trya_stream_enabled") or "on"
+                enabled_v = "on" if form.get("trya_stream_enabled") else "off"
                 moderation_en = "on" if form.get("exp_moderation_enabled") else "off"
                 loop_mode_v = form.get("exp_loop_mode", "reshuffle").strip()
                 if loop_mode_v not in ("stop", "reshuffle"):
                     loop_mode_v = "reshuffle"
                 # Auto-start scheduler
                 sched_en = "on" if form.get("exp_schedule_enabled") else "off"
+                if enabled_v != "on":
+                    sched_en = "off"
                 # Day checkboxes named exp_schedule_day_0..6 (Mon=0 .. Sun=6)
                 sched_days = ",".join(
                     str(i) for i in range(7) if form.get(f"exp_schedule_day_{i}")
@@ -11411,7 +11512,16 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.set_setting("trya_stream_outro_selection", outro_selection)
                 if stream_url_v:
                     await db.set_setting("trya_stream_stream_url", stream_url_v)
-                await flash("Settings saved.", "success")
+                await db.set_setting("trya_stream_enabled", enabled_v)
+                if enabled_v != "on" and trya_stream_manager.is_running:
+                    await trya_stream_manager.stop()
+                await flash(
+                    "Settings saved. TrYa Stream is disabled."
+                    if enabled_v != "on" else "Settings saved.",
+                    "success",
+                )
+                if bot is not None and previous_enabled != enabled_v:
+                    asyncio.create_task(bot.refresh_feature_slash_commands())
 
             elif action == "save_exp_twitch_settings":
                 exp_tw_cid = form.get("exp_twitch_client_id", "").strip()
@@ -11712,6 +11822,7 @@ def create_app(db: Database, bot=None) -> Quart:
         exp_schedule_days       = await db.get_setting("trya_stream_schedule_days") or ""
         exp_schedule_time       = await db.get_setting("trya_stream_schedule_time") or ""
         exp_schedule_days_set   = set(d for d in exp_schedule_days.split(",") if d)
+        trya_stream_enabled     = await db.get_setting("trya_stream_enabled") or "on"
         exp_active_playlist     = await db.get_setting("trya_stream_active_playlist") or "submission"
         exp_intro_enabled       = await db.get_setting("trya_stream_intro_enabled") or "off"
         exp_outro_enabled       = await db.get_setting("trya_stream_outro_enabled") or "off"
@@ -11824,6 +11935,7 @@ def create_app(db: Database, bot=None) -> Quart:
             exp_tw_bot_login=exp_tw_bot_login,
             exp_tw_scopes_ok=exp_tw_scopes_ok,
             trya_submission_playlist_days=trya_submission_playlist_days,
+            trya_stream_enabled=trya_stream_enabled,
             trya_alert_settings=trya_alert_settings,
             trya_alert_status=trya_stream_event_alerts.status,
             trya_eventsub_diag=trya_eventsub_diag,
@@ -11840,6 +11952,11 @@ def create_app(db: Database, bot=None) -> Quart:
             process_exp_song,
         )
 
+        if (await db.get_setting("trya_stream_enabled") or "on") != "on":
+            return await render_template(
+                "trya_stream_upload.html",
+                error="TrYa Stream submissions are currently disabled.",
+            ), 503
         song = await db.get_trya_stream_song_by_token(token)
         if not song:
             return await render_template(
@@ -12036,6 +12153,8 @@ def create_app(db: Database, bot=None) -> Quart:
     async def trya_stream_stream_action(action):
         from quart import jsonify
         if action in ("start", "start_legacy"):
+            if (await db.get_setting("trya_stream_enabled") or "on") != "on":
+                return jsonify({"ok": False, "error": "TrYa Stream is disabled."}), 409
             if app.database_restore_pending:
                 return jsonify({"ok": False, "error": "A database restore is in progress."}), 409
             twitch_key = await db.get_setting("trya_stream_twitch_key") or ""
@@ -12699,6 +12818,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 await flash("Stream key saved.", "success")
 
             elif action == "save_exp_settings":
+                previous_enabled = await db.get_setting("exp_radio_enabled") or "on"
                 enabled_v = "on" if form.get("exp_radio_enabled") else "off"
                 ch1 = form.get("exp_post_channel_1_id", "").strip()
                 ch2 = form.get("exp_post_channel_2_id", "").strip()
@@ -12784,6 +12904,8 @@ def create_app(db: Database, bot=None) -> Quart:
                     if enabled_v != "on" else "Settings saved.",
                     "success",
                 )
+                if bot is not None and previous_enabled != enabled_v:
+                    asyncio.create_task(bot.refresh_feature_slash_commands())
 
             elif action == "save_exp_twitch_settings":
                 exp_tw_cid = form.get("exp_twitch_client_id", "").strip()

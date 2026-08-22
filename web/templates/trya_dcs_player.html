@@ -87,7 +87,23 @@
         .message-text { margin-top:2px; color:#d9d4e0; line-height:1.38; overflow-wrap:anywhere; white-space:pre-wrap; }
         .message-text img.emoji { width:24px; height:24px; object-fit:contain; vertical-align:middle; }
         .mention { display:inline; padding:1px 3px; border-radius:3px; background:rgba(88,101,242,.2); color:#b9c2ff; font-weight:650; }
-        .reply { color:#8f879c; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-bottom:2px; }
+        .reply { color:#8f879c; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-bottom:2px; cursor:pointer; }
+        .message { position:relative; }
+        .message-name { cursor:pointer; }
+        .message-actions { position:absolute; top:6px; right:0; display:flex; gap:4px; opacity:0; }
+        .message:hover .message-actions, .message:focus-within .message-actions { opacity:1; }
+        .message-actions button { padding:3px 7px; font-size:10px; background:#211a2d; }
+        .reply-bar { display:none; align-items:center; gap:8px; margin:0 12px 8px; padding:7px 9px; border:1px solid var(--line); border-radius:6px; background:#0c0a11; color:#cfc7d8; font-size:12px; }
+        .reply-bar.open { display:flex; }
+        .reply-bar span { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .reply-bar button { padding:3px 7px; font-size:11px; }
+        .mention-picker { display:none; position:absolute; left:12px; right:12px; bottom:62px; max-height:220px; overflow-y:auto; padding:6px; border:1px solid var(--line); border-radius:6px; background:#0c0a11; box-shadow:0 10px 30px #000a; z-index:3; }
+        .mention-picker.open { display:block; }
+        .mention-option { display:flex; align-items:center; gap:8px; width:100%; padding:7px 8px; border:0; background:transparent; text-align:left; color:#eeeaf6; }
+        .mention-option:hover, .mention-option.active { background:#211a2d; }
+        .mention-option img { width:22px; height:22px; border-radius:50%; object-fit:cover; background:#282230; }
+        .mention-option strong { font-size:13px; }
+        .mention-option em { color:#8f879c; font-size:11px; font-style:normal; }
         .attachment-image, .embed-image { display:block; max-width:min(100%,320px); max-height:240px; margin-top:7px; border-radius:5px; object-fit:contain; }
         .message a { color:#7ab6ff; }
         .chat-foot { position:relative; padding:10px 12px 12px; border-top:1px solid var(--line); }
@@ -221,6 +237,11 @@
                     <input id="emoji-search" class="emoji-search" type="search" autocomplete="off" placeholder="Search emojis..." aria-label="Search emojis">
                     <div id="emoji-grid" class="emoji-grid"></div>
                 </div>
+                <div id="mention-picker" class="mention-picker" hidden></div>
+                <div id="reply-bar" class="reply-bar">
+                    <span id="reply-bar-text"></span>
+                    <button id="reply-cancel" type="button" title="Cancel reply">✕</button>
+                </div>
                 <form id="chat-form" class="chat-form">
                     <button id="emoji-button" type="button" title="Guild emojis">☺</button>
                     <input id="chat-input" maxlength="1800" autocomplete="off" disabled value="Chat is connecting...">
@@ -263,6 +284,17 @@ const chatInput = document.getElementById('chat-input');
 const sendButton = document.getElementById('send-button');
 const emojiButton = document.getElementById('emoji-button');
 const emojiPicker = document.getElementById('emoji-picker');
+const mentionPicker = document.getElementById('mention-picker');
+const replyBar = document.getElementById('reply-bar');
+const replyBarText = document.getElementById('reply-bar-text');
+const chatMembersUrl = {{ url_for('trya_dcs_chat_members')|tojson }};
+const chatMembers = new Map();
+let pendingReply = null;
+let mentionQuery = null;
+let mentionStart = -1;
+let mentionOptions = [];
+let mentionIndex = 0;
+let mentionTimer = null;
 const emojiSearch = document.getElementById('emoji-search');
 const emojiGrid = document.getElementById('emoji-grid');
 const chatError = document.getElementById('chat-error');
@@ -275,10 +307,80 @@ let currentSongIndex = 0;
 let currentSongRemaining = 0;
 let currentStreamRemaining = 0;
 let currentListenerCount = 0;
+let encoderSongIndex = 0;
+let encoderElapsed = 0;
+let encoderDuration = 0;
+let encoderElapsedAt = 0;
 let relicStatusTimer = null;
 let relicInfoTimer = null;
 let relicInfoIndex = 0;
 let relicPayload = null;
+
+function getPlaybackLatency() {
+    // Metadata follows FFmpeg. HLS is held behind the live edge on purpose
+    // (liveSyncDuration / liveEdge-20), so the audible song changes later.
+    if (streamIsRunning !== true || video.paused || video.readyState < 2 || !video.seekable.length) {
+        return 0;
+    }
+    const liveEdge = video.seekable.end(video.seekable.length - 1);
+    if (!Number.isFinite(liveEdge)) return 10;
+    const latency = liveEdge - video.currentTime;
+    if (latency < 1) return 0;
+    return Math.max(0, Math.min(45, latency));
+}
+
+function encoderElapsedNow() {
+    if (!encoderElapsedAt) return encoderElapsed;
+    return encoderElapsed + (performance.now() - encoderElapsedAt) / 1000;
+}
+
+function setEncoderClock(index, elapsed, duration) {
+    encoderSongIndex = Number(index || 0);
+    encoderDuration = Number(duration || 0);
+    encoderElapsed = Math.max(0, Number(elapsed || 0));
+    encoderElapsedAt = performance.now();
+}
+
+function applyListenerMetadata() {
+    if (!encoderSongIndex || !currentQueue.length) {
+        renderDashboard();
+        return;
+    }
+    let position = 0;
+    for (let i = 0; i < encoderSongIndex - 1 && i < currentQueue.length; i++) {
+        position += Number(currentQueue[i].duration || 0);
+    }
+    position += encoderElapsedNow();
+    const listenerPos = Math.max(0, position - getPlaybackLatency());
+    let idx = 0;
+    let start = 0;
+    for (let i = 0; i < currentQueue.length; i++) {
+        const duration = Number(currentQueue[i].duration || 0);
+        const end = start + duration;
+        if (listenerPos < end || i === currentQueue.length - 1) {
+            idx = i;
+            break;
+        }
+        start = end;
+    }
+    const song = currentQueue[idx] || {};
+    const duration = Number(song.duration || encoderDuration || 0);
+    const elapsed = Math.max(0, Math.min(duration, listenerPos - start));
+    currentSongIndex = idx + 1;
+    currentSongRemaining = Math.max(0, duration - elapsed);
+    currentStreamRemaining = currentSongRemaining;
+    for (let i = idx + 1; i < currentQueue.length; i++) {
+        currentStreamRemaining += Number(currentQueue[i].duration || 0);
+    }
+    const percent = duration > 0 ? elapsed / duration * 100 : 0;
+    document.getElementById('song-progress').style.width = `${Math.max(0, Math.min(100, percent))}%`;
+    document.getElementById('now-title').textContent = song.title || 'TrYa DCS';
+    document.getElementById('now-artist').textContent = `${song.artist || 'Unknown artist'}${song.submitted_by ? ` · submitted by ${song.submitted_by}` : ''} · Song ${currentSongIndex}/${currentQueue.length}`;
+    updateWlmLink(song.wlm_url || '');
+    updateSunoLink(song.suno_url || '');
+    renderQueue();
+    renderDashboard();
+}
 
 function formatRemaining(seconds) {
     const value = Math.max(0, Math.round(Number(seconds || 0)));
@@ -564,6 +666,9 @@ function maintainLivePosition() {
 }
 
 setInterval(maintainLivePosition, 2000);
+setInterval(() => {
+    if (streamIsRunning === true && encoderSongIndex) applyListenerMetadata();
+}, 250);
 
 offlineImage.addEventListener('error', () => {
     offlineImageAvailable = false;
@@ -664,19 +769,28 @@ async function refreshStatus() {
         const payload = await response.json();
         applyStreamMode(Boolean(payload.running));
         const song = payload.song;
-        updateWlmLink(song && song.wlm_url ? song.wlm_url : '');
-        updateSunoLink(song && song.suno_url ? song.suno_url : '');
         currentQueue = Array.isArray(payload.playlist) ? payload.playlist : [];
-        currentSongIndex = Number(payload.song_index || 0);
-        currentSongRemaining = Number(payload.song_remaining_seconds || 0);
-        currentStreamRemaining = Number(payload.stream_remaining_seconds || 0);
         currentListenerCount = Number(payload.listener_count || 0);
-        renderQueue();
-        renderDashboard();
-        document.getElementById('now-title').textContent = song && song.title ? song.title : 'TrYa DCS';
-        document.getElementById('now-artist').textContent = song
-            ? `${song.artist || 'Unknown artist'}${song.submitted_by ? ` · submitted by ${song.submitted_by}` : ''} · Song ${payload.song_index}/${payload.playlist_length}`
-            : (payload.running ? 'Preparing stream metadata' : 'The community stream is offline');
+        if (payload.running && song) {
+            const duration = Number(song.duration || 0);
+            const remaining = Number(payload.song_remaining_seconds || 0);
+            setEncoderClock(payload.song_index, Math.max(0, duration - remaining), duration);
+            applyListenerMetadata();
+        } else {
+            encoderSongIndex = 0;
+            encoderElapsed = 0;
+            encoderElapsedAt = 0;
+            currentSongIndex = 0;
+            currentSongRemaining = 0;
+            currentStreamRemaining = 0;
+            document.getElementById('song-progress').style.width = '0%';
+            document.getElementById('now-title').textContent = 'TrYa DCS';
+            document.getElementById('now-artist').textContent = payload.running ? 'Preparing stream metadata' : 'The community stream is offline';
+            updateWlmLink('');
+            updateSunoLink('');
+            renderQueue();
+            renderDashboard();
+        }
     } catch (_) {}
     clearTimeout(statusTimer);
     statusTimer = setTimeout(refreshStatus, 3000);
@@ -708,10 +822,149 @@ function appendDiscordContent(parent, content, mentions = []) {
     parent.append(document.createTextNode(content.slice(cursor)));
 }
 
+function rememberChatMember(member) {
+    if (!member || !member.id) return;
+    const current = chatMembers.get(String(member.id)) || {};
+    chatMembers.set(String(member.id), {
+        id: String(member.id),
+        display_name: member.display_name || member.author || current.display_name || 'Discord member',
+        username: member.username || current.username || '',
+        role_color: member.role_color || current.role_color || '',
+        avatar_url: member.avatar_url || current.avatar_url || ''
+    });
+}
+
+function setPendingReply(data) {
+    if (!data || !data.message_id) return;
+    pendingReply = {
+        message_id: String(data.message_id),
+        author: data.display_name || 'Discord member',
+        content: String(data.content || '').replace(/\s+/g, ' ').trim()
+    };
+    replyBarText.textContent = `Replying to ${pendingReply.author}: ${pendingReply.content || 'message'}`;
+    replyBar.classList.add('open');
+    chatInput.focus();
+}
+
+function clearPendingReply() {
+    pendingReply = null;
+    replyBar.classList.remove('open');
+    replyBarText.textContent = '';
+}
+
+function insertMention(member) {
+    if (!member || !member.id) return;
+    rememberChatMember(member);
+    const value = chatInput.value;
+    const cursor = chatInput.selectionStart || value.length;
+    const from = mentionStart >= 0 ? mentionStart : cursor;
+    const before = value.slice(0, from);
+    const after = value.slice(cursor);
+    const token = `@${member.display_name || member.username || 'member'} `;
+    chatInput.value = `${before}${token}${after}`;
+    const next = before.length + token.length;
+    chatInput.setSelectionRange(next, next);
+    chatInput.dataset.mentionIds = JSON.stringify([
+        ...new Set([...(JSON.parse(chatInput.dataset.mentionIds || '[]')), String(member.id)])
+    ]);
+    closeMentionPicker();
+    chatInput.focus();
+}
+
+function closeMentionPicker() {
+    mentionPicker.classList.remove('open');
+    mentionPicker.hidden = true;
+    mentionQuery = null;
+    mentionStart = -1;
+    mentionOptions = [];
+    mentionIndex = 0;
+}
+
+function renderMentionPicker(items) {
+    mentionOptions = items.slice(0, 12);
+    mentionIndex = 0;
+    mentionPicker.replaceChildren();
+    if (!mentionOptions.length) {
+        closeMentionPicker();
+        return;
+    }
+    mentionOptions.forEach((member, index) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'mention-option' + (index === 0 ? ' active' : '');
+        const avatar = document.createElement('img');
+        avatar.alt = '';
+        if (member.avatar_url) avatar.src = member.avatar_url;
+        const name = document.createElement('strong');
+        name.textContent = member.display_name || member.username || 'Discord member';
+        if (/^#[0-9a-f]{6}$/i.test(member.role_color || '')) name.style.color = member.role_color;
+        button.append(avatar, name);
+        if (member.username && member.username !== member.display_name) {
+            const nick = document.createElement('em');
+            nick.textContent = member.username;
+            button.append(nick);
+        }
+        button.addEventListener('mousedown', event => {
+            event.preventDefault();
+            insertMention(member);
+        });
+        mentionPicker.append(button);
+    });
+    mentionPicker.hidden = false;
+    mentionPicker.classList.add('open');
+}
+
+function localMentionMatches(query) {
+    const needle = query.toLowerCase();
+    return [...chatMembers.values()].filter(member => {
+        const haystack = `${member.display_name || ''} ${member.username || ''}`.toLowerCase();
+        return haystack.includes(needle);
+    }).slice(0, 12);
+}
+
+async function refreshMentionPicker(query) {
+    const local = localMentionMatches(query);
+    renderMentionPicker(local);
+    if (query.length < 1) return;
+    try {
+        const response = await fetch(`${chatMembersUrl}?q=${encodeURIComponent(query)}`, {credentials: 'same-origin'});
+        if (!response.ok) return;
+        const payload = await response.json();
+        const remote = Array.isArray(payload.members) ? payload.members : [];
+        remote.forEach(rememberChatMember);
+        const merged = new Map(local.map(member => [member.id, member]));
+        remote.forEach(member => merged.set(String(member.id), member));
+        if (mentionQuery === query) renderMentionPicker([...merged.values()]);
+    } catch (_) {}
+}
+
+function updateMentionPickerFromInput() {
+    const value = chatInput.value;
+    const cursor = chatInput.selectionStart || 0;
+    const before = value.slice(0, cursor);
+    const match = before.match(/(^|\s)@([^\s@]{0,32})$/);
+    if (!match) {
+        closeMentionPicker();
+        return;
+    }
+    mentionStart = before.length - match[2].length - 1;
+    mentionQuery = match[2];
+    clearTimeout(mentionTimer);
+    mentionTimer = setTimeout(() => refreshMentionPicker(mentionQuery), 80);
+}
+
 function createMessage(data) {
+    rememberChatMember({
+        id: data.author_id,
+        display_name: data.display_name,
+        role_color: data.role_color,
+        avatar_url: data.avatar_url
+    });
+    (data.mentions || []).forEach(rememberChatMember);
     const item = document.createElement('article');
     item.className = 'message';
     item.dataset.messageId = data.message_id;
+    item.dataset.authorId = data.author_id || '';
     const avatar = document.createElement('img');
     avatar.className = 'message-avatar';
     avatar.alt = '';
@@ -721,6 +974,11 @@ function createMessage(data) {
         const reply = document.createElement('div');
         reply.className = 'reply';
         reply.textContent = `Reply to ${data.reply.author}: ${data.reply.content}`;
+        if (data.reply.message_id) {
+            reply.addEventListener('click', () => {
+                messages.querySelector(`[data-message-id="${CSS.escape(String(data.reply.message_id))}"]`)?.scrollIntoView({block:'nearest', behavior:'smooth'});
+            });
+        }
         body.append(reply);
     }
     const head = document.createElement('div');
@@ -729,10 +987,27 @@ function createMessage(data) {
     name.className = 'message-name';
     name.textContent = data.display_name || 'Discord member';
     if (/^#[0-9a-f]{6}$/i.test(data.role_color || '')) name.style.color = data.role_color;
+    name.title = 'Mention this member';
+    name.addEventListener('click', () => {
+        mentionStart = chatInput.selectionStart || chatInput.value.length;
+        insertMention({
+            id: data.author_id,
+            display_name: data.display_name,
+            role_color: data.role_color,
+            avatar_url: data.avatar_url
+        });
+    });
     const stamp = document.createElement('time');
     stamp.className = 'message-time';
     stamp.textContent = new Date(Number(data.created_at || 0) * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
     head.append(name, stamp);
+    const actions = document.createElement('div');
+    actions.className = 'message-actions';
+    const replyButton = document.createElement('button');
+    replyButton.type = 'button';
+    replyButton.textContent = 'Reply';
+    replyButton.addEventListener('click', () => setPendingReply(data));
+    actions.append(replyButton);
     const text = document.createElement('div');
     text.className = 'message-text';
     appendDiscordContent(text, data.content || '', data.mentions || []);
@@ -762,7 +1037,7 @@ function createMessage(data) {
             body.append(image);
         }
     }
-    item.append(avatar, body);
+    item.append(avatar, body, actions);
     return item;
 }
 
@@ -847,23 +1122,14 @@ function handleEvent(event) {
     } else if (event.type === 'chat.error') {
         chatError.textContent = data.message || 'Chat error';
     } else if (event.type === 'radio.now_playing') {
-        currentSongIndex = Number(data.song_index || 0);
-        currentSongRemaining = Number(data.duration || 0);
-        renderQueue();
-        renderDashboard();
-        document.getElementById('now-title').textContent = data.title || 'TrYa DCS';
-        document.getElementById('now-artist').textContent = `${data.artist || 'Unknown artist'}${data.submitted_by ? ` · submitted by ${data.submitted_by}` : ''} · Song ${data.song_index}/${data.playlist_length}`;
-        updateWlmLink(data.wlm_url || '');
-        updateSunoLink(data.suno_url || '');
+        setEncoderClock(data.song_index, 0, data.duration);
+        applyListenerMetadata();
     } else if (event.type === 'radio.progress') {
-        const percent = data.duration > 0 ? Math.max(0, Math.min(100, data.elapsed / data.duration * 100)) : 0;
-        document.getElementById('song-progress').style.width = `${percent}%`;
-        currentSongRemaining = Math.max(0, Number(data.duration || 0) - Number(data.elapsed || 0));
-        renderDashboard();
+        setEncoderClock(data.song_index, data.elapsed, data.duration);
+        applyListenerMetadata();
     } else if (event.type === 'radio.queue_update') {
         currentQueue = Array.isArray(data.songs) ? data.songs : [];
-        renderQueue();
-        renderDashboard();
+        applyListenerMetadata();
     } else if (event.type === 'relic.update') {
         refreshRelicStatus();
     }
@@ -955,17 +1221,25 @@ if (preferChatFallback) {
     setTimeout(connectSocket, 250);
 }
 
+function outgoingChatPayload() {
+    return {
+        content: chatInput.value.trim(),
+        reply_to: pendingReply ? pendingReply.message_id : null,
+        mention_ids: JSON.parse(chatInput.dataset.mentionIds || '[]')
+    };
+}
+
 document.getElementById('chat-form').addEventListener('submit', async event => {
     event.preventDefault();
-    const content = chatInput.value.trim();
-    if (!content) return;
+    const payload = outgoingChatPayload();
+    if (!payload.content) return;
     if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({type:'chat.send', data:{content}}));
+        socket.send(JSON.stringify({type:'chat.send', data:payload}));
     } else if (chatFallbackActive) {
         const response = await fetch('{{ url_for('trya_dcs_chat_fallback') }}', {
             method: 'POST', credentials: 'same-origin',
             headers: {'Content-Type': 'application/json', 'X-CSRF-Token': chatCsrf},
-            body: JSON.stringify({content})
+            body: JSON.stringify(payload)
         });
         if (!response.ok) {
             chatError.textContent = 'The message could not be delivered.';
@@ -975,9 +1249,32 @@ document.getElementById('chat-form').addEventListener('submit', async event => {
         return;
     }
     chatInput.value = '';
+    chatInput.dataset.mentionIds = '[]';
+    clearPendingReply();
+    closeMentionPicker();
     emojiPicker.classList.remove('open');
 });
+chatInput.addEventListener('input', updateMentionPickerFromInput);
+chatInput.addEventListener('keydown', event => {
+    if (!mentionPicker.classList.contains('open') || !mentionOptions.length) return;
+    if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        mentionIndex = (mentionIndex + 1) % mentionOptions.length;
+        [...mentionPicker.children].forEach((item, index) => item.classList.toggle('active', index === mentionIndex));
+    } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        mentionIndex = (mentionIndex - 1 + mentionOptions.length) % mentionOptions.length;
+        [...mentionPicker.children].forEach((item, index) => item.classList.toggle('active', index === mentionIndex));
+    } else if (event.key === 'Enter' || event.key === 'Tab') {
+        event.preventDefault();
+        insertMention(mentionOptions[mentionIndex]);
+    } else if (event.key === 'Escape') {
+        closeMentionPicker();
+    }
+});
+document.getElementById('reply-cancel').addEventListener('click', clearPendingReply);
 emojiButton.addEventListener('click', () => {
+    closeMentionPicker();
     emojiPicker.classList.toggle('open');
     if (emojiPicker.classList.contains('open')) emojiSearch.focus();
 });

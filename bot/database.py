@@ -6153,24 +6153,29 @@ class Database:
         replacement_song_id: int | None = None,
         rights_version: str,
         rights_declaration: str,
+        playlist_source: str = "submission",
     ) -> tuple[int, str]:
         """Create an inactive, single-use DCS upload slot."""
         import secrets
 
+        source = str(playlist_source or "submission").strip().lower()
+        if source not in {"submission", "intro", "outro"}:
+            raise ValueError("invalid DCS playlist_source")
         upload_token = secrets.token_urlsafe(32)
         cursor = await self.db.execute(
             """INSERT INTO trya_dcs_songs
                    (user_id, user_name, suno_url, suno_uuid, rights_version,
                     rights_declaration, rights_hash, rights_accepted_at,
-                    upload_token, active, approval_status, analysis_status,
-                    replacement_song_id)
-               VALUES (?, ?, '', '', ?, ?, '', 0, ?, 0, 'pending', 'pending', ?)""",
+                    upload_token, playlist_source, active, approval_status,
+                    analysis_status, replacement_song_id)
+               VALUES (?, ?, '', '', ?, ?, '', 0, ?, ?, 0, 'pending', 'pending', ?)""",
             (
                 int(user_id),
                 user_name,
                 rights_version,
                 rights_declaration,
                 upload_token,
+                source,
                 replacement_song_id,
             ),
         )
@@ -6194,28 +6199,51 @@ class Database:
         return dict(row) if row else None
 
     async def get_trya_dcs_songs_by_user(
-        self, user_id: int, *, include_pending: bool = False
+        self,
+        user_id: int,
+        *,
+        include_pending: bool = False,
+        playlist_source: str | None = None,
     ) -> list[dict]:
         pending_clause = (
             "OR (active = 0 AND uploaded_at IS NULL AND removed_at IS NULL)"
             if include_pending else ""
         )
+        source_clause = ""
+        params: list = [int(user_id)]
+        if playlist_source:
+            source = str(playlist_source).strip().lower()
+            if source not in {"submission", "intro", "outro"}:
+                raise ValueError("invalid DCS playlist_source")
+            source_clause = "AND COALESCE(playlist_source, 'submission') = ?"
+            params.append(source)
         async with self.db.execute(
             f"""SELECT * FROM trya_dcs_songs
                 WHERE user_id = ? AND (active = 1 {pending_clause})
+                  {source_clause}
                 ORDER BY submitted_at DESC""",
-            (int(user_id),),
+            params,
         ) as cursor:
             return [dict(row) for row in await cursor.fetchall()]
 
-    async def supersede_pending_trya_dcs_uploads(self, user_id: int) -> int:
+    async def supersede_pending_trya_dcs_uploads(
+        self, user_id: int, playlist_source: str | None = None
+    ) -> int:
+        source_clause = ""
+        params: list = [int(user_id)]
+        if playlist_source:
+            source = str(playlist_source).strip().lower()
+            if source not in {"submission", "intro", "outro"}:
+                raise ValueError("invalid DCS playlist_source")
+            source_clause = "AND COALESCE(playlist_source, 'submission') = ?"
+            params.append(source)
         cursor = await self.db.execute(
-            """UPDATE trya_dcs_songs
+            f"""UPDATE trya_dcs_songs
                SET analysis_status = 'failed', removed_at = unixepoch(),
                    remove_reason = 'superseded_pending_upload', upload_token = NULL
                WHERE user_id = ? AND active = 0 AND uploaded_at IS NULL
-                 AND removed_at IS NULL""",
-            (int(user_id),),
+                 AND removed_at IS NULL {source_clause}""",
+            params,
         )
         await self.db.commit()
         return max(0, int(cursor.rowcount or 0))
@@ -6434,6 +6462,24 @@ class Database:
         )
         await self.db.commit()
         return int(cursor.lastrowid)
+
+    async def get_latest_trya_dcs_playlist_snapshot(self) -> Optional[dict]:
+        async with self.db.execute(
+            """SELECT created_by, mode, songs_json, created_at
+               FROM trya_dcs_playlist_snapshots
+               ORDER BY created_at DESC, id DESC LIMIT 1"""
+        ) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        try:
+            data["songs"] = json.loads(data.pop("songs_json") or "[]")
+        except (TypeError, json.JSONDecodeError):
+            data["songs"] = []
+        if not isinstance(data["songs"], list):
+            data["songs"] = []
+        return data
 
     async def purge_expired_trya_dcs_tokens(self, now: float | None = None) -> int:
         cursor = await self.db.execute(

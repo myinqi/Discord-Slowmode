@@ -27,13 +27,14 @@ class TryaDcsDatabaseTests(unittest.IsolatedAsyncioTestCase):
         await self.db.close()
         self.temp_dir.cleanup()
 
-    async def _new_slot(self, user_id=100, replacement_song_id=None):
+    async def _new_slot(self, user_id=100, replacement_song_id=None, playlist_source="submission"):
         return await self.db.add_trya_dcs_song(
             user_id=user_id,
             user_name=f"member-{user_id}",
             replacement_song_id=replacement_song_id,
             rights_version="1",
             rights_declaration=DECLARATION,
+            playlist_source=playlist_source,
         )
 
     async def _finalize(self, song_id, suffix):
@@ -127,6 +128,10 @@ class TryaDcsDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await self.db.purge_failed_trya_dcs_song(song_id))
         self.assertIsNotNone(await self.db.get_trya_dcs_song(song_id))
 
+    async def test_invalid_playlist_source_is_rejected(self):
+        with self.assertRaises(ValueError):
+            await self._new_slot(user_id=100, playlist_source="admin")
+
     async def test_playlist_source_can_be_assigned_after_upload(self):
         song_id, _ = await self._new_slot(user_id=100)
         await self._finalize(song_id, "intro")
@@ -135,6 +140,35 @@ class TryaDcsDatabaseTests(unittest.IsolatedAsyncioTestCase):
         stored = await self.db.get_trya_dcs_song(song_id)
 
         self.assertEqual(stored["playlist_source"], "intro")
+
+    async def test_intro_slot_is_created_without_counting_as_submission(self):
+        submission_id, _ = await self._new_slot(user_id=100)
+        await self._finalize(submission_id, "submission")
+        intro_id, _ = await self._new_slot(user_id=100, playlist_source="intro")
+
+        stored = await self.db.get_trya_dcs_song(intro_id)
+        submissions = await self.db.get_trya_dcs_songs_by_user(
+            100, playlist_source="submission"
+        )
+        intros = await self.db.get_trya_dcs_songs_by_user(
+            100, include_pending=True, playlist_source="intro"
+        )
+
+        self.assertEqual(stored["playlist_source"], "intro")
+        self.assertEqual([song["id"] for song in submissions], [submission_id])
+        self.assertEqual([song["id"] for song in intros], [intro_id])
+
+    async def test_pending_intro_does_not_supersede_pending_submission(self):
+        submission_id, submission_token = await self._new_slot(user_id=100)
+        await self.db.supersede_pending_trya_dcs_uploads(
+            100, playlist_source="intro"
+        )
+
+        self.assertIsNotNone(await self.db.get_trya_dcs_song_by_token(submission_token))
+        self.assertEqual(
+            (await self.db.get_trya_dcs_song(submission_id))["playlist_source"],
+            "submission",
+        )
 
     async def test_replacement_retires_old_song_only_after_finalize(self):
         old_id, _ = await self._new_slot(user_id=100)

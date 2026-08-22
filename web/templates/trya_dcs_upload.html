@@ -42,6 +42,13 @@
             {% endif %}
 
             <section class="bg-gray-800/50 rounded-lg p-4 space-y-4">
+                <div>
+                    <p class="text-gray-400 text-xs uppercase tracking-wide">Destination</p>
+                    <p class="text-white text-sm mt-1">{{ (song.playlist_source or 'submission')|capitalize }} playlist</p>
+                    {% if (song.playlist_source or 'submission') in ('intro', 'outro') %}
+                    <p class="text-gray-500 text-xs mt-1">Intro and outro songs do not count toward the per-member submission limit. Whisper and optional moderation still run.</p>
+                    {% endif %}
+                </div>
                 <label class="block">
                     <span class="block text-sm font-medium text-gray-200 mb-2">Suno song URL</span>
                     <input type="url" name="suno_url" required value="{{ submitted_suno_url or song.suno_url or '' }}"
