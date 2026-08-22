@@ -10,7 +10,11 @@ from collections import deque
 
 from bot.trya_stream_manager import TryaStreamManager
 from bot.trya_dcs_events import trya_dcs_events
+from bot.trya_dcs_schedule import is_submissions_locked
 from bot.suno_urls import SUNO_UUID_RE, UUID_RE
+
+# Re-export so callers can keep importing from this module.
+__all__ = ["TryaDcsManager", "get_dcs_log", "is_submissions_locked", "log_dcs_event"]
 
 
 _DCS_LOG_BUFFER = deque(maxlen=2000)
@@ -91,7 +95,7 @@ class TryaDcsManager(TryaStreamManager):
     def get_log(self, since_ts: float = 0.0, max_age_secs: float = 600.0) -> list[dict]:
         return get_dcs_log(since_ts=since_ts, max_age_secs=max_age_secs)
 
-    async def start(self, *, created_by: str = "admin") -> dict:
+    async def start(self, *, created_by: str = "admin", scheduled: bool = False) -> dict:
         async with self._start_lock:
             if self.is_running:
                 return {"ok": False, "error": "The DCS stream is already running."}
@@ -197,14 +201,19 @@ class TryaDcsManager(TryaStreamManager):
             ]
             await self.db.save_trya_dcs_playlist_snapshot(
                 created_by=created_by,
-                mode="manual",
+                mode="scheduled" if scheduled else "manual",
                 songs=snapshot,
             )
             self._stream_ready_event.clear()
             self._reset_ffmpeg_health("starting")
+            from bot import trya_dcs_schedule as dcs_schedule
+            dcs_schedule.dcs_stream_is_live = True
             self.is_running = True
             self._task = asyncio.create_task(self._stream_loop())
-            self._log(f"Starting {len(first_playlist)} songs toward MediaMTX.")
+            self._log(
+                f"Starting {len(first_playlist)} songs toward MediaMTX"
+                f"{' (scheduled)' if scheduled else ''}."
+            )
             await trya_dcs_events.publish("radio.mode", {
                 "mode": "starting",
                 "playlist_length": len(first_playlist),
@@ -215,6 +224,8 @@ class TryaDcsManager(TryaStreamManager):
             return {"ok": True, "song_count": len(first_playlist)}
 
     async def stop(self) -> dict:
+        from bot import trya_dcs_schedule as dcs_schedule
+        dcs_schedule.dcs_stream_is_live = False
         self.is_running = False
         self._safe_stop_requested = False
         self._stream_ready_event.clear()

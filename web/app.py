@@ -708,6 +708,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 "exp_radio_schedule_task",
                 "trya_stream_cleanup_task",
                 "trya_stream_schedule_task",
+                "trya_dcs_schedule_task",
             ):
                 task = getattr(app, task_name, None)
                 if task and not task.done():
@@ -8399,8 +8400,164 @@ def create_app(db: Database, bot=None) -> Quart:
         bot.trya_stream_manager = trya_stream_manager
         bot.trya_dcs_manager = trya_dcs_manager
 
+    async def _trya_dcs_schedule_loop():
+        """Auto-start TrYa DCS on configured weekdays + time.
+
+        A 15-minute catch-up window prevents a container restart or briefly
+        busy event loop at the configured minute from losing the scheduled
+        run. Accepted occurrences are persisted so a later process restart
+        cannot fire the same schedule twice.
+        """
+        from bot.trya_dcs_manager import log_dcs_event
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+
+        schedule_tz = ZoneInfo("Europe/Berlin")
+        catch_up_seconds = 15 * 60
+        retry_seconds = 60
+        app.dcs_schedule_last_attempt_key = ""
+        app.dcs_schedule_last_attempt_at = 0.0
+        last_config_signature = None
+        log_dcs_event(
+            "Scheduler loop started (Europe/Berlin, 15-minute catch-up window)."
+        )
+        while True:
+            try:
+                enabled = await db.get_setting("trya_dcs_schedule_enabled") or "off"
+                days_csv = await db.get_setting("trya_dcs_schedule_days") or ""
+                hhmm = (await db.get_setting("trya_dcs_schedule_time") or "").strip()
+                config_signature = (enabled, days_csv, hhmm)
+                if config_signature != last_config_signature:
+                    last_config_signature = config_signature
+                    if enabled == "on":
+                        day_names = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+                        configured_days = [
+                            day_names[int(day)]
+                            for day in days_csv.split(",")
+                            if day.strip().isdigit() and 0 <= int(day) <= 6
+                        ]
+                        if configured_days and hhmm:
+                            log_dcs_event(
+                                f"Scheduler armed: {', '.join(configured_days)} at {hhmm} Europe/Berlin."
+                            )
+                        else:
+                            log_dcs_event(
+                                "Scheduler enabled but weekdays or start time are missing.",
+                                level="error",
+                            )
+                    else:
+                        log_dcs_event("Scheduler disabled.")
+                if enabled != "on":
+                    await asyncio.sleep(30)
+                    continue
+                days = {int(d) for d in days_csv.split(",") if d.strip().isdigit()}
+                if not days or not hhmm or ":" not in hhmm:
+                    await asyncio.sleep(30)
+                    continue
+                try:
+                    h_str, m_str = hhmm.split(":", 1)
+                    target_h, target_m = int(h_str), int(m_str)
+                except Exception:
+                    await asyncio.sleep(30)
+                    continue
+                if not (0 <= target_h <= 23 and 0 <= target_m <= 59):
+                    await asyncio.sleep(30)
+                    continue
+
+                now = datetime.now(schedule_tz)
+                target = now.replace(
+                    hour=target_h, minute=target_m, second=0, microsecond=0,
+                )
+                if target > now:
+                    previous_target = target - timedelta(days=1)
+                    if (now - previous_target).total_seconds() <= catch_up_seconds:
+                        target = previous_target
+                seconds_late = (now - target).total_seconds()
+                occurrence_key = target.strftime("%Y-%m-%dT%H:%M%z")
+                last_handled = (
+                    await db.get_setting("trya_dcs_schedule_last_handled") or ""
+                )
+                due = (
+                    target.weekday() in days
+                    and 0 <= seconds_late <= catch_up_seconds
+                    and occurrence_key != last_handled
+                )
+                retry_ready = (
+                    occurrence_key != app.dcs_schedule_last_attempt_key
+                    or time.monotonic() - app.dcs_schedule_last_attempt_at >= retry_seconds
+                )
+                if due and retry_ready:
+                    app.dcs_schedule_last_attempt_key = occurrence_key
+                    app.dcs_schedule_last_attempt_at = time.monotonic()
+                    late_note = (
+                        "on time" if seconds_late < 60
+                        else f"{int(seconds_late // 60)} minute(s) late"
+                    )
+                    if app.database_restore_pending:
+                        log_dcs_event(
+                            "Scheduler: database restore in progress - retrying shortly.",
+                            level="error",
+                        )
+                    elif trya_dcs_manager.is_running:
+                        await db.set_setting(
+                            "trya_dcs_schedule_last_handled", occurrence_key,
+                        )
+                        log_dcs_event(
+                            "Scheduler: stream already running - scheduled occurrence marked as handled."
+                        )
+                    else:
+                        log_dcs_event(
+                            f"Scheduler: triggering auto-start for {target.strftime('%a %H:%M')} "
+                            f"Europe/Berlin ({late_note})."
+                        )
+                        try:
+                            if app.database_restore_pending:
+                                result = {
+                                    "ok": False,
+                                    "error": "database restore in progress",
+                                }
+                            else:
+                                result = await trya_dcs_manager.start(
+                                    created_by="scheduler", scheduled=True,
+                                )
+                            if result.get("ok"):
+                                log_dcs_event(
+                                    f"Scheduler: start accepted with {result.get('song_count')} song(s); waiting for FFmpeg to go live."
+                                )
+                                live_ok = await trya_dcs_manager.wait_until_live(timeout=900)
+                                if not live_ok:
+                                    log_dcs_event(
+                                        "Scheduler: stream did not become live within 15 minutes.",
+                                        level="error",
+                                    )
+                                    continue
+                                await db.set_setting(
+                                    "trya_dcs_schedule_last_handled", occurrence_key,
+                                )
+                                log_dcs_event("Scheduler: DCS publisher is live.")
+                            else:
+                                log_dcs_event(
+                                    f"Scheduler: start failed — {result.get('error')}",
+                                    level="error",
+                                )
+                        except Exception as e:
+                            log_dcs_event(
+                                f"Scheduler: start exception: {e}",
+                                level="error",
+                            )
+            except Exception as e:
+                print(f"[trya-dcs] Scheduler loop error: {e}", flush=True)
+            await asyncio.sleep(30)
+
+    @app.before_serving
+    async def start_trya_dcs_schedule():
+        app.trya_dcs_schedule_task = asyncio.create_task(_trya_dcs_schedule_loop())
+
     @app.after_serving
     async def stop_trya_dcs_publisher():
+        schedule_task = getattr(app, "trya_dcs_schedule_task", None)
+        if schedule_task and not schedule_task.done():
+            schedule_task.cancel()
         if trya_dcs_manager.is_running:
             await trya_dcs_manager.stop()
 
@@ -8705,6 +8862,9 @@ def create_app(db: Database, bot=None) -> Quart:
             "trya_dcs_max_duration_seconds": "360",
             "trya_dcs_max_upload_mib": "20",
             "trya_dcs_loop_mode": "stop",
+            "trya_dcs_schedule_enabled": "off",
+            "trya_dcs_schedule_days": "",
+            "trya_dcs_schedule_time": "",
             "trya_dcs_bg_filename": "",
             "trya_dcs_bg_type": "image",
             "trya_dcs_media_corners_enabled": "off",
@@ -9390,6 +9550,15 @@ def create_app(db: Database, bot=None) -> Quart:
                     "trya_dcs_loop_mode": (
                         "reshuffle" if form.get("loop_mode") == "reshuffle" else "stop"
                     ),
+                    "trya_dcs_schedule_enabled": (
+                        "on" if form.get("dcs_schedule_enabled") else "off"
+                    ),
+                    "trya_dcs_schedule_days": ",".join(
+                        str(i) for i in range(7) if form.get(f"dcs_schedule_day_{i}")
+                    ),
+                    "trya_dcs_schedule_time": (
+                        form.get("dcs_schedule_time") or ""
+                    ).strip(),
                     "trya_dcs_stream_title": (
                         form.get("stream_title") or ""
                     ).strip()[:200],
@@ -9416,6 +9585,16 @@ def create_app(db: Database, bot=None) -> Quart:
                         bounded_int("obs_fps", 20, 15, 24)
                     ),
                 }
+                schedule_time = values["trya_dcs_schedule_time"]
+                if not re.fullmatch(r"\d{1,2}:\d{2}", schedule_time or ""):
+                    values["trya_dcs_schedule_time"] = ""
+                else:
+                    hour_s, minute_s = schedule_time.split(":", 1)
+                    hour, minute = int(hour_s), int(minute_s)
+                    if 0 <= hour <= 23 and 0 <= minute <= 59:
+                        values["trya_dcs_schedule_time"] = f"{hour:02d}:{minute:02d}"
+                    else:
+                        values["trya_dcs_schedule_time"] = ""
                 for key, value in values.items():
                     await db.set_setting(key, value)
                 if values["trya_dcs_moderation_enabled"] != "on":
@@ -9746,6 +9925,10 @@ def create_app(db: Database, bot=None) -> Quart:
                 "trya_dcs_upload.html", done=True,
                 title=song.get("title") or "Your song",
             )
+        from bot.trya_dcs_manager import is_submissions_locked as _dcs_locked
+        locked, _ = await _dcs_locked(db)
+        if locked:
+            return await render_template("trya_dcs_upload.html", stream_live=True), 503
         if await db.get_setting("trya_dcs_enabled") != "on":
             return await render_template("trya_dcs_upload.html", disabled=True), 503
 

@@ -2398,6 +2398,23 @@ class CommandsCog(commands.Cog):
             ephemeral=True,
         )
 
+    async def _trya_dcs_commands_locked(self) -> tuple[bool, str]:
+        from bot.trya_dcs_manager import is_submissions_locked
+
+        locked, reason = await is_submissions_locked(self.bot.db)
+        if not locked:
+            return False, ""
+        if reason == "stream_live":
+            return True, (
+                "TrYa DCS is live. `/trya-dcs` commands are available again after it ends."
+            )
+        minutes = reason.replace("pre_start_", "").replace("min", "")
+        return True, (
+            f"TrYa DCS starts in approximately **{minutes} minutes**. "
+            "`/trya-dcs` commands close 60 minutes before the stream so Whisper "
+            "and optional moderation can finish."
+        )
+
     async def _trya_dcs_submit(
         self, interaction: discord.Interaction, *, replace: bool
     ) -> None:
@@ -2406,6 +2423,10 @@ class CommandsCog(commands.Cog):
             await interaction.followup.send(
                 "TrYa DCS submissions are currently disabled.", ephemeral=True
             )
+            return
+        locked, lock_message = await self._trya_dcs_commands_locked()
+        if locked:
+            await interaction.followup.send(lock_message, ephemeral=True)
             return
         configured_guild = int(
             await self.bot.db.get_setting("trya_dcs_guild_id") or 0
@@ -2493,6 +2514,10 @@ class CommandsCog(commands.Cog):
     )
     async def trya_dcs_delete(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+        locked, lock_message = await self._trya_dcs_commands_locked()
+        if locked:
+            await interaction.followup.send(lock_message, ephemeral=True)
+            return
         songs = await self.bot.db.get_trya_dcs_songs_by_user(
             interaction.user.id, include_pending=True
         )

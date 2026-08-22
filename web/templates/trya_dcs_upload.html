@@ -16,6 +16,11 @@
     <section class="bg-yellow-900/40 border border-yellow-700/50 rounded-xl p-6 text-center">
         <p class="text-yellow-300 font-semibold">TrYa DCS submissions are currently disabled.</p>
     </section>
+    {% elif stream_live %}
+    <section class="bg-yellow-900/40 border border-yellow-700/50 rounded-xl p-6 text-center">
+        <p class="text-yellow-300 font-semibold">TrYa DCS submissions are temporarily paused.</p>
+        <p class="text-gray-400 text-sm mt-2">Commands and uploads close 60 minutes before a scheduled start and while the stream is live, so analysis can finish without affecting playback.</p>
+    </section>
     {% elif error %}
     <section class="bg-red-900/40 border border-red-700/50 rounded-xl p-6 text-center">
         <p class="text-red-300 font-semibold">{{ error }}</p>

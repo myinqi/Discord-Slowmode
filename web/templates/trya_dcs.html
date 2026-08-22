@@ -241,6 +241,45 @@
                     <option value="reshuffle" {% if settings.trya_dcs_loop_mode == 'reshuffle' %}selected{% endif %}>Reshuffle and continue</option>
                 </select>
             </label>
+            <div class="sm:col-span-2 xl:col-span-4 pt-2 border-t border-gray-700/50 space-y-2">
+                <label class="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" name="dcs_schedule_enabled"
+                        {% if settings.trya_dcs_schedule_enabled == 'on' %}checked{% endif %}
+                        class="w-4 h-4 accent-discord-blurple">
+                    <span class="text-white text-sm font-medium">Auto-start schedule</span>
+                </label>
+                <p class="text-gray-500 text-xs">
+                    Automatically starts the DCS publisher on the selected weekdays
+                    at the time below (Europe/Berlin). The stream ends according to
+                    the playlist-end setting above. Member <code>/trya-dcs</code>
+                    commands and uploads lock 60 minutes before a scheduled start
+                    so Whisper and optional LLM review can finish. If the stream is
+                    already running at trigger time, the occurrence is considered
+                    handled. Starts delayed by a container restart or brief outage
+                    are retried for up to 15 minutes.
+                </p>
+                <div class="grid grid-cols-7 gap-1 text-center text-xs max-w-lg">
+                    {% set schedule_days_set = settings.trya_dcs_schedule_days.split(',') %}
+                    {% for label, idx in [('Mon',0),('Tue',1),('Wed',2),('Thu',3),('Fri',4),('Sat',5),('Sun',6)] %}
+                    <label class="cursor-pointer select-none">
+                        <input type="checkbox" name="dcs_schedule_day_{{ idx }}"
+                            class="peer sr-only"
+                            {% if (idx|string) in schedule_days_set %}checked{% endif %}>
+                        <span class="block px-1 py-1.5 rounded bg-gray-800 text-gray-400
+                                     peer-checked:bg-discord-blurple peer-checked:text-white
+                                     hover:bg-gray-700 transition-colors">
+                            {{ label }}
+                        </span>
+                    </label>
+                    {% endfor %}
+                </div>
+                <div class="flex items-center gap-2">
+                    <label class="text-gray-400 text-xs">Start time:</label>
+                    <input type="time" name="dcs_schedule_time"
+                           value="{{ settings.trya_dcs_schedule_time }}"
+                           class="px-2 py-1 bg-gray-800 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-discord-blurple">
+                </div>
+            </div>
             <label class="block">
                 <span class="block text-gray-400 text-xs mb-1">Stream token lifetime (seconds)</span>
                 <input type="number" name="stream_token_ttl_seconds" min="300" max="900" step="60" value="{{ settings.trya_dcs_stream_token_ttl_seconds }}"

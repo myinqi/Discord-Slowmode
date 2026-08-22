@@ -82,6 +82,9 @@ Acceptance:
       stop-mode/safe-stop outro and dedicated OBS overlay contribution are implemented.
 - [x] Add health reporting for FFmpeg and MediaMTX.
 - [x] Add safe stop and playlist-end behaviour.
+- [x] Add weekday auto-start schedule (Europe/Berlin) with a 15-minute
+      catch-up window. Member `/trya-dcs-*` commands and uploads lock 60
+      minutes before a scheduled start and while the publisher is live.
 
 Acceptance:
 
@@ -204,4 +207,9 @@ These items are intentionally outside the first production-ready release.
 - [x] 2026-08-20: Manual song approval, authenticated Discord-backed chat,
       managed webhooks, guild emojis and the central WebSocket event broker added.
 - [x] 2026-08-20: Added DCS intro/outro pools and dedicated OBS RTMP overlay contribution.
+- [x] 2026-08-22: Added DCS auto-start scheduler (weekdays + Europe/Berlin time)
+      with a 15-minute catch-up window. `/trya-dcs-*` commands and member
+      uploads lock 60 minutes before a scheduled start and while the publisher
+      is live so Whisper and optional LLM review can finish without competing
+      with FFmpeg.
 - [ ] Broaden authorization/database route tests.
