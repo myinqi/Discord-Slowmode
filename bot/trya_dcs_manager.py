@@ -17,6 +17,10 @@ from bot.suno_urls import SUNO_UUID_RE, UUID_RE
 __all__ = ["TryaDcsManager", "get_dcs_log", "is_submissions_locked", "log_dcs_event"]
 
 _FFMPEG_HEARTBEAT_SECONDS = 30.0
+# Match the hook/cover normaliser (max 720px). Same output 1080p/2000k;
+# the live graph just downscales less.
+_DCS_INSET_W = 720
+_DCS_INSET_H = 720
 
 
 _DCS_LOG_BUFFER = deque(maxlen=2000)
@@ -560,6 +564,8 @@ class TryaDcsManager(TryaStreamManager):
             # Leave cores for libx264. 10 filter threads plus 10 encoder
             # threads on ARM oversubscribe and drop speed below 1.0x.
             filter_complex_threads=max(1, min(4, (os.cpu_count() or 1) // 2)),
+            inset_width=_DCS_INSET_W,
+            inset_height=_DCS_INSET_H,
         )
         self._reset_ffmpeg_health("starting")
         self._process = await asyncio.create_subprocess_exec(

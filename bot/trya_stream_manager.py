@@ -2421,6 +2421,8 @@ class TryaStreamManager:
         realtime_audio: bool = False,
         video_preset: str = "veryfast",
         filter_complex_threads: int = 0,
+        inset_width: int | None = None,
+        inset_height: int | None = None,
     ) -> list:
         """Build ONE FFmpeg command for the full playlist.
 
@@ -2432,6 +2434,10 @@ class TryaStreamManager:
           4: Combined ASS subtitles (lyrics + NowPlaying title cards)
         """
         W, H = _W, _H
+        inset_w = int(inset_width or _INSET_W)
+        inset_h = int(inset_height or _INSET_H)
+        inset_w = max(160, min(W - 40, inset_w - inset_w % 2))
+        inset_h = max(160, min(H - 40, inset_h - inset_h % 2))
         if video_preset not in {"ultrafast", "superfast", "veryfast", "faster", "fast"}:
             video_preset = "veryfast"
         cmd = ["ffmpeg", "-y"]
@@ -2478,7 +2484,7 @@ class TryaStreamManager:
                 cmd += ["-loop", "1", "-t", str(dur + 0.5), "-i", path]
             else:
                 cmd += ["-f", "lavfi", "-t", str(dur + 0.5),
-                        "-i", f"color=size={_INSET_W}x{_INSET_H}:color=black:rate={_FPS}"]
+                        "-i", f"color=size={inset_w}x{inset_h}:color=black:rate={_FPS}"]
             media_inputs.append(input_idx); input_idx += 1
 
         audio_inputs = []
@@ -2580,8 +2586,8 @@ class TryaStreamManager:
         for i, (song, mid) in enumerate(zip(songs, media_inputs)):
             dur = song.get("duration") or 300
             filters.append(
-                f"[{mid}:v]scale={_INSET_W}:{_INSET_H}:force_original_aspect_ratio=decrease:"
-                f"force_divisible_by=2,pad={_INSET_W}:{_INSET_H}:(ow-iw)/2:(oh-ih)/2:black,"
+                f"[{mid}:v]scale={inset_w}:{inset_h}:force_original_aspect_ratio=decrease:"
+                f"force_divisible_by=2,pad={inset_w}:{inset_h}:(ow-iw)/2:(oh-ih)/2:black,"
                 f"setsar=1,fps={_FPS},trim=0:{dur},setpts=PTS-STARTPTS[cv_base{i}]"
             )
         concat_in = "".join(f"[cv_base{i}]" for i in range(n))
@@ -2590,8 +2596,8 @@ class TryaStreamManager:
             filters.extend(_rounded_media_filters(
                 "[covers_base]", "[covers]",
                 label_prefix="song_style",
-                width=_INSET_W,
-                height=_INSET_H,
+                width=inset_w,
+                height=inset_h,
                 fps=_FPS,
                 radius=corner_radius,
                 border_enabled=border_enabled,
@@ -2612,7 +2618,7 @@ class TryaStreamManager:
                 audio_concat_in.append(f"[a{i}]")
             filters.append(f"{''.join(audio_concat_in)}concat=n={n}:v=0:a=1[aout]")
         filters.append(
-            f"{last}[covers]overlay=x=20:y={H}-{_INSET_H}-20:shortest=0[after_cv]"
+            f"{last}[covers]overlay=x=20:y={H}-{inset_h}-20:shortest=0[after_cv]"
         )
         last = "[after_cv]"
 
