@@ -6463,15 +6463,7 @@ class Database:
         await self.db.commit()
         return int(cursor.lastrowid)
 
-    async def get_latest_trya_dcs_playlist_snapshot(self) -> Optional[dict]:
-        async with self.db.execute(
-            """SELECT created_by, mode, songs_json, created_at
-               FROM trya_dcs_playlist_snapshots
-               ORDER BY created_at DESC, id DESC LIMIT 1"""
-        ) as cursor:
-            row = await cursor.fetchone()
-        if not row:
-            return None
+    def _parse_trya_dcs_playlist_snapshot(self, row) -> dict:
         data = dict(row)
         try:
             data["songs"] = json.loads(data.pop("songs_json") or "[]")
@@ -6479,7 +6471,58 @@ class Database:
             data["songs"] = []
         if not isinstance(data["songs"], list):
             data["songs"] = []
+        urls = []
+        for song in data["songs"]:
+            if not isinstance(song, dict):
+                continue
+            url = str(song.get("suno_url") or "").strip()
+            if url:
+                urls.append(url)
+        data["urls"] = urls
+        data["song_count"] = len(data["songs"])
+        data["scheduled"] = str(data.get("mode") or "") == "scheduled"
         return data
+
+    async def get_latest_trya_dcs_playlist_snapshot(self) -> Optional[dict]:
+        async with self.db.execute(
+            """SELECT id, created_by, mode, songs_json, created_at
+               FROM trya_dcs_playlist_snapshots
+               ORDER BY created_at DESC, id DESC LIMIT 1"""
+        ) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            return None
+        return self._parse_trya_dcs_playlist_snapshot(row)
+
+    async def get_trya_dcs_playlist_snapshots(self, limit: int = 50) -> list[dict]:
+        limit = max(1, min(int(limit), 200))
+        async with self.db.execute(
+            """SELECT id, created_at, created_by, mode, songs_json
+               FROM trya_dcs_playlist_snapshots
+               ORDER BY created_at DESC, id DESC
+               LIMIT ?""",
+            (limit,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        snapshots = []
+        for row in rows:
+            item = self._parse_trya_dcs_playlist_snapshot(row)
+            item.pop("songs", None)
+            item.pop("urls", None)
+            snapshots.append(item)
+        return snapshots
+
+    async def get_trya_dcs_playlist_snapshot(self, snapshot_id: int) -> Optional[dict]:
+        async with self.db.execute(
+            """SELECT id, created_at, created_by, mode, songs_json
+               FROM trya_dcs_playlist_snapshots
+               WHERE id = ?""",
+            (int(snapshot_id),),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            return None
+        return self._parse_trya_dcs_playlist_snapshot(row)
 
     async def purge_expired_trya_dcs_tokens(self, now: float | None = None) -> int:
         cursor = await self.db.execute(

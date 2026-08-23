@@ -196,6 +196,40 @@ class TryaDcsDatabaseTests(unittest.IsolatedAsyncioTestCase):
             old_after_success["remove_reason"], f"replaced_by:{replacement_id}"
         )
 
+    async def test_playlist_snapshots_are_listed_newest_first(self):
+        first_id = await self.db.save_trya_dcs_playlist_snapshot(
+            created_by="admin",
+            mode="manual",
+            songs=[{
+                "title": "First",
+                "suno_url": "https://suno.com/song/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            }],
+        )
+        second_id = await self.db.save_trya_dcs_playlist_snapshot(
+            created_by="scheduler",
+            mode="scheduled",
+            songs=[
+                {
+                    "title": "Second",
+                    "suno_url": "https://suno.com/song/ffffffff-bbbb-cccc-dddd-eeeeeeeeeeee",
+                },
+                {"title": "No Suno"},
+            ],
+        )
+
+        listed = await self.db.get_trya_dcs_playlist_snapshots()
+        self.assertEqual([row["id"] for row in listed], [second_id, first_id])
+        self.assertEqual(listed[0]["song_count"], 2)
+        self.assertTrue(listed[0]["scheduled"])
+        self.assertNotIn("songs", listed[0])
+
+        snapshot = await self.db.get_trya_dcs_playlist_snapshot(second_id)
+        self.assertEqual(snapshot["songs"][0]["title"], "Second")
+        self.assertEqual(
+            snapshot["urls"],
+            ["https://suno.com/song/ffffffff-bbbb-cccc-dddd-eeeeeeeeeeee"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

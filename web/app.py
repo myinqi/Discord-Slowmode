@@ -616,6 +616,7 @@ def create_app(db: Database, bot=None) -> Quart:
             "sidebar_visible_items": visible,
             "admin_bot_icon_url": bot_icon_url,
             "admin_bot_icon_custom": bool(custom_icon),
+            "bot_name": await db.get_setting("bot_name") or "Corax Bot",
         }
 
     def admin_required(f):
@@ -9874,9 +9875,9 @@ def create_app(db: Database, bot=None) -> Quart:
             await db.get_setting("trya_dcs_relic_discord_only") or "off"
         ) == "on"
         player_prefix = "discord:" if discord_only else None
-        leaderboard = await db.relic_get_leaderboard(7, user_id_prefix=player_prefix)
+        leaderboard = await db.relic_get_leaderboard(14, user_id_prefix=player_prefix)
         recent = await db.relic_get_recent_log(
-            30 if not discord_only else 80,
+            80 if not discord_only else 160,
             user_id_prefix=player_prefix,
         )
         ritual = await db.relic_get_ritual()
@@ -9956,7 +9957,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     "created_at": float(row.get("created_at") or 0),
                 }
                 for row in recent if row.get("result_type") == "found"
-            ][:8],
+            ][:16],
             "recent_combines": [
                 {
                     "username": row.get("username") or "Unknown",
@@ -9965,7 +9966,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     "created_at": float(row.get("created_at") or 0),
                 }
                 for row in recent if row.get("result_type") == "combine"
-            ][:8],
+            ][:16],
             "recent_activity": [
                 {
                     "username": row.get("username") or "Unknown",
@@ -9977,7 +9978,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     "created_at": float(row.get("created_at") or 0),
                 }
                 for row in recent
-            ][:10],
+            ][:16],
             "commands": [
                 f"{prefix}{command}" for command in (
                     "raven", "nest", "items", "top", "rank", "daily",
@@ -16699,6 +16700,44 @@ def create_app(db: Database, bot=None) -> Quart:
                 "thread": thread_ok,
                 "warning": thread_error,
             })
+
+    @app.route("/api/suno-info/dcs-playlists")
+    @permission_required('suno_info')
+    async def api_suno_info_dcs_playlists():
+        """List or load historical TrYa DCS playlist snapshots."""
+        from quart import jsonify
+
+        snapshot_ref = (request.args.get("snapshot") or "").strip()
+        if snapshot_ref:
+            snapshot_id = (
+                int(snapshot_ref[3:])
+                if snapshot_ref.startswith("db-") and snapshot_ref[3:].isdigit()
+                else int(snapshot_ref) if snapshot_ref.isdigit() else 0
+            )
+            snapshot = (
+                await db.get_trya_dcs_playlist_snapshot(snapshot_id)
+                if snapshot_id
+                else None
+            )
+            if not snapshot:
+                return jsonify({"error": "Playlist snapshot not found"}), 404
+            snapshot["id"] = f"db-{snapshot['id']}"
+            return jsonify(snapshot)
+
+        stored = await db.get_trya_dcs_playlist_snapshots(limit=100)
+        return jsonify({
+            "snapshots": [
+                {
+                    "id": f"db-{row['id']}",
+                    "created_at": float(row.get("created_at") or 0),
+                    "created_by": row.get("created_by") or "",
+                    "mode": row.get("mode") or "",
+                    "scheduled": bool(row.get("scheduled")),
+                    "song_count": int(row.get("song_count") or 0),
+                }
+                for row in stored
+            ]
+        })
 
     @app.route("/api/suno-info/exp-radio-playlists")
     @permission_required('suno_info')

@@ -586,7 +586,7 @@ function renderRelicStatus(payload) {
         item.textContent = `${event.name} · ${formatRemaining(Math.max(0, event.ends_at - Date.now() / 1000))} remaining`;
         events.append(item);
     }
-    const activity = (payload.recent_activity || []).slice(0, 5).map(item => {
+    const activity = (payload.recent_activity || []).slice(0, 10).map(item => {
         const rewards = [
             item.points ? `+${item.points} pts` : '',
             item.xp ? `+${item.xp} XP` : ''

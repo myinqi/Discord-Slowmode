@@ -197,6 +197,7 @@ class TryaDcsManager(TryaStreamManager):
                     "artist": song.get("artist"),
                     "duration": song.get("duration"),
                     "submitted_by": song.get("user_name") or "",
+                    "playlist_source": song.get("playlist_source") or "submission",
                     "suno_url": self._public_suno_url(song),
                     "wlm_url": self._public_wlm_url(song),
                 }

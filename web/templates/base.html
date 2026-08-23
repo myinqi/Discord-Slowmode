@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Dashboard{% endblock %} — Corax Bot</title>
+    <title>{% block title %}Dashboard{% endblock %} — {{ bot_name }}</title>
     <link rel="icon" href="{{ admin_bot_icon_url }}">
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -50,7 +50,7 @@
     <div class="md:hidden fixed top-0 inset-x-0 z-40 h-12 bg-discord-dark border-b border-gray-700/50 flex items-center px-4 gap-3 flex-shrink-0">
         <button onclick="toggleMobileSidebar()" class="text-gray-300 hover:text-white p-1 text-xl leading-none">☰</button>
         <img src="{{ admin_bot_icon_url }}" alt="Bot" class="w-6 h-6 rounded object-cover">
-        <span class="text-white font-bold text-sm">Corax Bot</span>
+        <span class="text-white font-bold text-sm">{{ bot_name }}</span>
         <span class="text-gray-500 text-xs">Admin Panel</span>
     </div>
     <!-- Mobile backdrop -->
@@ -59,7 +59,7 @@
         <!-- Sidebar -->
         <aside id="sidebar" class="sidebar w-64 bg-discord-dark flex flex-col border-r border-gray-700/50 min-h-screen fixed inset-y-0 left-0 z-50 -translate-x-full transition-transform duration-200 md:relative md:translate-x-0">
             <div class="p-4 border-b border-gray-700/50">
-                <h1 class="sidebar-header text-white font-bold text-lg flex items-center gap-2"><img src="{{ admin_bot_icon_url }}" alt="Bot" class="w-6 h-6 rounded object-cover"> <span class="sidebar-header-text">Corax Bot</span></h1>
+                <h1 class="sidebar-header text-white font-bold text-lg flex items-center gap-2"><img src="{{ admin_bot_icon_url }}" alt="Bot" class="w-6 h-6 rounded object-cover"> <span class="sidebar-header-text">{{ bot_name }}</span></h1>
                 <p class="text-gray-400 text-xs mt-1 sidebar-header-text">Admin Panel</p>
             </div>
             {% set perms = session.get('permissions', []) %}

@@ -261,9 +261,9 @@
                     class="px-3 py-1 rounded-md bg-transparent text-gray-400 hover:text-white font-medium transition-colors"
                     onclick="switchSource('party')">Party Playlist</button>
                 {% endif %}
-                <button id="src-exp-radio-btn"
+                <button id="src-dcs-btn"
                     class="px-3 py-1 rounded-md bg-transparent text-gray-400 hover:text-white font-medium transition-colors"
-                    onclick="switchSource('exp-radio')">Exp. Radio</button>
+                    onclick="switchSource('dcs')">TrYa DCS</button>
             </div>
             <!-- Playlist URL row -->
             <div id="src-playlist-row" class="flex flex-col sm:flex-row gap-2">
@@ -299,17 +299,17 @@
                 <span id="party-status" class="text-gray-500 text-xs"></span>
             </div>
             {% endif %}
-            <!-- Experimental Radio playlist history row -->
-            <div id="src-exp-radio-row" style="display:none" class="flex flex-wrap items-center gap-2">
-                <select id="exp-radio-snapshot"
+            <!-- TrYa DCS playlist history row -->
+            <div id="src-dcs-row" style="display:none" class="flex flex-wrap items-center gap-2">
+                <select id="dcs-snapshot"
                     class="flex-1 min-w-[240px] bg-discord-darker border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:border-discord-blurple focus:outline-none">
                     <option value="">Loading stream playlists…</option>
                 </select>
-                <button id="btn-exp-radio-load"
+                <button id="btn-dcs-load"
                     class="px-4 py-2 bg-discord-blurple hover:bg-discord-blurple/80 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50">
                     Load stream
                 </button>
-                <span id="exp-radio-status" class="text-gray-500 text-xs"></span>
+                <span id="dcs-status" class="text-gray-500 text-xs"></span>
             </div>
             <!-- Discord channel row -->
             <div id="src-channel-row" class="flex-col gap-2" style="display:none">
@@ -652,8 +652,8 @@ var _ytPendingId = null;
 var hlsPlayer = null;
 var PARTY_SONGS = [];   // raw party playlist entries from DB
 var PARTY_FILTER = 'all'; // 'all' | 'remaining' | 'heard'
-var EXP_RADIO_SNAPSHOTS_LOADED = false;
-var EXP_RADIO_ACTIVE_SNAPSHOT = '';
+var DCS_SNAPSHOTS_LOADED = false;
+var DCS_ACTIVE_SNAPSHOT = '';
 function switchSource(src){
     CURRENT_SOURCE = src;
     var on = 'px-3 py-1 rounded-md font-medium transition-colors text-xs bg-discord-blurple text-white';
@@ -661,11 +661,11 @@ function switchSource(src){
     document.getElementById('src-playlist-row').style.display  = src==='playlist' ? '' : 'none';
     document.getElementById('src-channel-row').style.display   = src==='channel'  ? 'flex' : 'none';
     var _pr = document.getElementById('src-party-row'); if(_pr) _pr.style.display = src==='party' ? '' : 'none';
-    document.getElementById('src-exp-radio-row').style.display = src==='exp-radio' ? 'flex' : 'none';
+    document.getElementById('src-dcs-row').style.display = src==='dcs' ? 'flex' : 'none';
     document.getElementById('src-playlist-btn').className = src==='playlist' ? on : off;
     document.getElementById('src-channel-btn').className  = src==='channel'  ? on : off;
     var _pb = document.getElementById('src-party-btn'); if(_pb) _pb.className = src==='party' ? on : off;
-    document.getElementById('src-exp-radio-btn').className = src==='exp-radio' ? on : off;
+    document.getElementById('src-dcs-btn').className = src==='dcs' ? on : off;
     // Party-specific UI
     var isParty = src === 'party';
     document.getElementById('si-table-wrap').style.display = isParty ? 'none' : '';
@@ -673,39 +673,53 @@ function switchSource(src){
     document.getElementById('party-tabs').style.display    = isParty ? '' : 'none';
     if(!isParty){ ARTIST_FILTER=''; var sel=document.getElementById('dc-artist'); if(sel) sel.value=''; }
     if(isParty) loadPartyPlaylist();
-    if(src === 'exp-radio') loadExpRadioSnapshots();
+    if(src === 'dcs') loadDcsSnapshots();
     updateSunoInfoReactionVisibility(CUR >= 0 ? SONGS[CUR] : null);
     try { localStorage.setItem('suno-info-source', src); } catch(e){}
 }
 
-document.getElementById('btn-exp-radio-load').addEventListener('click', loadExpRadioPlaylist);
-document.getElementById('exp-radio-snapshot').addEventListener('change', loadExpRadioPlaylist);
+document.getElementById('btn-dcs-load').addEventListener('click', loadDcsPlaylist);
+document.getElementById('dcs-snapshot').addEventListener('change', loadDcsPlaylist);
 
-function expRadioSnapshotLabel(snapshot){
+function dcsSnapshotLabel(snapshot){
     var date = snapshot.created_at
         ? new Date(snapshot.created_at * 1000).toLocaleString([], {
             year:'numeric', month:'2-digit', day:'2-digit',
             hour:'2-digit', minute:'2-digit'
         })
         : 'Unknown date';
-    var source = snapshot.source
-        ? snapshot.source.charAt(0).toUpperCase() + snapshot.source.slice(1)
-        : 'Playlist';
     var kind = snapshot.scheduled ? 'Scheduled' : 'Manual';
-    return date + ' · ' + kind + ' · ' + source + ' · ' + snapshot.song_count + ' songs';
+    return date + ' · ' + kind + ' · ' + snapshot.song_count + ' songs';
 }
 
-async function loadExpRadioSnapshots(){
-    var select = document.getElementById('exp-radio-snapshot');
-    if(EXP_RADIO_SNAPSHOTS_LOADED){
-        if(CURRENT_SOURCE === 'exp-radio' &&
-           EXP_RADIO_ACTIVE_SNAPSHOT !== select.value) loadExpRadioPlaylist();
+function dcsSongFromSnapshot(song, url){
+    var source = String(url || (song && song.suno_url) || '');
+    var uuid = song && song.suno_uuid ? String(song.suno_uuid).trim() : '';
+    var match = source.match(SUNO_UUID_RE) || uuid.match(/^([a-zA-Z0-9_-]{8,})$/);
+    if(!match) return null;
+    var sunoUrl = source || ('https://suno.com/song/' + match[1]);
+    return {
+        uuid: match[1],
+        type: 'suno',
+        title: (song && song.title) || match[1],
+        artist: (song && (song.artist || song.submitted_by)) || '',
+        suno_url: sunoUrl,
+        source_url: sunoUrl,
+        _is_hook: /\/hook\//.test(sunoUrl)
+    };
+}
+
+async function loadDcsSnapshots(){
+    var select = document.getElementById('dcs-snapshot');
+    if(DCS_SNAPSHOTS_LOADED){
+        if(CURRENT_SOURCE === 'dcs' &&
+           DCS_ACTIVE_SNAPSHOT !== select.value) loadDcsPlaylist();
         return;
     }
-    var status = document.getElementById('exp-radio-status');
+    var status = document.getElementById('dcs-status');
     status.textContent = 'Loading history…';
     try {
-        var r = await fetch('/api/suno-info/exp-radio-playlists');
+        var r = await fetch('/api/suno-info/dcs-playlists');
         var data = await r.json();
         if(!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
         var snapshots = data.snapshots || [];
@@ -716,52 +730,50 @@ async function loadExpRadioSnapshots(){
         }
         select.innerHTML = snapshots.map(function(snapshot){
             return '<option value="' + esc(snapshot.id) + '">' +
-                esc(expRadioSnapshotLabel(snapshot)) + '</option>';
+                esc(dcsSnapshotLabel(snapshot)) + '</option>';
         }).join('');
-        EXP_RADIO_SNAPSHOTS_LOADED = true;
+        DCS_SNAPSHOTS_LOADED = true;
         status.textContent = snapshots.length + ' stream playlist' + (snapshots.length===1?'':'s');
-        if(CURRENT_SOURCE === 'exp-radio') await loadExpRadioPlaylist();
+        if(CURRENT_SOURCE === 'dcs') await loadDcsPlaylist();
     } catch(e){
         status.textContent = 'History failed: ' + e.message;
     }
 }
 
-async function loadExpRadioPlaylist(){
-    var select = document.getElementById('exp-radio-snapshot');
+async function loadDcsPlaylist(){
+    var select = document.getElementById('dcs-snapshot');
     var snapshotId = select.value;
     if(!snapshotId) return;
-    var btn = document.getElementById('btn-exp-radio-load');
-    var status = document.getElementById('exp-radio-status');
+    var btn = document.getElementById('btn-dcs-load');
+    var status = document.getElementById('dcs-status');
     btn.disabled = true;
     btn.textContent = 'Loading…';
-    setStatus('Loading Experimental Radio playlist…');
+    setStatus('Loading TrYa DCS playlist…');
     document.getElementById('songs-tbody').innerHTML =
-        '<tr><td colspan="4" class="si-loading">Loading Experimental Radio playlist…</td></tr>';
+        '<tr><td colspan="4" class="si-loading">Loading TrYa DCS playlist…</td></tr>';
     try {
-        var r = await fetch('/api/suno-info/exp-radio-playlists?snapshot=' + encodeURIComponent(snapshotId));
+        var r = await fetch('/api/suno-info/dcs-playlists?snapshot=' + encodeURIComponent(snapshotId));
         var data = await r.json();
         if(!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
-        if(CURRENT_SOURCE !== 'exp-radio') return;
+        if(CURRENT_SOURCE !== 'dcs') return;
         SONGS = [];
-        (data.urls || []).forEach(function(url){
-            var match = String(url).match(SUNO_UUID_RE);
-            if(!match) return;
-            SONGS.push({
-                uuid: match[1],
-                type: 'suno',
-                title: match[1],
-                artist: '',
-                suno_url: url,
-                source_url: url,
-                _is_hook: /\/hook\//.test(url)
+        if(data.songs && data.songs.length){
+            data.songs.forEach(function(song){
+                var parsed = dcsSongFromSnapshot(song);
+                if(parsed) SONGS.push(parsed);
             });
-        });
+        } else {
+            (data.urls || []).forEach(function(url){
+                var parsed = dcsSongFromSnapshot(null, url);
+                if(parsed) SONGS.push(parsed);
+            });
+        }
         CUR = -1;
-        EXP_RADIO_ACTIVE_SNAPSHOT = snapshotId;
+        DCS_ACTIVE_SNAPSHOT = snapshotId;
         PLAYED_SET.clear();
         updateSunoInfoReactionVisibility(null);
         if(SHUFFLE) buildShuffle();
-        document.getElementById('playlist-name').textContent = '— Exp. Radio · ' +
+        document.getElementById('playlist-name').textContent = '— TrYa DCS · ' +
             (data.created_at ? new Date(data.created_at * 1000).toLocaleDateString() : 'Stream');
         document.getElementById('song-count').textContent = SONGS.length + ' songs';
         setStatus(SONGS.length + ' loaded');
@@ -2747,7 +2759,8 @@ function syncTheaterFromState(){
     }
     // Restore source tab (playlist vs discord channel vs party playlist)
     var lastSrc = localStorage.getItem('suno-info-source');
-    if(lastSrc === 'channel' || lastSrc === 'exp-radio' ||
+    if(lastSrc === 'exp-radio') lastSrc = 'dcs';
+    if(lastSrc === 'channel' || lastSrc === 'dcs' ||
        (lastSrc === 'party' && HAS_PARTY)) switchSource(lastSrc);
     // Restore shuffle state
     if(localStorage.getItem('suno-info-shuffle') === '1') toggleShuffle();
