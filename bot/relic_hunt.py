@@ -253,6 +253,7 @@ class RelicHunt:
         self._response_sender = contextvars.ContextVar(
             f"relic_response_sender_{id(self)}", default=None
         )
+        self._system_broadcaster = None
 
     # ------------------------------------------------------------------ #
     # Lifecycle                                                            #
@@ -342,10 +343,18 @@ class RelicHunt:
             else:
                 twitch_bot.register_command(cmd, self._subscriber_guard(handler))
 
-        if not self._watcher_task or self._watcher_task.done():
-            self._watcher_task = asyncio.create_task(self._event_watcher_loop())
+        self.ensure_watcher()
         await twitch_bot.start_listener()
         _rlog(f"Started — {self.stream_kind} IRC listener active")
+
+    def set_system_broadcaster(self, callback) -> None:
+        self._system_broadcaster = callback
+
+    def ensure_watcher(self) -> None:
+        self._running = True
+        if not self._watcher_task or self._watcher_task.done():
+            self._watcher_task = asyncio.create_task(self._event_watcher_loop())
+            _rlog(f"Timed events watcher started — {self.stream_kind}")
 
     async def stop(self) -> None:
         self._running = False
@@ -367,26 +376,41 @@ class RelicHunt:
     def _stream_is_live(self) -> bool:
         if self.stream_kind == "trya":
             from bot.trya_stream_manager import stream_is_live
-        else:
-            from bot.exp_stream_manager import stream_is_live
+            return bool(stream_is_live)
+        if self.stream_kind == "dcs":
+            from bot.trya_dcs_schedule import dcs_stream_is_live
+            return bool(dcs_stream_is_live)
+        from bot.exp_stream_manager import stream_is_live
         return bool(stream_is_live)
 
-    def _other_stream_is_live(self) -> bool:
+    def _owns_timed_events(self) -> bool:
+        """Exactly one RelicHunt instance should tick village/events."""
+        try:
+            from bot.trya_stream_manager import stream_is_live as trya_live
+        except Exception:
+            trya_live = False
+        try:
+            from bot.exp_stream_manager import stream_is_live as exp_live
+        except Exception:
+            exp_live = False
+        try:
+            from bot.trya_dcs_schedule import dcs_stream_is_live as dcs_live
+        except Exception:
+            dcs_live = False
+        trya_live = bool(trya_live)
+        exp_live = bool(exp_live)
+        dcs_live = bool(dcs_live)
+        if self.stream_kind == "dcs":
+            return dcs_live
         if self.stream_kind == "trya":
-            from bot.exp_stream_manager import stream_is_live
-        else:
-            from bot.trya_stream_manager import stream_is_live
-        return bool(stream_is_live)
+            return trya_live
+        return exp_live or (not trya_live and not dcs_live)
 
     async def _event_watcher_loop(self) -> None:
         """Every 10 s: post end messages for expired events; fire auto-starts."""
         while self._running:
             try:
-                owns_events = (
-                    self._stream_is_live()
-                    or (self.stream_kind == "exp" and not self._other_stream_is_live())
-                )
-                if owns_events and not self._other_stream_is_live():
+                if self._owns_timed_events():
                     await self._tick_expired_events()
                     await self._tick_auto_event()
                     await self._tick_village_payout()
@@ -507,6 +531,8 @@ class RelicHunt:
         sender = self._response_sender.get()
         if sender:
             await sender(msg)
+        elif self._system_broadcaster:
+            await self._system_broadcaster(msg)
         elif self._bot:
             await self._bot.send(msg)
 
@@ -1045,10 +1071,23 @@ class RelicHunt:
             await self.db.relic_update_ritual(0, goal)
             reward_pts = int((await self.db.relic_get_setting("ritual_reward_points")) or 100)
             reward_xp  = int((await self.db.relic_get_setting("ritual_reward_xp")) or 50)
-            await self._send(
+            complete_msg = (
                 f"🔥 The Raven Ritual is complete! All active hunters receive "
                 f"+{reward_pts} points, +{reward_xp} XP and +{ritual_shiny_gain} Shiny."
             )
+            await self._send(complete_msg)
+            await self.db.relic_log_hunt({
+                "twitch_user_id": uid,
+                "username": name,
+                "item_id": None,
+                "item_name": "ritual",
+                "rarity": "info",
+                "points_awarded": reward_pts,
+                "xp_awarded": reward_xp,
+                "result_type": "ritual",
+                "message": complete_msg,
+                "created_at": time.time(),
+            })
 
             # Reward all active users (hunted in last 30 min)
             window = int((await self.db.relic_get_setting("ritual_active_window_minutes")) or 30) * 60
@@ -1056,7 +1095,11 @@ class RelicHunt:
             cutoff = time.time() - window
             active_users = [
                 u for u in all_users
-                if max(u.get("last_raven_at") or 0, u.get("last_ritual_at") or 0) >= cutoff
+                if max(
+                    u.get("last_raven_at") or 0,
+                    u.get("last_ritual_at") or 0,
+                    u.get("last_daily_at") or 0,
+                ) >= cutoff
             ]
             for u in active_users:
                 old_points = u["points"]

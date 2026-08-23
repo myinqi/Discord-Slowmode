@@ -372,6 +372,11 @@ async def process_dcs_song(
             )
         await db.update_trya_dcs_song(song_id, **analysis_update)
 
+        latest = await db.get_trya_dcs_song(song_id)
+        if latest:
+            from bot.trya_dcs_manager import TryaDcsManager
+            await TryaDcsManager(db, base_dir).prefetch_and_normalize_visuals(latest)
+
         log_dcs_event(f"Analysis #{song_id} finished: ASS={ass_filename}")
         if moderation_enabled:
             await moderate_dcs_song(db, song_id)

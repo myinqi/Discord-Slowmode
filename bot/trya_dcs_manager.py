@@ -17,10 +17,10 @@ from bot.suno_urls import SUNO_UUID_RE, UUID_RE
 __all__ = ["TryaDcsManager", "get_dcs_log", "is_submissions_locked", "log_dcs_event"]
 
 _FFMPEG_HEARTBEAT_SECONDS = 30.0
-# Match the hook/cover normaliser (max 720px). Same output 1080p/2000k;
-# the live graph just downscales less.
-_DCS_INSET_W = 720
-_DCS_INSET_H = 720
+# Larger than TrYa Stream's 480 inset, but native for many 640 hooks so the
+# live graph does not upscale. Output stays 1080p / 2000 kbit/s.
+_DCS_INSET_W = 640
+_DCS_INSET_H = 640
 
 
 _DCS_LOG_BUFFER = deque(maxlen=2000)
@@ -519,6 +519,7 @@ class TryaDcsManager(TryaStreamManager):
         else:
             self._set_obs_overlay_status(False, "disabled", "OBS overlay disabled", "local")
 
+        await self.normalize_cached_visuals()
         media_paths = []
         for song in songs:
             path = await self._get_video(song) or await self._get_cover(song)

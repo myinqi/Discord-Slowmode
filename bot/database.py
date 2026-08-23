@@ -7673,7 +7673,11 @@ class Database:
 
     async def relic_get_active_users_since(self, cutoff: float) -> list[dict]:
         async with self.db.execute(
-            "SELECT * FROM relic_users WHERE COALESCE(last_raven_at, 0) >= ? "
+            "SELECT * FROM relic_users WHERE MAX("
+            "COALESCE(last_raven_at, 0), "
+            "COALESCE(last_ritual_at, 0), "
+            "COALESCE(last_daily_at, 0)"
+            ") >= ? "
             "ORDER BY last_raven_at DESC",
             (cutoff,),
         ) as cur:

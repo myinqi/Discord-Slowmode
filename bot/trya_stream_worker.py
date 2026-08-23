@@ -1348,6 +1348,13 @@ async def process_exp_song(db, song_id: int, trya_stream_dir: str, bot=None,
             cover_url=cover_url, video_url=video_url,
             lyrics=lyrics, duration=duration,
         )
+        latest_visuals = await db.get_trya_stream_song(song_id)
+        manager = getattr(bot, "trya_stream_manager", None)
+        if manager is None:
+            from bot.trya_stream_manager import TryaStreamManager
+            manager = TryaStreamManager(db, trya_stream_dir)
+        if latest_visuals:
+            await manager.prefetch_and_normalize_visuals(latest_visuals)
 
         # 3) Whisper word-timestamp analysis. We do NOT pass the lyric text
         # itself as initial_prompt (Whisper echoes it as the first sung

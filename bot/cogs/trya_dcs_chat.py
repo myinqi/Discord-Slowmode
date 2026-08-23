@@ -1,6 +1,7 @@
 """Discord side of the TrYa DCS live-chat bridge."""
 
 import re
+import time
 
 import discord
 from discord.ext import commands
@@ -315,6 +316,49 @@ class TryaDcsChat(commands.Cog):
 
     async def cog_load(self) -> None:
         await self.relic_hunt.prepare()
+        self.relic_hunt.set_system_broadcaster(self._broadcast_relic_system)
+        self.relic_hunt.ensure_watcher()
+
+    async def _broadcast_relic_system(self, msg: str) -> None:
+        from bot.trya_dcs_manager import log_dcs_event
+
+        text = str(msg or "").strip()[:1950]
+        if not text:
+            return
+        log_dcs_event(text)
+        now = time.time()
+        await self.bot.db.relic_log_hunt({
+            "twitch_user_id": "system:dcs",
+            "username": "Hrafnathorp",
+            "item_id": None,
+            "item_name": "event",
+            "rarity": "info",
+            "points_awarded": 0,
+            "xp_awarded": 0,
+            "result_type": "dcs_feedback",
+            "message": text,
+            "created_at": now,
+        })
+        await trya_dcs_events.publish(
+            "relic.update",
+            {"user_id": "system", "updated_at": now},
+        )
+        channel_id = await self._configured_channel_id()
+        if not channel_id:
+            return
+        channel = self.bot.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(channel_id)
+            except (discord.HTTPException, discord.NotFound, discord.Forbidden):
+                return
+        try:
+            await channel.send(
+                text,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except (discord.HTTPException, discord.Forbidden):
+            pass
 
     async def _configured_channel_id(self) -> int:
         try:
@@ -358,6 +402,12 @@ class TryaDcsChat(commands.Cog):
             )
 
         relic_user_id = f"discord:{member.id}"
+        recent_before = await self.bot.db.relic_get_recent_log(20)
+        before_keys = {
+            (row.get("created_at"), row.get("message"), row.get("result_type"))
+            for row in recent_before
+            if row.get("twitch_user_id") == relic_user_id
+        }
         handled = await self.relic_hunt.dispatch_message(
             content,
             {
@@ -377,15 +427,19 @@ class TryaDcsChat(commands.Cog):
         if handled:
             now = discord.utils.utcnow().timestamp()
             recent = await self.bot.db.relic_get_recent_log(20)
-            already_logged = any(
+            wrote_action_log = any(
                 row.get("twitch_user_id") == relic_user_id
-                and now - float(row.get("created_at") or 0) < 8
                 and (row.get("result_type") or "") != "dcs_feedback"
+                and (
+                    row.get("created_at"),
+                    row.get("message"),
+                    row.get("result_type"),
+                ) not in before_keys
                 for row in recent
             )
-            # Combine/find/ritual already write a hunt log. A second
-            # dcs_feedback row would duplicate the same action in the player.
-            if not already_logged:
+            # Combine/find/ritual already write a hunt log for this action.
+            # Failed combine/daily still need the captured reply in the player.
+            if not wrote_action_log:
                 existing = {
                     row.get("message")
                     for row in recent

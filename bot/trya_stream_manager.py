@@ -1298,6 +1298,8 @@ class TryaStreamManager:
             # Heuristic: anything containing 'error' or starting with
             # '[<x>] @ ...' suggests a problem worth flagging.
             lowered = line.lower()
+            if "late sei is not implemented" in lowered:
+                continue
             if "error" in lowered or "failed" in lowered:
                 level = "error"
             elif "queue blocking" in lowered:
@@ -1876,20 +1878,34 @@ class TryaStreamManager:
         try:
             proc = await asyncio.create_subprocess_exec(
                 "ffprobe", "-v", "error",
-                "-select_streams", "v:0",
-                "-show_entries", "stream=width,height,r_frame_rate,bit_rate",
-                "-of", "csv=p=0", path,
+                "-print_format", "json",
+                "-show_streams", "-show_format",
+                path,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             )
             out, _ = await proc.communicate()
-            parts = (out.decode().strip() or "").split(",")
-            w  = int(parts[0]) if len(parts) > 0 and parts[0] else 0
-            h  = int(parts[1]) if len(parts) > 1 and parts[1] else 0
+            probe = json.loads(out.decode() or "{}")
+            streams = probe.get("streams") or []
+            video = next((item for item in streams if item.get("codec_type") == "video"), {})
+            w = int(video.get("width") or 0)
+            h = int(video.get("height") or 0)
+            has_audio = any(item.get("codec_type") == "audio" for item in streams)
+            bitrate = int(
+                probe.get("format", {}).get("bit_rate")
+                or video.get("bit_rate")
+                or 0
+            )
         except Exception as e:
             self._log(f"Cover probe failed ({path}): {e}", "error")
             return False
-        # Already small enough → no-op (idempotency)
-        if w and h and max(w, h) <= 720:
+        # Skip only light, video-only loops. 640x640 @ 2.8 Mbit/s or leftover
+        # AAC on a hook still spikes the live decoder on every wrap.
+        already_light = (
+            w and h and max(w, h) <= 720
+            and not has_audio
+            and (bitrate <= 1_500_000 or bitrate == 0)
+        )
+        if already_light:
             self._log(f"Cover already normalized ({w}x{h}): {path}")
             return True
         tmp = path + ".norm.mp4"
@@ -2009,6 +2025,52 @@ class TryaStreamManager:
         if path:
             return True, "Cover downloaded and normalized."
         return False, "No usable cover URL available."
+
+    async def prefetch_and_normalize_visuals(self, song: dict) -> str | None:
+        """Download hook/video/cover at submit time. Audio stays on the MP3."""
+        try:
+            path = await self._get_video(song) or await self._get_cover(song)
+            if path:
+                self._log(
+                    f"Visual ready: {song.get('title') or song.get('id')} → "
+                    f"{os.path.basename(path)}"
+                )
+            return path
+        except Exception as exc:
+            self._log(
+                f"Visual prefetch failed for {song.get('title') or song.get('id')}: {exc}",
+                "error",
+            )
+            return None
+
+    async def normalize_cached_visuals(self) -> tuple[int, int]:
+        """Re-encode existing cover_cache files that still have audio or high bitrate."""
+        cache_dir = os.path.join(self.trya_stream_dir, "cover_cache")
+        if not os.path.isdir(cache_dir):
+            return 0, 0
+        ok = failed = 0
+        for name in sorted(os.listdir(cache_dir)):
+            path = os.path.join(cache_dir, name)
+            if not os.path.isfile(path):
+                continue
+            ext = os.path.splitext(name)[1].lower()
+            try:
+                if ext == ".mp4":
+                    result = await self._normalize_cover_video(path)
+                elif ext in {".jpg", ".jpeg", ".png", ".webp"}:
+                    result = await self._normalize_cover_image(path)
+                else:
+                    continue
+                if result:
+                    ok += 1
+                else:
+                    failed += 1
+            except Exception as exc:
+                failed += 1
+                self._log(f"Cached visual normalize failed ({name}): {exc}", "error")
+        if ok or failed:
+            self._log(f"Cached visuals: {ok} ready, {failed} failed.")
+        return ok, failed
 
     # ── Concat-all loop video builder ─────────────────────────────────────────
 
