@@ -9859,6 +9859,19 @@ def create_app(db: Database, bot=None) -> Quart:
             admin_csrf=admin_csrf,
         )
 
+    @app.route("/trya-dcs/stream/status")
+    @permission_required("trya_dcs")
+    async def trya_dcs_stream_status():
+        status = await trya_dcs_manager.get_status()
+        presence_now = time.monotonic()
+        app.trya_dcs_presence = {
+            member_id: seen_at
+            for member_id, seen_at in app.trya_dcs_presence.items()
+            if presence_now - seen_at < 15
+        }
+        status["listener_count"] = len(app.trya_dcs_presence)
+        return status
+
     @app.route("/trya-dcs/stream/log")
     @permission_required("trya_dcs")
     async def trya_dcs_stream_log():

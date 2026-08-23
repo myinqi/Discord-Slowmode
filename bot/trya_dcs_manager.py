@@ -16,6 +16,8 @@ from bot.suno_urls import SUNO_UUID_RE, UUID_RE
 # Re-export so callers can keep importing from this module.
 __all__ = ["TryaDcsManager", "get_dcs_log", "is_submissions_locked", "log_dcs_event"]
 
+_FFMPEG_HEARTBEAT_SECONDS = 30.0
+
 
 _DCS_LOG_BUFFER = deque(maxlen=2000)
 
@@ -43,9 +45,51 @@ class TryaDcsManager(TryaStreamManager):
         self._regular_playlist: list[dict] = []
         self._intro_song: dict | None = None
         self._outro_song: dict | None = None
+        self._ffmpeg_heartbeat_at = 0.0
 
     def _log(self, line: str, level: str = "info") -> None:
         log_dcs_event(line, level)
+
+    def _reset_ffmpeg_health(self, state: str = "offline") -> None:
+        super()._reset_ffmpeg_health(state)
+        self._ffmpeg_heartbeat_at = 0.0
+
+    def _record_ffmpeg_progress(self, progress: dict) -> None:
+        super()._record_ffmpeg_progress(progress)
+        self._maybe_log_ffmpeg_heartbeat()
+
+    def _maybe_log_ffmpeg_heartbeat(self) -> None:
+        now = time.monotonic()
+        if now - self._ffmpeg_heartbeat_at < _FFMPEG_HEARTBEAT_SECONDS:
+            return
+        health = self._get_ffmpeg_health()
+        if health.get("state") not in {"healthy", "stalled"}:
+            return
+        self._ffmpeg_heartbeat_at = now
+        speed = str(health.get("speed") or "").strip()
+        parts = [
+            health.get("out_time") or None,
+            health.get("bitrate") or None,
+            speed or None,
+            f"fps={health['fps']}" if health.get("fps") else None,
+        ]
+        drops = str(health.get("drop_frames") or "").strip()
+        if drops and drops not in {"0", "N/A"}:
+            parts.append(f"drops={drops}")
+        title = (self.current_song or {}).get("title") or ""
+        if title:
+            parts.append(title)
+        line = "FFmpeg " + " · ".join(part for part in parts if part)
+        speed_val = None
+        try:
+            speed_val = float(speed.rstrip("xX"))
+        except (TypeError, ValueError):
+            pass
+        behind = speed_val is not None and speed_val < 0.97
+        if health.get("state") == "stalled" or behind:
+            self._log(line, "warning")
+        else:
+            self._log(line)
 
     @staticmethod
     def _public_suno_url(song: dict | None) -> str:
@@ -513,7 +557,9 @@ class TryaDcsManager(TryaStreamManager):
             audio_bitrate_kbps=audio_bitrate,
             realtime_audio=True,
             video_preset="ultrafast",
-            filter_complex_threads=min(10, os.cpu_count() or 1),
+            # Leave cores for libx264. 10 filter threads plus 10 encoder
+            # threads on ARM oversubscribe and drop speed below 1.0x.
+            filter_complex_threads=max(1, min(4, (os.cpu_count() or 1) // 2)),
         )
         self._reset_ffmpeg_health("starting")
         self._process = await asyncio.create_subprocess_exec(

@@ -100,41 +100,33 @@
     <div class="dcs-section-header px-5 py-4 border-b border-gray-700/50 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <div>
             <h3 class="text-white font-semibold">DCS publisher</h3>
-            {% if stream_status.running %}
-            <p class="text-green-300 text-sm mt-1">Live · Song {{ stream_status.song_index }}/{{ stream_status.playlist_length }}</p>
-            {% else %}
-            <p class="text-gray-500 text-sm mt-1">Offline</p>
-            {% endif %}
+            <p id="dcs-publisher-state" class="{{ 'text-green-300' if stream_status.running else 'text-gray-500' }} text-sm mt-1">{% if stream_status.running %}Live · Song {{ stream_status.song_index }}/{{ stream_status.playlist_length }}{% else %}Offline{% endif %}</p>
         </div>
         <div class="flex flex-wrap gap-2">
-            <form method="POST"><input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="start_stream"><button class="px-4 py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white text-sm font-medium" {% if stream_status.running %}disabled{% endif %}>Start</button></form>
-            <form method="POST"><input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="safe_stop_stream"><button class="px-4 py-2 rounded-lg bg-yellow-700 hover:bg-yellow-600 text-white text-sm font-medium" {% if not stream_status.running %}disabled{% endif %}>Safe stop</button></form>
-            <form method="POST"><input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="stop_stream"><button class="px-4 py-2 rounded-lg bg-red-800 hover:bg-red-700 text-white text-sm font-medium" {% if not stream_status.running %}disabled{% endif %}>Stop</button></form>
+            <form method="POST"><input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="start_stream"><button id="dcs-btn-start" class="px-4 py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white text-sm font-medium" {% if stream_status.running %}disabled{% endif %}>Start</button></form>
+            <form method="POST"><input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="safe_stop_stream"><button id="dcs-btn-safe-stop" class="px-4 py-2 rounded-lg bg-yellow-700 hover:bg-yellow-600 text-white text-sm font-medium" {% if not stream_status.running %}disabled{% endif %}>Safe stop</button></form>
+            <form method="POST"><input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="stop_stream"><button id="dcs-btn-stop" class="px-4 py-2 rounded-lg bg-red-800 hover:bg-red-700 text-white text-sm font-medium" {% if not stream_status.running %}disabled{% endif %}>Stop</button></form>
         </div>
     </div>
     <div class="p-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         <div class="bg-discord-darker border border-gray-700 rounded-lg p-4">
             <p class="text-gray-500 text-xs uppercase">Current song</p>
-            {% if stream_status.song %}
-            <p class="text-white font-semibold mt-2">{{ stream_status.song.title }}</p>
-            <p class="text-gray-400 text-sm">{{ stream_status.song.artist }}</p>
-            {% else %}
-            <p class="text-gray-500 mt-2">No active song.</p>
-            {% endif %}
+            <p id="dcs-song-title" class="{{ 'text-white font-semibold' if stream_status.song else 'text-gray-500' }} mt-2">{{ stream_status.song.title if stream_status.song else 'No active song.' }}</p>
+            <p id="dcs-song-artist" class="text-gray-400 text-sm">{{ stream_status.song.artist if stream_status.song else '' }}</p>
         </div>
         <div class="bg-discord-darker border border-gray-700 rounded-lg p-4">
             <p class="text-gray-500 text-xs uppercase">FFmpeg health</p>
-            <p class="mt-2 font-semibold {{ 'text-green-300' if stream_status.ffmpeg.state == 'healthy' else ('text-yellow-300' if stream_status.running else 'text-gray-500') }}">{{ stream_status.ffmpeg.state|capitalize }}</p>
-            {% if stream_status.ffmpeg.out_time %}<p class="text-gray-500 text-xs mt-1">Output {{ stream_status.ffmpeg.out_time }} · {{ stream_status.ffmpeg.bitrate or 'bitrate pending' }} · {{ stream_status.ffmpeg.speed or 'speed pending' }}</p>{% endif %}
+            <p id="dcs-ffmpeg-state" class="mt-2 font-semibold {{ 'text-green-300' if stream_status.ffmpeg.state == 'healthy' else ('text-yellow-300' if stream_status.running else 'text-gray-500') }}">{{ stream_status.ffmpeg.state|capitalize }}</p>
+            <p id="dcs-ffmpeg-detail" class="text-gray-500 text-xs mt-1">{% if stream_status.ffmpeg.out_time %}Output {{ stream_status.ffmpeg.out_time }} · {{ stream_status.ffmpeg.bitrate or 'bitrate pending' }} · {{ stream_status.ffmpeg.speed or 'speed pending' }}{% endif %}</p>
         </div>
         <div class="bg-discord-darker border border-gray-700 rounded-lg p-4">
             <p class="text-gray-500 text-xs uppercase">Web listeners</p>
-            <p class="text-white text-2xl font-semibold mt-1">{{ stream_status.listener_count or 0 }}</p>
+            <p id="dcs-listener-count" class="text-white text-2xl font-semibold mt-1">{{ stream_status.listener_count or 0 }}</p>
             <p class="text-gray-500 text-xs mt-1">Authenticated player sessions currently connected.</p>
         </div>
         <div class="bg-discord-darker border border-gray-700 rounded-lg p-4">
             <p class="text-gray-500 text-xs uppercase">OBS contribution</p>
-            <p class="mt-2 font-semibold {{ 'text-green-300' if stream_status.obs_overlay.state in ('connected', 'live') else ('text-yellow-300' if stream_status.obs_overlay.enabled else 'text-gray-500') }}">{{ stream_status.obs_overlay.label }}</p>
+            <p id="dcs-obs-status" class="mt-2 font-semibold {{ 'text-green-300' if stream_status.obs_overlay.state in ('connected', 'live') else ('text-yellow-300' if stream_status.obs_overlay.enabled else 'text-gray-500') }}">{{ stream_status.obs_overlay.label }}</p>
             <p class="text-gray-500 text-xs mt-1">Dedicated RTMP listener on port 1937.</p>
         </div>
     </div>
@@ -683,5 +675,86 @@ document.getElementById('dcs-log-copy').addEventListener('click', async event =>
     }
 });
 setTimeout(pollDcsLog, 1000);
+
+function dcsSpeedValue(speed) {
+    const parsed = parseFloat(String(speed || '').replace(/x$/i, ''));
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function renderDcsPublisher(status) {
+    const running = Boolean(status.running);
+    const ffmpeg = status.ffmpeg || {};
+    const song = status.song || null;
+    const obs = status.obs_overlay || {};
+    const stateEl = document.getElementById('dcs-publisher-state');
+    if (running) {
+        const pending = status.safe_stop_pending ? ' · stopping after current song' : '';
+        stateEl.textContent = `Live · Song ${status.song_index || 0}/${status.playlist_length || 0}${pending}`;
+        stateEl.className = 'text-green-300 text-sm mt-1';
+    } else {
+        stateEl.textContent = 'Offline';
+        stateEl.className = 'text-gray-500 text-sm mt-1';
+    }
+    document.getElementById('dcs-btn-start').disabled = running;
+    document.getElementById('dcs-btn-stop').disabled = !running;
+    const safeStop = document.getElementById('dcs-btn-safe-stop');
+    safeStop.disabled = !running || Boolean(status.safe_stop_pending);
+    safeStop.textContent = status.safe_stop_pending ? 'Stopping…' : 'Safe stop';
+
+    const titleEl = document.getElementById('dcs-song-title');
+    const artistEl = document.getElementById('dcs-song-artist');
+    if (running && song) {
+        titleEl.textContent = song.title || 'Unknown title';
+        titleEl.className = 'text-white font-semibold mt-2';
+        artistEl.textContent = song.artist || '';
+    } else {
+        titleEl.textContent = 'No active song.';
+        titleEl.className = 'text-gray-500 mt-2';
+        artistEl.textContent = '';
+    }
+
+    const ffmpegState = running ? (ffmpeg.state || 'unknown') : 'offline';
+    const ffmpegEl = document.getElementById('dcs-ffmpeg-state');
+    const detailEl = document.getElementById('dcs-ffmpeg-detail');
+    const speed = dcsSpeedValue(ffmpeg.speed);
+    ffmpegEl.textContent = ffmpegState.charAt(0).toUpperCase() + ffmpegState.slice(1);
+    if (!running || ffmpegState === 'offline') {
+        ffmpegEl.className = 'mt-2 font-semibold text-gray-500';
+        detailEl.textContent = '';
+    } else if (ffmpegState === 'stalled' || (speed !== null && speed < 0.97)) {
+        ffmpegEl.className = 'mt-2 font-semibold text-yellow-300';
+        detailEl.textContent = ffmpegState === 'stalled'
+            ? `No progress for ${Math.round(Number(ffmpeg.last_progress_age || 0))}s`
+            : `Output ${ffmpeg.out_time || '—'} · ${ffmpeg.bitrate || 'bitrate pending'} · ${ffmpeg.speed || 'speed pending'} · behind realtime`;
+    } else if (ffmpegState === 'starting') {
+        ffmpegEl.className = 'mt-2 font-semibold text-yellow-300';
+        detailEl.textContent = 'Waiting for encoder progress';
+    } else {
+        ffmpegEl.className = 'mt-2 font-semibold text-green-300';
+        detailEl.textContent = ffmpeg.out_time
+            ? `Output ${ffmpeg.out_time} · ${ffmpeg.bitrate || 'bitrate pending'} · ${ffmpeg.speed || 'speed pending'}`
+            : '';
+    }
+
+    document.getElementById('dcs-listener-count').textContent = String(status.listener_count || 0);
+    const obsEl = document.getElementById('dcs-obs-status');
+    obsEl.textContent = obs.label || 'OBS overlay disabled';
+    if (obs.state === 'connected' || obs.state === 'live') {
+        obsEl.className = 'mt-2 font-semibold text-green-300';
+    } else if (obs.enabled) {
+        obsEl.className = 'mt-2 font-semibold text-yellow-300';
+    } else {
+        obsEl.className = 'mt-2 font-semibold text-gray-500';
+    }
+}
+
+async function pollDcsStatus() {
+    try {
+        const response = await fetch('{{ url_for("trya_dcs_stream_status") }}', {credentials: 'same-origin'});
+        if (response.ok) renderDcsPublisher(await response.json());
+    } catch (_) {}
+    setTimeout(pollDcsStatus, 2000);
+}
+setTimeout(pollDcsStatus, 1000);
 </script>
 {% endblock %}

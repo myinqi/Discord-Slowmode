@@ -1297,7 +1297,13 @@ class TryaStreamManager:
                 continue
             # Heuristic: anything containing 'error' or starting with
             # '[<x>] @ ...' suggests a problem worth flagging.
-            level = "error" if ("error" in line.lower() or "failed" in line.lower()) else "ffmpeg"
+            lowered = line.lower()
+            if "error" in lowered or "failed" in lowered:
+                level = "error"
+            elif "queue blocking" in lowered:
+                level = "warning"
+            else:
+                level = "ffmpeg"
             self._log(line, level)
 
     async def _announce_rotation_end(self, total_dur: float):
