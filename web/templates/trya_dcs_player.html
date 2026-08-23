@@ -21,22 +21,21 @@
         .identity { display:flex; align-items:center; gap:9px; color:var(--muted); font-size:14px; }
         .identity img { width:32px; height:32px; border-radius:50%; object-fit:cover; }
         button { border:1px solid var(--line); border-radius:6px; background:#211a2d; color:#eeeaf6; padding:8px 12px; cursor:pointer; }
-        .layout { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0, 1fr) minmax(300px, 390px); gap:14px; }
-        .video-panel, .chat-panel { min-height:0; border:1px solid var(--line); background:var(--panel); border-radius:8px; }
+        .layout { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0, 1fr) minmax(300px, 390px); grid-template-rows:minmax(0, 1fr); gap:14px; overflow:hidden; }
+        .video-panel, .chat-panel { min-height:0; max-height:100%; border:1px solid var(--line); background:var(--panel); border-radius:8px; }
         .video-panel {
-            display:grid;
-            grid-template-rows: auto auto auto minmax(13rem, 1fr);
-            align-content:start;
             overflow-x:hidden;
-            overflow-y:auto;
+            overflow-y:scroll;
+            overscroll-behavior:contain;
             scrollbar-gutter:stable;
             scrollbar-width:thin;
             scrollbar-color:#6d627d transparent;
         }
         .video-panel::-webkit-scrollbar { width:10px; }
         .video-panel::-webkit-scrollbar-thumb { background:#6d627d; border-radius:6px; }
-        .chat-panel { overflow:hidden; }
-        .video-wrap { position:relative; width:100%; aspect-ratio:16/9; overflow:hidden; background:#000; display:grid; place-items:center; }
+        .video-stack { display:flex; flex-direction:column; min-height:100%; }
+        .chat-panel { overflow:hidden; display:flex; flex-direction:column; }
+        .video-wrap { position:relative; flex:none; width:100%; aspect-ratio:16/9; max-height:calc(100dvh - 22rem); overflow:hidden; background:#000; display:grid; place-items:center; }
         video { width:100%; height:100%; object-fit:contain; background:#000; }
         .offline-image { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#000; }
         .state { position:absolute; z-index:2; inset:0; display:grid; place-items:center; pointer-events:none; text-align:center; padding:24px; color:#c8c1d2; background:rgba(0,0,0,.35); }
@@ -67,7 +66,7 @@
         .dashboard-stats { margin-top:6px; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px 12px; }
         .dashboard-stat strong { display:block; color:#e9e4ef; font-size:13px; }
         .dashboard-stat span { display:block; margin-top:1px; color:#756d80; font-size:10px; }
-        .community-grid { min-height:13rem; overflow:hidden; display:grid; grid-template-columns:1fr 1fr; margin:0 16px 12px; }
+        .community-grid { flex:1 0 13rem; min-height:13rem; overflow:hidden; display:grid; grid-template-columns:1fr 1fr; margin:0 16px 12px; }
         .community-panel { display:flex; flex-direction:column; min-width:0; min-height:0; padding:14px 16px 16px; overflow:hidden; }
         .community-panel:first-child { padding-left:0; border-right:1px solid var(--line); }
         .community-panel:last-child { padding-right:0; }
@@ -159,9 +158,10 @@
             body { height:auto; overflow:auto; padding:10px; }
             .shell { height:auto; }
             header { align-items:flex-start; }
-            .layout { grid-template-columns:1fr; height:auto; min-height:auto; }
-            .video-panel { display:flex; flex-direction:column; overflow:visible; scrollbar-gutter:auto; }
-            .video-wrap { flex:none; }
+            .layout { grid-template-columns:1fr; grid-template-rows:none; height:auto; min-height:auto; overflow:visible; }
+            .video-panel, .chat-panel { max-height:none; }
+            .video-panel { overflow:visible; scrollbar-gutter:auto; }
+            .video-wrap { max-height:none; }
             .community-grid { flex:none; min-height:0; overflow:visible; margin-bottom:0; }
             #community-info-content, #relic-activity { overflow:visible; }
             .chat-panel { min-height:420px; }
@@ -202,6 +202,7 @@
     </header>
     <main class="layout">
         <section class="video-panel">
+            <div class="video-stack">
             <div class="video-wrap">
                 <video id="radio-video" controls autoplay playsinline></video>
                 <img id="offline-image" class="offline-image" src="{{ offline_image_url }}" alt="The community stream is offline" hidden>
@@ -256,6 +257,7 @@
                     <div id="relic-activity" class="community-list"><div class="community-empty">No activity yet.</div></div>
                 </div>
             </section>
+            </div>
         </section>
         <aside class="chat-panel">
             <div class="chat-head">Discord live chat</div>
