@@ -40,9 +40,9 @@
         <summary class="list-none cursor-pointer px-2 py-1 rounded bg-gray-700/70 hover:bg-gray-600 text-gray-300 text-xs">Import transcript</summary>
         <form method="POST" class="mt-2 w-[34rem] max-w-[82vw] rounded-lg border border-gray-600 bg-discord-darker p-3 space-y-2">
             <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="action" value="import_transcript"><input type="hidden" name="song_id" value="{{ song.id }}">
-            <label class="block text-gray-300 text-xs font-medium">Word timestamps JSON</label>
-            <textarea name="transcript_json" rows="8" maxlength="1500000" required placeholder='[{"word":"Hello","start":0.5,"end":0.9}]' class="w-full bg-discord-dark border border-gray-600 rounded p-2 text-gray-200 font-mono text-xs"></textarea>
-            <p class="text-gray-500 text-[11px]">This replaces the stored word timestamps and ASS subtitles. Every item must contain exactly word, start and end.</p>
+            <label class="block text-gray-300 text-xs font-medium">Transcript</label>
+            <textarea name="transcript_json" rows="8" maxlength="1500000" required placeholder='[0:18] Music to hear, why hear&#39;st thou music sadly?' class="w-full bg-discord-dark border border-gray-600 rounded p-2 text-gray-200 font-mono text-xs"></textarea>
+            <p class="text-gray-500 text-[11px]">Paste either timed lines like <code>[1:07] word word</code> or JSON <code>[{"word":"Hello","start":0.5,"end":0.9}]</code>. This replaces the stored word timestamps and ASS subtitles.</p>
             <div class="flex justify-end"><button type="submit" class="px-2 py-1 rounded bg-gray-600 hover:bg-gray-500 text-white text-xs">Validate and replace</button></div>
         </form>
     </details>
@@ -200,9 +200,10 @@
                     class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-gray-300 font-mono text-sm focus:border-discord-blurple focus:outline-none">
             </label>
             <label class="block">
-                <span class="block text-gray-400 text-xs mb-1">Maximum active songs per member</span>
+                <span class="block text-gray-400 text-xs mb-1">Maximum active submission songs per member</span>
                 <input type="number" name="max_per_user" min="1" max="20" value="{{ settings.trya_dcs_max_per_user }}"
                     class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white focus:border-discord-blurple focus:outline-none">
+                <p class="text-gray-500 text-[11px] mt-1">Applies only to the submission playlist. Intro and outro are unlimited.</p>
             </label>
             <label class="block">
                 <span class="block text-gray-400 text-xs mb-1">Maximum song duration (seconds)</span>

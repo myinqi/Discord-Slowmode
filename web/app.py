@@ -10131,7 +10131,13 @@ def create_app(db: Database, bot=None) -> Quart:
         song = await db.get_trya_dcs_song_by_token(token)
         if not song:
             return await render_template(
-                "trya_dcs_upload.html", error="This upload link is invalid or expired."
+                "trya_dcs_upload.html",
+                error=(
+                    "This upload link is invalid, already replaced, or no longer active. "
+                    "Each song needs its own /trya-dcs-submit link. Intro and outro are "
+                    "unlimited and do not use the submission song limit — run the command "
+                    "again and choose Intro or Outro."
+                ),
             ), 404
         if time.time() - float(song.get("submitted_at") or 0) > 86400:
             await db.delete_trya_dcs_song(int(song["id"]), user_id=int(song["user_id"]))
@@ -10150,8 +10156,10 @@ def create_app(db: Database, bot=None) -> Quart:
             ), 403
         if song.get("uploaded_at"):
             return await render_template(
-                "trya_dcs_upload.html", done=True,
+                "trya_dcs_upload.html",
+                done=True,
                 title=song.get("title") or "Your song",
+                playlist_source=song.get("playlist_source") or "submission",
             )
         from bot.trya_dcs_manager import is_submissions_locked as _dcs_locked
         locked, _ = await _dcs_locked(db)
@@ -10232,11 +10240,15 @@ def create_app(db: Database, bot=None) -> Quart:
         playlist_source = str(song.get("playlist_source") or "submission").strip().lower()
         if playlist_source not in {"submission", "intro", "outro"}:
             playlist_source = "submission"
-        try:
-            maximum = max(1, min(20, int(await db.get_setting("trya_dcs_max_per_user") or "4")))
-        except (TypeError, ValueError):
-            maximum = 4
-        if playlist_source == "submission" and not song.get("replacement_song_id"):
+        if db.trya_dcs_source_uses_per_user_limit(playlist_source) and not song.get(
+            "replacement_song_id"
+        ):
+            try:
+                maximum = max(
+                    1, min(20, int(await db.get_setting("trya_dcs_max_per_user") or "4"))
+                )
+            except (TypeError, ValueError):
+                maximum = 4
             active_count = sum(
                 1 for existing in await db.get_trya_dcs_songs_by_user(
                     int(song["user_id"]), playlist_source="submission"
@@ -10245,7 +10257,9 @@ def create_app(db: Database, bot=None) -> Quart:
             )
             if active_count >= maximum:
                 return await upload_error(
-                    f"You already have the maximum of {maximum} active DCS songs.", 409
+                    f"You already have the maximum of {maximum} active DCS submission songs. "
+                    "Intro and outro uploads are unlimited.",
+                    409,
                 )
 
         attestation_names = (

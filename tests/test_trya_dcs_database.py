@@ -158,6 +158,41 @@ class TryaDcsDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([song["id"] for song in submissions], [submission_id])
         self.assertEqual([song["id"] for song in intros], [intro_id])
 
+    async def test_intro_and_outro_are_unlimited_when_submissions_are_capped(self):
+        self.assertTrue(self.db.trya_dcs_source_uses_per_user_limit("submission"))
+        self.assertTrue(self.db.trya_dcs_source_uses_per_user_limit(None))
+        self.assertFalse(self.db.trya_dcs_source_uses_per_user_limit("intro"))
+        self.assertFalse(self.db.trya_dcs_source_uses_per_user_limit("outro"))
+
+        for index in range(4):
+            song_id, _ = await self._new_slot(user_id=100)
+            await self._finalize(song_id, f"submission-{index}")
+
+        intro_id, intro_token = await self._new_slot(user_id=100, playlist_source="intro")
+        await self._finalize(intro_id, "intro-1")
+        outro_id, outro_token = await self._new_slot(user_id=100, playlist_source="outro")
+        extra_intro_id, extra_intro_token = await self._new_slot(
+            user_id=100, playlist_source="intro"
+        )
+
+        submissions = await self.db.get_trya_dcs_songs_by_user(
+            100, playlist_source="submission"
+        )
+        intros = await self.db.get_trya_dcs_songs_by_user(
+            100, include_pending=True, playlist_source="intro"
+        )
+        outros = await self.db.get_trya_dcs_songs_by_user(
+            100, include_pending=True, playlist_source="outro"
+        )
+
+        self.assertEqual(len(submissions), 4)
+        self.assertEqual({song["id"] for song in intros}, {intro_id, extra_intro_id})
+        self.assertEqual([song["id"] for song in outros], [outro_id])
+        self.assertIsNotNone(await self.db.get_trya_dcs_song_by_token(intro_token))
+        self.assertIsNotNone(await self.db.get_trya_dcs_song_by_token(outro_token))
+        self.assertIsNotNone(await self.db.get_trya_dcs_song_by_token(extra_intro_token))
+        self.assertIsNotNone((await self.db.get_trya_dcs_song(intro_id))["upload_token"])
+
     async def test_pending_intro_does_not_supersede_pending_submission(self):
         submission_id, submission_token = await self._new_slot(user_id=100)
         await self.db.supersede_pending_trya_dcs_uploads(
@@ -169,6 +204,17 @@ class TryaDcsDatabaseTests(unittest.IsolatedAsyncioTestCase):
             (await self.db.get_trya_dcs_song(submission_id))["playlist_source"],
             "submission",
         )
+
+    async def test_pending_outro_does_not_supersede_pending_intro(self):
+        intro_id, intro_token = await self._new_slot(user_id=100, playlist_source="intro")
+        outro_id, outro_token = await self._new_slot(user_id=100, playlist_source="outro")
+
+        await self.db.supersede_pending_trya_dcs_uploads(100, playlist_source="outro")
+
+        self.assertIsNotNone(await self.db.get_trya_dcs_song_by_token(intro_token))
+        self.assertIsNone(await self.db.get_trya_dcs_song_by_token(outro_token))
+        self.assertIsNone((await self.db.get_trya_dcs_song(intro_id))["removed_at"])
+        self.assertIsNotNone((await self.db.get_trya_dcs_song(outro_id))["removed_at"])
 
     async def test_replacement_retires_old_song_only_after_finalize(self):
         old_id, _ = await self._new_slot(user_id=100)

@@ -2,11 +2,11 @@
 
 import hashlib
 import json
-import math
 import os
 import time
 
 from bot.trya_dcs_manager import log_dcs_event
+from bot.trya_dcs_transcript import parse_dcs_transcript
 from bot.trya_stream_worker import (
     _align_to_lyrics,
     _normalize_original_to_mp3,
@@ -226,34 +226,8 @@ async def import_dcs_transcript(
     song = await db.get_trya_dcs_song(song_id)
     if not song or not song.get("active") or not song.get("uploaded_at"):
         raise ValueError("active uploaded DCS song not found")
-    try:
-        raw_words = json.loads(transcript_json)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"transcript is not valid JSON: {exc.msg}") from exc
-    if not isinstance(raw_words, list) or not raw_words or len(raw_words) > 20000:
-        raise ValueError("transcript must be a non-empty array with at most 20,000 words")
     duration = float(song.get("duration") or 0)
-    words = []
-    previous_start = -1.0
-    for index, item in enumerate(raw_words):
-        if not isinstance(item, dict) or set(item) != {"word", "start", "end"}:
-            raise ValueError(f"word #{index + 1} must contain exactly word, start and end")
-        word = str(item.get("word") or "").strip()
-        try:
-            start = float(item["start"])
-            end = float(item["end"])
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"word #{index + 1} has invalid timestamps") from exc
-        if (
-            not word or len(word) > 200
-            or not math.isfinite(start) or not math.isfinite(end)
-            or start < 0 or end <= start
-        ):
-            raise ValueError(f"word #{index + 1} is empty or has an invalid time range")
-        if start < previous_start or (duration > 0 and end > duration + 5):
-            raise ValueError(f"word #{index + 1} is out of chronological or song range")
-        words.append({"word": word, "start": round(start, 3), "end": round(end, 3)})
-        previous_start = start
+    words = parse_dcs_transcript(transcript_json, duration=duration)
     ensure_dcs_dirs(base_dir)
     ass_filename = os.path.basename(
         song.get("ass_filename") or f"{song.get('suno_uuid') or song_id}.ass"

@@ -2134,7 +2134,7 @@ class CommandsCog(commands.Cog):
             embed.add_field(
                 name="📡 TrYa DCS",
                 value=(
-                    "**`/trya-dcs-submit [destination]`** — Open the private community stream upload form\n"
+                    "**`/trya-dcs-submit [destination]`** — Open the private community stream upload form (defaults to Submission; use Intro or Outro when needed)\n"
                     "**`/trya-dcs-replace [destination]`** — Replace your oldest song in that playlist after upload succeeds\n"
                     "**`/trya-dcs-delete`** — Remove one of your DCS songs or cancel a pending upload\n"
                     "**`/trya-dcs-hook <hook>`** — Add or change a Hook video\n"
@@ -2478,7 +2478,8 @@ class CommandsCog(commands.Cog):
         destination = str(destination or "submission").strip().lower()
         if destination not in TRYA_DCS_DESTINATIONS:
             await interaction.followup.send(
-                "Invalid destination. Choose submission, intro, or outro.", ephemeral=True
+                "Invalid destination. Choose submission, intro, or outro.",
+                ephemeral=True,
             )
             return
         if await self.bot.db.get_setting("trya_dcs_enabled") != "on":
@@ -2522,11 +2523,16 @@ class CommandsCog(commands.Cog):
             )
         except (TypeError, ValueError):
             maximum = 4
-        if destination == "submission" and not replace and len(active) >= maximum:
+        if (
+            self.bot.db.trya_dcs_source_uses_per_user_limit(destination)
+            and not replace
+            and len(active) >= maximum
+        ):
             await interaction.followup.send(
-                f"You already have the maximum of {maximum} active DCS songs. "
-                "Use `/trya-dcs-replace` or `/trya-dcs-delete`. Intro and outro "
-                "submissions are not counted toward this limit.",
+                f"You already have the maximum of {maximum} active DCS submission songs. "
+                "Use `/trya-dcs-replace` or `/trya-dcs-delete` for the submission playlist. "
+                "Intro and outro are unlimited — run `/trya-dcs-submit` again and choose "
+                "Intro or Outro.",
                 ephemeral=True,
             )
             return
@@ -2558,9 +2564,10 @@ class CommandsCog(commands.Cog):
         )
         if destination in {"intro", "outro"}:
             description += (
-                f" This upload goes to the {destination} playlist and does not "
-                "count toward your submission limit. Whisper and optional "
-                "moderation still run."
+                f" This upload goes to the {destination} playlist. You may upload "
+                "as many intro and outro songs as you want; they do not count "
+                "toward the submission song limit. Each additional song needs a "
+                "new `/trya-dcs-submit` link. Whisper and optional moderation still run."
             )
         if replacement:
             description += " Your existing song remains active until this upload succeeds."
@@ -2576,7 +2583,7 @@ class CommandsCog(commands.Cog):
         name="trya-dcs-submit", description="Submit a song to the private TrYa DCS stream"
     )
     @app_commands.describe(
-        destination="Target playlist. Intro and outro do not count toward the song limit."
+        destination="Optional. Defaults to Submission. Choose Intro or Outro only for those playlists; they ignore the song limit."
     )
     @app_commands.choices(destination=TRYA_DCS_DESTINATION_CHOICES)
     async def trya_dcs_submit(
@@ -2589,7 +2596,9 @@ class CommandsCog(commands.Cog):
     @app_commands.command(
         name="trya-dcs-replace", description="Replace your oldest private TrYa DCS song"
     )
-    @app_commands.describe(destination="Target playlist")
+    @app_commands.describe(
+        destination="Optional. Defaults to Submission. Choose Intro or Outro to replace in those playlists."
+    )
     @app_commands.choices(destination=TRYA_DCS_DESTINATION_CHOICES)
     async def trya_dcs_replace(
         self,

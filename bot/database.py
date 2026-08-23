@@ -6145,6 +6145,11 @@ class Database:
         ) as cursor:
             return [dict(row) for row in await cursor.fetchall()]
 
+    @staticmethod
+    def trya_dcs_source_uses_per_user_limit(playlist_source: str | None) -> bool:
+        """Only the submission playlist uses trya_dcs_max_per_user."""
+        return str(playlist_source or "submission").strip().lower() == "submission"
+
     async def add_trya_dcs_song(
         self,
         *,
@@ -6308,7 +6313,6 @@ class Database:
             approved_at=time.time(),
             approved_by="validated-upload",
             analysis_status="pending",
-            upload_token=None,
         )
         update_fields = (
             "original_sha256", "original_filename", "original_mime",
@@ -6319,7 +6323,7 @@ class Database:
             "official_download_attested", "material_rights_attested",
             "technical_processing_attested", "private_playback_attested",
             "active", "approval_status", "approved_at", "approved_by",
-            "analysis_status", "upload_token",
+            "analysis_status",
         )
         try:
             await self.db.execute("BEGIN IMMEDIATE")
