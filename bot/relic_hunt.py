@@ -959,7 +959,12 @@ class RelicHunt:
         if not await self._is_game_enabled():
             return
         lb_size = int((await self.db.relic_get_setting("leaderboard_size")) or 5)
-        lb = await self.db.relic_get_leaderboard(lb_size)
+        prefix = None
+        if self.stream_kind == "dcs" and (
+            (await self.db.get_setting("trya_dcs_relic_discord_only") or "off") == "on"
+        ):
+            prefix = "discord:"
+        lb = await self.db.relic_get_leaderboard(lb_size, user_id_prefix=prefix)
         if not lb:
             await self._send("No Relic Hunters yet. Type !raven to begin!")
             return

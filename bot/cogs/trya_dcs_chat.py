@@ -20,6 +20,39 @@ _WEBHOOK_NAME = "TrYa DCS Web Chat"
 _USER_MENTION_RE = re.compile(r"<@!?(\d{17,20})>")
 
 
+async def publish_dcs_game_feedback(
+    db,
+    text: str,
+    *,
+    username: str = "Corax",
+    user_id: str = "system:corax",
+) -> None:
+    """Show a system line in DCS Recent Game Feedback without posting to Discord."""
+    from bot.trya_dcs_manager import log_dcs_event
+
+    message = str(text or "").strip()[:1950]
+    if not message or db is None:
+        return
+    log_dcs_event(message)
+    now = time.time()
+    await db.relic_log_hunt({
+        "twitch_user_id": user_id,
+        "username": username,
+        "item_id": None,
+        "item_name": "event",
+        "rarity": "info",
+        "points_awarded": 0,
+        "xp_awarded": 0,
+        "result_type": "dcs_feedback",
+        "message": message,
+        "created_at": now,
+    })
+    await trya_dcs_events.publish(
+        "relic.update",
+        {"user_id": "system", "updated_at": now},
+    )
+
+
 def _avatar_url(author) -> str:
     avatar = getattr(author, "display_avatar", None)
     return str(avatar.url) if avatar else ""
@@ -320,45 +353,7 @@ class TryaDcsChat(commands.Cog):
         self.relic_hunt.ensure_watcher()
 
     async def _broadcast_relic_system(self, msg: str) -> None:
-        from bot.trya_dcs_manager import log_dcs_event
-
-        text = str(msg or "").strip()[:1950]
-        if not text:
-            return
-        log_dcs_event(text)
-        now = time.time()
-        await self.bot.db.relic_log_hunt({
-            "twitch_user_id": "system:dcs",
-            "username": "Hrafnathorp",
-            "item_id": None,
-            "item_name": "event",
-            "rarity": "info",
-            "points_awarded": 0,
-            "xp_awarded": 0,
-            "result_type": "dcs_feedback",
-            "message": text,
-            "created_at": now,
-        })
-        await trya_dcs_events.publish(
-            "relic.update",
-            {"user_id": "system", "updated_at": now},
-        )
-        channel_id = await self._configured_channel_id()
-        if not channel_id:
-            return
-        channel = self.bot.get_channel(channel_id)
-        if channel is None:
-            try:
-                channel = await self.bot.fetch_channel(channel_id)
-            except (discord.HTTPException, discord.NotFound, discord.Forbidden):
-                return
-        try:
-            await channel.send(
-                text,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-        except (discord.HTTPException, discord.Forbidden):
-            pass
+        await publish_dcs_game_feedback(self.bot.db, msg, username="Corax")
 
     async def _configured_channel_id(self) -> int:
         try:

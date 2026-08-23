@@ -7746,6 +7746,7 @@ class Database:
             async with self.db.execute(
                 """SELECT * FROM relic_hunt_log
                    WHERE twitch_user_id LIKE ?
+                      OR twitch_user_id LIKE 'system:%'
                    ORDER BY created_at DESC LIMIT ?""",
                 (f"{user_id_prefix}%", int(limit)),
             ) as cur:

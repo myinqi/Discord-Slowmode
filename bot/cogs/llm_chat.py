@@ -323,7 +323,10 @@ class LLMChatCog(commands.Cog):
                         except Exception as e2:
                             print(f"[corax] fallback reply also failed: {e2}")
                 elif text:
-                    await message.reply(text[:1900], mention_author=False)
+                    if await self._post_dcs_feedback_instead(message, text[:1900]):
+                        pass
+                    else:
+                        await message.reply(text[:1900], mention_author=False)
                 else:
                     await message.reply(
                         "…hm, dazu fällt mir gerade nichts ein.",
@@ -344,6 +347,24 @@ class LLMChatCog(commands.Cog):
             error=error,
             latency_ms=latency_ms,
         )
+
+    async def _post_dcs_feedback_instead(self, message: discord.Message, text: str) -> bool:
+        """Keep DCS Discord chat clean: Corax flavor goes to the player panel."""
+        try:
+            channel_id = int(
+                await self.bot.db.get_setting("trya_dcs_chat_channel_id") or 0
+            )
+        except (TypeError, ValueError):
+            channel_id = 0
+        if not channel_id or message.channel.id != channel_id:
+            return False
+        from bot.cogs.trya_dcs_chat import publish_dcs_game_feedback
+        await publish_dcs_game_feedback(self.bot.db, text, username="Corax")
+        try:
+            await message.add_reaction("🐦‍⬛")
+        except Exception:
+            pass
+        return True
 
     # ---------------------------------------------------------- retention job
 
