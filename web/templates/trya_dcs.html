@@ -16,6 +16,26 @@
 <div class="flex flex-wrap items-start gap-1 mt-2">
     <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="action" value="retry_whisper"><input type="hidden" name="song_id" value="{{ song.id }}"><button type="submit" class="px-2 py-1 rounded bg-sky-950/60 hover:bg-sky-900/70 text-sky-300 text-xs">Retry Whisper</button></form>
     {% if settings.trya_dcs_moderation_enabled == 'on' %}<form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="action" value="retry_moderation"><input type="hidden" name="song_id" value="{{ song.id }}"><button type="submit" class="px-2 py-1 rounded bg-violet-950/60 hover:bg-violet-900/70 text-violet-300 text-xs">Retry moderation</button></form>{% endif %}
+    {% if song.transcript_preview %}
+    <details>
+        <summary class="list-none cursor-pointer px-2 py-1 rounded bg-emerald-950/50 hover:bg-emerald-900/60 text-emerald-300 text-xs" title="Inspect the Whisper word timestamps used for subtitles">View transcript{% if song.word_count %} ({{ song.word_count }}){% endif %}</summary>
+        <div class="mt-2 w-[34rem] max-w-[82vw] rounded-lg border border-gray-600 bg-discord-darker p-3 space-y-3">
+            {% if song.transcript_span %}
+            <p class="text-gray-500 text-[11px]">{{ song.word_count }} words · {{ '%.0f'|format(song.transcript_span[0]) }}–{{ '%.0f'|format(song.transcript_span[1]) }}s</p>
+            {% endif %}
+            {% if song.lyrics %}
+            <div>
+                <p class="text-gray-400 text-[11px] uppercase tracking-wide mb-1">Suno lyrics</p>
+                <pre class="max-h-40 overflow-y-auto whitespace-pre-wrap font-sans text-gray-300 text-xs bg-black/30 rounded p-2">{{ song.lyrics }}</pre>
+            </div>
+            {% endif %}
+            <div>
+                <p class="text-gray-400 text-[11px] uppercase tracking-wide mb-1">Whisper transcript</p>
+                <pre class="max-h-56 overflow-y-auto whitespace-pre-wrap font-mono text-emerald-300/90 text-xs bg-black/30 rounded p-2">{{ song.transcript_preview }}</pre>
+            </div>
+        </div>
+    </details>
+    {% endif %}
     <details>
         <summary class="list-none cursor-pointer px-2 py-1 rounded bg-gray-700/70 hover:bg-gray-600 text-gray-300 text-xs">Import transcript</summary>
         <form method="POST" class="mt-2 w-[34rem] max-w-[82vw] rounded-lg border border-gray-600 bg-discord-darker p-3 space-y-2">

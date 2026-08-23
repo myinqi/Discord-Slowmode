@@ -9804,8 +9804,36 @@ def create_app(db: Database, bot=None) -> Quart:
         )
         songs = await db.get_trya_dcs_songs(active_only=False)
         songs_desc = list(reversed(songs))
+        import json as _dcs_json
         for song in songs_desc:
             song["public_suno_url"] = trya_dcs_manager._public_suno_url(song)
+            song["word_count"] = 0
+            song["transcript_preview"] = ""
+            song["transcript_span"] = None
+            wt_raw = song.get("word_timestamps")
+            if not wt_raw:
+                continue
+            try:
+                words = _dcs_json.loads(wt_raw) if isinstance(wt_raw, str) else wt_raw
+                if not isinstance(words, list) or not words:
+                    continue
+                song["word_count"] = len(words)
+                song["transcript_span"] = (
+                    float(words[0].get("start", 0)),
+                    float(words[-1].get("end", 0)),
+                )
+                parts, last_mark = [], -10.0
+                for item in words:
+                    start = float(item.get("start", 0))
+                    if start - last_mark >= 10:
+                        minutes, seconds = divmod(int(start), 60)
+                        parts.append(f"\n[{minutes}:{seconds:02d}] ")
+                        last_mark = start
+                    parts.append(str(item.get("word") or ""))
+                    parts.append(" ")
+                song["transcript_preview"] = "".join(parts).strip()
+            except (TypeError, ValueError, _dcs_json.JSONDecodeError):
+                pass
         submission_songs = [
             song for song in songs_desc
             if (song.get("playlist_source") or "submission") not in {"intro", "outro"}
