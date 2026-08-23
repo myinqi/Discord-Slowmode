@@ -20,15 +20,15 @@ from bot.trya_stream_worker import (
 )
 
 
-DCS_RIGHTS_VERSION = "trya-dcs-private-community-v1-2026-08-20"
+DCS_RIGHTS_VERSION = "trya-dcs-private-community-v2-2026-08-23"
 DCS_RIGHTS_DECLARATION = (
     "I confirm that I may share this song inside the private, non-commercial "
     "TrYa DCS community; that this exact file came from an official Suno download "
-    "channel; that I hold every required right and permission for my lyrics, "
-    "samples, voices and all other supplied material; and that I permit the "
-    "technical copies, transcoding and playback required for the closed TrYa DCS "
-    "service. The documented Suno plan and original/cover/remix status does not "
-    "itself decide eligibility."
+    "channel; that I have the necessary rights or permissions for any lyrics, "
+    "samples, voices, recordings, or other third-party material I supplied or "
+    "uploaded for this song; and that I permit the technical copies, transcoding "
+    "and playback required for the closed TrYa DCS service. The documented Suno "
+    "plan and original/cover/remix status does not itself decide eligibility."
 )
 
 
