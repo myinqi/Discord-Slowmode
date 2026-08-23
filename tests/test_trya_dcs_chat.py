@@ -1,11 +1,11 @@
 import unittest
 
-try:
-    from bot.cogs.trya_dcs_chat import neutralize_mass_mentions, parse_web_chat_payload
-except ModuleNotFoundError as exc:
-    raise unittest.SkipTest(
-        "discord.py is installed by requirements.txt and required for DCS chat tests"
-    ) from exc
+from bot.trya_dcs_web_chat import (
+    forget_web_chat_fingerprint,
+    neutralize_mass_mentions,
+    parse_web_chat_payload,
+    register_web_chat_fingerprint,
+)
 
 
 class TryaDcsWebChatTests(unittest.TestCase):
@@ -30,6 +30,20 @@ class TryaDcsWebChatTests(unittest.TestCase):
         self.assertIn("@\u200beveryone", cleaned)
         self.assertIn("@\u200bhere", cleaned)
         self.assertIn("<@\u200b&123456789012345678>", cleaned)
+
+    def test_identical_web_posts_are_deduped_within_the_window(self):
+        store = {}
+        self.assertTrue(register_web_chat_fingerprint(1, "hello", now=10.0, store=store))
+        self.assertFalse(register_web_chat_fingerprint(1, "hello", now=11.0, store=store))
+        self.assertTrue(register_web_chat_fingerprint(1, "hello", now=14.0, store=store))
+        self.assertTrue(register_web_chat_fingerprint(1, "hello", reply_to="99", now=11.0, store=store))
+        self.assertTrue(register_web_chat_fingerprint(2, "hello", now=11.0, store=store))
+
+    def test_failed_web_post_fingerprint_can_be_retried(self):
+        store = {}
+        self.assertTrue(register_web_chat_fingerprint(7, "retry me", now=1.0, store=store))
+        forget_web_chat_fingerprint(7, "retry me", store=store)
+        self.assertTrue(register_web_chat_fingerprint(7, "retry me", now=1.5, store=store))
 
 
 if __name__ == "__main__":

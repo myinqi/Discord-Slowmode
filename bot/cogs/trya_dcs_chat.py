@@ -7,12 +7,16 @@ from discord.ext import commands
 
 from bot.relic_hunt import RelicHunt
 from bot.trya_dcs_events import trya_dcs_events
+from bot.trya_dcs_web_chat import (
+    forget_web_chat_fingerprint,
+    neutralize_mass_mentions,
+    parse_web_chat_payload,
+    register_web_chat_fingerprint,
+)
 
 
 _WEBHOOK_NAME = "TrYa DCS Web Chat"
 _USER_MENTION_RE = re.compile(r"<@!?(\d{17,20})>")
-_ROLE_MENTION_RE = re.compile(r"<@&\d{17,20}>")
-_EVERYONE_RE = re.compile(r"@(everyone|here)\b", re.IGNORECASE)
 
 
 def _avatar_url(author) -> str:
@@ -158,27 +162,6 @@ async def guild_emoji_payload(guild: discord.Guild | None) -> list[dict]:
     ]
 
 
-def parse_web_chat_payload(payload: dict | None) -> tuple[str, str | None, list[str]]:
-    data = payload if isinstance(payload, dict) else {}
-    content = str(data.get("content") or "").strip()
-    reply_to = str(data.get("reply_to") or "").strip() or None
-    if reply_to and not reply_to.isdigit():
-        reply_to = None
-    mention_ids = []
-    raw_ids = data.get("mention_ids") if isinstance(data.get("mention_ids"), list) else []
-    for raw in raw_ids[:20]:
-        value = str(raw).strip()
-        if value.isdigit() and value not in mention_ids:
-            mention_ids.append(value)
-    return content, reply_to, mention_ids
-
-
-def neutralize_mass_mentions(content: str) -> str:
-    """Prevent @everyone/@here and role pings from untrusted web input."""
-    clean = _ROLE_MENTION_RE.sub(lambda match: match.group(0).replace("@", "@\u200b", 1), content)
-    return _EVERYONE_RE.sub(lambda match: "@\u200b" + match.group(1).lower(), clean)
-
-
 async def _resolve_guild_member(guild: discord.Guild, user_id: int):
     member = guild.get_member(user_id)
     if member is not None:
@@ -262,6 +245,9 @@ async def send_web_chat_message(
     if not clean:
         raise ValueError("Message is empty.")
     command_text = clean
+    if not register_web_chat_fingerprint(user_id, command_text, reply_to):
+        print(f"[trya-dcs-chat] Dropped duplicate web message from {user_id}", flush=True)
+        return
 
     reference = None
     if reply_to:
@@ -296,22 +282,26 @@ async def send_web_chat_message(
     except (discord.Forbidden, discord.HTTPException):
         webhook = None
 
-    if webhook is not None:
-        await webhook.send(
-            clean,
-            username=f"{member.display_name} · Web"[:80],
-            avatar_url=_avatar_url(member) or None,
-            allowed_mentions=allowed_mentions,
-            wait=True,
-        )
-    else:
-        send_kwargs = {
-            "content": f"**{member.display_name} · Web:** {clean}",
-            "allowed_mentions": allowed_mentions,
-        }
-        if reference is not None:
-            send_kwargs["reference"] = reference
-        await channel.send(**send_kwargs)
+    try:
+        if webhook is not None:
+            await webhook.send(
+                clean,
+                username=f"{member.display_name} · Web"[:80],
+                avatar_url=_avatar_url(member) or None,
+                allowed_mentions=allowed_mentions,
+                wait=True,
+            )
+        else:
+            send_kwargs = {
+                "content": f"**{member.display_name} · Web:** {clean}",
+                "allowed_mentions": allowed_mentions,
+            }
+            if reference is not None:
+                send_kwargs["reference"] = reference
+            await channel.send(**send_kwargs)
+    except Exception:
+        forget_web_chat_fingerprint(user_id, command_text, reply_to)
+        raise
 
     cog = bot.get_cog("TryaDcsChat")
     if cog:

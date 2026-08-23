@@ -14,7 +14,7 @@
         html, body { margin: 0; height: 100%; background: #07060b; color: #f1edf7; font-family: system-ui, sans-serif; }
         body { display:flex; flex-direction:column; height:100vh; height:100dvh; padding:18px; overflow:hidden; }
         .shell { display:flex; flex-direction:column; flex:1; min-height:0; width: min(1600px, 100%); margin: 0 auto; }
-        header { flex:none; min-height: 54px; display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:14px; }
+        header { flex:none; min-height: 48px; display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:12px; }
         .brand-lockup { display:flex; align-items:center; gap:11px; }
         .brand-logo { width:42px; height:42px; border-radius:9px; object-fit:contain; }
         .brand { font-size:22px; font-weight:750; }
@@ -23,13 +23,13 @@
         button { border:1px solid var(--line); border-radius:6px; background:#211a2d; color:#eeeaf6; padding:8px 12px; cursor:pointer; }
         .layout { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0, 1fr) minmax(300px, 390px); gap:14px; }
         .video-panel, .chat-panel { min-height:0; border:1px solid var(--line); background:var(--panel); border-radius:8px; overflow:hidden; }
-        .video-panel { display:flex; flex-direction:column; min-height:0; }
-        .video-wrap { position:relative; flex:0 0 auto; width:100%; aspect-ratio:16/9; min-height:0; overflow:hidden; background:#000; display:grid; place-items:center; }
+        .video-panel { display:flex; flex-direction:column; min-height:0; overflow-x:hidden; overflow-y:auto; }
+        .video-wrap { position:relative; flex:0 1 auto; width:100%; aspect-ratio:16/9; min-height:140px; overflow:hidden; background:#000; display:grid; place-items:center; }
         video { width:100%; height:100%; object-fit:contain; background:#000; }
         .offline-image { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; background:#000; }
         .state { position:absolute; z-index:2; inset:0; display:grid; place-items:center; pointer-events:none; text-align:center; padding:24px; color:#c8c1d2; background:rgba(0,0,0,.35); }
         .state.hidden { display:none; }
-        .meta { flex:none; padding:14px 16px; display:flex; justify-content:space-between; gap:16px; border-top:1px solid var(--line); }
+        .meta { flex:none; padding:12px 16px; display:flex; justify-content:space-between; gap:16px; border-top:1px solid var(--line); }
         .meta-main { min-width:0; flex:1; }
         .meta-title { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
         .meta-actions { display:flex; align-items:center; gap:8px; flex-shrink:0; }
@@ -42,7 +42,7 @@
         .progress { height:3px; margin-top:10px; background:#30293d; overflow:hidden; }
         .progress span { display:block; width:0; height:100%; background:var(--accent); transition:width .45s linear; }
         .disclosure { align-self:center; max-width:360px; text-align:right; white-space:pre-line; color:#aaa2b5; font-size:12px; }
-        .stream-dashboard { flex:none; display:grid; grid-template-columns:1fr 1fr 1.25fr; margin:0 16px; padding:15px 0; border-bottom:1px solid var(--line); }
+        .stream-dashboard { flex:none; display:grid; grid-template-columns:1fr 1fr 1.25fr; margin:0 16px; padding:12px 0; border-bottom:1px solid var(--line); }
         .dashboard-cell { min-width:0; padding:0 16px; border-right:1px solid var(--line); }
         .dashboard-cell:first-child { padding-left:0; }
         .dashboard-cell:last-child { padding-right:0; border-right:0; }
@@ -55,7 +55,7 @@
         .dashboard-stats { margin-top:6px; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px 12px; }
         .dashboard-stat strong { display:block; color:#e9e4ef; font-size:13px; }
         .dashboard-stat span { display:block; margin-top:1px; color:#756d80; font-size:10px; }
-        .community-grid { flex:1 1 0; min-height:0; overflow:hidden; display:grid; grid-template-columns:1fr 1fr; margin:0 16px 12px; }
+        .community-grid { flex:1 1 12rem; min-height:12rem; overflow:hidden; display:grid; grid-template-columns:1fr 1fr; margin:0 16px 12px; }
         .community-panel { display:flex; flex-direction:column; min-width:0; min-height:0; padding:14px 16px 16px; overflow:hidden; }
         .community-panel:first-child { padding-left:0; border-right:1px solid var(--line); }
         .community-panel:last-child { padding-right:0; }
@@ -135,14 +135,22 @@
         .queue-artist { display:block; margin-top:2px; color:#898191; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .queue-links { min-height:0; margin-top:4px; }
         .queue-links a { padding:2px 6px; font-size:9px; }
+        @media (max-height: 900px) {
+            body { padding:10px; }
+            header { margin-bottom:8px; }
+            .meta { padding:10px 14px; }
+            .stream-dashboard { padding:10px 0; }
+            .community-grid { min-height:10rem; flex-basis:10rem; margin-bottom:8px; }
+        }
         @media (max-width: 900px) {
             html, body { height:auto; }
             body { height:auto; overflow:auto; padding:10px; }
             .shell { height:auto; }
             header { align-items:flex-start; }
             .layout { grid-template-columns:1fr; height:auto; min-height:auto; }
-            .video-wrap { flex:none; }
-            .community-grid { flex:none; overflow:visible; margin-bottom:0; }
+            .video-panel { overflow:visible; }
+            .video-wrap { flex:none; min-height:0; }
+            .community-grid { flex:none; min-height:0; overflow:visible; margin-bottom:0; }
             #community-info-content, #relic-activity { overflow:visible; }
             .chat-panel { min-height:420px; }
             .meta { flex-direction:column; }
@@ -779,7 +787,6 @@ video.addEventListener('canplay', maintainLivePosition);
 video.addEventListener('playing', () => {
     state.classList.add('hidden');
     maintainLivePosition();
-    if (preferChatFallback) startChatFallback(); else connectSocket();
 });
 video.addEventListener('waiting', () => {
     if (streamIsRunning !== false) {
@@ -1235,23 +1242,28 @@ function connectSocket() {
     if (chatFallbackActive) return;
     if (socket && (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN)) return;
     const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-    socket = new WebSocket(`${scheme}://${location.host}{{ url_for('trya_dcs_websocket') }}`);
-    socket.addEventListener('open', () => {
+    const next = new WebSocket(`${scheme}://${location.host}{{ url_for('trya_dcs_websocket') }}`);
+    socket = next;
+    next.addEventListener('open', () => {
+        if (socket !== next) return;
         chatError.textContent = '';
         clearInterval(heartbeatTimer);
         heartbeatTimer = setInterval(() => {
-            if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({type:'ping'}));
+            if (socket === next && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({type:'ping'}));
         }, 25000);
     });
-    socket.addEventListener('message', event => {
+    next.addEventListener('message', event => {
+        if (socket !== next) return;
         try { handleEvent(JSON.parse(event.data)); } catch (_) {}
     });
-    socket.addEventListener('error', () => {
+    next.addEventListener('error', () => {
+        if (socket !== next) return;
         chatError.textContent = 'Chat connection failed. Switching transport...';
-        try { socket.close(); } catch (_) {}
+        try { next.close(); } catch (_) {}
         startChatFallback();
     });
-    socket.addEventListener('close', event => {
+    next.addEventListener('close', event => {
+        if (socket !== next) return;
         clearInterval(heartbeatTimer);
         chatInput.disabled = true;
         sendButton.disabled = true;
@@ -1276,30 +1288,56 @@ function outgoingChatPayload() {
     };
 }
 
+let chatSending = false;
 document.getElementById('chat-form').addEventListener('submit', async event => {
     event.preventDefault();
+    event.stopPropagation();
+    if (chatSending) return;
     const payload = outgoingChatPayload();
     if (!payload.content) return;
-    if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({type:'chat.send', data:payload}));
-    } else if (chatFallbackActive) {
-        const response = await fetch('{{ url_for('trya_dcs_chat_fallback') }}', {
-            method: 'POST', credentials: 'same-origin',
-            headers: {'Content-Type': 'application/json', 'X-CSRF-Token': chatCsrf},
-            body: JSON.stringify(payload)
-        });
-        if (!response.ok) {
-            chatError.textContent = 'The message could not be delivered.';
-            return;
-        }
-    } else {
-        return;
-    }
+    const useSocket = socket && socket.readyState === WebSocket.OPEN;
+    if (!useSocket && !chatFallbackActive) return;
+    chatSending = true;
+    sendButton.disabled = true;
+    const previousReply = pendingReply;
     chatInput.value = '';
     chatInput.dataset.mentionIds = '[]';
     clearPendingReply();
     closeMentionPicker();
     emojiPicker.classList.remove('open');
+    const restoreDraft = () => {
+        if (chatInput.value) return;
+        chatInput.value = payload.content;
+        if (previousReply) {
+            setPendingReply({
+                message_id: previousReply.message_id,
+                display_name: previousReply.author,
+                content: previousReply.content
+            });
+        }
+    };
+    try {
+        if (useSocket) {
+            socket.send(JSON.stringify({type:'chat.send', data:payload}));
+        } else {
+            const response = await fetch('{{ url_for('trya_dcs_chat_fallback') }}', {
+                method: 'POST', credentials: 'same-origin',
+                headers: {'Content-Type': 'application/json', 'X-CSRF-Token': chatCsrf},
+                body: JSON.stringify(payload)
+            });
+            if (!response.ok) {
+                chatError.textContent = 'The message could not be delivered.';
+                restoreDraft();
+            }
+        }
+    } catch (_) {
+        chatError.textContent = 'The message could not be delivered.';
+        restoreDraft();
+    } finally {
+        chatSending = false;
+        if (!chatInput.disabled) sendButton.disabled = false;
+        chatInput.focus();
+    }
 });
 chatInput.addEventListener('input', updateMentionPickerFromInput);
 chatInput.addEventListener('keydown', event => {
