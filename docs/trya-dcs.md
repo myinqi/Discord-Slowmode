@@ -202,7 +202,10 @@ docker compose up -d --build
 
 After deployment, open **TrYa DCS** in the Admin UI, verify the guild and chat
 channel, then confirm that the Media Server and Discord OAuth status cards are
-green before enabling the feature.
+green before enabling the feature. Up to three Discord announcement channels and
+a short message can be configured in Stream distribution. Successful scheduler
+starts append the protected player URL and post automatically; manual starts remain
+silent unless **Post announcement now** is used.
 
 ## VOD recording
 

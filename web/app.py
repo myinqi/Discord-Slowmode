@@ -8405,6 +8405,50 @@ def create_app(db: Database, bot=None) -> Quart:
         bot.trya_stream_manager = trya_stream_manager
         bot.trya_dcs_manager = trya_dcs_manager
 
+    async def _post_trya_dcs_announcement() -> tuple[int, list[str]]:
+        if bot is None:
+            return 0, ["Discord bot is unavailable."]
+        channel_ids = []
+        for index in range(1, 4):
+            value = (await db.get_setting(f"trya_dcs_announcement_channel_{index}_id") or "").strip()
+            if value.isdigit() and int(value) not in channel_ids:
+                channel_ids.append(int(value))
+        if not channel_ids:
+            return 0, ["No announcement channels are configured."]
+        message = (
+            await db.get_setting("trya_dcs_announcement_message")
+            or "TrYa DCS is live. Join the community stream:"
+        ).strip()[:1500]
+        player_url = (await db.get_setting("trya_dcs_public_url") or "").strip()
+        if not player_url:
+            public_base = Config.WEB_URL.strip().rstrip("/")
+            if not public_base:
+                return 0, ["DCS player URL is not configured."]
+            player_url = f"{public_base}/trya-dcs/player"
+        content = f"{message}\n{player_url}" if message else player_url
+        sent = 0
+        errors = []
+        import discord
+        for channel_id in channel_ids:
+            channel = bot.get_channel(channel_id)
+            if channel is None:
+                try:
+                    channel = await bot.fetch_channel(channel_id)
+                except Exception as exc:
+                    errors.append(f"Channel {channel_id}: {exc}")
+                    continue
+            try:
+                await channel.send(
+                    content,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                sent += 1
+            except Exception as exc:
+                errors.append(f"Channel {channel_id}: {exc}")
+        return sent, errors
+
+    app.post_trya_dcs_announcement = _post_trya_dcs_announcement
+
     async def _trya_dcs_schedule_loop():
         """Auto-start TrYa DCS on configured weekdays + time.
 
@@ -8543,6 +8587,15 @@ def create_app(db: Database, bot=None) -> Quart:
                                     "trya_dcs_schedule_last_handled", occurrence_key,
                                 )
                                 log_dcs_event("Scheduler: DCS publisher is live.")
+                                sent, errors = await _post_trya_dcs_announcement()
+                                log_dcs_event(
+                                    f"Scheduler: Discord announcement posted to {sent} channel(s)."
+                                )
+                                for error in errors:
+                                    log_dcs_event(
+                                        f"Scheduler announcement warning: {error}",
+                                        level="error",
+                                    )
                             else:
                                 log_dcs_event(
                                     f"Scheduler: start failed — {result.get('error')}",
@@ -8873,6 +8926,10 @@ def create_app(db: Database, bot=None) -> Quart:
             "trya_dcs_schedule_enabled": "off",
             "trya_dcs_schedule_days": "",
             "trya_dcs_schedule_time": "",
+            "trya_dcs_announcement_channel_1_id": "",
+            "trya_dcs_announcement_channel_2_id": "",
+            "trya_dcs_announcement_channel_3_id": "",
+            "trya_dcs_announcement_message": "TrYa DCS is live. Join the community stream:",
             "trya_dcs_bg_filename": "",
             "trya_dcs_bg_type": "image",
             "trya_dcs_media_corners_enabled": "off",
@@ -8970,6 +9027,29 @@ def create_app(db: Database, bot=None) -> Quart:
                 await flash("The DCS form expired. Please try again.", "error")
                 return redirect(request.url)
             action = form.get("action", "save_settings")
+            if action == "post_dcs_announcement":
+                for index in range(1, 4):
+                    channel_id = str(form.get(f"announcement_channel_{index}_id") or "").strip()
+                    await db.set_setting(
+                        f"trya_dcs_announcement_channel_{index}_id",
+                        channel_id if channel_id.isdigit() else "",
+                    )
+                await db.set_setting(
+                    "trya_dcs_announcement_message",
+                    str(form.get("announcement_message") or "").strip()[:1500],
+                )
+                sent, errors = await _post_trya_dcs_announcement()
+                if sent:
+                    await flash(
+                        f"DCS announcement posted to {sent} channel(s).",
+                        "success",
+                    )
+                else:
+                    await flash("No DCS announcement was posted.", "error")
+                for error in errors:
+                    from bot.trya_dcs_manager import log_dcs_event
+                    log_dcs_event(f"Manual announcement warning: {error}", "error")
+                return redirect(request.url)
             if action == "save_dcs_vod_settings":
                 resolution = "1080" if form.get("vod_resolution") == "1080" else "720"
                 await db.set_setting(
@@ -9668,6 +9748,14 @@ def create_app(db: Database, bot=None) -> Quart:
                 if chat_channel_id and not chat_channel_id.isdigit():
                     await flash("Chat channel ID must contain digits only.", "error")
                     return redirect(request.url)
+                for index in range(1, 4):
+                    channel_id = str(form.get(f"announcement_channel_{index}_id") or "").strip()
+                    if channel_id and not channel_id.isdigit():
+                        await flash(
+                            f"Announcement channel {index} must contain digits only.",
+                            "error",
+                        )
+                        return redirect(request.url)
 
                 def bounded_int(name: str, default: int, low: int, high: int) -> int:
                     try:
@@ -9726,6 +9814,18 @@ def create_app(db: Database, bot=None) -> Quart:
                     "trya_dcs_schedule_time": (
                         form.get("dcs_schedule_time") or ""
                     ).strip(),
+                    "trya_dcs_announcement_channel_1_id": (
+                        form.get("announcement_channel_1_id") or ""
+                    ).strip(),
+                    "trya_dcs_announcement_channel_2_id": (
+                        form.get("announcement_channel_2_id") or ""
+                    ).strip(),
+                    "trya_dcs_announcement_channel_3_id": (
+                        form.get("announcement_channel_3_id") or ""
+                    ).strip(),
+                    "trya_dcs_announcement_message": (
+                        form.get("announcement_message") or ""
+                    ).strip()[:1500],
                     "trya_dcs_stream_title": (
                         form.get("stream_title") or ""
                     ).strip()[:200],

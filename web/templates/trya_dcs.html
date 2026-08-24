@@ -163,7 +163,6 @@
 
 <form method="POST" class="space-y-6">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf }}">
-    <input type="hidden" name="action" value="save_settings">
     <section class="bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden" data-dcs-collapse="access">
         <div class="dcs-section-header px-5 py-4 border-b border-gray-700/50 flex items-center justify-between gap-4">
             <div>
@@ -303,6 +302,17 @@
                 <input type="number" name="membership_recheck_seconds" min="60" max="900" step="60" value="{{ settings.trya_dcs_membership_recheck_seconds }}"
                     class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white focus:border-discord-blurple focus:outline-none">
             </label>
+            <div class="sm:col-span-2 xl:col-span-4 pt-4 border-t border-gray-700/50 space-y-3">
+                <div><p class="text-white text-sm font-medium">Discord stream announcement</p><p class="text-gray-500 text-xs mt-1">Automatically posted only after a scheduled publisher has successfully gone live. Use the button below for an on-demand post.</p></div>
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                    {% for index in range(1, 4) %}
+                    {% set selected_channel = settings['trya_dcs_announcement_channel_' ~ index ~ '_id'] %}
+                    <label class="block"><span class="block text-gray-500 text-xs mb-1">Announcement channel {{ index }}</span><select name="announcement_channel_{{ index }}_id" class="w-full bg-discord-darker border border-gray-600 rounded px-3 py-2 text-white text-sm"><option value="">Disabled</option>{% for channel in text_channels %}<option value="{{ channel.id }}" {% if selected_channel == channel.id|string %}selected{% endif %}>#{{ channel.name }}</option>{% endfor %}</select></label>
+                    {% endfor %}
+                </div>
+                <label class="block"><span class="block text-gray-500 text-xs mb-1">Announcement message</span><textarea name="announcement_message" rows="2" maxlength="1500" class="w-full bg-discord-darker border border-gray-600 rounded px-3 py-2 text-white text-sm resize-y">{{ settings.trya_dcs_announcement_message }}</textarea></label>
+                <div class="flex flex-wrap items-center justify-between gap-3"><p class="text-gray-600 text-xs">The configured player URL is appended automatically.</p><button type="submit" name="action" value="post_dcs_announcement" class="px-3 py-2 rounded bg-blue-900/60 hover:bg-blue-800/70 text-blue-200 text-sm">Post announcement now</button></div>
+            </div>
             <div class="sm:col-span-2 xl:col-span-4 p-3 bg-discord-darker border border-gray-700 rounded-lg text-xs space-y-1">
                 <p class="text-gray-400">Protected HLS endpoint</p>
                 <p class="text-blue-300 font-mono break-all select-all">{{ protected_hls_url }}</p>
@@ -396,7 +406,7 @@
     </section>
 
     <div class="flex justify-end">
-        <button type="submit" class="px-5 py-2.5 bg-discord-blurple hover:bg-indigo-500 text-white rounded-lg font-medium transition-colors">
+        <button type="submit" name="action" value="save_settings" class="px-5 py-2.5 bg-discord-blurple hover:bg-indigo-500 text-white rounded-lg font-medium transition-colors">
             Save DCS settings
         </button>
     </div>
