@@ -76,3 +76,16 @@ def neutralize_mass_mentions(content: str) -> str:
     """Prevent @everyone/@here and role pings from untrusted web input."""
     clean = _ROLE_MENTION_RE.sub(lambda match: match.group(0).replace("@", "@\u200b", 1), content)
     return _EVERYONE_RE.sub(lambda match: "@\u200b" + match.group(1).lower(), clean)
+
+
+_CUSTOM_EMOJI_MARKUP_RE = re.compile(r"^<a?:[A-Za-z0-9_]{2,32}:\d{17,20}>$")
+
+
+def is_allowed_dcs_emoji_markup(value: str) -> bool:
+    """Accept guild custom markup or a short unicode emoji, nothing else."""
+    text = str(value or "").strip()
+    if _CUSTOM_EMOJI_MARKUP_RE.fullmatch(text):
+        return True
+    if not text or len(text) > 16 or "<" in text or ">" in text or "\n" in text:
+        return False
+    return any(ord(char) > 127 for char in text)

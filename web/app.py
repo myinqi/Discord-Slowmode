@@ -10853,6 +10853,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 "user_id": str(user_id),
                 "chat_enabled": bool(channel_id and channel),
                 "emojis": await guild_emoji_payload(guild),
+                "favorite_emojis": await db.get_trya_dcs_emoji_favorites(int(user_id)),
                 "messages": [],
             },
         }))
@@ -11051,8 +11052,36 @@ def create_app(db: Database, bot=None) -> Quart:
         return {
             "chat_enabled": bool(channel_id and channel),
             "emojis": await guild_emoji_payload(get_guild()),
+            "favorite_emojis": await db.get_trya_dcs_emoji_favorites(int(user_id)),
             "messages": messages,
         }
+
+    @app.route("/trya-dcs/api/emoji-favorites", methods=["POST"])
+    async def trya_dcs_emoji_favorites():
+        if (await db.get_setting("trya_dcs_enabled") or "off") != "on":
+            return {"error": "disabled"}, 503
+        user_id = session.get("trya_dcs_discord_user_id")
+        try:
+            guild_id = int(await db.get_setting("trya_dcs_guild_id") or Config.GUILD_ID or 0)
+        except (TypeError, ValueError):
+            return {"error": "invalid_configuration"}, 503
+        if not user_id or not await _trya_dcs_membership_valid(int(user_id), guild_id):
+            return {"error": "forbidden"}, 403
+        csrf = str(request.headers.get("X-CSRF-Token") or "")
+        expected = str(session.get("trya_dcs_player_csrf") or "")
+        if not expected or not hmac.compare_digest(csrf, expected):
+            return {"error": "invalid_csrf"}, 403
+        payload = await request.get_json(silent=True) or {}
+        from bot.trya_dcs_web_chat import is_allowed_dcs_emoji_markup
+        markup = str(payload.get("markup") or "").strip()
+        if not is_allowed_dcs_emoji_markup(markup):
+            return {"error": "invalid_emoji"}, 400
+        favorites = await db.set_trya_dcs_emoji_favorite(
+            int(user_id),
+            markup,
+            bool(payload.get("favorite")),
+        )
+        return {"ok": True, "favorites": favorites}
 
     @app.route("/trya-dcs/api/chat/members")
     async def trya_dcs_chat_members():

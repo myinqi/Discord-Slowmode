@@ -93,7 +93,7 @@
         .relic-event { margin-bottom:8px; padding:8px 9px; border:1px solid #55306d; border-radius:5px; color:#d8b4fe; background:#24112f; font-size:11px; }
         .chat-panel { display:flex; flex-direction:column; min-height:0; }
         .chat-head { flex:none; padding:15px 16px; border-bottom:1px solid var(--line); font-weight:650; }
-        .messages { flex:1; min-height:0; padding:12px 14px; overflow-y:auto; }
+        .messages { flex:1 1 0; min-height:0; padding:12px 14px; overflow-y:scroll; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
         .empty-chat { min-height:0; height:100%; display:grid; place-items:center; color:var(--muted); text-align:center; }
         .message { display:grid; grid-template-columns:34px minmax(0,1fr); gap:9px; padding:8px 0; }
         .message-avatar { width:34px; height:34px; border-radius:50%; object-fit:cover; background:#282230; }
@@ -126,11 +126,16 @@
         .chat-form { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:7px; }
         .chat-form input { min-width:0; width:100%; border:1px solid var(--line); border-radius:6px; background:#0c0a11; color:#eeeaf6; padding:11px; }
         .chat-form input:disabled { color:#777080; }
-        .emoji-picker { display:none; position:absolute; left:12px; right:12px; bottom:62px; max-height:270px; padding:9px; border:1px solid var(--line); border-radius:6px; background:#0c0a11; box-shadow:0 10px 30px #000a; }
+        .emoji-picker { display:none; position:absolute; left:12px; right:12px; bottom:62px; max-height:340px; padding:9px; border:1px solid var(--line); border-radius:6px; background:#0c0a11; box-shadow:0 10px 30px #000a; }
         .emoji-picker.open { display:block; }
         .emoji-search { width:100%; margin-bottom:8px; border:1px solid var(--line); border-radius:5px; background:#15121d; color:#eeeaf6; padding:8px 9px; }
+        .emoji-favorites { margin:0 0 8px; padding:7px 7px 8px; border:1px solid #3a3247; border-radius:6px; background:#16111f; }
+        .emoji-section-label { color:#b9a46a; font-size:10px; font-weight:750; letter-spacing:.08em; text-transform:uppercase; margin-bottom:6px; }
+        .emoji-hint { margin:0 0 7px; color:#706878; font-size:10px; line-height:1.35; }
         .emoji-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(34px,1fr)); gap:4px; max-height:205px; overflow-y:auto; }
-        .emoji-grid button { padding:4px; height:36px; background:transparent; font-size:21px; }
+        .emoji-favorites-grid { max-height:none; }
+        .emoji-grid button { position:relative; padding:4px; height:36px; background:transparent; font-size:21px; }
+        .emoji-grid button.favorite { box-shadow:inset 0 0 0 1px #d4a017; background:#241a0c; }
         .emoji-picker img { width:25px; height:25px; object-fit:contain; }
         .chat-error { min-height:18px; padding:0 12px 7px; color:#f18c99; font-size:11px; }
         dialog { width:min(560px,calc(100% - 24px)); max-height:min(720px,80vh); padding:0; color:#f1edf7; background:#15121d; border:1px solid var(--line); border-radius:8px; box-shadow:0 22px 70px #000c; }
@@ -144,8 +149,8 @@
         .queue-song { min-width:0; }
         .queue-title { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .queue-artist { display:block; margin-top:2px; color:#898191; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-        .queue-links { min-height:0; margin-top:4px; }
-        .queue-links a { padding:2px 6px; font-size:9px; }
+        .queue-links { min-height:0; margin-top:4px; position:relative; z-index:1; }
+        .queue-links a { padding:4px 8px; font-size:10px; }
         @media (max-height: 900px) {
             body { padding:10px; }
             header { margin-bottom:8px; }
@@ -159,11 +164,18 @@
             .shell { height:auto; }
             header { align-items:flex-start; }
             .layout { grid-template-columns:1fr; grid-template-rows:none; height:auto; min-height:auto; overflow:visible; }
-            .video-panel, .chat-panel { max-height:none; }
-            .video-panel { overflow:visible; scrollbar-gutter:auto; }
+            .video-panel { max-height:none; overflow:visible; scrollbar-gutter:auto; }
             .community-grid { flex:none; min-height:0; overflow:visible; margin-bottom:0; }
             #community-info-content, #relic-activity { overflow:visible; }
-            .chat-panel { min-height:420px; }
+            .chat-panel {
+                height: min(32rem, 60vh);
+                height: min(32rem, 60dvh);
+                max-height: min(32rem, 60vh);
+                max-height: min(32rem, 60dvh);
+                min-height: 18rem;
+                overflow: hidden;
+            }
+            .messages { flex:1 1 0; min-height:0; overflow-y:scroll; }
             .meta { flex-direction:column; }
             .disclosure { text-align:left; }
             .stream-dashboard { grid-template-columns:1fr; gap:12px; }
@@ -265,6 +277,11 @@
             <div class="chat-foot">
                 <div id="emoji-picker" class="emoji-picker">
                     <input id="emoji-search" class="emoji-search" type="search" autocomplete="off" placeholder="Search emojis..." aria-label="Search emojis">
+                    <div id="emoji-favorites" class="emoji-favorites" hidden>
+                        <div class="emoji-section-label">Your favorites</div>
+                        <div id="emoji-favorites-grid" class="emoji-grid emoji-favorites-grid"></div>
+                    </div>
+                    <p id="emoji-hint" class="emoji-hint">Alt-click or hold an emoji to save it to your favorites. Stored for your Discord login.</p>
                     <div id="emoji-grid" class="emoji-grid"></div>
                 </div>
                 <div id="mention-picker" class="mention-picker" hidden></div>
@@ -327,12 +344,17 @@ let mentionIndex = 0;
 let mentionTimer = null;
 const emojiSearch = document.getElementById('emoji-search');
 const emojiGrid = document.getElementById('emoji-grid');
+const emojiFavoritesWrap = document.getElementById('emoji-favorites');
+const emojiFavoritesGrid = document.getElementById('emoji-favorites-grid');
+const emojiHint = document.getElementById('emoji-hint');
 const chatError = document.getElementById('chat-error');
 const queueDialog = document.getElementById('queue-dialog');
 const queueList = document.getElementById('queue-list');
 const wlmLink = document.getElementById('wlm-link');
 const sunoLink = document.getElementById('suno-link');
 let currentQueue = [];
+let lastQueueSongsKey = '';
+let lastQueueCurrentIndex = -1;
 let currentSongIndex = 0;
 let currentSongRemaining = 0;
 let currentStreamRemaining = 0;
@@ -423,19 +445,35 @@ function formatRemaining(seconds) {
     return hours ? `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}` : `${minutes}:${String(secs).padStart(2, '0')}`;
 }
 
-function renderDashboardLinks(container, song) {
-    container.replaceChildren();
+function songLinkItems(song) {
+    const items = [];
     for (const [label, value, host] of [['WLM', song && song.wlm_url, 'www.welovemusic.ai'], ['Suno', song && song.suno_url, 'suno.com']]) {
         try {
             const url = new URL(value);
             if (url.protocol !== 'https:' || (host === 'suno.com' ? !['suno.com', 'app.suno.com'].includes(url.hostname) : url.hostname !== host)) continue;
-            const link = document.createElement('a');
-            link.href = url.href;
-            link.target = '_blank';
-            link.rel = 'noopener noreferrer';
-            link.textContent = `${label} ↗`;
-            container.append(link);
+            items.push({href: url.href, text: `${label} ↗`});
         } catch (_) {}
+    }
+    return items;
+}
+
+function renderDashboardLinks(container, song) {
+    const wanted = songLinkItems(song);
+    const existing = [...container.querySelectorAll('a')];
+    if (
+        existing.length === wanted.length
+        && wanted.every((item, index) => existing[index].getAttribute('href') === item.href && existing[index].textContent === item.text)
+    ) {
+        return;
+    }
+    container.replaceChildren();
+    for (const item of wanted) {
+        const link = document.createElement('a');
+        link.href = item.href;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = item.text;
+        container.append(link);
     }
 }
 
@@ -638,7 +676,32 @@ async function refreshRelicStatus() {
     relicStatusTimer = setTimeout(refreshRelicStatus, 3000);
 }
 
+function queueSongsKey() {
+    return currentQueue.map(song => [
+        song.title || '',
+        song.artist || '',
+        song.suno_url || '',
+        song.wlm_url || '',
+    ].join('\t')).join('\n');
+}
+
+function updateQueueCurrent() {
+    [...queueList.children].forEach((item, index) => {
+        item.classList.toggle('current', index + 1 === currentSongIndex);
+    });
+}
+
 function renderQueue() {
+    const songsKey = queueSongsKey();
+    if (songsKey === lastQueueSongsKey && queueList.children.length === (currentQueue.length || 1)) {
+        if (lastQueueCurrentIndex !== currentSongIndex) {
+            lastQueueCurrentIndex = currentSongIndex;
+            updateQueueCurrent();
+        }
+        return;
+    }
+    lastQueueSongsKey = songsKey;
+    lastQueueCurrentIndex = currentSongIndex;
     queueList.replaceChildren();
     if (!currentQueue.length) {
         const empty = document.createElement('li');
@@ -1122,6 +1185,9 @@ const unicodeEmojis = [
     ['party','🎉'], ['star','⭐'], ['wave','👋'], ['eyes','👀']
 ];
 let availableEmojis = [];
+let favoriteEmojis = [];
+let favoriteHoldTimer = null;
+let favoriteHoldFired = false;
 
 function rememberEmoji(value) {
     try {
@@ -1136,35 +1202,107 @@ function insertEmoji(value) {
     chatInput.focus();
 }
 
+function emojiByValue(value) {
+    return availableEmojis.find(item => item.value === value);
+}
+
+function appendEmojiButton(container, emoji, {favorited = false} = {}) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.title = favorited ? `${emoji.name} · favorite (alt-click or hold to remove)` : `${emoji.name} · alt-click or hold to favorite`;
+    if (favorited) button.classList.add('favorite');
+    if (emoji.url) {
+        const image = document.createElement('img');
+        image.alt = emoji.name;
+        image.src = emoji.url;
+        button.append(image);
+    } else {
+        button.textContent = emoji.value;
+    }
+    button.addEventListener('click', event => {
+        if (favoriteHoldFired) {
+            favoriteHoldFired = false;
+            event.preventDefault();
+            return;
+        }
+        if (event.altKey || event.metaKey) {
+            event.preventDefault();
+            toggleFavorite(emoji.value);
+            return;
+        }
+        insertEmoji(emoji.value);
+    });
+    button.addEventListener('contextmenu', event => {
+        event.preventDefault();
+        toggleFavorite(emoji.value);
+    });
+    button.addEventListener('pointerdown', () => {
+        favoriteHoldFired = false;
+        clearTimeout(favoriteHoldTimer);
+        favoriteHoldTimer = setTimeout(() => {
+            favoriteHoldFired = true;
+            toggleFavorite(emoji.value);
+        }, 480);
+    });
+    const cancelHold = () => clearTimeout(favoriteHoldTimer);
+    button.addEventListener('pointerup', cancelHold);
+    button.addEventListener('pointerleave', cancelHold);
+    button.addEventListener('pointercancel', cancelHold);
+    container.append(button);
+}
+
+async function toggleFavorite(value) {
+    if (!emojiByValue(value)) return;
+    const favorite = !favoriteEmojis.includes(value);
+    favoriteEmojis = favorite
+        ? [value, ...favoriteEmojis.filter(item => item !== value)].slice(0, 24)
+        : favoriteEmojis.filter(item => item !== value);
+    renderEmojiPicker(emojiSearch.value);
+    try {
+        const response = await fetch('{{ url_for("trya_dcs_emoji_favorites") }}', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {'Content-Type': 'application/json', 'X-CSRF-Token': chatCsrf},
+            body: JSON.stringify({markup: value, favorite}),
+        });
+        const payload = await response.json();
+        if (response.ok && Array.isArray(payload.favorites)) {
+            favoriteEmojis = payload.favorites.filter(item => emojiByValue(item));
+            renderEmojiPicker(emojiSearch.value);
+        }
+    } catch (_) {}
+}
+
 function renderEmojiPicker(filter = '') {
     const needle = filter.trim().toLowerCase();
+    const matches = item => !needle || item.name.toLowerCase().includes(needle);
+    const favoriteEntries = favoriteEmojis.map(emojiByValue).filter(Boolean).filter(matches);
+    emojiFavoritesGrid.replaceChildren();
+    favoriteEntries.forEach(emoji => appendEmojiButton(emojiFavoritesGrid, emoji, {favorited: true}));
+    emojiFavoritesWrap.hidden = favoriteEntries.length === 0;
+    emojiHint.hidden = favoriteEmojis.length > 0 && !needle;
     emojiGrid.replaceChildren();
     let recent = [];
     try { recent = JSON.parse(localStorage.getItem('tryaDcsRecentEmojis') || '[]'); } catch (_) {}
-    const recentEntries = recent.map(value => availableEmojis.find(item => item.value === value)).filter(Boolean);
-    const entries = [...recentEntries, ...availableEmojis.filter(item => !recent.includes(item.value))];
-    for (const emoji of entries.filter(item => !needle || item.name.toLowerCase().includes(needle))) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.title = emoji.name;
-        if (emoji.url) {
-            const image = document.createElement('img');
-            image.alt = emoji.name;
-            image.src = emoji.url;
-            button.append(image);
-        } else {
-            button.textContent = emoji.value;
-        }
-        button.addEventListener('click', () => insertEmoji(emoji.value));
-        emojiGrid.append(button);
+    const recentEntries = recent.map(emojiByValue).filter(Boolean);
+    const favoriteSet = new Set(favoriteEmojis);
+    const entries = [
+        ...recentEntries.filter(item => !favoriteSet.has(item.value)),
+        ...availableEmojis.filter(item => !recent.includes(item.value) && !favoriteSet.has(item.value)),
+    ];
+    for (const emoji of entries.filter(matches)) {
+        appendEmojiButton(emojiGrid, emoji, {favorited: false});
     }
 }
 
-function installEmojis(emojis) {
+function installEmojis(emojis, favorites) {
     availableEmojis = [
         ...unicodeEmojis.map(([name, value]) => ({name, value})),
         ...(emojis || []).map(emoji => ({name: emoji.name, value: emoji.markup, url: emoji.url}))
     ];
+    if (Array.isArray(favorites)) {
+        favoriteEmojis = favorites.filter(item => emojiByValue(item));
+    }
     renderEmojiPicker(emojiSearch.value);
 }
 
@@ -1174,7 +1312,7 @@ function handleEvent(event) {
         messages.replaceChildren();
         for (const message of data.messages || []) upsertMessage(message);
         if (!(data.messages || []).length) messages.innerHTML = '<div class="empty-chat">No messages yet.</div>';
-        installEmojis(data.emojis);
+        installEmojis(data.emojis, data.favorite_emojis);
         chatInput.disabled = !data.chat_enabled;
         sendButton.disabled = !data.chat_enabled;
         emojiButton.disabled = !data.chat_enabled;
@@ -1384,6 +1522,11 @@ document.getElementById('queue-button').addEventListener('click', () => {
 document.getElementById('queue-close').addEventListener('click', () => queueDialog.close());
 queueDialog.addEventListener('click', event => {
     if (event.target === queueDialog) queueDialog.close();
+});
+queueList.addEventListener('click', event => {
+    const link = event.target.closest('a[href]');
+    if (!link || !queueList.contains(link)) return;
+    event.stopPropagation();
 });
 authorizeStream(true).catch(() => showState('Could not initialize the stream.'));
 refreshStatus();

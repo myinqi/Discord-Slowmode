@@ -2,6 +2,7 @@ import unittest
 
 from bot.trya_dcs_web_chat import (
     forget_web_chat_fingerprint,
+    is_allowed_dcs_emoji_markup,
     neutralize_mass_mentions,
     parse_web_chat_payload,
     register_web_chat_fingerprint,
@@ -38,6 +39,13 @@ class TryaDcsWebChatTests(unittest.TestCase):
         self.assertTrue(register_web_chat_fingerprint(1, "hello", now=14.0, store=store))
         self.assertTrue(register_web_chat_fingerprint(1, "hello", reply_to="99", now=11.0, store=store))
         self.assertTrue(register_web_chat_fingerprint(2, "hello", now=11.0, store=store))
+
+    def test_emoji_markup_allows_guild_and_unicode_only(self):
+        self.assertTrue(is_allowed_dcs_emoji_markup("<a:wiggle:123456789012345678>"))
+        self.assertTrue(is_allowed_dcs_emoji_markup("💜"))
+        self.assertFalse(is_allowed_dcs_emoji_markup("<script>"))
+        self.assertFalse(is_allowed_dcs_emoji_markup("hello"))
+        self.assertFalse(is_allowed_dcs_emoji_markup(""))
 
     def test_failed_web_post_fingerprint_can_be_retried(self):
         store = {}

@@ -414,6 +414,16 @@ class Database:
                 ON trya_dcs_stream_tokens(expires_at, revoked_at);
             CREATE INDEX IF NOT EXISTS idx_trya_dcs_tokens_user
                 ON trya_dcs_stream_tokens(discord_user_id, expires_at DESC);
+
+            CREATE TABLE IF NOT EXISTS trya_dcs_emoji_favorites (
+                discord_user_id INTEGER NOT NULL,
+                markup TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at REAL NOT NULL DEFAULT (unixepoch()),
+                PRIMARY KEY (discord_user_id, markup)
+            );
+            CREATE INDEX IF NOT EXISTS idx_trya_dcs_emoji_favorites_user
+                ON trya_dcs_emoji_favorites(discord_user_id, sort_order, created_at);
         """)
         await self.db.commit()
         await self.db.execute(
@@ -6586,6 +6596,50 @@ class Database:
             (int(discord_user_id),),
         )
         await self.db.commit()
+
+    async def get_trya_dcs_emoji_favorites(self, discord_user_id: int) -> list[str]:
+        async with self.db.execute(
+            """SELECT markup FROM trya_dcs_emoji_favorites
+               WHERE discord_user_id = ?
+               ORDER BY created_at DESC, sort_order DESC""",
+            (int(discord_user_id),),
+        ) as cursor:
+            return [str(row["markup"]) for row in await cursor.fetchall() if row["markup"]]
+
+    async def set_trya_dcs_emoji_favorite(
+        self,
+        discord_user_id: int,
+        markup: str,
+        favorite: bool,
+        *,
+        limit: int = 24,
+    ) -> list[str]:
+        user_id = int(discord_user_id)
+        value = str(markup or "").strip()
+        if favorite:
+            if not value:
+                return await self.get_trya_dcs_emoji_favorites(user_id)
+            current = await self.get_trya_dcs_emoji_favorites(user_id)
+            if value in current:
+                return current
+            if len(current) >= max(1, int(limit)):
+                oldest = current[0]
+                await self.db.execute(
+                    "DELETE FROM trya_dcs_emoji_favorites WHERE discord_user_id = ? AND markup = ?",
+                    (user_id, oldest),
+                )
+            await self.db.execute(
+                """INSERT INTO trya_dcs_emoji_favorites (discord_user_id, markup, sort_order)
+                   VALUES (?, ?, ?)""",
+                (user_id, value, int(time.time() * 1000) % 1000000000),
+            )
+        else:
+            await self.db.execute(
+                "DELETE FROM trya_dcs_emoji_favorites WHERE discord_user_id = ? AND markup = ?",
+                (user_id, value),
+            )
+        await self.db.commit()
+        return await self.get_trya_dcs_emoji_favorites(user_id)
 
     # -----------------------------------------------------------------------
     # Relic Hunt — table creation

@@ -2487,6 +2487,7 @@ class TryaStreamManager:
         filter_complex_threads: int = 0,
         inset_width: int | None = None,
         inset_height: int | None = None,
+        end_hold_seconds: float = 0.0,
     ) -> list:
         """Build ONE FFmpeg command for the full playlist.
 
@@ -2693,12 +2694,19 @@ class TryaStreamManager:
         else:
             filters.append(f"{last}copy[vout]")
 
+        video_map = "[vout]"
+        audio_map = f"{audio_input}:a" if legacy_pipeline else "[aout]"
+        hold = max(0.0, float(end_hold_seconds or 0))
+        if hold > 0 and not legacy_pipeline:
+            hold_s = f"{hold:.3f}"
+            filters.append(f"[vout]tpad=stop_mode=clone:stop_duration={hold_s}[vout_pad]")
+            filters.append(f"[aout]apad=pad_dur={hold_s}[aout_pad]")
+            video_map = "[vout_pad]"
+            audio_map = "[aout_pad]"
+
         cmd += ["-filter_complex", ";".join(filters)]
-        if legacy_pipeline:
-            cmd += ["-map", "[vout]", "-map", f"{audio_input}:a"]
-        else:
-            cmd += ["-map", "[vout]", "-map", "[aout]"]
-        cmd += ["-t", str(total_dur + 2)]
+        cmd += ["-map", video_map, "-map", audio_map]
+        cmd += ["-t", str(float(total_dur) + (hold if hold > 0 else 2))]
 
         # ── Encode ─────────────────────────────────────────────────────────────
         if legacy_pipeline:

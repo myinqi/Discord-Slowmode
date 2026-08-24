@@ -22,6 +22,11 @@ _FFMPEG_HEARTBEAT_SECONDS = 30.0
 # live graph does not upscale. Output stays 1080p / 2000 kbit/s.
 _DCS_INSET_W = 640
 _DCS_INSET_H = 640
+# Last-song MP3s can be longer than the probed duration; give the file room.
+_DCS_LAST_SONG_PAD_SECONDS = 15.0
+# Viewers sit behind the encoder (HLS). Keep publishing after the last audio
+# so the player can finish the outro before radio.mode goes offline.
+_DCS_END_HOLD_SECONDS = 22.0
 
 
 _DCS_LOG_BUFFER = deque(maxlen=2000)
@@ -639,6 +644,19 @@ class TryaDcsManager(TryaStreamManager):
             "trya_dcs_audio_bitrate_kbps", 192, 96, 320
         )
         total_duration = sum(float(song.get("duration") or 300) for song in songs)
+        playback_songs = [dict(song) for song in songs]
+        if playback_songs:
+            last = playback_songs[-1]
+            last["duration"] = float(last.get("duration") or 300) + _DCS_LAST_SONG_PAD_SECONDS
+            playback_songs[-1] = last
+        ffmpeg_duration = sum(float(song.get("duration") or 300) for song in playback_songs)
+        loop_mode = await self.db.get_setting("trya_dcs_loop_mode") or "stop"
+        end_hold = 0.0 if loop_mode == "reshuffle" else _DCS_END_HOLD_SECONDS
+        if end_hold > 0:
+            self._log(
+                f"Holding the publisher for {end_hold:.0f}s after the last song "
+                "so delayed listeners can finish it."
+            )
         vod_path = None
         try:
             vod_path = await self.vod.attach(
@@ -657,7 +675,7 @@ class TryaDcsManager(TryaStreamManager):
         except Exception as exc:
             self._log(f"VOD attach failed: {exc}", "error")
         command = self._build_playlist_cmd(
-            songs=songs,
+            songs=playback_songs,
             media_paths=media_paths,
             bg_path=bg_path,
             bg_type=bg_type,
@@ -667,13 +685,14 @@ class TryaDcsManager(TryaStreamManager):
             video_bitrate_kbps=video_bitrate,
             ass_path=ass_path,
             twitch_key="",
-            total_dur=total_duration,
+            total_dur=ffmpeg_duration,
             media_style=media_style,
             output_url=self._output_url,
             vod_path=vod_path,
             audio_bitrate_kbps=audio_bitrate,
             realtime_audio=True,
             video_preset="ultrafast",
+            end_hold_seconds=end_hold,
             # Leave cores for libx264. 10 filter threads plus 10 encoder
             # threads on ARM oversubscribe and drop speed below 1.0x.
             filter_complex_threads=max(1, min(4, (os.cpu_count() or 1) // 2)),
