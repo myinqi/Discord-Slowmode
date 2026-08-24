@@ -714,6 +714,12 @@ class TryaDcsManager(TryaStreamManager):
         if self._process.returncode is not None:
             await stderr_task
             raise RuntimeError(f"FFmpeg exited during startup ({self._process.returncode}).")
+        if getattr(self, "_tee_rtmp_failed", False):
+            self._log(
+                "FFmpeg dropped the MediaMTX RTMP output at startup; the live path is down.",
+                "error",
+            )
+            raise RuntimeError("FFmpeg dropped the MediaMTX RTMP output at startup.")
         self._stream_ready_event.set()
         self._log("MediaMTX publisher is live.")
         if vod_path:

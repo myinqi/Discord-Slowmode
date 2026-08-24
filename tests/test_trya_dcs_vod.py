@@ -49,8 +49,11 @@ class TeeOutputTests(unittest.TestCase):
         self.assertEqual(args[:4], ["-f", "tee", "-use_fifo", "1"])
         spec = args[4]
         self.assertIn("f=flv", spec)
+        self.assertIn("flvflags=no_duration_filesize", spec)
+        self.assertNotIn("f=flv:onfail=ignore", spec)
         self.assertIn("f=mp4", spec)
         self.assertIn("frag_keyframe", spec)
+        self.assertIn("onfail=ignore", spec)
         self.assertNotIn("mpegts", spec)
         self.assertIn(ffmpeg_tee_escape("rtmp://mediamtx:1935/trya-dcs"), spec)
         self.assertIn(ffmpeg_tee_escape("/data/vods/id/master.partial.mp4"), spec)

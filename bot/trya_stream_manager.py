@@ -354,6 +354,7 @@ class TryaStreamManager:
         self._ffmpeg_progress_pending = {}
         self._ffmpeg_last_progress_at = 0.0
         self._ffmpeg_health_state = state
+        self._tee_rtmp_failed = False
 
     def _set_obs_overlay_status(self, enabled: bool, state: str, label: str, mode: str = "local") -> None:
         self._obs_overlay_status = {
@@ -1301,6 +1302,14 @@ class TryaStreamManager:
             lowered = line.lower()
             if "late sei is not implemented" in lowered:
                 continue
+            if "deprecated pixel format used" in lowered:
+                continue
+            if "failed to update header with correct duration" in lowered:
+                continue
+            if "failed to update header with correct filesize" in lowered:
+                continue
+            if "slave muxer #0 failed" in lowered:
+                self._tee_rtmp_failed = True
             if "error" in lowered or "failed" in lowered:
                 level = "error"
             elif "queue blocking" in lowered:

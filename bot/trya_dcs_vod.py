@@ -45,7 +45,7 @@ def ffmpeg_live_output_args(stream_target: str, vod_path: str | None = None) -> 
         "-use_fifo",
         "1",
         (
-            f"[f=flv:onfail=ignore]{ffmpeg_tee_escape(stream_target)}|"
+            f"[f=flv:flvflags=no_duration_filesize]{ffmpeg_tee_escape(stream_target)}|"
             f"[f=mp4:movflags=+frag_keyframe+empty_moov+default_base_moof:onfail=ignore]"
             f"{ffmpeg_tee_escape(vod_path)}"
         ),
