@@ -10073,6 +10073,30 @@ def create_app(db: Database, bot=None) -> Quart:
             admin_csrf=admin_csrf,
         )
 
+    @app.route("/trya-dcs/v/<token>")
+    async def trya_dcs_member_vod_download(token: str):
+        from quart import abort, send_file
+
+        raw = str(token or "").strip()
+        if not raw or len(raw) > 80:
+            abort(404)
+        if (await db.get_setting("trya_dcs_enabled") or "off") != "on":
+            abort(404)
+        record = await db.get_trya_dcs_vod_share_token(
+            hashlib.sha256(raw.encode()).hexdigest()
+        )
+        if not record:
+            abort(404)
+        path = trya_dcs_manager.vod.file(str(record.get("vod_id") or ""), "rendered")
+        if not path:
+            abort(404)
+        return await send_file(
+            path,
+            as_attachment=True,
+            attachment_filename=f"trya_dcs_{record['vod_id']}_chat.mp4",
+            conditional=True,
+        )
+
     @app.route("/trya-dcs/vod/<vod_id>/<kind>")
     @permission_required("trya_dcs")
     async def trya_dcs_vod_download(vod_id: str, kind: str):

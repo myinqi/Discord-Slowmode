@@ -424,6 +424,16 @@ class Database:
             );
             CREATE INDEX IF NOT EXISTS idx_trya_dcs_emoji_favorites_user
                 ON trya_dcs_emoji_favorites(discord_user_id, sort_order, created_at);
+
+            CREATE TABLE IF NOT EXISTS trya_dcs_vod_share_tokens (
+                token_hash TEXT PRIMARY KEY,
+                vod_id TEXT NOT NULL,
+                discord_user_id INTEGER NOT NULL,
+                issued_at REAL NOT NULL,
+                expires_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_trya_dcs_vod_share_expiry
+                ON trya_dcs_vod_share_tokens(expires_at);
         """)
         await self.db.commit()
         await self.db.execute(
@@ -6588,6 +6598,40 @@ class Database:
             (int(token_id),),
         )
         await self.db.commit()
+
+    async def purge_expired_trya_dcs_vod_share_tokens(self, now: float | None = None) -> None:
+        await self.db.execute(
+            "DELETE FROM trya_dcs_vod_share_tokens WHERE expires_at <= ?",
+            (float(now or time.time()),),
+        )
+        await self.db.commit()
+
+    async def issue_trya_dcs_vod_share_token(
+        self,
+        *,
+        token_hash: str,
+        vod_id: str,
+        discord_user_id: int,
+        issued_at: float,
+        expires_at: float,
+    ) -> None:
+        await self.purge_expired_trya_dcs_vod_share_tokens(issued_at)
+        await self.db.execute(
+            """INSERT INTO trya_dcs_vod_share_tokens
+                   (token_hash, vod_id, discord_user_id, issued_at, expires_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (token_hash, str(vod_id), int(discord_user_id), float(issued_at), float(expires_at)),
+        )
+        await self.db.commit()
+
+    async def get_trya_dcs_vod_share_token(self, token_hash: str) -> Optional[dict]:
+        async with self.db.execute(
+            """SELECT * FROM trya_dcs_vod_share_tokens
+               WHERE token_hash = ? AND expires_at > unixepoch()""",
+            (token_hash,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return dict(row) if row else None
 
     async def revoke_trya_dcs_user_tokens(self, discord_user_id: int) -> None:
         await self.db.execute(

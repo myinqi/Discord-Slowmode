@@ -66,6 +66,7 @@ TRYA_DCS_SLASH_COMMAND_NAMES = frozenset({
     "trya-dcs-hook-remove",
     "trya-dcs-playlist",
     "trya-dcs-to-suno",
+    "trya-dcs-vod",
 })
 FEATURE_SLASH_COMMAND_GROUPS = (
     ("exp_radio_enabled", "on", EXP_RADIO_SLASH_COMMAND_NAMES),
@@ -2141,6 +2142,7 @@ class CommandsCog(commands.Cog):
                     "**`/trya-dcs-hook-remove`** — Remove a Hook video\n"
                     "**`/trya-dcs-playlist`** — Show the current playlist\n"
                     "**`/trya-dcs-to-suno`** — Export Suno URLs from the latest DCS stream\n"
+                    "**`/trya-dcs-vod`** — Download finished DCS VODs with chat overlay\n"
                     "Intro and outro do not count toward the per-member song limit. All destinations use the same rights form, Whisper and optional moderation."
                 ),
                 inline=False,
@@ -2768,6 +2770,83 @@ class CommandsCog(commands.Cog):
             file=discord.File(io.BytesIO(data), filename="trya-dcs-to-suno.txt"),
             ephemeral=True,
         )
+
+    @app_commands.command(
+        name="trya-dcs-vod",
+        description="Get download links for finished TrYa DCS VODs",
+    )
+    async def trya_dcs_vod(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        if (await self.bot.db.get_setting("trya_dcs_enabled") or "off") != "on":
+            await interaction.followup.send("TrYa DCS is currently disabled.", ephemeral=True)
+            return
+        configured_guild = int(await self.bot.db.get_setting("trya_dcs_guild_id") or 0)
+        if not interaction.guild or not configured_guild or interaction.guild.id != configured_guild:
+            await interaction.followup.send(
+                "This command is available only inside the configured TrYa DCS server.",
+                ephemeral=True,
+            )
+            return
+        web_url = str(getattr(self.bot, "web_url", "") or "").rstrip("/")
+        if not web_url:
+            await interaction.followup.send(
+                "The DCS download site is not configured.", ephemeral=True
+            )
+            return
+        manager = getattr(self.bot, "trya_dcs_manager", None)
+        if manager is None or not hasattr(manager, "vod"):
+            await interaction.followup.send("VOD storage is not available.", ephemeral=True)
+            return
+        ready = [
+            item for item in manager.vod.list()
+            if item.get("rendered_exists") and item.get("status") == "ready"
+        ]
+        if not ready:
+            pending = [
+                item for item in manager.vod.list()
+                if item.get("status") in {"rendering", "master_ready"}
+            ]
+            if pending:
+                await interaction.followup.send(
+                    "A DCS recording is still being prepared. Try `/trya-dcs-vod` again when the chat layout has finished rendering.",
+                    ephemeral=True,
+                )
+                return
+            await interaction.followup.send(
+                "No finished DCS VODs are available yet.", ephemeral=True
+            )
+            return
+        import hashlib
+        import secrets
+        view = discord.ui.View()
+        now = time.time()
+        expires = now + 2 * 3600
+        lines = [
+            "Finished DCS VODs with chat overlay. Links expire in **2 hours** and download the rendered file (not the live-picture master)."
+        ]
+        for index, vod in enumerate(ready[:8], 1):
+            raw = secrets.token_urlsafe(24)
+            await self.bot.db.issue_trya_dcs_vod_share_token(
+                token_hash=hashlib.sha256(raw.encode()).hexdigest(),
+                vod_id=str(vod["id"]),
+                discord_user_id=interaction.user.id,
+                issued_at=now,
+                expires_at=expires,
+            )
+            started = float(vod.get("started_at") or 0)
+            stamp = datetime.fromtimestamp(started, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+            minutes = max(1, int(round(float(vod.get("duration") or 0) / 60)))
+            res = vod.get("render_resolution") or "1080"
+            label = f"{index}. {stamp} UTC · {minutes} min · {res}p"
+            lines.append(f"**{label}**")
+            view.add_item(
+                discord.ui.Button(
+                    style=discord.ButtonStyle.link,
+                    label=label[:80],
+                    url=f"{web_url}/trya-dcs/v/{raw}",
+                )
+            )
+        await interaction.followup.send("\n".join(lines), view=view, ephemeral=True)
 
     async def _trya_stream_command_disabled(self, interaction: discord.Interaction) -> bool:
         if (await self.bot.db.get_setting("trya_stream_enabled") or "on") == "on":
