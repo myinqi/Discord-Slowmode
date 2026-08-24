@@ -36,20 +36,13 @@ def ffmpeg_tee_escape(value: str) -> str:
 
 
 def ffmpeg_live_output_args(stream_target: str, vod_path: str | None = None) -> list[str]:
-    """Encode once: live RTMP plus an optional local fragmented MP4 copy."""
-    if not vod_path:
-        return ["-f", "flv", stream_target]
-    return [
-        "-f",
-        "tee",
-        "-use_fifo",
-        "1",
-        (
-            f"[f=flv:flvflags=no_duration_filesize]{ffmpeg_tee_escape(stream_target)}|"
-            f"[f=mp4:movflags=+frag_keyframe+empty_moov+default_base_moof:onfail=ignore]"
-            f"{ffmpeg_tee_escape(vod_path)}"
-        ),
-    ]
+    """Live output stays a single RTMP/FLV publisher.
+
+    VOD is recorded separately from MediaMTX HLS so a local muxer cannot
+    reset the live ingest connection.
+    """
+    del vod_path
+    return ["-f", "flv", stream_target]
 
 
 def hls_url_from_rtmp(rtmp_url: str) -> str:
@@ -239,52 +232,38 @@ class DcsVodManager:
         self.capture_ready.clear()
         self.capture_task = asyncio.create_task(self._capture_events(events_path, now))
         await asyncio.wait_for(self.capture_ready.wait(), timeout=5)
-        self.log(f"VOD recording started: {vod_id} (same encode, local fMP4 copy).")
+        self.log(f"VOD recording started: {vod_id} (HLS stream copy).")
         return self._partial_path(metadata)
 
-    async def ensure_hls_fallback(self, hls_url: str) -> None:
+    async def start_hls_recorder(self, hls_url: str) -> None:
         try:
             if not self.active or not hls_url:
                 return
-            await asyncio.sleep(8)
+            if self.recorder and self.recorder.returncode is None:
+                return
+            await asyncio.sleep(2)
             if not self.active:
                 return
-            size = self.sidecar_bytes()
-            if size > 200_000:
-                self.log(f"VOD sidecar is growing ({size / 1048576:.1f} MiB).")
-                return
-            self.log(
-                f"VOD sidecar still empty after 8s ({self.describe_files()}); "
-                "falling back to HLS stream copy.",
-                "warning",
+            partial = os.path.join(self._directory(self.active["id"]), "master.partial.ts")
+            command = [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "warning",
+                "-live_start_index", "-3", "-rw_timeout", "15000000",
+                "-i", hls_url,
+                "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy",
+                "-f", "mpegts",
+                partial,
+            ]
+            self.recorder = await asyncio.create_subprocess_exec(
+                *command,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
             )
-            await self._launch_hls_recorder(hls_url)
+            self.log(f"VOD HLS recorder started ({hls_url}).")
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            self.log(f"VOD HLS fallback failed: {exc}", "error")
-
-    async def _launch_hls_recorder(self, hls_url: str) -> None:
-        if not self.active:
-            return
-        if self.recorder and self.recorder.returncode is None:
-            return
-        partial = os.path.join(self._directory(self.active["id"]), "master.partial.mp4")
-        command = [
-            "ffmpeg", "-y", "-hide_banner", "-loglevel", "warning",
-            "-live_start_index", "0", "-rw_timeout", "15000000",
-            "-i", hls_url,
-            "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy",
-            "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
-            partial,
-        ]
-        self.recorder = await asyncio.create_subprocess_exec(
-            *command,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        self.log("VOD HLS fallback recorder started.")
+            self.log(f"VOD HLS recorder failed: {exc}", "error")
 
     async def _archive_partial(self, metadata: dict) -> None:
         directory = self._directory(metadata["id"])
@@ -381,10 +360,17 @@ class DcsVodManager:
             f"{f', {metadata['duration']:.1f}s' if metadata['duration'] else ''}"
             f"{f', {size_mib:.1f} MiB' if size_mib else ''})."
         )
-        if metadata["status"] in {"master_ready", "interrupted"} and (
+        if (
+            metadata["status"] in {"master_ready", "interrupted"}
+            and metadata["duration"] >= 5
+            and (os.path.getsize(master) if os.path.isfile(master) else 0) >= 500_000
+            and (await self.db.get_setting("trya_dcs_vod_auto_render") or "off") == "on"
+        ):
+            await self.queue_render(metadata["id"])
+        elif metadata["status"] in {"master_ready", "interrupted"} and (
             await self.db.get_setting("trya_dcs_vod_auto_render") or "off"
         ) == "on":
-            await self.queue_render(metadata["id"])
+            self.log("VOD auto-render skipped; master is too short to render.")
         return metadata
 
     async def _stop_recorder(self, process) -> str:
@@ -409,6 +395,7 @@ class DcsVodManager:
         command = [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "warning",
             "-err_detect", "ignore_err", "-fflags", "+genpts+discardcorrupt",
+            "-analyzeduration", "10000000", "-probesize", "10000000",
             "-i", source, "-c", "copy",
         ]
         if source.endswith(".ts"):

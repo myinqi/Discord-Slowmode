@@ -691,7 +691,7 @@ class TryaDcsManager(TryaStreamManager):
             total_dur=ffmpeg_duration,
             media_style=media_style,
             output_url=self._output_url,
-            vod_path=vod_path,
+            vod_path=None,
             audio_bitrate_kbps=audio_bitrate,
             realtime_audio=True,
             video_preset="ultrafast",
@@ -714,17 +714,12 @@ class TryaDcsManager(TryaStreamManager):
         if self._process.returncode is not None:
             await stderr_task
             raise RuntimeError(f"FFmpeg exited during startup ({self._process.returncode}).")
-        if getattr(self, "_tee_rtmp_failed", False):
-            self._log(
-                "FFmpeg dropped the MediaMTX RTMP output at startup; the live path is down.",
-                "error",
-            )
-            raise RuntimeError("FFmpeg dropped the MediaMTX RTMP output at startup.")
         self._stream_ready_event.set()
         self._log("MediaMTX publisher is live.")
         if vod_path:
-            self._log(f"VOD sidecar: {os.path.basename(vod_path)}")
-            asyncio.create_task(self.vod.ensure_hls_fallback(hls_url_from_rtmp(self._output_url)))
+            asyncio.create_task(
+                self.vod.start_hls_recorder(hls_url_from_rtmp(self._output_url))
+            )
         tracker = asyncio.create_task(self._track_song_progress(songs))
         announce_task = None
         if not self._safe_stop_requested:
