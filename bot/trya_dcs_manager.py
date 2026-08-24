@@ -11,7 +11,7 @@ from collections import deque
 from bot.trya_stream_manager import TryaStreamManager
 from bot.trya_dcs_events import trya_dcs_events
 from bot.trya_dcs_schedule import is_submissions_locked
-from bot.trya_dcs_vod import DcsVodManager
+from bot.trya_dcs_vod import DcsVodManager, safe_stop_target_out_time
 from bot.suno_urls import SUNO_UUID_RE, UUID_RE
 
 # Re-export so callers can keep importing from this module.
@@ -52,6 +52,11 @@ class TryaDcsManager(TryaStreamManager):
         self._outro_song: dict | None = None
         self._ffmpeg_heartbeat_at = 0.0
         self.vod = DcsVodManager(db, base_dir, log_dcs_event)
+        self.bot = None
+        self._cached_loop_path: str | None = None
+        self._safe_stop_task: asyncio.Task | None = None
+        self._safe_stop_outro_played = False
+        self._announce_task: asyncio.Task | None = None
 
     def _log(self, line: str, level: str = "info") -> None:
         log_dcs_event(line, level)
@@ -232,6 +237,8 @@ class TryaDcsManager(TryaStreamManager):
                 first_playlist[0].get("duration") or 300
             )
             self._safe_stop_requested = False
+            self._safe_stop_outro_played = False
+            self._cached_loop_path = None
             self._output_url = (
                 await self.db.get_setting("trya_dcs_rtmp_ingest_url")
                 or "rtmp://mediamtx:1935/trya-dcs"
@@ -283,6 +290,14 @@ class TryaDcsManager(TryaStreamManager):
         self.is_running = False
         self._safe_stop_requested = False
         self._stream_ready_event.clear()
+        waiter = self._safe_stop_task
+        self._safe_stop_task = None
+        if waiter and waiter is not asyncio.current_task() and not waiter.done():
+            waiter.cancel()
+        announcer = self._announce_task
+        self._announce_task = None
+        if announcer and announcer is not asyncio.current_task() and not announcer.done():
+            announcer.cancel()
         process = self._process
         if process and process.returncode is None:
             try:
@@ -303,6 +318,7 @@ class TryaDcsManager(TryaStreamManager):
             task.cancel()
         self.current_song = None
         self._current_song_index = 0
+        self._cached_loop_path = None
         self._reset_ffmpeg_health("offline")
         self._log("Stopped.")
         await trya_dcs_events.publish("radio.mode", {"mode": "offline"})
@@ -314,32 +330,98 @@ class TryaDcsManager(TryaStreamManager):
         if self._safe_stop_requested:
             return {"ok": False, "error": "Safe stop is already pending."}
         self._safe_stop_requested = True
+        song_title = (self.current_song or {}).get("title") or "the current song"
         self._log("Safe stop requested; the current song will finish.")
-        asyncio.create_task(self._safe_stop_waiter())
+        await self._announce_chat(
+            f"🎙️ The stream will end after '{song_title}' finishes. Thanks for listening!"
+        )
+        self._safe_stop_task = asyncio.create_task(self._safe_stop_waiter())
         return {"ok": True}
 
+    async def _announce_chat(self, message: str) -> None:
+        try:
+            from bot.cogs.trya_dcs_chat import announce_dcs_stream_chat
+            await announce_dcs_stream_chat(self.bot, self.db, message)
+        except Exception as exc:
+            self._log(f"Stream chat announcement failed: {exc}", "error")
+
+    async def _announce_rotation_end(self, total_dur: float) -> None:
+        try:
+            lead = 30.0
+            wait = float(total_dur or 0) - lead
+            if wait < 15:
+                return
+            await asyncio.sleep(wait)
+            if not self.is_running or self._safe_stop_requested:
+                return
+            mode = await self.db.get_setting("trya_dcs_loop_mode") or "stop"
+            if mode == "stop":
+                msg = (
+                    "⚠️ Heads up: the stream will end in ~30 seconds when the last "
+                    "track finishes. Thanks for tuning in!"
+                )
+            else:
+                msg = (
+                    "🔄 Heads up: the playlist will restart in ~30 seconds with a "
+                    "freshly shuffled order (including any newly approved tracks)."
+                )
+            await self._announce_chat(msg)
+            self._log(f"Rotation end announcement posted (mode={mode}).")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._log(f"Rotation end announcement failed: {exc}", "error")
+
     async def _safe_stop_waiter(self) -> None:
-        remaining = self._current_song_end_time - time.monotonic()
-        if remaining > 0:
-            await asyncio.sleep(remaining + 0.5)
-        if not self._safe_stop_requested or not self.is_running:
-            return
-        process = self._process
-        if process and process.returncode is None:
-            process.terminate()
+        try:
+            song = self.current_song or {}
+            stored = float(song.get("duration") or 0)
+            probed = None
             try:
-                await asyncio.wait_for(process.wait(), timeout=10)
-            except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
-        if self._outro_song and (
-            not self.current_song
-            or int(self.current_song.get("id") or 0) != int(self._outro_song.get("id") or 0)
-        ):
-            self._log(f"Safe stop: playing outro {self._outro_song.get('title') or self._outro_song['id']}.")
-            await self._play_dcs_playlist([self._outro_song])
-        if self.is_running:
-            await self.stop()
+                probed = await self._probe_audio_duration(song)
+            except Exception:
+                probed = None
+            remaining = self._current_song_end_time - time.monotonic()
+            out_time = self._get_ffmpeg_out_time_seconds()
+            target = safe_stop_target_out_time(out_time, remaining, stored, probed)
+            deadline = time.monotonic() + max(0.0, remaining) + max(
+                2.0, (probed or stored) - stored + 2.0 if probed else 2.0
+            )
+            while self._safe_stop_requested and self.is_running:
+                process = self._process
+                if process is None or process.returncode is not None:
+                    return
+                now_out = self._get_ffmpeg_out_time_seconds()
+                if target is None and now_out is not None:
+                    target = safe_stop_target_out_time(
+                        now_out,
+                        self._current_song_end_time - time.monotonic(),
+                        stored,
+                        probed,
+                    )
+                if target is not None and now_out is not None and now_out >= target:
+                    break
+                if time.monotonic() >= deadline:
+                    break
+                await asyncio.sleep(0.25)
+            else:
+                return
+            await asyncio.sleep(1.0)
+            if not self._safe_stop_requested or not self.is_running:
+                return
+            process = self._process
+            if process and process.returncode is None:
+                self._log("Safe stop: current song finished, ending publisher.")
+                process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=10)
+                except asyncio.TimeoutError:
+                    process.kill()
+                    await process.wait()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._log(f"Safe stop waiter failed: {exc}", "error")
 
     async def get_status(self) -> dict:
         status = await super().get_status()
@@ -379,6 +461,9 @@ class TryaDcsManager(TryaStreamManager):
                 if not self.is_running:
                     break
                 if self._safe_stop_requested:
+                    await self._play_safe_stop_outro()
+                    if self.is_running:
+                        await self.stop()
                     break
                 mode = await self.db.get_setting("trya_dcs_loop_mode") or "stop"
                 if mode != "reshuffle":
@@ -391,10 +476,35 @@ class TryaDcsManager(TryaStreamManager):
         except asyncio.CancelledError:
             pass
         except Exception as exc:
+            if self._safe_stop_requested and self.is_running:
+                self._log(f"Publisher ended during safe stop: {exc}")
+                try:
+                    await self._play_safe_stop_outro()
+                except Exception as outro_exc:
+                    self._log(f"Safe-stop outro failed: {outro_exc}", "error")
+                if self.is_running:
+                    await self.stop()
+                return
             self._log(f"Publisher failed: {exc}", "error")
             await self.stop(interrupted=True)
 
+    async def _play_safe_stop_outro(self) -> None:
+        if self._safe_stop_outro_played or not self.is_running:
+            return
+        outro = self._outro_song
+        if not outro:
+            return
+        current_id = int((self.current_song or {}).get("id") or 0)
+        outro_id = int(outro.get("id") or 0)
+        if outro_id and current_id == outro_id:
+            return
+        self._safe_stop_outro_played = True
+        self._log(f"Safe stop: playing outro {outro.get('title') or outro.get('id')}.")
+        await self._play_dcs_playlist([outro])
+
     async def _resolve_dcs_loop_path(self) -> str | None:
+        if self._cached_loop_path and os.path.isfile(self._cached_loop_path):
+            return self._cached_loop_path
         assets_dir = os.path.join(self.trya_stream_dir, "assets")
         try:
             configured = json.loads(
@@ -461,12 +571,15 @@ class TryaDcsManager(TryaStreamManager):
                     "error",
                 )
         if built_path and os.path.isfile(built_path):
-            return built_path
-        if built_path is None and selected_filename:
-            return os.path.join(assets_dir, selected_filename)
-        fallback = random.choice(videos)["filename"]
-        self._log(f"DCS overlay build failed; using {fallback}.", "error")
-        return os.path.join(assets_dir, fallback)
+            resolved = built_path
+        elif built_path is None and selected_filename:
+            resolved = os.path.join(assets_dir, selected_filename)
+        else:
+            fallback = random.choice(videos)["filename"]
+            self._log(f"DCS overlay build failed; using {fallback}.", "error")
+            resolved = os.path.join(assets_dir, fallback)
+        self._cached_loop_path = resolved
+        return resolved
 
     async def _play_dcs_playlist(self, songs: list[dict]) -> None:
         asset_dir = os.path.join(self.trya_stream_dir, "assets")
@@ -600,14 +713,33 @@ class TryaDcsManager(TryaStreamManager):
             ],
         )
         tracker = asyncio.create_task(self._track_song_progress(songs))
-        await self._process.wait()
-        tracker.cancel()
+        announce_task = None
+        if not self._safe_stop_requested:
+            announce_task = asyncio.create_task(self._announce_rotation_end(total_duration))
+            self._announce_task = announce_task
         try:
-            await tracker
-        except asyncio.CancelledError:
-            pass
+            await self._process.wait()
+        finally:
+            tracker.cancel()
+            if announce_task is not None:
+                announce_task.cancel()
+                if self._announce_task is announce_task:
+                    self._announce_task = None
+            try:
+                await tracker
+            except asyncio.CancelledError:
+                pass
+            if announce_task is not None:
+                try:
+                    await announce_task
+                except asyncio.CancelledError:
+                    pass
         await stderr_task
-        if self._process.returncode and self.is_running:
+        if (
+            self._process.returncode
+            and self.is_running
+            and not self._safe_stop_requested
+        ):
             raise RuntimeError(f"FFmpeg exited with code {self._process.returncode}.")
 
     async def _bounded_setting(self, key: str, default: int, low: int, high: int) -> int:
@@ -635,6 +767,8 @@ class TryaDcsManager(TryaStreamManager):
                     index = candidate
                 else:
                     break
+            if self._safe_stop_requested and active_index >= 0:
+                index = min(index, active_index)
             song = songs[index]
             duration = float(song.get("duration") or 300)
             elapsed = max(0.0, out_time - starts[index])

@@ -20,6 +20,62 @@ _WEBHOOK_NAME = "TrYa DCS Web Chat"
 _USER_MENTION_RE = re.compile(r"<@!?(\d{17,20})>")
 
 
+async def announce_dcs_stream_chat(bot, db, text: str) -> None:
+    """Post a Corax stream notice to Discord DCS chat and the web player."""
+    from bot.trya_dcs_manager import log_dcs_event
+
+    message = str(text or "").strip()[:1900]
+    if not message:
+        return
+    log_dcs_event(message)
+    channel_id = 0
+    if db is not None:
+        try:
+            channel_id = int(await db.get_setting("trya_dcs_chat_channel_id") or 0)
+        except (TypeError, ValueError):
+            channel_id = 0
+    posted = False
+    if bot is not None and channel_id:
+        try:
+            channel = bot.get_channel(channel_id)
+            if channel is None:
+                channel = await bot.fetch_channel(channel_id)
+            if isinstance(channel, discord.TextChannel):
+                await channel.send(
+                    message,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                posted = True
+        except Exception as exc:
+            log_dcs_event(f"Stream chat announcement failed: {exc}", "error")
+    if posted:
+        return
+    avatar_url = ""
+    author_id = "system:corax"
+    user = getattr(bot, "user", None) if bot is not None else None
+    if user is not None:
+        author_id = str(user.id)
+        avatar = getattr(user, "display_avatar", None)
+        if avatar is not None:
+            avatar_url = str(avatar.url)
+    await trya_dcs_events.publish("chat.message", {
+        "message_id": f"system-{time.time_ns()}",
+        "channel_id": str(channel_id or ""),
+        "author_id": author_id,
+        "display_name": "Corax",
+        "avatar_url": avatar_url,
+        "role_color": "#C4B5FD",
+        "content": message,
+        "created_at": time.time(),
+        "edited_at": None,
+        "web_origin": False,
+        "reply": None,
+        "mentions": [],
+        "attachments": [],
+        "embeds": [],
+    })
+
+
 async def publish_dcs_game_feedback(
     db,
     text: str,

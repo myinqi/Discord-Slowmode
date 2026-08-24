@@ -8404,6 +8404,7 @@ def create_app(db: Database, bot=None) -> Quart:
         bot.exp_stream_manager = exp_stream_manager
         bot.trya_stream_manager = trya_stream_manager
         bot.trya_dcs_manager = trya_dcs_manager
+        trya_dcs_manager.bot = bot
 
     async def _post_trya_dcs_announcement() -> tuple[int, list[str]]:
         if bot is None:

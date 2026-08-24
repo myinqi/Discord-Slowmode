@@ -12,6 +12,42 @@ from datetime import datetime, timezone
 from bot.trya_dcs_events import trya_dcs_events
 
 
+def classify_vod_stop(
+    *,
+    interrupted: bool,
+    master_ok: bool,
+    assembly_error: str = "",
+    recorder_error: str = "",
+) -> tuple[str, str]:
+    """Keep a usable recording even when FFmpeg is stopped with the live stream."""
+    if not master_ok:
+        return "failed", (
+            assembly_error
+            or recorder_error
+            or "Recorder did not produce a valid master file."
+        )
+    if interrupted:
+        return "interrupted", ""
+    return "master_ready", ""
+
+
+def safe_stop_target_out_time(
+    out_time: float | None,
+    remaining: float,
+    stored_duration: float,
+    probed_duration: float | None,
+    extra: float = 2.0,
+) -> float | None:
+    """FFmpeg clock time at which the current song has actually finished."""
+    if out_time is None:
+        return None
+    stored = max(0.0, float(stored_duration or 0))
+    probed = float(probed_duration or 0)
+    if probed > stored:
+        extra += probed - stored
+    return float(out_time) + max(0.0, float(remaining or 0)) + extra
+
+
 class DcsVodManager:
     def __init__(self, db, base_dir: str, logger):
         self.db = db
@@ -105,7 +141,7 @@ class DcsVodManager:
             self._write_metadata(self.active)
             if self.recorder and self.recorder.returncode is None:
                 try:
-                    await asyncio.wait_for(asyncio.shield(self.recorder.wait()), timeout=2)
+                    await asyncio.wait_for(asyncio.shield(self.recorder.wait()), timeout=8)
                 except asyncio.TimeoutError:
                     return self.active
             if self.recorder:
@@ -218,18 +254,7 @@ class DcsVodManager:
         self.capture_task = None
         process = self.recorder
         self.recorder = None
-        if process and process.returncode is None:
-            try:
-                process.send_signal(signal.SIGINT)
-                await asyncio.wait_for(process.wait(), timeout=30)
-            except Exception:
-                try:
-                    process.kill()
-                    await process.wait()
-                except ProcessLookupError:
-                    pass
-        if process and process.returncode is not None:
-            await process.wait()
+        recorder_error = await self._stop_recorder(process)
         await self._archive_partial(metadata)
         directory = self._directory(metadata["id"])
         master = os.path.join(directory, "master.mp4")
@@ -238,23 +263,76 @@ class DcsVodManager:
             await self._assemble_master(metadata, master)
         except Exception as exc:
             assembly_error = str(exc)
+        if not os.path.isfile(master) or os.path.getsize(master) <= 0:
+            leftover = os.path.join(directory, "master.partial.mp4")
+            if os.path.isfile(leftover) and os.path.getsize(leftover) > 0:
+                try:
+                    await self._remux_copy(leftover, master)
+                except Exception as exc:
+                    assembly_error = assembly_error or str(exc)
+                    if not os.path.isfile(master):
+                        os.replace(leftover, master)
         metadata["ended_at"] = time.time()
         metadata["duration"] = await self._probe_duration(master)
-        metadata["status"] = "interrupted" if interrupted else "master_ready"
-        if assembly_error:
-            metadata["status"] = "failed"
-            metadata["error"] = assembly_error
-        if not os.path.isfile(master) or metadata["duration"] <= 0:
-            metadata["status"] = "failed"
-            if not metadata.get("error"):
-                metadata["error"] = "Recorder did not produce a valid master file."
+        master_ok = os.path.isfile(master) and os.path.getsize(master) > 0
+        status, error = classify_vod_stop(
+            interrupted=interrupted,
+            master_ok=master_ok,
+            assembly_error=assembly_error,
+            recorder_error=recorder_error,
+        )
+        metadata["status"] = status
+        if error:
+            metadata["error"] = error
+        elif status in {"master_ready", "interrupted"}:
+            metadata["error"] = ""
         self._write_metadata(metadata)
-        self.log(f"VOD recording stopped: {metadata['id']} ({metadata['status']}).")
+        size_mib = (os.path.getsize(master) / 1048576) if master_ok else 0
+        self.log(
+            f"VOD recording stopped: {metadata['id']} ({metadata['status']}"
+            f"{f', {metadata['duration']:.1f}s' if metadata['duration'] else ''}"
+            f"{f', {size_mib:.1f} MiB' if size_mib else ''})."
+        )
         if metadata["status"] in {"master_ready", "interrupted"} and (
             await self.db.get_setting("trya_dcs_vod_auto_render") or "off"
         ) == "on":
             await self.queue_render(metadata["id"])
         return metadata
+
+    async def _stop_recorder(self, process) -> str:
+        if process is None:
+            return ""
+        if process.returncode is None:
+            try:
+                await asyncio.wait_for(process.wait(), timeout=8)
+            except asyncio.TimeoutError:
+                try:
+                    process.send_signal(signal.SIGINT)
+                    await asyncio.wait_for(process.wait(), timeout=20)
+                except Exception:
+                    try:
+                        process.kill()
+                        await process.wait()
+                    except ProcessLookupError:
+                        pass
+        return ""
+
+    async def _remux_copy(self, source: str, destination: str) -> None:
+        process = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "warning",
+            "-err_detect", "ignore_err", "-fflags", "+genpts+discardcorrupt",
+            "-i", source,
+            "-c", "copy", "-movflags", "+faststart",
+            destination,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await process.communicate()
+        if process.returncode != 0 or not os.path.isfile(destination) or os.path.getsize(destination) <= 0:
+            raise RuntimeError(
+                "VOD remux failed: "
+                + stderr.decode("utf-8", errors="replace")[-2000:]
+            )
 
     async def _assemble_master(self, metadata: dict, master: str) -> None:
         directory = self._directory(metadata["id"])
@@ -266,7 +344,15 @@ class DcsVodManager:
         if not parts:
             return
         if len(parts) == 1:
-            os.replace(parts[0], master)
+            try:
+                await self._remux_copy(parts[0], master)
+            except Exception:
+                os.replace(parts[0], master)
+            else:
+                try:
+                    os.remove(parts[0])
+                except FileNotFoundError:
+                    pass
             metadata["parts"] = []
             return
         concat_path = os.path.join(directory, "parts.txt")
