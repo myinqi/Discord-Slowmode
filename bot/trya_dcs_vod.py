@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 from bot.trya_dcs_events import trya_dcs_events
 
 _CUSTOM_EMOJI_RE = re.compile(r"<a?:([A-Za-z0-9_]+):(\d{17,20})>")
-_EMOJI_PLACEHOLDER = "\ufffc"
+_EMOJI_PLACEHOLDER = "\u25a1"
 
 
 def chat_text_with_emoji_slots(content: str) -> tuple[str, list[tuple[str, str]]]:
@@ -634,9 +634,11 @@ class DcsVodManager:
             seen.add(emoji_id)
             path = os.path.join(cache, f"{emoji_id}.png")
             overlay["path"] = path
-            if os.path.isfile(path) and os.path.getsize(path) > 0:
-                continue
-            url = f"https://cdn.discordapp.com/emojis/{emoji_id}.png?size=64&quality=lossless"
+            if os.path.isfile(path) and os.path.getsize(path) > 8:
+                with open(path, "rb") as handle:
+                    if handle.read(8).startswith(b"\x89PNG"):
+                        continue
+            url = f"https://cdn.discordapp.com/emojis/{emoji_id}.png?size=128&quality=lossless"
             try:
                 await asyncio.to_thread(self._fetch_url, url, path)
             except Exception as exc:
@@ -651,8 +653,8 @@ class DcsVodManager:
         request = Request(url, headers={"User-Agent": "TrYaDCS-VOD/1.0"})
         with urlopen(request, timeout=12) as response:
             payload = response.read()
-        if not payload:
-            raise RuntimeError("empty emoji image")
+        if not payload or not payload.startswith(b"\x89PNG"):
+            raise RuntimeError("emoji image was not a PNG")
         tmp = f"{path}.tmp"
         with open(tmp, "wb") as handle:
             handle.write(payload)
@@ -670,28 +672,15 @@ class DcsVodManager:
                 continue
             id_to_index[emoji_id] = len(id_to_index) + 1
             inputs += ["-i", item["path"]]
-        counts: dict[str, int] = defaultdict(int)
-        for item in usable:
-            counts[item["id"]] += 1
         filters: list[str] = []
-        pads: dict[str, list[str]] = defaultdict(list)
-        size = int(usable[0]["size"])
-        for emoji_id, index in id_to_index.items():
-            count = counts[emoji_id]
-            scaled = f"e{emoji_id}s"
-            filters.append(
-                f"[{index}:v]scale={size}:{size}:force_original_aspect_ratio=decrease,"
-                f"format=rgba,pad={size}:{size}:(ow-iw)/2:(oh-ih)/2:color=0x00000000[{scaled}]"
-            )
-            if count == 1:
-                pads[emoji_id].append(scaled)
-            else:
-                names = [f"e{emoji_id}p{n}" for n in range(count)]
-                filters.append(f"[{scaled}]split={count}" + "".join(f"[{name}]" for name in names))
-                pads[emoji_id].extend(names)
         last = "base"
         for index, item in enumerate(usable):
-            src = pads[item["id"]].pop(0)
+            src = f"em{index}"
+            size = max(16, int(item["size"]))
+            filters.append(
+                f"[{id_to_index[item['id']]}:v]scale={size}:{size}:force_original_aspect_ratio=decrease,"
+                f"format=rgba,pad={size}:{size}:(ow-iw)/2:(oh-ih)/2:color=0x00000000[{src}]"
+            )
             nxt = "vout" if index == len(usable) - 1 else f"ov{index}"
             filters.append(
                 f"[{last}][{src}]overlay={int(item['x'])}:{int(item['y'])}:"
@@ -797,9 +786,11 @@ class DcsVodManager:
             snapshots.append((float(record.get("time") or 0), [messages[item] for item in order[-5:] if item in messages]))
         overlays: list[dict] = []
         wrap_width = 34 if scale <= 1 else 46
-        char_w = max(8, chat_font * 0.54)
-        emoji_size = max(18, int(chat_font * 1.05))
+        char_w = max(10, chat_font * 0.62)
+        inline_size = max(26, int(chat_font * 1.25))
+        solo_size = max(44, int(48 * scale))
         origin_x = video_width + int(16 * scale)
+        gap = max(4, int(6 * scale))
         for index, (start, visible) in enumerate(snapshots):
             end = min(duration, snapshots[index + 1][0] if index + 1 < len(snapshots) else duration)
             if end <= start:
@@ -809,28 +800,44 @@ class DcsVodManager:
                 name = self._ass_escape(message.get("display_name") or "Discord member")
                 color = self._ass_color(message.get("role_color"), "&H00D8B4FE")
                 raw, slots = self._message_body(message)
-                lines = textwrap.wrap(raw, width=wrap_width, break_long_words=True, break_on_hyphens=False)[:3] or [""]
-                slot_index = 0
-                body_y = y + int(chat_font * 1.22)
-                for line_index, line in enumerate(lines):
-                    col = 0
-                    for char in line:
-                        if char == _EMOJI_PLACEHOLDER and slot_index < len(slots):
-                            _name, emoji_id = slots[slot_index]
-                            overlays.append({
-                                "id": emoji_id,
-                                "x": origin_x + int(col * char_w),
-                                "y": body_y + int(line_index * chat_font * 1.18) - int(emoji_size * 0.15),
-                                "start": start,
-                                "end": end,
-                                "size": emoji_size,
-                            })
-                            slot_index += 1
-                        col += 1
-                text = self._ass_escape("\n".join(lines))
-                block = f"{{\\pos({origin_x},{y})\\c{color}\\b1}}{name}{{\\c&H00E8E2EF&\\b0}}\\N{text}"
-                events.append(f"Dialogue: 2,{self._ass_time(start)},{self._ass_time(end)},Chat,,0,0,0,,{block}")
-                y += int((40 + 20 * len(lines)) * scale)
+                emoji_only = bool(slots) and not raw.replace(_EMOJI_PLACEHOLDER, "").strip()
+                if emoji_only:
+                    block = f"{{\\pos({origin_x},{y})\\c{color}\\b1}}{name}"
+                    events.append(f"Dialogue: 2,{self._ass_time(start)},{self._ass_time(end)},Chat,,0,0,0,,{block}")
+                    row_y = y + int(chat_font * 1.35)
+                    for slot_index, (_slot_name, emoji_id) in enumerate(slots[:6]):
+                        overlays.append({
+                            "id": emoji_id,
+                            "x": origin_x + slot_index * (solo_size + gap),
+                            "y": row_y,
+                            "start": start,
+                            "end": end,
+                            "size": solo_size,
+                        })
+                    y += int(chat_font * 1.35) + solo_size + int(14 * scale)
+                else:
+                    lines = textwrap.wrap(raw, width=wrap_width, break_long_words=True, break_on_hyphens=False)[:3] or [""]
+                    slot_index = 0
+                    body_y = y + int(chat_font * 1.28)
+                    for line_index, line in enumerate(lines):
+                        col = 0
+                        for char in line:
+                            if char == _EMOJI_PLACEHOLDER and slot_index < len(slots):
+                                _slot_name, emoji_id = slots[slot_index]
+                                overlays.append({
+                                    "id": emoji_id,
+                                    "x": origin_x + int(col * char_w),
+                                    "y": body_y + int(line_index * chat_font * 1.22) - int(inline_size * 0.18),
+                                    "start": start,
+                                    "end": end,
+                                    "size": inline_size,
+                                })
+                                slot_index += 1
+                            col += 1
+                    text = self._ass_escape("\n".join(lines))
+                    block = f"{{\\pos({origin_x},{y})\\c{color}\\b1}}{name}{{\\c&H00E8E2EF&\\b0}}\\N{text}"
+                    events.append(f"Dialogue: 2,{self._ass_time(start)},{self._ass_time(end)},Chat,,0,0,0,,{block}")
+                    y += int((40 + 20 * len(lines)) * scale)
                 if y > top_height - int(55 * scale):
                     break
         return overlays

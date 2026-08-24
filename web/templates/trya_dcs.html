@@ -587,14 +587,23 @@
     </div>
 </section>
 
-<section class="mt-6 bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden" data-dcs-collapse="submissions">
+<section id="dcs-submissions" class="mt-6 bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden" data-dcs-collapse="submissions">
     <div class="dcs-section-header px-5 py-4 border-b border-gray-700/50 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
             <h3 class="text-white font-semibold">DCS submissions</h3>
             <p class="text-gray-500 text-sm mt-1">Rights classifications are shown for review and never act as automatic exclusions.</p>
             <p class="text-blue-300 text-xs mt-2">Active submission playlist: {{ active_submission_count }} song{{ '' if active_submission_count == 1 else 's' }} · {{ active_submission_duration_text }}</p>
         </div>
-        <a href="{{ url_for('trya_dcs_consent_csv') }}" class="inline-flex justify-center px-3 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm">Export evidence CSV</a>
+        <div class="flex flex-wrap items-center gap-3">
+            <form method="POST" class="flex items-center">
+                <input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="toggle_hide_replaced_submissions">
+                <label class="inline-flex items-center gap-2 text-gray-300 text-sm cursor-pointer select-none">
+                    <input type="checkbox" name="hide_replaced" value="1" class="rounded border-gray-600 bg-discord-darker" {% if hide_replaced_submissions %}checked{% endif %} onchange="this.form.submit()">
+                    <span>Hide replaced songs{% if replaced_submission_count %} <span class="text-gray-500">({{ replaced_submission_count }})</span>{% endif %}</span>
+                </label>
+            </form>
+            <a href="{{ url_for('trya_dcs_consent_csv') }}" class="inline-flex justify-center px-3 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm">Export evidence CSV</a>
+        </div>
     </div>
     {% if submission_songs %}
     <div class="overflow-x-auto">

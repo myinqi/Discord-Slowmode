@@ -8967,6 +8967,7 @@ def create_app(db: Database, bot=None) -> Quart:
             "trya_dcs_vod_auto_render": "off",
             "trya_dcs_vod_resolution": "720",
             "trya_dcs_vod_keep_master": "on",
+            "trya_dcs_hide_replaced_submissions": "on",
         }
 
         async def get_dcs_loop_videos() -> list[dict]:
@@ -9068,6 +9069,12 @@ def create_app(db: Database, bot=None) -> Quart:
                 )
                 await flash("DCS VOD settings saved.", "success")
                 return redirect(request.url)
+            if action == "toggle_hide_replaced_submissions":
+                await db.set_setting(
+                    "trya_dcs_hide_replaced_submissions",
+                    "on" if form.get("hide_replaced") else "off",
+                )
+                return redirect(url_for("trya_dcs_admin") + "#dcs-submissions")
             if action == "render_dcs_vod":
                 vod_id = str(form.get("vod_id") or "")
                 resolution = "1080" if form.get("vod_resolution") == "1080" else "720"
@@ -9973,11 +9980,21 @@ def create_app(db: Database, bot=None) -> Quart:
                 song["transcript_preview"] = "".join(parts).strip()
             except (TypeError, ValueError, _dcs_json.JSONDecodeError):
                 pass
+        def _is_replaced_submission(song: dict) -> bool:
+            reason = str(song.get("remove_reason") or "")
+            return reason.startswith("replaced_by:") or bool(song.get("replacement_song_id"))
+
+        hide_replaced = settings.get("trya_dcs_hide_replaced_submissions") == "on"
         submission_songs = [
             song for song in songs_desc
             if (song.get("playlist_source") or "submission") not in {"intro", "outro"}
             and song.get("remove_reason") != "removed_by_owner"
         ]
+        replaced_submission_count = sum(1 for song in submission_songs if _is_replaced_submission(song))
+        if hide_replaced:
+            submission_songs = [
+                song for song in submission_songs if not _is_replaced_submission(song)
+            ]
         active_submission_songs = [song for song in submission_songs if song.get("active")]
         active_submission_duration = int(round(sum(
             float(song.get("duration") or 0) for song in active_submission_songs
@@ -10033,6 +10050,8 @@ def create_app(db: Database, bot=None) -> Quart:
             dcs_loop_random_count=dcs_loop_random_count,
             songs=songs_desc,
             submission_songs=submission_songs,
+            hide_replaced_submissions=hide_replaced,
+            replaced_submission_count=replaced_submission_count,
             active_submission_count=len(active_submission_songs),
             active_submission_duration_text=active_submission_duration_text,
             intro_songs=intro_songs,

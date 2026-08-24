@@ -16,6 +16,7 @@ class ChatEmojiSlotTests(unittest.TestCase):
         self.assertEqual(slots, [("Dancing25", "123456789012345678"), ("Dancing166", "123456789012345679")])
         self.assertEqual(text.count(_EMOJI_PLACEHOLDER), 2)
         self.assertNotIn(":Dancing25:", text)
+        self.assertTrue(text.startswith("hello "))
 
     def test_plain_text_has_no_slots(self):
         text, slots = chat_text_with_emoji_slots("hello there")
