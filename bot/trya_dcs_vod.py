@@ -29,6 +29,39 @@ def chat_text_with_emoji_slots(content: str) -> tuple[str, list[tuple[str, str]]
     return _CUSTOM_EMOJI_RE.sub(replace, str(content or "")), slots
 
 
+def rendered_keep_limit(value: str | None) -> int | None:
+    """None means keep every rendered VOD."""
+    if str(value or "") in {"4", "8"}:
+        return int(value)
+    return None
+
+
+def select_oldest_rendered_to_delete(
+    vods: list[dict],
+    keep: int | None,
+    protect_id: str | None = None,
+) -> list[str]:
+    if keep is None or keep < 1:
+        return []
+    ready = [
+        item for item in vods
+        if item.get("rendered_exists") or item.get("status") == "ready"
+    ]
+    ready.sort(key=lambda item: float(item.get("started_at") or 0))
+    overflow = len(ready) - keep
+    if overflow <= 0:
+        return []
+    removed: list[str] = []
+    for item in ready:
+        vod_id = str(item.get("id") or "")
+        if not vod_id or vod_id == protect_id:
+            continue
+        removed.append(vod_id)
+        if len(removed) >= overflow:
+            break
+    return removed
+
+
 def classify_vod_stop(
     *,
     interrupted: bool,
@@ -575,6 +608,8 @@ class DcsVodManager:
                 except FileNotFoundError:
                     pass
             self.log(f"VOD render ready: {vod_id} ({height}p).")
+            self._write_metadata(metadata)
+            await self.prune_rendered(protect_id=vod_id)
         except Exception as exc:
             metadata["status"] = "render_failed"
             metadata["error"] = str(exc)[-3000:]
@@ -848,6 +883,18 @@ class DcsVodManager:
             return None
         path = os.path.join(self._directory(vod_id), filename)
         return path if os.path.isfile(path) else None
+
+    async def prune_rendered(self, protect_id: str | None = None) -> int:
+        keep = rendered_keep_limit(
+            await self.db.get_setting("trya_dcs_vod_keep_rendered")
+        )
+        doomed = select_oldest_rendered_to_delete(self.list(), keep, protect_id)
+        removed = 0
+        for vod_id in doomed:
+            if await self.delete(vod_id):
+                removed += 1
+                self.log(f"VOD retention removed oldest rendered copy: {vod_id}.")
+        return removed
 
     async def delete(self, vod_id: str) -> bool:
         if self.active and self.active.get("id") == vod_id:

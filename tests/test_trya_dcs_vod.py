@@ -6,7 +6,9 @@ from bot.trya_dcs_vod import (
     classify_vod_stop,
     ffmpeg_live_output_args,
     hls_url_from_rtmp,
+    rendered_keep_limit,
     safe_stop_target_out_time,
+    select_oldest_rendered_to_delete,
 )
 
 
@@ -22,6 +24,27 @@ class ChatEmojiSlotTests(unittest.TestCase):
         text, slots = chat_text_with_emoji_slots("hello there")
         self.assertEqual(slots, [])
         self.assertEqual(text, "hello there")
+
+
+class RenderedRetentionTests(unittest.TestCase):
+    def test_all_means_no_limit(self):
+        self.assertIsNone(rendered_keep_limit("all"))
+        self.assertIsNone(rendered_keep_limit(""))
+
+    def test_numeric_limits(self):
+        self.assertEqual(rendered_keep_limit("4"), 4)
+        self.assertEqual(rendered_keep_limit("8"), 8)
+
+    def test_deletes_oldest_rendered_over_the_cap(self):
+        vods = [
+            {"id": "a", "started_at": 1, "rendered_exists": True, "status": "ready"},
+            {"id": "b", "started_at": 2, "rendered_exists": True, "status": "ready"},
+            {"id": "c", "started_at": 3, "rendered_exists": True, "status": "ready"},
+            {"id": "d", "started_at": 4, "rendered_exists": False, "status": "failed"},
+        ]
+        self.assertEqual(select_oldest_rendered_to_delete(vods, 2), ["a"])
+        self.assertEqual(select_oldest_rendered_to_delete(vods, 2, protect_id="a"), ["b"])
+        self.assertEqual(select_oldest_rendered_to_delete(vods, None), [])
 
 
 class ClassifyVodStopTests(unittest.TestCase):

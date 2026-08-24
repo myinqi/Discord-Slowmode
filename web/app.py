@@ -8967,6 +8967,7 @@ def create_app(db: Database, bot=None) -> Quart:
             "trya_dcs_vod_auto_render": "off",
             "trya_dcs_vod_resolution": "720",
             "trya_dcs_vod_keep_master": "on",
+            "trya_dcs_vod_keep_rendered": "all",
             "trya_dcs_hide_replaced_submissions": "on",
         }
 
@@ -9067,7 +9068,16 @@ def create_app(db: Database, bot=None) -> Quart:
                     "trya_dcs_vod_keep_master",
                     "on" if form.get("vod_keep_master") else "off",
                 )
-                await flash("DCS VOD settings saved.", "success")
+                keep_rendered = str(form.get("vod_keep_rendered") or "all")
+                if keep_rendered not in {"4", "8", "all"}:
+                    keep_rendered = "all"
+                await db.set_setting("trya_dcs_vod_keep_rendered", keep_rendered)
+                pruned = await trya_dcs_manager.vod.prune_rendered()
+                await flash(
+                    "DCS VOD settings saved."
+                    + (f" Removed {pruned} old rendered VOD(s)." if pruned else ""),
+                    "success",
+                )
                 return redirect(request.url)
             if action == "toggle_hide_replaced_submissions":
                 await db.set_setting(
