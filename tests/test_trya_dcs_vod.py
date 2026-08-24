@@ -1,11 +1,26 @@
 import unittest
 
 from bot.trya_dcs_vod import (
+    _EMOJI_PLACEHOLDER,
+    chat_text_with_emoji_slots,
     classify_vod_stop,
     ffmpeg_live_output_args,
     hls_url_from_rtmp,
     safe_stop_target_out_time,
 )
+
+
+class ChatEmojiSlotTests(unittest.TestCase):
+    def test_custom_discord_emojis_become_overlay_slots(self):
+        text, slots = chat_text_with_emoji_slots("hello <a:Dancing25:123456789012345678><:Dancing166:123456789012345679>")
+        self.assertEqual(slots, [("Dancing25", "123456789012345678"), ("Dancing166", "123456789012345679")])
+        self.assertEqual(text.count(_EMOJI_PLACEHOLDER), 2)
+        self.assertNotIn(":Dancing25:", text)
+
+    def test_plain_text_has_no_slots(self):
+        text, slots = chat_text_with_emoji_slots("hello there")
+        self.assertEqual(slots, [])
+        self.assertEqual(text, "hello there")
 
 
 class ClassifyVodStopTests(unittest.TestCase):

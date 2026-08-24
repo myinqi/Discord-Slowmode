@@ -9,7 +9,24 @@ import textwrap
 import time
 from datetime import datetime, timezone
 
+from collections import defaultdict
+from urllib.request import Request, urlopen
+
 from bot.trya_dcs_events import trya_dcs_events
+
+_CUSTOM_EMOJI_RE = re.compile(r"<a?:([A-Za-z0-9_]+):(\d{17,20})>")
+_EMOJI_PLACEHOLDER = "\ufffc"
+
+
+def chat_text_with_emoji_slots(content: str) -> tuple[str, list[tuple[str, str]]]:
+    """Replace Discord custom emojis with a wide slot; return slots in order."""
+    slots: list[tuple[str, str]] = []
+
+    def replace(match: re.Match) -> str:
+        slots.append((match.group(1), match.group(2)))
+        return _EMOJI_PLACEHOLDER
+
+    return _CUSTOM_EMOJI_RE.sub(replace, str(content or "")), slots
 
 
 def classify_vod_stop(
@@ -510,9 +527,12 @@ class DcsVodManager:
             top_height = int(height * 0.75)
             chat_width = width - video_width
             bottom_height = height - top_height
-            self._build_ass(metadata, ass_path, width, height, video_width, top_height, chat_width, bottom_height)
+            overlays = self._build_ass(
+                metadata, ass_path, width, height, video_width, top_height, chat_width, bottom_height
+            )
+            await self._download_emoji_assets(directory, overlays)
             escaped_ass = ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-            filters = (
+            base = (
                 f"scale={video_width}:{top_height}:force_original_aspect_ratio=decrease,"
                 f"pad={width}:{height}:0:0:color=0x08070c,"
                 f"drawbox=x={video_width}:y=0:w={chat_width}:h={top_height}:color=0x12101a:t=fill,"
@@ -524,7 +544,15 @@ class DcsVodManager:
             bitrate = "3200k" if height == 1080 else "1800k"
             command = [
                 "ffmpeg", "-y", "-hide_banner", "-loglevel", "warning", "-i", master,
-                "-vf", filters, "-map", "0:v:0", "-map", "0:a:0?",
+            ]
+            overlay_inputs, overlay_filters, overlay_map = self._emoji_overlay_graph(directory, overlays)
+            command += overlay_inputs
+            if overlay_filters:
+                command += ["-filter_complex", f"[0:v]{base}[base];{overlay_filters}", "-map", overlay_map]
+            else:
+                command += ["-vf", base, "-map", "0:v:0"]
+            command += [
+                "-map", "0:a:0?",
                 "-c:v", "libx264", "-preset", "ultrafast", "-b:v", bitrate,
                 "-maxrate", bitrate, "-bufsize", str(int(bitrate[:-1]) * 2) + "k",
                 "-pix_fmt", "yuv420p", "-r", "30", "-g", "60",
@@ -579,19 +607,100 @@ class DcsVodManager:
         return f"&H00{rgb[4:6]}{rgb[2:4]}{rgb[0:2]}"
 
     def _message_text(self, data: dict) -> str:
+        content, _slots = self._message_body(data)
+        return content.replace(_EMOJI_PLACEHOLDER, " ")
+
+    def _message_body(self, data: dict) -> tuple[str, list[tuple[str, str]]]:
         content = str(data.get("content") or "")
         mentions = {str(item.get("id")): item.get("display_name") or "Member" for item in data.get("mentions") or []}
         content = re.sub(r"<@!?(\d+)>", lambda match: "@" + mentions.get(match.group(1), "Member"), content)
-        content = re.sub(r"<a?:([A-Za-z0-9_]+):\d+>", lambda match: ":" + match.group(1) + ":", content)
+        content, slots = chat_text_with_emoji_slots(content)
         attachments = data.get("attachments") or []
         if attachments:
             labels = ", ".join(item.get("filename") or "attachment" for item in attachments[:3])
             content += f" [Attachment: {labels}]"
         if data.get("reply"):
             content = f"Reply to {data['reply'].get('author')}: {content}"
-        return content.strip()
+        return content.strip(), slots
 
-    def _build_ass(self, metadata: dict, path: str, width: int, height: int, video_width: int, top_height: int, chat_width: int, bottom_height: int) -> None:
+    async def _download_emoji_assets(self, directory: str, overlays: list[dict]) -> None:
+        cache = os.path.join(directory, "emoji_cache")
+        os.makedirs(cache, exist_ok=True)
+        seen: set[str] = set()
+        for overlay in overlays:
+            emoji_id = overlay.get("id")
+            if not emoji_id or emoji_id in seen:
+                continue
+            seen.add(emoji_id)
+            path = os.path.join(cache, f"{emoji_id}.png")
+            overlay["path"] = path
+            if os.path.isfile(path) and os.path.getsize(path) > 0:
+                continue
+            url = f"https://cdn.discordapp.com/emojis/{emoji_id}.png?size=64&quality=lossless"
+            try:
+                await asyncio.to_thread(self._fetch_url, url, path)
+            except Exception as exc:
+                self.log(f"VOD emoji {emoji_id} download failed: {exc}", "error")
+        for overlay in overlays:
+            emoji_id = overlay.get("id")
+            path = os.path.join(cache, f"{emoji_id}.png") if emoji_id else ""
+            overlay["path"] = path if path and os.path.isfile(path) and os.path.getsize(path) > 0 else ""
+
+    @staticmethod
+    def _fetch_url(url: str, path: str) -> None:
+        request = Request(url, headers={"User-Agent": "TrYaDCS-VOD/1.0"})
+        with urlopen(request, timeout=12) as response:
+            payload = response.read()
+        if not payload:
+            raise RuntimeError("empty emoji image")
+        tmp = f"{path}.tmp"
+        with open(tmp, "wb") as handle:
+            handle.write(payload)
+        os.replace(tmp, path)
+
+    def _emoji_overlay_graph(self, directory: str, overlays: list[dict]) -> tuple[list[str], str, str]:
+        usable = [item for item in overlays if item.get("path") and os.path.isfile(item["path"])][:80]
+        if not usable:
+            return [], "", "0:v:0"
+        inputs: list[str] = []
+        id_to_index: dict[str, int] = {}
+        for item in usable:
+            emoji_id = item["id"]
+            if emoji_id in id_to_index:
+                continue
+            id_to_index[emoji_id] = len(id_to_index) + 1
+            inputs += ["-i", item["path"]]
+        counts: dict[str, int] = defaultdict(int)
+        for item in usable:
+            counts[item["id"]] += 1
+        filters: list[str] = []
+        pads: dict[str, list[str]] = defaultdict(list)
+        size = int(usable[0]["size"])
+        for emoji_id, index in id_to_index.items():
+            count = counts[emoji_id]
+            scaled = f"e{emoji_id}s"
+            filters.append(
+                f"[{index}:v]scale={size}:{size}:force_original_aspect_ratio=decrease,"
+                f"format=rgba,pad={size}:{size}:(ow-iw)/2:(oh-ih)/2:color=0x00000000[{scaled}]"
+            )
+            if count == 1:
+                pads[emoji_id].append(scaled)
+            else:
+                names = [f"e{emoji_id}p{n}" for n in range(count)]
+                filters.append(f"[{scaled}]split={count}" + "".join(f"[{name}]" for name in names))
+                pads[emoji_id].extend(names)
+        last = "base"
+        for index, item in enumerate(usable):
+            src = pads[item["id"]].pop(0)
+            nxt = "vout" if index == len(usable) - 1 else f"ov{index}"
+            filters.append(
+                f"[{last}][{src}]overlay={int(item['x'])}:{int(item['y'])}:"
+                f"enable='between(t,{item['start']:.3f},{item['end']:.3f})'[{nxt}]"
+            )
+            last = nxt
+        return inputs, ";".join(filters), "[vout]"
+
+    def _build_ass(self, metadata: dict, path: str, width: int, height: int, video_width: int, top_height: int, chat_width: int, bottom_height: int) -> list[dict]:
         duration = float(metadata.get("duration") or 0)
         scale = height / 720
         chat_font = max(18, int(22 * scale))
@@ -610,11 +719,21 @@ class DcsVodManager:
         events = []
         events.append(f"Dialogue: 2,0:00:00.00,{self._ass_time(duration)},Song,,0,0,0,,{{\\pos({video_width + int(18*scale)},{int(22*scale)})}}Discord Chat")
         self._append_song_events(events, metadata.get("playlist") or [], duration, width, top_height, bottom_height, scale)
-        self._append_chat_events(events, os.path.join(self._directory(metadata["id"]), "events.jsonl"), duration, video_width, top_height, chat_width, scale)
+        overlays = self._append_chat_events(
+            events,
+            os.path.join(self._directory(metadata["id"]), "events.jsonl"),
+            duration,
+            video_width,
+            top_height,
+            chat_width,
+            scale,
+            chat_font,
+        )
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(header)
             for event in events:
                 handle.write(event + "\n")
+        return overlays
 
     def _append_song_events(self, events: list[str], playlist: list[dict], duration: float, width: int, top_height: int, bottom_height: int, scale: float) -> None:
         starts = []
@@ -643,7 +762,17 @@ class DcsVodManager:
                     text += f"\\N{{\\fs{max(14, int(17*scale))}\\c&H00958C9F&}}{artist}"
                 events.append(f"Dialogue: 3,{self._ass_time(start)},{self._ass_time(end)},Song,,0,0,0,,{text}")
 
-    def _append_chat_events(self, events: list[str], sidecar: str, duration: float, video_width: int, top_height: int, chat_width: int, scale: float) -> None:
+    def _append_chat_events(
+        self,
+        events: list[str],
+        sidecar: str,
+        duration: float,
+        video_width: int,
+        top_height: int,
+        chat_width: int,
+        scale: float,
+        chat_font: int,
+    ) -> list[dict]:
         records = []
         try:
             with open(sidecar, encoding="utf-8") as handle:
@@ -666,6 +795,11 @@ class DcsVodManager:
                 messages.pop(message_id, None)
                 order = [item for item in order if item != message_id]
             snapshots.append((float(record.get("time") or 0), [messages[item] for item in order[-5:] if item in messages]))
+        overlays: list[dict] = []
+        wrap_width = 34 if scale <= 1 else 46
+        char_w = max(8, chat_font * 0.54)
+        emoji_size = max(18, int(chat_font * 1.05))
+        origin_x = video_width + int(16 * scale)
         for index, (start, visible) in enumerate(snapshots):
             end = min(duration, snapshots[index + 1][0] if index + 1 < len(snapshots) else duration)
             if end <= start:
@@ -674,14 +808,32 @@ class DcsVodManager:
             for message in visible:
                 name = self._ass_escape(message.get("display_name") or "Discord member")
                 color = self._ass_color(message.get("role_color"), "&H00D8B4FE")
-                raw = self._message_text(message)
-                lines = textwrap.wrap(raw, width=34 if scale <= 1 else 46, break_long_words=True, break_on_hyphens=False)[:3] or [""]
+                raw, slots = self._message_body(message)
+                lines = textwrap.wrap(raw, width=wrap_width, break_long_words=True, break_on_hyphens=False)[:3] or [""]
+                slot_index = 0
+                body_y = y + int(chat_font * 1.22)
+                for line_index, line in enumerate(lines):
+                    col = 0
+                    for char in line:
+                        if char == _EMOJI_PLACEHOLDER and slot_index < len(slots):
+                            _name, emoji_id = slots[slot_index]
+                            overlays.append({
+                                "id": emoji_id,
+                                "x": origin_x + int(col * char_w),
+                                "y": body_y + int(line_index * chat_font * 1.18) - int(emoji_size * 0.15),
+                                "start": start,
+                                "end": end,
+                                "size": emoji_size,
+                            })
+                            slot_index += 1
+                        col += 1
                 text = self._ass_escape("\n".join(lines))
-                block = f"{{\\pos({video_width + int(16*scale)},{y})\\c{color}\\b1}}{name}{{\\c&H00E8E2EF&\\b0}}\\N{text}"
+                block = f"{{\\pos({origin_x},{y})\\c{color}\\b1}}{name}{{\\c&H00E8E2EF&\\b0}}\\N{text}"
                 events.append(f"Dialogue: 2,{self._ass_time(start)},{self._ass_time(end)},Chat,,0,0,0,,{block}")
                 y += int((40 + 20 * len(lines)) * scale)
                 if y > top_height - int(55 * scale):
                     break
+        return overlays
 
     def file(self, vod_id: str, kind: str) -> str | None:
         filename = {"master": "master.mp4", "rendered": "rendered.mp4", "events": "events.jsonl"}.get(kind)
