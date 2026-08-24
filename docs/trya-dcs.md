@@ -52,6 +52,9 @@ The current implementation includes:
 - independently collapsible Admin UI sections whose state persists per browser;
 - a configurable, validated offline player image stored outside the public web
   root and served only to authenticated guild members;
+- optional VOD recording through a second stream-copy FFmpeg reader, synchronized
+  chat/radio event sidecars and manual or automatic 720p/1080p lightweight renders
+  with a Discord-chat sidebar plus previous/current/next song information;
 - a live dashboard below the player with previous/next-song links, playlist
   position, song/rotation remaining time and in-memory active-listener presence;
 - a configurable rotating community panel and live Raven's Nest panel with
@@ -201,14 +204,34 @@ After deployment, open **TrYa DCS** in the Admin UI, verify the guild and chat
 channel, then confirm that the Media Server and Discord OAuth status cards are
 green before enabling the feature.
 
+## VOD recording
+
+When enabled, a separate FFmpeg process reads the already encoded MediaMTX RTMP
+path and writes a fragmented 1080p MP4 with `-c copy`. It does not perform a second
+live encode. In parallel, the DCS event broker writes chat, edit, delete, radio and
+Relic Hunt events to an NDJSON timeline.
+
+After stream end, rendering can run automatically or from the Admin UI. The
+lightweight renderer creates either a 1280x720 or 1920x1080 composition with the
+stream occupying the left 75%, a synchronized text-chat sidebar on the right and a
+bottom previous/current/next song strip. Unicode text, mention names, replies, role
+colours, static custom-emoji names and attachment labels are retained. The original
+master and event timeline remain independently downloadable; master deletion after a
+successful render is configurable.
+
+Files are stored under `TRYA_DCS_DIR/vods/<vod-id>/`. Interrupted recordings and
+renders are marked on process restart, and RTMP reconnects are assembled from
+stream-copy parts before rendering.
+
 ## Backup and restore
 
 The existing **Settings** backup tools cover TrYa DCS without a separate export:
 
 - a database backup contains DCS settings, songs, consent evidence, playlist
   snapshots and hashed stream-token records;
-- a full data backup additionally contains the immutable originals, normalized
-  work audio, subtitles and downloaded visual media below `radio/trya_dcs`;
+- a full data backup additionally contains immutable originals, normalized work
+  audio, subtitles, visual media, VOD masters, renders and event timelines below
+  `radio/trya_dcs`;
 - database restore is refused while TrYa DCS or another stream manager is
   running, preventing the publisher from continuing against replaced state.
 

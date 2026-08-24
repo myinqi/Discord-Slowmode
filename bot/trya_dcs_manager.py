@@ -11,6 +11,7 @@ from collections import deque
 from bot.trya_stream_manager import TryaStreamManager
 from bot.trya_dcs_events import trya_dcs_events
 from bot.trya_dcs_schedule import is_submissions_locked
+from bot.trya_dcs_vod import DcsVodManager
 from bot.suno_urls import SUNO_UUID_RE, UUID_RE
 
 # Re-export so callers can keep importing from this module.
@@ -50,6 +51,7 @@ class TryaDcsManager(TryaStreamManager):
         self._intro_song: dict | None = None
         self._outro_song: dict | None = None
         self._ffmpeg_heartbeat_at = 0.0
+        self.vod = DcsVodManager(db, base_dir, log_dcs_event)
 
     def _log(self, line: str, level: str = "info") -> None:
         log_dcs_event(line, level)
@@ -275,7 +277,7 @@ class TryaDcsManager(TryaStreamManager):
             })
             return {"ok": True, "song_count": len(first_playlist)}
 
-    async def stop(self) -> dict:
+    async def stop(self, interrupted: bool = False) -> dict:
         from bot import trya_dcs_schedule as dcs_schedule
         dcs_schedule.dcs_stream_is_live = False
         self.is_running = False
@@ -292,6 +294,7 @@ class TryaDcsManager(TryaStreamManager):
                 except ProcessLookupError:
                     pass
         self._process = None
+        await self.vod.stop(interrupted=interrupted)
         await self._stop_obs_overlay_bridge()
         self._set_obs_overlay_status(False, "disabled", "OBS overlay disabled", "local")
         task = self._task
@@ -389,7 +392,7 @@ class TryaDcsManager(TryaStreamManager):
             pass
         except Exception as exc:
             self._log(f"Publisher failed: {exc}", "error")
-            await self.stop()
+            await self.stop(interrupted=True)
 
     async def _resolve_dcs_loop_path(self) -> str | None:
         assets_dir = os.path.join(self.trya_stream_dir, "assets")
@@ -582,6 +585,20 @@ class TryaDcsManager(TryaStreamManager):
             raise RuntimeError(f"FFmpeg exited during startup ({self._process.returncode}).")
         self._stream_ready_event.set()
         self._log("MediaMTX publisher is live.")
+        await self.vod.start(
+            self._output_url,
+            [
+                {
+                    "id": int(song["id"]),
+                    "title": song.get("title") or "Unknown",
+                    "artist": song.get("artist") or "Unknown",
+                    "duration": float(song.get("duration") or 0),
+                    "suno_url": self._public_suno_url(song),
+                    "wlm_url": self._public_wlm_url(song),
+                }
+                for song in songs
+            ],
+        )
         tracker = asyncio.create_task(self._track_song_progress(songs))
         await self._process.wait()
         tracker.cancel()

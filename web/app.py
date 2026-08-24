@@ -8905,6 +8905,10 @@ def create_app(db: Database, bot=None) -> Quart:
             "trya_dcs_info_gallery_title": "Gallery",
             "trya_dcs_info_gallery_mode": "static",
             "trya_dcs_info_gallery_interval_seconds": "5",
+            "trya_dcs_vod_record_enabled": "off",
+            "trya_dcs_vod_auto_render": "off",
+            "trya_dcs_vod_resolution": "720",
+            "trya_dcs_vod_keep_master": "on",
         }
 
         async def get_dcs_loop_videos() -> list[dict]:
@@ -8966,6 +8970,40 @@ def create_app(db: Database, bot=None) -> Quart:
                 await flash("The DCS form expired. Please try again.", "error")
                 return redirect(request.url)
             action = form.get("action", "save_settings")
+            if action == "save_dcs_vod_settings":
+                resolution = "1080" if form.get("vod_resolution") == "1080" else "720"
+                await db.set_setting(
+                    "trya_dcs_vod_record_enabled",
+                    "on" if form.get("vod_record_enabled") else "off",
+                )
+                await db.set_setting(
+                    "trya_dcs_vod_auto_render",
+                    "on" if form.get("vod_auto_render") else "off",
+                )
+                await db.set_setting("trya_dcs_vod_resolution", resolution)
+                await db.set_setting(
+                    "trya_dcs_vod_keep_master",
+                    "on" if form.get("vod_keep_master") else "off",
+                )
+                await flash("DCS VOD settings saved.", "success")
+                return redirect(request.url)
+            if action == "render_dcs_vod":
+                vod_id = str(form.get("vod_id") or "")
+                resolution = "1080" if form.get("vod_resolution") == "1080" else "720"
+                queued = await trya_dcs_manager.vod.queue_render(vod_id, resolution)
+                await flash(
+                    "VOD rendering queued." if queued else "VOD could not be queued for rendering.",
+                    "success" if queued else "error",
+                )
+                return redirect(request.url)
+            if action == "delete_dcs_vod":
+                vod_id = str(form.get("vod_id") or "")
+                deleted = await trya_dcs_manager.vod.delete(vod_id)
+                await flash(
+                    "VOD deleted." if deleted else "Recording or rendering VODs cannot be deleted.",
+                    "success" if deleted else "error",
+                )
+                return redirect(request.url)
             if action == "save_dcs_relic_display":
                 try:
                     rotation_seconds = max(5, min(60, int(form.get("info_rotation_seconds") or "12")))
@@ -9839,6 +9877,21 @@ def create_app(db: Database, bot=None) -> Quart:
             if (song.get("playlist_source") or "submission") not in {"intro", "outro"}
             and song.get("remove_reason") != "removed_by_owner"
         ]
+        active_submission_songs = [song for song in submission_songs if song.get("active")]
+        active_submission_duration = int(round(sum(
+            float(song.get("duration") or 0) for song in active_submission_songs
+        )))
+        active_submission_hours, active_submission_remainder = divmod(
+            active_submission_duration, 3600
+        )
+        active_submission_minutes, active_submission_seconds = divmod(
+            active_submission_remainder, 60
+        )
+        active_submission_duration_text = (
+            f"{active_submission_hours}h {active_submission_minutes:02d}m {active_submission_seconds:02d}s"
+            if active_submission_hours
+            else f"{active_submission_minutes}m {active_submission_seconds:02d}s"
+        )
         intro_songs = [
             song for song in songs_desc
             if song.get("active") and song.get("playlist_source") == "intro"
@@ -9879,12 +9932,30 @@ def create_app(db: Database, bot=None) -> Quart:
             dcs_loop_random_count=dcs_loop_random_count,
             songs=songs_desc,
             submission_songs=submission_songs,
+            active_submission_count=len(active_submission_songs),
+            active_submission_duration_text=active_submission_duration_text,
             intro_songs=intro_songs,
             outro_songs=outro_songs,
             stream_status=stream_status,
             gallery_images=await get_dcs_gallery_images(),
+            dcs_vods=trya_dcs_manager.vod.list(),
             stream_log=trya_dcs_manager.get_log(max_age_secs=900),
             admin_csrf=admin_csrf,
+        )
+
+    @app.route("/trya-dcs/vod/<vod_id>/<kind>")
+    @permission_required("trya_dcs")
+    async def trya_dcs_vod_download(vod_id: str, kind: str):
+        from quart import abort, send_file
+        path = trya_dcs_manager.vod.file(vod_id, kind)
+        if not path:
+            abort(404)
+        extension = ".jsonl" if kind == "events" else ".mp4"
+        return await send_file(
+            path,
+            as_attachment=True,
+            attachment_filename=f"trya_dcs_{vod_id}_{kind}{extension}",
+            conditional=True,
         )
 
     @app.route("/trya-dcs/stream/status")

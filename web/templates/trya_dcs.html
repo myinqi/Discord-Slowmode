@@ -484,6 +484,37 @@
     </div>
 </section>
 
+<section class="mt-6 bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden" data-dcs-collapse="vod-recording">
+    <div class="dcs-section-header px-5 py-4 border-b border-gray-700/50">
+        <h3 class="text-white font-semibold">VOD recording</h3>
+        <p class="text-gray-500 text-sm mt-1">Records a 1080p stream-copy master and optionally renders a 720p/1080p version with synchronized chat and song information.</p>
+    </div>
+    <div class="p-5 space-y-6">
+        <form method="POST" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 items-end">
+            <input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="save_dcs_vod_settings">
+            <label class="flex items-start gap-2 text-gray-300 text-sm"><input type="checkbox" name="vod_record_enabled" value="1" class="mt-1" {% if settings.trya_dcs_vod_record_enabled == 'on' %}checked{% endif %}><span><span class="block font-medium">Record master</span><span class="block text-gray-500 text-xs">No second live encode.</span></span></label>
+            <label class="flex items-start gap-2 text-gray-300 text-sm"><input type="checkbox" name="vod_auto_render" value="1" class="mt-1" {% if settings.trya_dcs_vod_auto_render == 'on' %}checked{% endif %}><span><span class="block font-medium">Render automatically</span><span class="block text-gray-500 text-xs">Starts after stream end.</span></span></label>
+            <label class="block"><span class="block text-gray-500 text-xs mb-1">Rendered resolution</span><select name="vod_resolution" class="w-full bg-discord-darker border border-gray-600 rounded px-3 py-2 text-white text-sm"><option value="720" {% if settings.trya_dcs_vod_resolution == '720' %}selected{% endif %}>720p</option><option value="1080" {% if settings.trya_dcs_vod_resolution == '1080' %}selected{% endif %}>1080p</option></select></label>
+            <label class="flex items-start gap-2 text-gray-300 text-sm"><input type="checkbox" name="vod_keep_master" value="1" class="mt-1" {% if settings.trya_dcs_vod_keep_master == 'on' %}checked{% endif %}><span><span class="block font-medium">Keep 1080p master</span><span class="block text-gray-500 text-xs">Otherwise removed after successful render.</span></span></label>
+            <button type="submit" class="md:col-span-2 xl:col-span-4 px-3 py-2 rounded bg-discord-blurple hover:bg-indigo-500 text-white text-sm">Save VOD settings</button>
+        </form>
+        <div class="space-y-2">
+            {% for vod in dcs_vods %}
+            <div class="rounded-lg border border-gray-700 bg-discord-darker/50 p-3 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
+                <div class="min-w-0"><p class="text-white text-sm font-medium">{{ vod.id }}</p><p class="text-gray-500 text-xs">{{ vod.status|replace('_',' ')|title }} · {{ (vod.duration or 0)|round(1) }}s · Master {{ ((vod.master_size or 0) / 1048576)|round(1) }} MiB · Render {{ ((vod.rendered_size or 0) / 1048576)|round(1) }} MiB</p>{% if vod.error %}<p class="text-red-300 text-xs mt-1 break-all">{{ vod.error }}</p>{% endif %}</div>
+                <div class="flex flex-wrap gap-2">
+                    {% if vod.master_exists %}<a href="{{ url_for('trya_dcs_vod_download', vod_id=vod.id, kind='master') }}" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs">Master</a>{% endif %}
+                    {% if vod.rendered_exists %}<a href="{{ url_for('trya_dcs_vod_download', vod_id=vod.id, kind='rendered') }}" class="px-2 py-1 rounded bg-fuchsia-900/60 hover:bg-fuchsia-800/70 text-fuchsia-200 text-xs">Rendered VOD</a>{% endif %}
+                    {% if vod.events_exists %}<a href="{{ url_for('trya_dcs_vod_download', vod_id=vod.id, kind='events') }}" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs">Timeline</a>{% endif %}
+                    {% if vod.master_exists and vod.status != 'rendering' %}<form method="POST" class="flex gap-1"><input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="render_dcs_vod"><input type="hidden" name="vod_id" value="{{ vod.id }}"><select name="vod_resolution" class="bg-discord-dark border border-gray-600 rounded px-1 text-gray-200 text-xs"><option value="720">720p</option><option value="1080">1080p</option></select><button class="px-2 py-1 rounded bg-blue-900/60 hover:bg-blue-800/70 text-blue-200 text-xs">Render</button></form>{% endif %}
+                    <form method="POST" onsubmit="return confirm('Permanently delete this VOD and all related files?')"><input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="delete_dcs_vod"><input type="hidden" name="vod_id" value="{{ vod.id }}"><button class="px-2 py-1 rounded bg-red-950/60 hover:bg-red-900/70 text-red-300 text-xs">Delete</button></form>
+                </div>
+            </div>
+            {% else %}<p class="text-gray-600 text-sm">No VOD recordings yet.</p>{% endfor %}
+        </div>
+    </div>
+</section>
+
 <section class="mt-6 bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden" data-dcs-collapse="offline-image">
     <div class="dcs-section-header px-5 py-4 border-b border-gray-700/50">
         <h3 class="text-white font-semibold">Offline player image</h3>
@@ -550,6 +581,7 @@
         <div>
             <h3 class="text-white font-semibold">DCS submissions</h3>
             <p class="text-gray-500 text-sm mt-1">Rights classifications are shown for review and never act as automatic exclusions.</p>
+            <p class="text-blue-300 text-xs mt-2">Active submission playlist: {{ active_submission_count }} song{{ '' if active_submission_count == 1 else 's' }} · {{ active_submission_duration_text }}</p>
         </div>
         <a href="{{ url_for('trya_dcs_consent_csv') }}" class="inline-flex justify-center px-3 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm">Export evidence CSV</a>
     </div>
