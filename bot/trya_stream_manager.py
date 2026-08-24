@@ -24,6 +24,7 @@ from bot.trya_stream_files import (
     trya_stream_hook_cache_path,
 )
 from bot.twitch_bot import TwitchBot
+from bot.trya_dcs_vod import ffmpeg_live_output_args
 
 _RTMP_BASE  = "rtmps://live.twitch.tv:443/app/"
 _LEGACY_RTMP_BASE = "rtmp://live.twitch.tv/app/"
@@ -2479,6 +2480,7 @@ class TryaStreamManager:
         audio_concat_file: str | None = None,
         media_style: dict | None = None,
         output_url: str | None = None,
+        vod_path: str | None = None,
         audio_bitrate_kbps: int = 128,
         realtime_audio: bool = False,
         video_preset: str = "veryfast",
@@ -2724,6 +2726,6 @@ class TryaStreamManager:
             "-c:a", "aac", "-b:a", audio_bitrate, "-ar", "44100",
             "-rtmp_live", "live",
             "-flvflags", "no_duration_filesize",
-            "-f", "flv", stream_target,
         ]
+        cmd += ffmpeg_live_output_args(stream_target, vod_path)
         return cmd

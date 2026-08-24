@@ -31,6 +31,24 @@ def classify_vod_stop(
     return "master_ready", ""
 
 
+def ffmpeg_tee_escape(value: str) -> str:
+    return str(value or "").replace("\\", "\\\\").replace(":", "\\:").replace("|", "\\|")
+
+
+def ffmpeg_live_output_args(stream_target: str, vod_path: str | None = None) -> list[str]:
+    """Encode once: live RTMP plus an optional local MPEG-TS copy."""
+    if not vod_path:
+        return ["-f", "flv", stream_target]
+    return [
+        "-f",
+        "tee",
+        (
+            f"[f=flv:onfail=ignore]{ffmpeg_tee_escape(stream_target)}|"
+            f"[f=mpegts:bsfs/v=h264_mp4toannexb]{ffmpeg_tee_escape(vod_path)}"
+        ),
+    ]
+
+
 def safe_stop_target_out_time(
     out_time: float | None,
     remaining: float,
@@ -94,10 +112,10 @@ class DcsVodManager:
                 continue
             directory = self._directory(vod_id)
             if metadata.get("status") == "recording":
-                partial = os.path.join(directory, "master.partial.mp4")
                 master = os.path.join(directory, "master.mp4")
-                if os.path.isfile(partial) and os.path.getsize(partial) > 0:
-                    os.replace(partial, master)
+                mp4_partial = os.path.join(directory, "master.partial.mp4")
+                if os.path.isfile(mp4_partial) and os.path.getsize(mp4_partial) > 0:
+                    os.replace(mp4_partial, master)
                 metadata["status"] = "interrupted"
                 metadata["ended_at"] = metadata.get("ended_at") or time.time()
                 metadata["error"] = "Recording was interrupted by a process restart."
@@ -135,21 +153,16 @@ class DcsVodManager:
     async def enabled(self) -> bool:
         return (await self.db.get_setting("trya_dcs_vod_record_enabled") or "off") == "on"
 
-    async def start(self, source_url: str, playlist: list[dict]) -> dict | None:
+    def _partial_path(self, metadata: dict) -> str:
+        return os.path.join(self._directory(metadata["id"]), "master.partial.ts")
+
+    async def attach(self, playlist: list[dict]) -> str | None:
+        """Prepare a same-encode MPEG-TS sidecar and return its path."""
         if self.active:
             self.active.setdefault("playlist", []).extend(playlist)
-            self._write_metadata(self.active)
-            if self.recorder and self.recorder.returncode is None:
-                try:
-                    await asyncio.wait_for(asyncio.shield(self.recorder.wait()), timeout=8)
-                except asyncio.TimeoutError:
-                    return self.active
-            if self.recorder:
-                await self.recorder.wait()
-                self.recorder = None
             await self._archive_partial(self.active)
-            await self._launch_recorder(source_url, self.active)
-            return self.active
+            self._write_metadata(self.active)
+            return self._partial_path(self.active)
         if not await self.enabled():
             return None
         now = time.time()
@@ -178,49 +191,26 @@ class DcsVodManager:
         self.capture_ready.clear()
         self.capture_task = asyncio.create_task(self._capture_events(events_path, now))
         await asyncio.wait_for(self.capture_ready.wait(), timeout=5)
-        try:
-            await self._launch_recorder(source_url, metadata)
-        except Exception as exc:
-            metadata["status"] = "failed"
-            metadata["error"] = str(exc)
-            self._write_metadata(metadata)
-            self.active = None
-            if self.capture_task:
-                self.capture_task.cancel()
-            self.capture_task = None
-            self.log(f"VOD recorder failed to start: {exc}", "error")
-            return None
-        self.log(f"VOD recording started: {vod_id}")
-        return metadata
-
-    async def _launch_recorder(self, source_url: str, metadata: dict) -> None:
-        directory = self._directory(metadata["id"])
-        partial = os.path.join(directory, "master.partial.mp4")
-        command = [
-            "ffmpeg", "-y", "-hide_banner", "-loglevel", "warning",
-            "-rw_timeout", "15000000", "-i", source_url,
-            "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy",
-            "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
-            partial,
-        ]
-        self.recorder = await asyncio.create_subprocess_exec(
-            *command,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        self.log(f"VOD recorder part {len(metadata.get('parts') or []) + 1} started.")
+        self.log(f"VOD recording started: {vod_id} (same encode, local MPEG-TS copy).")
+        return self._partial_path(metadata)
 
     async def _archive_partial(self, metadata: dict) -> None:
         directory = self._directory(metadata["id"])
-        partial = os.path.join(directory, "master.partial.mp4")
-        if not os.path.isfile(partial) or os.path.getsize(partial) <= 0:
-            return
         parts = metadata.setdefault("parts", [])
-        filename = f"part_{len(parts) + 1:03d}.mp4"
-        os.replace(partial, os.path.join(directory, filename))
-        parts.append(filename)
-        self._write_metadata(metadata)
+        archived = False
+        for name in ("master.partial.ts", "master.partial.mp4"):
+            partial = os.path.join(directory, name)
+            if not os.path.isfile(partial) or os.path.getsize(partial) <= 0:
+                continue
+            ext = os.path.splitext(name)[1]
+            filename = f"part_{len(parts) + 1:03d}{ext}"
+            os.replace(partial, os.path.join(directory, filename))
+            parts.append(filename)
+            size = os.path.getsize(os.path.join(directory, filename))
+            self.log(f"VOD archived {filename} ({size / 1048576:.1f} MiB).")
+            archived = True
+        if archived:
+            self._write_metadata(metadata)
 
     async def _capture_events(self, path: str, started_at: float) -> None:
         try:
@@ -264,14 +254,18 @@ class DcsVodManager:
         except Exception as exc:
             assembly_error = str(exc)
         if not os.path.isfile(master) or os.path.getsize(master) <= 0:
-            leftover = os.path.join(directory, "master.partial.mp4")
-            if os.path.isfile(leftover) and os.path.getsize(leftover) > 0:
+            for leftover_name in ("master.partial.ts", "master.partial.mp4"):
+                leftover = os.path.join(directory, leftover_name)
+                if not os.path.isfile(leftover) or os.path.getsize(leftover) <= 0:
+                    continue
                 try:
                     await self._remux_copy(leftover, master)
                 except Exception as exc:
                     assembly_error = assembly_error or str(exc)
-                    if not os.path.isfile(master):
+                    if leftover_name.endswith(".mp4") and not os.path.isfile(master):
                         os.replace(leftover, master)
+                if os.path.isfile(master) and os.path.getsize(master) > 0:
+                    break
         metadata["ended_at"] = time.time()
         metadata["duration"] = await self._probe_duration(master)
         master_ok = os.path.isfile(master) and os.path.getsize(master) > 0
@@ -318,12 +312,16 @@ class DcsVodManager:
         return ""
 
     async def _remux_copy(self, source: str, destination: str) -> None:
-        process = await asyncio.create_subprocess_exec(
+        command = [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "warning",
             "-err_detect", "ignore_err", "-fflags", "+genpts+discardcorrupt",
-            "-i", source,
-            "-c", "copy", "-movflags", "+faststart",
-            destination,
+            "-i", source, "-c", "copy",
+        ]
+        if source.endswith(".ts"):
+            command += ["-bsf:a", "aac_adtstoasc"]
+        command += ["-movflags", "+faststart", destination]
+        process = await asyncio.create_subprocess_exec(
+            *command,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -359,10 +357,16 @@ class DcsVodManager:
         with open(concat_path, "w", encoding="utf-8") as handle:
             for path in parts:
                 handle.write("file '" + path.replace("'", "'\\''") + "'\n")
-        process = await asyncio.create_subprocess_exec(
+        concat_cmd = [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "warning",
             "-f", "concat", "-safe", "0", "-i", concat_path,
-            "-c", "copy", "-movflags", "+faststart", master,
+            "-c", "copy",
+        ]
+        if any(path.endswith(".ts") for path in parts):
+            concat_cmd += ["-bsf:a", "aac_adtstoasc"]
+        concat_cmd += ["-movflags", "+faststart", master]
+        process = await asyncio.create_subprocess_exec(
+            *concat_cmd,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )

@@ -1,6 +1,11 @@
 import unittest
 
-from bot.trya_dcs_vod import classify_vod_stop, safe_stop_target_out_time
+from bot.trya_dcs_vod import (
+    classify_vod_stop,
+    ffmpeg_live_output_args,
+    ffmpeg_tee_escape,
+    safe_stop_target_out_time,
+)
 
 
 class ClassifyVodStopTests(unittest.TestCase):
@@ -26,6 +31,27 @@ class ClassifyVodStopTests(unittest.TestCase):
         )
         self.assertEqual(status, "failed")
         self.assertIn("Connection refused", error)
+
+
+class TeeOutputTests(unittest.TestCase):
+    def test_rtmp_only_without_vod_path(self):
+        self.assertEqual(
+            ffmpeg_live_output_args("rtmp://mediamtx:1935/trya-dcs"),
+            ["-f", "flv", "rtmp://mediamtx:1935/trya-dcs"],
+        )
+
+    def test_tee_writes_mpegts_sidecar(self):
+        args = ffmpeg_live_output_args(
+            "rtmp://mediamtx:1935/trya-dcs",
+            "/data/vods/id/master.partial.ts",
+        )
+        self.assertEqual(args[0], "-f")
+        self.assertEqual(args[1], "tee")
+        spec = args[2]
+        self.assertIn("f=flv", spec)
+        self.assertIn("f=mpegts", spec)
+        self.assertIn(ffmpeg_tee_escape("rtmp://mediamtx:1935/trya-dcs"), spec)
+        self.assertIn(ffmpeg_tee_escape("/data/vods/id/master.partial.ts"), spec)
 
 
 class SafeStopTimingTests(unittest.TestCase):

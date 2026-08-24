@@ -55,7 +55,6 @@ class TryaDcsManager(TryaStreamManager):
         self.bot = None
         self._cached_loop_path: str | None = None
         self._safe_stop_task: asyncio.Task | None = None
-        self._safe_stop_outro_played = False
         self._announce_task: asyncio.Task | None = None
 
     def _log(self, line: str, level: str = "info") -> None:
@@ -237,7 +236,6 @@ class TryaDcsManager(TryaStreamManager):
                 first_playlist[0].get("duration") or 300
             )
             self._safe_stop_requested = False
-            self._safe_stop_outro_played = False
             self._cached_loop_path = None
             self._output_url = (
                 await self.db.get_setting("trya_dcs_rtmp_ingest_url")
@@ -461,7 +459,6 @@ class TryaDcsManager(TryaStreamManager):
                 if not self.is_running:
                     break
                 if self._safe_stop_requested:
-                    await self._play_safe_stop_outro()
                     if self.is_running:
                         await self.stop()
                     break
@@ -478,29 +475,10 @@ class TryaDcsManager(TryaStreamManager):
         except Exception as exc:
             if self._safe_stop_requested and self.is_running:
                 self._log(f"Publisher ended during safe stop: {exc}")
-                try:
-                    await self._play_safe_stop_outro()
-                except Exception as outro_exc:
-                    self._log(f"Safe-stop outro failed: {outro_exc}", "error")
-                if self.is_running:
-                    await self.stop()
+                await self.stop()
                 return
             self._log(f"Publisher failed: {exc}", "error")
             await self.stop(interrupted=True)
-
-    async def _play_safe_stop_outro(self) -> None:
-        if self._safe_stop_outro_played or not self.is_running:
-            return
-        outro = self._outro_song
-        if not outro:
-            return
-        current_id = int((self.current_song or {}).get("id") or 0)
-        outro_id = int(outro.get("id") or 0)
-        if outro_id and current_id == outro_id:
-            return
-        self._safe_stop_outro_played = True
-        self._log(f"Safe stop: playing outro {outro.get('title') or outro.get('id')}.")
-        await self._play_dcs_playlist([outro])
 
     async def _resolve_dcs_loop_path(self) -> str | None:
         if self._cached_loop_path and os.path.isfile(self._cached_loop_path):
@@ -661,6 +639,23 @@ class TryaDcsManager(TryaStreamManager):
             "trya_dcs_audio_bitrate_kbps", 192, 96, 320
         )
         total_duration = sum(float(song.get("duration") or 300) for song in songs)
+        vod_path = None
+        try:
+            vod_path = await self.vod.attach(
+                [
+                    {
+                        "id": int(song["id"]),
+                        "title": song.get("title") or "Unknown",
+                        "artist": song.get("artist") or "Unknown",
+                        "duration": float(song.get("duration") or 0),
+                        "suno_url": self._public_suno_url(song),
+                        "wlm_url": self._public_wlm_url(song),
+                    }
+                    for song in songs
+                ]
+            )
+        except Exception as exc:
+            self._log(f"VOD attach failed: {exc}", "error")
         command = self._build_playlist_cmd(
             songs=songs,
             media_paths=media_paths,
@@ -675,6 +670,7 @@ class TryaDcsManager(TryaStreamManager):
             total_dur=total_duration,
             media_style=media_style,
             output_url=self._output_url,
+            vod_path=vod_path,
             audio_bitrate_kbps=audio_bitrate,
             realtime_audio=True,
             video_preset="ultrafast",
@@ -698,20 +694,8 @@ class TryaDcsManager(TryaStreamManager):
             raise RuntimeError(f"FFmpeg exited during startup ({self._process.returncode}).")
         self._stream_ready_event.set()
         self._log("MediaMTX publisher is live.")
-        await self.vod.start(
-            self._output_url,
-            [
-                {
-                    "id": int(song["id"]),
-                    "title": song.get("title") or "Unknown",
-                    "artist": song.get("artist") or "Unknown",
-                    "duration": float(song.get("duration") or 0),
-                    "suno_url": self._public_suno_url(song),
-                    "wlm_url": self._public_wlm_url(song),
-                }
-                for song in songs
-            ],
-        )
+        if vod_path:
+            self._log(f"VOD sidecar: {os.path.basename(vod_path)}")
         tracker = asyncio.create_task(self._track_song_progress(songs))
         announce_task = None
         if not self._safe_stop_requested:
