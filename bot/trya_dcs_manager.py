@@ -11,7 +11,7 @@ from collections import deque
 from bot.trya_stream_manager import TryaStreamManager
 from bot.trya_dcs_events import trya_dcs_events
 from bot.trya_dcs_schedule import is_submissions_locked
-from bot.trya_dcs_vod import DcsVodManager, safe_stop_target_out_time
+from bot.trya_dcs_vod import DcsVodManager, hls_url_from_rtmp, safe_stop_target_out_time
 from bot.suno_urls import SUNO_UUID_RE, UUID_RE
 
 # Re-export so callers can keep importing from this module.
@@ -94,6 +94,9 @@ class TryaDcsManager(TryaStreamManager):
         title = (self.current_song or {}).get("title") or ""
         if title:
             parts.append(title)
+        vod_bytes = self.vod.sidecar_bytes()
+        if vod_bytes:
+            parts.append(f"vod={vod_bytes / 1048576:.1f}MiB")
         line = "FFmpeg " + " · ".join(part for part in parts if part)
         speed_val = None
         try:
@@ -715,6 +718,7 @@ class TryaDcsManager(TryaStreamManager):
         self._log("MediaMTX publisher is live.")
         if vod_path:
             self._log(f"VOD sidecar: {os.path.basename(vod_path)}")
+            asyncio.create_task(self.vod.ensure_hls_fallback(hls_url_from_rtmp(self._output_url)))
         tracker = asyncio.create_task(self._track_song_progress(songs))
         announce_task = None
         if not self._safe_stop_requested:

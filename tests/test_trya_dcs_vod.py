@@ -4,6 +4,7 @@ from bot.trya_dcs_vod import (
     classify_vod_stop,
     ffmpeg_live_output_args,
     ffmpeg_tee_escape,
+    hls_url_from_rtmp,
     safe_stop_target_out_time,
 )
 
@@ -40,18 +41,25 @@ class TeeOutputTests(unittest.TestCase):
             ["-f", "flv", "rtmp://mediamtx:1935/trya-dcs"],
         )
 
-    def test_tee_writes_mpegts_sidecar(self):
+    def test_tee_writes_fragmented_mp4_sidecar(self):
         args = ffmpeg_live_output_args(
             "rtmp://mediamtx:1935/trya-dcs",
-            "/data/vods/id/master.partial.ts",
+            "/data/vods/id/master.partial.mp4",
         )
-        self.assertEqual(args[0], "-f")
-        self.assertEqual(args[1], "tee")
-        spec = args[2]
+        self.assertEqual(args[:4], ["-f", "tee", "-use_fifo", "1"])
+        spec = args[4]
         self.assertIn("f=flv", spec)
-        self.assertIn("f=mpegts", spec)
+        self.assertIn("f=mp4", spec)
+        self.assertIn("frag_keyframe", spec)
+        self.assertNotIn("mpegts", spec)
         self.assertIn(ffmpeg_tee_escape("rtmp://mediamtx:1935/trya-dcs"), spec)
-        self.assertIn(ffmpeg_tee_escape("/data/vods/id/master.partial.ts"), spec)
+        self.assertIn(ffmpeg_tee_escape("/data/vods/id/master.partial.mp4"), spec)
+
+    def test_hls_url_follows_mediamtx_path(self):
+        self.assertEqual(
+            hls_url_from_rtmp("rtmp://mediamtx:1935/trya-dcs"),
+            "http://mediamtx:8888/trya-dcs/index.m3u8",
+        )
 
 
 class SafeStopTimingTests(unittest.TestCase):

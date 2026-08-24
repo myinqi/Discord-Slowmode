@@ -36,17 +36,29 @@ def ffmpeg_tee_escape(value: str) -> str:
 
 
 def ffmpeg_live_output_args(stream_target: str, vod_path: str | None = None) -> list[str]:
-    """Encode once: live RTMP plus an optional local MPEG-TS copy."""
+    """Encode once: live RTMP plus an optional local fragmented MP4 copy."""
     if not vod_path:
         return ["-f", "flv", stream_target]
     return [
         "-f",
         "tee",
+        "-use_fifo",
+        "1",
         (
             f"[f=flv:onfail=ignore]{ffmpeg_tee_escape(stream_target)}|"
-            f"[f=mpegts:bsfs/v=h264_mp4toannexb]{ffmpeg_tee_escape(vod_path)}"
+            f"[f=mp4:movflags=+frag_keyframe+empty_moov+default_base_moof:onfail=ignore]"
+            f"{ffmpeg_tee_escape(vod_path)}"
         ),
     ]
+
+
+def hls_url_from_rtmp(rtmp_url: str) -> str:
+    from urllib.parse import urlparse
+
+    parsed = urlparse(str(rtmp_url or "").strip())
+    host = parsed.hostname or "mediamtx"
+    path = (parsed.path or "").strip("/") or "trya-dcs"
+    return f"http://{host}:8888/{path}/index.m3u8"
 
 
 def safe_stop_target_out_time(
@@ -116,6 +128,14 @@ class DcsVodManager:
                 mp4_partial = os.path.join(directory, "master.partial.mp4")
                 if os.path.isfile(mp4_partial) and os.path.getsize(mp4_partial) > 0:
                     os.replace(mp4_partial, master)
+                ts_partial = os.path.join(directory, "master.partial.ts")
+                if (
+                    (not os.path.isfile(master) or os.path.getsize(master) <= 0)
+                    and os.path.isfile(ts_partial)
+                    and os.path.getsize(ts_partial) > 0
+                ):
+                    os.replace(ts_partial, os.path.join(directory, "part_001.ts"))
+                    metadata.setdefault("parts", []).append("part_001.ts")
                 metadata["status"] = "interrupted"
                 metadata["ended_at"] = metadata.get("ended_at") or time.time()
                 metadata["error"] = "Recording was interrupted by a process restart."
@@ -154,10 +174,38 @@ class DcsVodManager:
         return (await self.db.get_setting("trya_dcs_vod_record_enabled") or "off") == "on"
 
     def _partial_path(self, metadata: dict) -> str:
-        return os.path.join(self._directory(metadata["id"]), "master.partial.ts")
+        return os.path.join(self._directory(metadata["id"]), "master.partial.mp4")
+
+    def sidecar_bytes(self) -> int:
+        if not self.active:
+            return 0
+        directory = self._directory(self.active["id"])
+        total = 0
+        for name in os.listdir(directory) if os.path.isdir(directory) else []:
+            if name.startswith("master.partial") or name.startswith("part_"):
+                path = os.path.join(directory, name)
+                if os.path.isfile(path):
+                    total += os.path.getsize(path)
+        return total
+
+    def describe_files(self, vod_id: str | None = None) -> str:
+        metadata = self.active if vod_id is None else {"id": vod_id}
+        if not metadata:
+            return "no active VOD"
+        directory = self._directory(metadata["id"])
+        try:
+            names = sorted(os.listdir(directory))
+        except OSError:
+            return f"{directory} (unreadable)"
+        parts = []
+        for name in names:
+            path = os.path.join(directory, name)
+            if os.path.isfile(path):
+                parts.append(f"{name}={os.path.getsize(path)}")
+        return ", ".join(parts) or "empty directory"
 
     async def attach(self, playlist: list[dict]) -> str | None:
-        """Prepare a same-encode MPEG-TS sidecar and return its path."""
+        """Prepare a same-encode fragmented MP4 sidecar and return its path."""
         if self.active:
             self.active.setdefault("playlist", []).extend(playlist)
             await self._archive_partial(self.active)
@@ -191,14 +239,58 @@ class DcsVodManager:
         self.capture_ready.clear()
         self.capture_task = asyncio.create_task(self._capture_events(events_path, now))
         await asyncio.wait_for(self.capture_ready.wait(), timeout=5)
-        self.log(f"VOD recording started: {vod_id} (same encode, local MPEG-TS copy).")
+        self.log(f"VOD recording started: {vod_id} (same encode, local fMP4 copy).")
         return self._partial_path(metadata)
+
+    async def ensure_hls_fallback(self, hls_url: str) -> None:
+        try:
+            if not self.active or not hls_url:
+                return
+            await asyncio.sleep(8)
+            if not self.active:
+                return
+            size = self.sidecar_bytes()
+            if size > 200_000:
+                self.log(f"VOD sidecar is growing ({size / 1048576:.1f} MiB).")
+                return
+            self.log(
+                f"VOD sidecar still empty after 8s ({self.describe_files()}); "
+                "falling back to HLS stream copy.",
+                "warning",
+            )
+            await self._launch_hls_recorder(hls_url)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.log(f"VOD HLS fallback failed: {exc}", "error")
+
+    async def _launch_hls_recorder(self, hls_url: str) -> None:
+        if not self.active:
+            return
+        if self.recorder and self.recorder.returncode is None:
+            return
+        partial = os.path.join(self._directory(self.active["id"]), "master.partial.mp4")
+        command = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "warning",
+            "-live_start_index", "0", "-rw_timeout", "15000000",
+            "-i", hls_url,
+            "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy",
+            "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
+            partial,
+        ]
+        self.recorder = await asyncio.create_subprocess_exec(
+            *command,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        self.log("VOD HLS fallback recorder started.")
 
     async def _archive_partial(self, metadata: dict) -> None:
         directory = self._directory(metadata["id"])
         parts = metadata.setdefault("parts", [])
         archived = False
-        for name in ("master.partial.ts", "master.partial.mp4"):
+        for name in ("master.partial.mp4", "master.partial.ts"):
             partial = os.path.join(directory, name)
             if not os.path.isfile(partial) or os.path.getsize(partial) <= 0:
                 continue
@@ -245,6 +337,7 @@ class DcsVodManager:
         process = self.recorder
         self.recorder = None
         recorder_error = await self._stop_recorder(process)
+        self.log(f"VOD files before assemble: {self.describe_files(metadata['id'])}")
         await self._archive_partial(metadata)
         directory = self._directory(metadata["id"])
         master = os.path.join(directory, "master.mp4")
@@ -253,8 +346,9 @@ class DcsVodManager:
             await self._assemble_master(metadata, master)
         except Exception as exc:
             assembly_error = str(exc)
+            self.log(f"VOD assemble failed: {exc}", "error")
         if not os.path.isfile(master) or os.path.getsize(master) <= 0:
-            for leftover_name in ("master.partial.ts", "master.partial.mp4"):
+            for leftover_name in ("master.partial.mp4", "master.partial.ts"):
                 leftover = os.path.join(directory, leftover_name)
                 if not os.path.isfile(leftover) or os.path.getsize(leftover) <= 0:
                     continue
@@ -327,10 +421,9 @@ class DcsVodManager:
         )
         _, stderr = await process.communicate()
         if process.returncode != 0 or not os.path.isfile(destination) or os.path.getsize(destination) <= 0:
-            raise RuntimeError(
-                "VOD remux failed: "
-                + stderr.decode("utf-8", errors="replace")[-2000:]
-            )
+            detail = stderr.decode("utf-8", errors="replace")[-2000:]
+            self.log(f"VOD remux failed for {os.path.basename(source)}: {detail}", "error")
+            raise RuntimeError("VOD remux failed: " + detail)
 
     async def _assemble_master(self, metadata: dict, master: str) -> None:
         directory = self._directory(metadata["id"])
