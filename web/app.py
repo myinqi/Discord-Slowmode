@@ -10073,9 +10073,72 @@ def create_app(db: Database, bot=None) -> Quart:
             admin_csrf=admin_csrf,
         )
 
+    def _vod_download_filename(name: str) -> str:
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", str(name or ""))
+        return safe.strip("._") or "trya_dcs.mp4"
+
+    async def _send_vod_download(path: str, filename: str, mimetype: str = "video/mp4"):
+        from quart import Response, abort, request
+
+        if not path or not os.path.isfile(path):
+            abort(404)
+        size = os.path.getsize(path)
+        if size <= 0:
+            abort(404)
+        start = 0
+        end = size - 1
+        status = 200
+        range_header = (request.headers.get("Range") or "").strip()
+        if range_header:
+            match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header)
+            if not match:
+                abort(416)
+            first, last = match.group(1), match.group(2)
+            if not first and not last:
+                abort(416)
+            if not first:
+                start = max(0, size - int(last))
+            else:
+                start = int(first)
+                if last:
+                    end = min(int(last), size - 1)
+            if start >= size or start > end:
+                abort(416)
+            status = 206
+        length = end - start + 1
+        headers = {
+            "Content-Type": mimetype,
+            "Content-Length": str(length),
+            "Content-Disposition": f'attachment; filename="{_vod_download_filename(filename)}"',
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "private, no-store, no-transform",
+            "X-Content-Type-Options": "nosniff",
+        }
+        if status == 206:
+            headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+
+        async def generate():
+            loop = asyncio.get_running_loop()
+            handle = await loop.run_in_executor(None, open, path, "rb")
+            try:
+                await loop.run_in_executor(None, handle.seek, start)
+                remaining = length
+                while remaining > 0:
+                    chunk = await loop.run_in_executor(
+                        None, handle.read, min(256 * 1024, remaining)
+                    )
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                    yield chunk
+            finally:
+                await loop.run_in_executor(None, handle.close)
+
+        return Response(generate(), status=status, headers=headers)
+
     @app.route("/trya-dcs/v/<token>")
     async def trya_dcs_member_vod_download(token: str):
-        from quart import abort, send_file
+        from quart import abort
 
         raw = str(token or "").strip()
         if not raw or len(raw) > 80:
@@ -10090,27 +10153,22 @@ def create_app(db: Database, bot=None) -> Quart:
         path = trya_dcs_manager.vod.file(str(record.get("vod_id") or ""), "rendered")
         if not path:
             abort(404)
-        return await send_file(
-            path,
-            as_attachment=True,
-            attachment_filename=f"trya_dcs_{record['vod_id']}_chat.mp4",
-            conditional=True,
+        return await _send_vod_download(
+            path, f"trya_dcs_{record['vod_id']}_chat.mp4"
         )
 
     @app.route("/trya-dcs/vod/<vod_id>/<kind>")
     @permission_required("trya_dcs")
     async def trya_dcs_vod_download(vod_id: str, kind: str):
-        from quart import abort, send_file
+        from quart import abort
         path = trya_dcs_manager.vod.file(vod_id, kind)
         if not path:
             abort(404)
-        extension = ".jsonl" if kind == "events" else ".mp4"
-        return await send_file(
-            path,
-            as_attachment=True,
-            attachment_filename=f"trya_dcs_{vod_id}_{kind}{extension}",
-            conditional=True,
-        )
+        if kind == "events":
+            return await _send_vod_download(
+                path, f"trya_dcs_{vod_id}_events.jsonl", mimetype="application/jsonl"
+            )
+        return await _send_vod_download(path, f"trya_dcs_{vod_id}_{kind}.mp4")
 
     @app.route("/trya-dcs/stream/status")
     @permission_required("trya_dcs")

@@ -69,6 +69,7 @@ async def main():
     hyper_cfg = HyperConfig()
     hyper_cfg.bind = [f"{Config.WEB_HOST}:{Config.WEB_PORT}"]
     hyper_cfg.accesslog = "-"
+    hyper_cfg.keep_alive_timeout = 75
     # Trust X-Forwarded-Proto / X-Forwarded-For from the Caddy reverse proxy
     # so that request.url is correctly built as https:// inside the app.
     hyper_cfg.forwarded_allow_ips = "*"

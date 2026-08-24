@@ -10,6 +10,28 @@ bot.macfreun.de {
 		}
 	}
 
+	handle /trya-dcs/v/* {
+		reverse_proxy slowmode-bot:5000 {
+			flush_interval -1
+			transport http {
+				read_timeout 30m
+				write_timeout 30m
+				response_header_timeout 2m
+			}
+		}
+	}
+
+	handle /trya-dcs/vod/* {
+		reverse_proxy slowmode-bot:5000 {
+			flush_interval -1
+			transport http {
+				read_timeout 30m
+				write_timeout 30m
+				response_header_timeout 2m
+			}
+		}
+	}
+
 	handle {
 		reverse_proxy slowmode-bot:5000
 	}
