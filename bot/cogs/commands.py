@@ -1513,12 +1513,13 @@ class CommandsCog(commands.Cog):
         output = text
         if translate:
             try:
-                import asyncio
-                from deep_translator import GoogleTranslator
-                loop = asyncio.get_event_loop()
-                output = await loop.run_in_executor(
-                    None, lambda: GoogleTranslator(source="auto", target=translate.lower()).translate(text)
-                )
+                from bot.cogs.auto_translate import TranslationError, translate_manual
+                translated = await translate_manual(self.bot, text, translate.lower())
+                if translated:
+                    output = translated
+            except TranslationError as e:
+                await interaction.followup.send(f"Translation failed: {e}", ephemeral=True)
+                return
             except Exception as e:
                 await interaction.followup.send(f"Translation failed: {e}", ephemeral=True)
                 return
@@ -1534,16 +1535,20 @@ class CommandsCog(commands.Cog):
     async def translate_cmd(self, interaction: discord.Interaction, to: str, text: str):
         await interaction.response.defer(ephemeral=True)
         try:
-            import asyncio
-            from deep_translator import GoogleTranslator
-            loop = asyncio.get_event_loop()
-            translated = await loop.run_in_executor(
-                None, lambda: GoogleTranslator(source="auto", target=to.lower()).translate(text)
-            )
+            from bot.cogs.auto_translate import TranslationError, translate_manual
+            translated = await translate_manual(self.bot, text, to.lower())
+            if not translated:
+                await interaction.followup.send(
+                    f"The text already appears to be in `{to.lower()}`.",
+                    ephemeral=True,
+                )
+                return
             await interaction.followup.send(
                 f"**Translation** → `{to.lower()}`\n{translated}",
                 ephemeral=True,
             )
+        except TranslationError as e:
+            await interaction.followup.send(f"Translation failed: {e}", ephemeral=True)
         except Exception as e:
             await interaction.followup.send(f"Translation failed: {e}", ephemeral=True)
 
@@ -2111,7 +2116,7 @@ class CommandsCog(commands.Cog):
         # Context Menu (all users)
         embed.add_field(
             name="📋 Context Menu (Right-click a message)",
-            value="**`Translate Message`** — Translate any message",
+            value="**`Translate Message`** — Translate any message (uses the Auto Translate engine)",
             inline=False,
         )
 
@@ -4159,18 +4164,22 @@ class TranslateLanguageSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         target = self.values[0]
         await interaction.response.defer(ephemeral=True)
+        label = [o.label for o in self.options if o.value == target][0]
         try:
-            import asyncio
-            from deep_translator import GoogleTranslator
-            loop = asyncio.get_event_loop()
-            translated = await loop.run_in_executor(
-                None, lambda: GoogleTranslator(source="auto", target=target).translate(self.original_text)
-            )
-            label = [o.label for o in self.options if o.value == target][0]
+            from bot.cogs.auto_translate import TranslationError, translate_manual
+            translated = await translate_manual(interaction.client, self.original_text, target)
+            if not translated:
+                await interaction.followup.send(
+                    f"The message already appears to be in {label}.",
+                    ephemeral=True,
+                )
+                return
             await interaction.followup.send(
                 f"**Translation** → {label} (`{target}`) of {self.author_name}'s message:\n\n{translated}",
                 ephemeral=True,
             )
+        except TranslationError as e:
+            await interaction.followup.send(f"Translation failed: {e}", ephemeral=True)
         except Exception as e:
             await interaction.followup.send(f"Translation failed: {e}", ephemeral=True)
 
