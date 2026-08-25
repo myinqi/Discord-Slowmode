@@ -179,7 +179,8 @@ small authorization endpoint. The bot never proxies the media body.
 Member VOD downloads from `/trya-dcs-vod` work the same way: Caddy asks
 `/trya-dcs/internal/vod-auth` to validate a hashed 2-hour share token, then
 `file_server` sends `rendered.mp4` from the bot-data volume. The Python app
-does not stream the MP4 body.
+does not stream the MP4 body. Caddy speaks HTTP/1.1 only so large files use
+kernel sendfile instead of HTTP/2 or HTTP/3 userspace copies.
 
 ## Access lifecycle
 

@@ -1,3 +1,12 @@
+{
+	# Large VOD downloads need HTTP/1.1 so Caddy can sendfile. HTTP/2 and
+	# HTTP/3 copy through userspace; Chrome then shows ~15 MB/s from the
+	# first buffer and settles around 2 MB/s. HLS works on HTTP/1.1.
+	servers {
+		protocols h1
+	}
+}
+
 bot.macfreun.de {
 	# Media bytes bypass the Python application. The bot authorizes each HLS
 	# request, then Caddy proxies it directly to internal MediaMTX.
@@ -28,6 +37,7 @@ bot.macfreun.de {
 			header Content-Disposition "attachment; filename=\"{header.X-Vod-Filename}\""
 			header Cache-Control "private, no-store, no-transform"
 			header X-Content-Type-Options "nosniff"
+			header -Alt-Svc
 			root * /srv/bot-data/radio/trya_dcs/vods
 			file_server {
 				hide *.json *.jsonl *.ts *.ass *.ssa master* part*
