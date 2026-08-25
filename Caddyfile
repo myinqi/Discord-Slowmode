@@ -10,15 +10,33 @@ bot.macfreun.de {
 		}
 	}
 
+	# Member VOD bytes bypass Python. The bot only authorizes the share
+	# token; Caddy then sendfiles rendered.mp4 from the bot-data volume.
+	# `route` keeps directive order: strip client headers, auth, rewrite.
 	handle /trya-dcs/v/* {
-		reverse_proxy slowmode-bot:5000 {
-			flush_interval -1
-			transport http {
-				read_timeout 30m
-				write_timeout 30m
-				response_header_timeout 2m
+		route {
+			request_header -X-Vod-Relpath
+			request_header -X-Vod-Filename
+			forward_auth slowmode-bot:5000 {
+				uri /trya-dcs/internal/vod-auth
+				copy_headers X-Vod-Relpath X-Vod-Filename
+			}
+			rewrite * {header.X-Vod-Relpath}
+			@unsafe not path_regexp ^/[A-Za-z0-9_-]+/rendered\.mp4$
+			respond @unsafe 404
+			header Content-Type "video/mp4"
+			header Content-Disposition "attachment; filename=\"{header.X-Vod-Filename}\""
+			header Cache-Control "private, no-store, no-transform"
+			header X-Content-Type-Options "nosniff"
+			root * /srv/bot-data/radio/trya_dcs/vods
+			file_server {
+				hide *.json *.jsonl *.ts *.ass *.ssa master* part*
 			}
 		}
+	}
+
+	handle /trya-dcs/internal/* {
+		respond 404
 	}
 
 	handle /trya-dcs/vod/* {

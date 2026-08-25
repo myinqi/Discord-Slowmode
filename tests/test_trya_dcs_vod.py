@@ -2,13 +2,16 @@ import unittest
 
 from bot.trya_dcs_vod import (
     _EMOJI_PLACEHOLDER,
+    caddy_rendered_vod_relpath,
     chat_text_with_emoji_slots,
     classify_vod_stop,
     ffmpeg_live_output_args,
     hls_url_from_rtmp,
+    member_vod_download_filename,
     rendered_keep_limit,
     safe_stop_target_out_time,
     select_oldest_rendered_to_delete,
+    vod_share_token_from_uri,
 )
 
 
@@ -90,6 +93,36 @@ class TeeOutputTests(unittest.TestCase):
         self.assertEqual(
             hls_url_from_rtmp("rtmp://mediamtx:1935/trya-dcs"),
             "http://mediamtx:8888/trya-dcs/index.m3u8",
+        )
+
+
+class MemberVodSharePathTests(unittest.TestCase):
+    def test_extracts_token_from_caddy_forwarded_uri(self):
+        token = "AbCdEfGhIjKlMnOpQrStUvWxYz0123"
+        self.assertEqual(
+            vod_share_token_from_uri(f"/trya-dcs/v/{token}"),
+            token,
+        )
+        self.assertEqual(
+            vod_share_token_from_uri(f"/trya-dcs/v/{token}/trya_dcs_chat.mp4?x=1"),
+            token,
+        )
+
+    def test_rejects_short_or_foreign_paths(self):
+        self.assertIsNone(vod_share_token_from_uri("/trya-dcs/v/short"))
+        self.assertIsNone(vod_share_token_from_uri("/trya-dcs/vod/20260824_231558/rendered"))
+        self.assertIsNone(vod_share_token_from_uri("/trya-dcs/v/../etc/passwd"))
+
+    def test_caddy_relpath_is_rendered_only(self):
+        self.assertEqual(
+            caddy_rendered_vod_relpath("20260824_231558"),
+            "/20260824_231558/rendered.mp4",
+        )
+        self.assertIsNone(caddy_rendered_vod_relpath("../etc"))
+        self.assertIsNone(caddy_rendered_vod_relpath("id/rendered.mp4"))
+        self.assertEqual(
+            member_vod_download_filename("20260824_231558"),
+            "trya_dcs_20260824_231558_chat.mp4",
         )
 
 

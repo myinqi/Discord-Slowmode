@@ -40,6 +40,9 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+      # Read-only VOD files for Caddy file_server. Root in Caddyfile is
+      # /srv/bot-data/radio/trya_dcs/vods so the database is not served.
+      - bot-data:/srv/bot-data:ro
     depends_on:
       - slowmode-bot
       - mediamtx

@@ -2822,7 +2822,7 @@ class CommandsCog(commands.Cog):
         now = time.time()
         expires = now + 2 * 3600
         lines = [
-            "Finished DCS VODs with chat overlay. Links expire in **2 hours** and download the rendered file (not the live-picture master)."
+            "Finished DCS VODs with chat overlay. Links expire in **2 hours** and download the rendered file (not the live-picture master). If Discord's in-app browser stops the download, open the link in Chrome or Firefox."
         ]
         for index, vod in enumerate(ready[:8], 1):
             raw = secrets.token_urlsafe(24)

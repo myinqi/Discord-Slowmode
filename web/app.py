@@ -8399,6 +8399,11 @@ def create_app(db: Database, bot=None) -> Quart:
     from bot.trya_stream_manager import TryaStreamManager
     trya_stream_manager = TryaStreamManager(db, TRYA_STREAM_DIR)
     from bot.trya_dcs_manager import TryaDcsManager
+    from bot.trya_dcs_vod import (
+        caddy_rendered_vod_relpath,
+        member_vod_download_filename,
+        vod_share_token_from_uri,
+    )
     trya_dcs_manager = TryaDcsManager(db, TRYA_DCS_DIR)
     if bot is not None:
         bot.exp_stream_manager = exp_stream_manager
@@ -10125,7 +10130,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 remaining = length
                 while remaining > 0:
                     chunk = await loop.run_in_executor(
-                        None, handle.read, min(256 * 1024, remaining)
+                        None, handle.read, min(1024 * 1024, remaining)
                     )
                     if not chunk:
                         break
@@ -10154,7 +10159,7 @@ def create_app(db: Database, bot=None) -> Quart:
         if not path:
             abort(404)
         return await _send_vod_download(
-            path, f"trya_dcs_{record['vod_id']}_chat.mp4"
+            path, member_vod_download_filename(str(record["vod_id"]))
         )
 
     @app.route("/trya-dcs/vod/<vod_id>/<kind>")
@@ -11300,6 +11305,33 @@ def create_app(db: Database, bot=None) -> Quart:
             path="/dcs-stream/",
         )
         return response
+
+    @app.route("/trya-dcs/internal/vod-auth", methods=["GET", "HEAD"])
+    async def trya_dcs_vod_auth():
+        from quart import Response
+
+        if (await db.get_setting("trya_dcs_enabled") or "off") != "on":
+            return "", 404
+        raw = vod_share_token_from_uri(request.headers.get("X-Forwarded-Uri") or "")
+        if not raw:
+            return "", 404
+        record = await db.get_trya_dcs_vod_share_token(
+            hashlib.sha256(raw.encode()).hexdigest()
+        )
+        if not record:
+            return "", 404
+        vod_id = str(record.get("vod_id") or "")
+        relpath = caddy_rendered_vod_relpath(vod_id)
+        if not relpath or not trya_dcs_manager.vod.file(vod_id, "rendered"):
+            return "", 404
+        return Response(
+            "",
+            status=204,
+            headers={
+                "X-Vod-Relpath": relpath,
+                "X-Vod-Filename": member_vod_download_filename(vod_id),
+            },
+        )
 
     @app.route("/trya-dcs/internal/media-auth", methods=["GET", "HEAD"])
     async def trya_dcs_media_auth():

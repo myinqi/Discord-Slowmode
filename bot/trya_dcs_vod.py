@@ -16,6 +16,28 @@ from bot.trya_dcs_events import trya_dcs_events
 
 _CUSTOM_EMOJI_RE = re.compile(r"<a?:([A-Za-z0-9_]+):(\d{17,20})>")
 _EMOJI_PLACEHOLDER = "\u25a1"
+_VOD_SHARE_TOKEN_PATH_RE = re.compile(r"^/trya-dcs/v/([A-Za-z0-9_-]{16,80})(?:/.*)?$")
+_VOD_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def vod_share_token_from_uri(uri: str) -> str | None:
+    """Extract a member VOD share token from the public download URI."""
+    path = (uri or "").split("?", 1)[0]
+    match = _VOD_SHARE_TOKEN_PATH_RE.fullmatch(path)
+    return match.group(1) if match else None
+
+
+def caddy_rendered_vod_relpath(vod_id: str) -> str | None:
+    """Relative path Caddy may serve from the VOD root (rendered file only)."""
+    if not _VOD_ID_RE.fullmatch(str(vod_id or "")):
+        return None
+    return f"/{vod_id}/rendered.mp4"
+
+
+def member_vod_download_filename(vod_id: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", str(vod_id or ""))
+    safe = safe.strip("._") or "vod"
+    return f"trya_dcs_{safe}_chat.mp4"
 
 
 def chat_text_with_emoji_slots(content: str) -> tuple[str, list[tuple[str, str]]]:

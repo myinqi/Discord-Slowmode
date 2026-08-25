@@ -170,10 +170,16 @@ Caddy is the only public entry point:
 
 ```text
 https://bot.macfreun.de/dcs-stream/trya-dcs/index.m3u8
+https://bot.macfreun.de/trya-dcs/v/<share-token>
 ```
 
 Before Caddy proxies a manifest or segment to MediaMTX, it calls the bot's
 small authorization endpoint. The bot never proxies the media body.
+
+Member VOD downloads from `/trya-dcs-vod` work the same way: Caddy asks
+`/trya-dcs/internal/vod-auth` to validate a hashed 2-hour share token, then
+`file_server` sends `rendered.mp4` from the bot-data volume. The Python app
+does not stream the MP4 body.
 
 ## Access lifecycle
 
