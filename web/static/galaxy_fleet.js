@@ -76,6 +76,78 @@
     }
   }
 
+  function venator(g, color, now, thrust) {
+    const value = rgb(color), pulse = .68 + .32 * Math.sin(now / 88);
+    g.fillStyle = color; g.strokeStyle = '#242631'; g.lineWidth = .7;
+    g.beginPath(); g.moveTo(19,0); g.lineTo(-13,-9); g.lineTo(-9,0); g.lineTo(-13,9); g.closePath(); g.fill(); g.stroke();
+    g.fillStyle = '#313747';
+    g.beginPath(); g.moveTo(16,0); g.lineTo(-9,-3.4); g.lineTo(-5,0); g.lineTo(-9,3.4); g.closePath(); g.fill();
+    g.strokeStyle = `rgba(${value.join(',')},.9)`; g.lineWidth = 1.25;
+    g.beginPath(); g.moveTo(15,-1.25); g.lineTo(-7,-5.8); g.moveTo(15,1.25); g.lineTo(-7,5.8); g.stroke();
+    g.fillStyle = '#858b9b';
+    for (const side of [-1, 1]) {
+      g.fillRect(-3,side * 4.2 - 1.2,5.5,2.4);
+      g.fillStyle = '#b2b8c7'; g.fillRect(-1.4,side * 6.7 - .8,1.2,2.7);
+      g.fillStyle = '#858b9b';
+    }
+    if (thrust) {
+      g.fillStyle = `rgba(105,175,255,${pulse.toFixed(3)})`;
+      for (const y of [-5.7,-2.8,0,2.8,5.7]) { g.beginPath(); g.arc(-12.2,y,.85,0,Math.PI*2); g.fill(); }
+    }
+  }
+
+  function gothicCruiser(g, color, now, thrust) {
+    const pulse = .62 + .38 * Math.sin(now / 100);
+    g.fillStyle = color; g.strokeStyle = '#202027'; g.lineWidth = .75;
+    g.beginPath(); g.moveTo(19,0); g.lineTo(11,-5); g.lineTo(-12,-7); g.lineTo(-16,-3); g.lineTo(-16,3); g.lineTo(-12,7); g.lineTo(11,5); g.closePath(); g.fill(); g.stroke();
+    g.fillStyle = '#77727c';
+    g.beginPath(); g.moveTo(20,0); g.lineTo(12,-3.4); g.lineTo(9,0); g.lineTo(12,3.4); g.closePath(); g.fill(); g.stroke();
+    g.fillStyle = '#3c3b44';
+    for (let x=-10;x<=8;x+=3){g.fillRect(x,-5.6,1.2,11.2)}
+    g.fillStyle = '#96919c';
+    g.fillRect(-3,-8,7,3); g.fillRect(-1.5,-11,3.5,3.2); g.fillRect(-.35,-14,.9,3.2);
+    g.fillRect(-3,5,7,3); g.fillRect(-1.5,8,3.5,3.2); g.fillRect(-.35,11,.9,3.2);
+    g.fillStyle = '#d2b768';
+    for (const y of [-3,0,3]) { g.beginPath(); g.arc(7,y,.75,0,Math.PI*2); g.fill(); }
+    if (thrust) {
+      g.fillStyle = `rgba(120,175,255,${pulse.toFixed(3)})`;
+      for (const y of [-4.5,-1.5,1.5,4.5]) { g.beginPath(); g.arc(-15.6,y,1,0,Math.PI*2); g.fill(); }
+    }
+  }
+
+  function borgCube(g, color, now, thrust) {
+    const pulse = .55 + .45 * Math.sin(now / 120);
+    g.fillStyle = '#252a29'; g.strokeStyle = color; g.lineWidth = .8;
+    g.fillRect(-11,-11,22,22); g.strokeRect(-11,-11,22,22);
+    g.fillStyle = '#141817';
+    for(let x=-8;x<=6;x+=7)for(let y=-8;y<=6;y+=7)g.fillRect(x,y,4,4);
+    g.strokeStyle = color; g.lineWidth = .55;
+    for(let i=-8;i<=8;i+=4){g.beginPath();g.moveTo(-10,i);g.lineTo(10,-i*.65);g.stroke()}
+    g.fillStyle = thrust ? `rgba(115,255,150,${pulse.toFixed(3)})` : color;
+    for(const p of [[-7,-7],[7,-7],[-7,7],[7,7],[0,0]]){g.beginPath();g.arc(p[0],p[1],1,0,Math.PI*2);g.fill()}
+  }
+
+  function birdOfPrey(g, color, now, thrust) {
+    const pulse = .65 + .35 * Math.sin(now / 92);
+    g.fillStyle = color; g.strokeStyle = '#222831'; g.lineWidth = .7;
+    g.beginPath();g.moveTo(17,0);g.lineTo(4,-4);g.lineTo(-13,-12);g.lineTo(-8,-2);g.lineTo(-3,0);g.lineTo(-8,2);g.lineTo(-13,12);g.lineTo(4,4);g.closePath();g.fill();g.stroke();
+    g.fillStyle='#3c4e48';g.beginPath();g.ellipse(4,0,7,4.8,0,0,Math.PI*2);g.fill();g.stroke();
+    g.fillStyle='#a0ada7';g.beginPath();g.moveTo(17,0);g.lineTo(8,-2.2);g.lineTo(8,2.2);g.closePath();g.fill();
+    g.strokeStyle='rgba(190,225,205,.45)';g.lineWidth=.5;
+    for(const side of [-1,1]){g.beginPath();g.moveTo(-10,side*9);g.lineTo(1,side*3);g.stroke()}
+    if(thrust){g.fillStyle=`rgba(105,220,150,${pulse.toFixed(3)})`;for(const y of [-2.2,2.2]){g.beginPath();g.arc(-7,y,1.1,0,Math.PI*2);g.fill()}}
+  }
+
+  function basestar(g, color, now, thrust) {
+    const pulse = .62 + .38 * Math.sin(now / 105);
+    g.fillStyle=color;g.strokeStyle='#272731';g.lineWidth=.7;
+    for(const rotation of [0,Math.PI]){g.save();g.rotate(rotation);g.beginPath();g.moveTo(17,0);g.lineTo(3,-4);g.lineTo(-7,-10);g.lineTo(-3,0);g.lineTo(-7,10);g.lineTo(3,4);g.closePath();g.fill();g.stroke();g.restore()}
+    g.fillStyle='#3d3d49';g.beginPath();g.arc(0,0,6,0,Math.PI*2);g.fill();g.stroke();
+    g.strokeStyle='#c7c9d7';g.lineWidth=.55;g.beginPath();g.arc(0,0,3.2,0,Math.PI*2);g.stroke();
+    g.fillStyle=thrust?`rgba(235,75,75,${pulse.toFixed(3)})`:'#7e353c';
+    for(const x of [-7,7]){g.beginPath();g.arc(x,0,1.2,0,Math.PI*2);g.fill()}
+  }
+
   function galaxyFleetDraw(g, effect, position, scale, angle, now, glow, color, thrust) {
     g.save(); g.translate(position[0], position[1]); g.rotate(angle); g.scale(scale, scale);
     halo(g, color, glow);
@@ -83,6 +155,11 @@
     if (effect === 'explorer') explorer(g, color, now, thrust);
     else if (effect === 'destroyer') destroyer(g, color, now, thrust);
     else if (effect === 'battlestar') battlestar(g, color, now, thrust);
+    else if (effect === 'venator') venator(g, color, now, thrust);
+    else if (effect === 'gothic_cruiser') gothicCruiser(g, color, now, thrust);
+    else if (effect === 'borg_cube') borgCube(g, color, now, thrust);
+    else if (effect === 'bird_of_prey') birdOfPrey(g, color, now, thrust);
+    else if (effect === 'basestar') basestar(g, color, now, thrust);
     g.restore();
   }
 

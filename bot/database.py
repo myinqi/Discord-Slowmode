@@ -28,16 +28,27 @@ GALAXY_UPGRADE_EFFECTS = {
         "explorer": "Federation-style explorer cruiser",
         "destroyer": "Star-destroyer wedge",
         "battlestar": "Battlestar carrier",
+        "venator": "Venator-style double wedge",
+        "gothic_cruiser": "Gothic battlecruiser",
+        "borg_cube": "Cybernetic cube",
+        "bird_of_prey": "Bird-of-prey raider",
+        "basestar": "Twin-wing basestar",
     },
     "trail": {
         "engine": "Engine beam",
         "sparkle": "Spark particles",
         "nebula": "Klangtresor green nebula",
         "warp": "Klangtresor warp wake",
+        "comet": "Comet tail",
+        "ion_storm": "Ion lightning",
+        "plasma": "Twin plasma exhaust",
     },
     "scanner": {
         "pulse": "Pulse rings",
         "rune": "Rotating rune",
+        "radar": "Radar sweep",
+        "targeting": "Targeting reticle",
+        "hexgrid": "Hex-grid scan",
     },
 }
 

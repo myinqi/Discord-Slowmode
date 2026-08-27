@@ -448,8 +448,10 @@ Configuration groups:
 - upgrade enable/disable;
 - editable names, descriptions and prices;
 - category-safe effect presets and colors (`ship`/`raven`/Klangtresor `cube` plus
-  stylized `explorer`, `destroyer` and `battlestar` hull silhouettes,
-  `engine`/`sparkle`/Klangtresor `nebula`/`warp`, `pulse`/`rune`);
+  stylized `explorer`, `destroyer`, `battlestar`, `venator` and
+  `gothic_cruiser`, `borg_cube`, `bird_of_prey` and `basestar` hull silhouettes;
+  `engine`/`sparkle`/Klangtresor `nebula`/`warp` plus `comet`, `ion_storm` and
+  `plasma` trails; `pulse`/`rune` plus `radar`, `targeting` and `hexgrid` scanners);
 - creation of additional hull, trail and scanner shop items from those safe presets;
   creation never equips or grants an item automatically;
 - sort order;

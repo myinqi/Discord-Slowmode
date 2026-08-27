@@ -173,8 +173,17 @@ class GalaxyDatabaseTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_admin_can_configure_safe_shop_effects(self):
         self.assertTrue(
-            {"cube", "explorer", "destroyer", "battlestar"}
+            {"cube", "explorer", "destroyer", "battlestar", "venator", "gothic_cruiser",
+             "borg_cube", "bird_of_prey", "basestar"}
             <= set(GALAXY_UPGRADE_EFFECTS["hull"])
+        )
+        self.assertTrue(
+            {"comet", "ion_storm", "plasma"}
+            <= set(GALAXY_UPGRADE_EFFECTS["trail"])
+        )
+        self.assertTrue(
+            {"radar", "targeting", "hexgrid"}
+            <= set(GALAXY_UPGRADE_EFFECTS["scanner"])
         )
         self.assertTrue(await self.db.galaxy_update_upgrade(
             "nebula", name="Aurora", description="Custom hull", price=333,
