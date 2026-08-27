@@ -94,6 +94,11 @@
         .relic-progress { height:7px; overflow:hidden; border-radius:999px; background:#2b2535; }
         .relic-progress span { display:block; height:100%; width:0; background:linear-gradient(90deg,#7c3aed,#d946ef); transition:width .4s ease; }
         .relic-meta { display:flex; justify-content:space-between; gap:12px; margin:5px 0 12px; color:#8d8498; font-size:10px; }
+        .combined-relic-status { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:14px; }
+        .combined-relic-section { min-width:0; }
+        .combined-relic-section + .combined-relic-section { padding-left:14px; border-left:1px solid var(--line); }
+        .combined-relic-label { margin-bottom:8px; color:#756d80; font-size:9px; font-weight:750; letter-spacing:.08em; text-transform:uppercase; }
+        .combined-relic-phrase { color:#aaa2b5; font:11px/1.5 ui-monospace,monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
         .relic-event { margin-bottom:8px; padding:8px 9px; border:1px solid #55306d; border-radius:5px; color:#d8b4fe; background:#24112f; font-size:11px; }
         .chat-panel { display:flex; flex-direction:column; min-height:0; }
         .chat-head { flex:none; padding:15px 16px; border-bottom:1px solid var(--line); font-weight:650; }
@@ -197,6 +202,8 @@
             .brand { font-size:19px; }
         }
         @media (max-width: 520px) {
+            .combined-relic-status { grid-template-columns:1fr; }
+            .combined-relic-section + .combined-relic-section { padding:12px 0 0; border-left:0; border-top:1px solid var(--line); }
             .meta-title { flex-direction:column; align-items:stretch; }
             .meta-title h1 { width:100%; }
             .meta-actions { width:100%; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); }
@@ -597,8 +604,14 @@ function configuredInfoPanels(payload) {
         rows: (payload.recent_combines || []).map(combine => ({primary: `${combine.username}: ${combine.activity}`, secondary: combine.rarity})),
         empty: 'No relics have been combined yet.'
     });
-    if (display.ritual) panels.push({title: 'Ritual Energy', type: 'ritual', ritual: payload.ritual || {energy: 0, goal: 1}});
-    if (display.phrase) panels.push({title: 'Phrase Puzzle', type: 'phrase', phrase: payload.phrase || {enabled: false, progress: ''}});
+    if (display.ritual && display.phrase) panels.push({
+        title: 'Ritual & Phrase Puzzle',
+        type: 'ritual_phrase',
+        ritual: payload.ritual || {energy: 0, goal: 1},
+        phrase: payload.phrase || {enabled: false, progress: ''}
+    });
+    else if (display.ritual) panels.push({title: 'Ritual Energy', type: 'ritual', ritual: payload.ritual || {energy: 0, goal: 1}});
+    else if (display.phrase) panels.push({title: 'Phrase Puzzle', type: 'phrase', phrase: payload.phrase || {enabled: false, progress: ''}});
     if (display.custom_enabled && display.custom_text) panels.push({title: display.custom_title || 'Community information', type: 'text', text: display.custom_text});
     if (display.gallery_enabled && (display.gallery_images || []).length) panels.push({
         title: display.gallery_title || 'Gallery',
@@ -647,6 +660,34 @@ function renderCommunityInfo() {
             item.addEventListener('click', () => sendCommand(command));
             content.append(item);
         }
+    } else if (panel.type === 'ritual_phrase') {
+        content.className = 'combined-relic-status';
+        const ritualSection = document.createElement('section');
+        ritualSection.className = 'combined-relic-section';
+        const ritualLabel = document.createElement('div');
+        ritualLabel.className = 'combined-relic-label';
+        ritualLabel.textContent = 'Ritual energy';
+        const ritual = panel.ritual;
+        const percent = Math.max(0, Math.min(100, Number(ritual.energy || 0) / Math.max(1, Number(ritual.goal || 1)) * 100));
+        const progress = document.createElement('div');
+        progress.className = 'relic-progress';
+        const fill = document.createElement('span');
+        fill.style.width = `${percent}%`;
+        progress.append(fill);
+        const meta = document.createElement('div');
+        meta.className = 'relic-meta';
+        meta.textContent = `${ritual.energy || 0} / ${ritual.goal || 1} energy`;
+        ritualSection.append(ritualLabel, progress, meta);
+        const phraseSection = document.createElement('section');
+        phraseSection.className = 'combined-relic-section';
+        const phraseLabel = document.createElement('div');
+        phraseLabel.className = 'combined-relic-label';
+        phraseLabel.textContent = 'Phrase Puzzle';
+        const phrase = document.createElement('div');
+        phrase.className = 'combined-relic-phrase';
+        phrase.textContent = panel.phrase.enabled && panel.phrase.progress ? panel.phrase.progress : 'No Phrase Puzzle is active.';
+        phraseSection.append(phraseLabel, phrase);
+        content.append(ritualSection, phraseSection);
     } else if (panel.type === 'ritual') {
         content.className = '';
         const ritual = panel.ritual;

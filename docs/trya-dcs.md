@@ -60,7 +60,8 @@ The current implementation includes:
   with Discord display names and avatars;
 - a configurable rotating community panel and live Raven's Nest panel with
   leaderboard, built-in plus enabled custom commands, finds, combines, ritual,
-  phrase and event state;
+  phrase and event state; enabled ritual and phrase information share one compact
+  rotation card while retaining their independent Admin switches;
 - transport-neutral Raven's Nest command dispatch from native Discord and the
   authenticated web chat into the existing shared `relic_*` database tables;
 - a dedicated OBS contribution listener at `rtmp://HOST:1937/live` with a
