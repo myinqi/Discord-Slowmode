@@ -55,11 +55,13 @@ rate-limited Discord actions.
 10. Per-user auto-navigation is enabled by default and leaves the ship in a short,
     visible arrival orbit before selecting the next older song. If disabled, the ship
     remains in orbit until the user selects another planet.
-11. Valid listening heartbeats accumulate eligible seconds and credits.
-12. A qualifying completion queues the configured bot reaction for the original
+11. Songs verified as fully heard remain desaturated on later expeditions. The
+    per-user skip option is enabled by default, so automatic navigation bypasses them.
+12. Valid listening heartbeats accumulate eligible seconds and credits.
+13. A qualifying completion queues the configured bot reaction for the original
     showcase message and records the listener's Discord display name in the shared
     song reaction thread under a separate **Galaxy Player** heading.
-13. Credits can be spent on ship hulls, engine trails and scanner effects.
+14. Credits can be spent on ship hulls, engine trails and scanner effects.
 
 ## Travel synchronization
 
@@ -258,6 +260,9 @@ selected_trail
 selected_scanner
 auto_navigation
 expedition_days
+skip_completed
+shop_collapsed
+volume_percent
 created_at
 updated_at
 last_seen_at
@@ -318,6 +323,7 @@ seeked_seconds
 started_at
 last_heartbeat_at
 completed_at
+fully_listened
 credits_awarded
 reaction_status
 UNIQUE(expedition_id, message_id)
@@ -436,7 +442,9 @@ Configuration groups:
 ### Shop
 
 - upgrade enable/disable;
-- prices;
+- editable names, descriptions and prices;
+- category-safe effect presets and colors (`ship`/`raven`, `engine`/`sparkle`,
+  `pulse`/`rune`);
 - sort order;
 - user balance adjustment with audit entry;
 - economy reset only through explicit destructive confirmation.

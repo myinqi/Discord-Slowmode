@@ -154,11 +154,32 @@ class GalaxyDatabaseTests(unittest.IsolatedAsyncioTestCase):
         profile = await self.db.galaxy_get_profile(42)
         self.assertEqual(profile["auto_navigation"], 1)
         self.assertEqual(profile["expedition_days"], 1)
+        self.assertEqual(profile["skip_completed"], 1)
+        self.assertEqual(profile["shop_collapsed"], 0)
+        self.assertEqual(profile["volume_percent"], 80)
         profile = await self.db.galaxy_set_preferences(
-            42, auto_navigation=False, expedition_days=14
+            42, auto_navigation=False, expedition_days=14,
+            skip_completed=False, shop_collapsed=True, volume_percent=35,
         )
         self.assertEqual(profile["auto_navigation"], 0)
         self.assertEqual(profile["expedition_days"], 14)
+        self.assertEqual(profile["skip_completed"], 0)
+        self.assertEqual(profile["shop_collapsed"], 1)
+        self.assertEqual(profile["volume_percent"], 35)
+
+    async def test_admin_can_configure_safe_shop_effects(self):
+        self.assertTrue(await self.db.galaxy_update_upgrade(
+            "nebula", name="Aurora", description="Custom hull", price=333,
+            enabled=True, effect="raven", color="#12abef",
+        ))
+        upgrades = {row["id"]: row for row in await self.db.galaxy_get_upgrades()}
+        self.assertEqual(upgrades["nebula"]["name"], "Aurora")
+        self.assertEqual(upgrades["nebula"]["price"], 333)
+        self.assertIn('"effect":"raven"', upgrades["nebula"]["config_json"])
+        self.assertFalse(await self.db.galaxy_update_upgrade(
+            "nebula", name="Bad", description="", price=1,
+            enabled=True, effect="javascript", color="red",
+        ))
 
     async def test_complete_no_seek_earns_more_than_forward_seek(self):
         _, complete_listen = await self._listen(
@@ -196,6 +217,8 @@ class GalaxyDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(complete_result[1], 150)
         self.assertEqual(seeked_result[1], 80)
         self.assertGreater(complete_result[1], seeked_result[1])
+        heard = await self.db.galaxy_get_fully_listened_message_ids(42, [101, 102])
+        self.assertEqual(heard, {101})
 
 
 class _GalaxyMember:

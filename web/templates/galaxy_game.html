@@ -47,5 +47,27 @@
     </section>
     <div class="flex justify-end"><button type="submit" class="px-5 py-2.5 rounded-lg bg-discord-blurple hover:bg-indigo-500 text-white font-medium">Save Galaxy settings</button></div>
 </form>
-<section class="mt-6 bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden"><div class="px-5 py-4 border-b border-gray-700/50"><h3 class="text-white font-semibold">Initial shop inventory</h3></div><div class="p-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">{% for upgrade in upgrades %}<div class="rounded border border-gray-700 bg-discord-darker p-3"><div class="flex justify-between gap-3"><strong class="text-white">{{ upgrade.name }}</strong><span class="text-blue-300 text-sm">{{ upgrade.price }} cr</span></div><p class="text-gray-500 text-xs mt-1">{{ upgrade.category|title }} · {{ upgrade.description }}</p></div>{% endfor %}</div></section>
+<form method="POST" class="mt-6 bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="form_kind" value="shop">
+    <div class="px-5 py-4 border-b border-gray-700/50"><h3 class="text-white font-semibold">Shop items and effects</h3><p class="text-gray-500 text-sm mt-1">Names, descriptions, prices and safe visual effects are editable. Starter items remain enabled.</p></div>
+    <div class="p-5 grid grid-cols-1 xl:grid-cols-2 gap-4">
+        {% for upgrade in upgrades %}
+        <fieldset class="rounded border border-gray-700 bg-discord-darker p-4 space-y-3">
+            <legend class="px-2 text-xs uppercase tracking-wide text-blue-300">{{ upgrade.category }} · {{ upgrade.id }}</legend>
+            <div class="grid grid-cols-1 sm:grid-cols-[1fr_110px] gap-3">
+                <label><span class="block text-gray-500 text-xs mb-1">Name</span><input name="upgrade_{{ upgrade.id }}_name" maxlength="40" value="{{ upgrade.name }}" class="w-full bg-gray-950 border border-gray-600 rounded px-3 py-2 text-white"></label>
+                <label><span class="block text-gray-500 text-xs mb-1">Price</span><input type="number" name="upgrade_{{ upgrade.id }}_price" min="0" max="100000" value="{{ upgrade.price }}" class="w-full bg-gray-950 border border-gray-600 rounded px-3 py-2 text-white"></label>
+            </div>
+            <label class="block"><span class="block text-gray-500 text-xs mb-1">Description</span><input name="upgrade_{{ upgrade.id }}_description" maxlength="180" value="{{ upgrade.description }}" class="w-full bg-gray-950 border border-gray-600 rounded px-3 py-2 text-white"></label>
+            <div class="grid grid-cols-[1fr_90px_auto] gap-3 items-end">
+                <label><span class="block text-gray-500 text-xs mb-1">Effect</span><select name="upgrade_{{ upgrade.id }}_effect" class="w-full bg-gray-950 border border-gray-600 rounded px-3 py-2 text-white">{% if upgrade.category == 'hull' %}<option value="ship" {% if upgrade.config.effect == 'ship' %}selected{% endif %}>Spacecraft</option><option value="raven" {% if upgrade.config.effect == 'raven' %}selected{% endif %}>Animated raven</option>{% elif upgrade.category == 'trail' %}<option value="engine" {% if upgrade.config.effect == 'engine' %}selected{% endif %}>Engine beam</option><option value="sparkle" {% if upgrade.config.effect == 'sparkle' %}selected{% endif %}>Spark particles</option>{% else %}<option value="pulse" {% if upgrade.config.effect == 'pulse' %}selected{% endif %}>Pulse rings</option><option value="rune" {% if upgrade.config.effect == 'rune' %}selected{% endif %}>Rotating rune</option>{% endif %}</select></label>
+                <label><span class="block text-gray-500 text-xs mb-1">Color</span><input type="color" name="upgrade_{{ upgrade.id }}_color" value="{{ upgrade.config.color or '#8b7cff' }}" class="w-full h-[38px] bg-gray-950 border border-gray-600 rounded p-1"></label>
+                <label class="flex items-center gap-2 pb-2 text-gray-300 text-sm"><input type="checkbox" name="upgrade_{{ upgrade.id }}_enabled" value="1" {% if upgrade.enabled %}checked{% endif %}>Enabled</label>
+            </div>
+        </fieldset>
+        {% endfor %}
+    </div>
+    <div class="px-5 pb-5 flex justify-end"><button type="submit" class="px-5 py-2.5 rounded-lg bg-discord-blurple hover:bg-indigo-500 text-white font-medium">Save shop items</button></div>
+</form>
 {% endblock %}

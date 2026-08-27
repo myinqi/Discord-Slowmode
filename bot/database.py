@@ -3,6 +3,7 @@ import json
 import math
 import os
 import random
+import re
 import sqlite3
 import time
 from typing import Optional
@@ -6756,6 +6757,9 @@ class Database:
                 selected_scanner TEXT NOT NULL DEFAULT 'pulse',
                 auto_navigation INTEGER NOT NULL DEFAULT 1,
                 expedition_days INTEGER NOT NULL DEFAULT 1,
+                skip_completed INTEGER NOT NULL DEFAULT 1,
+                shop_collapsed INTEGER NOT NULL DEFAULT 0,
+                volume_percent INTEGER NOT NULL DEFAULT 80,
                 created_at REAL NOT NULL DEFAULT (unixepoch()),
                 updated_at REAL NOT NULL DEFAULT (unixepoch()),
                 last_seen_at REAL NOT NULL DEFAULT (unixepoch())
@@ -6808,6 +6812,7 @@ class Database:
                 started_at REAL NOT NULL,
                 last_heartbeat_at REAL NOT NULL,
                 completed_at REAL,
+                fully_listened INTEGER NOT NULL DEFAULT 0,
                 credits_awarded INTEGER NOT NULL DEFAULT 0,
                 reaction_status TEXT NOT NULL DEFAULT 'pending',
                 UNIQUE (expedition_id, message_id),
@@ -6868,6 +6873,16 @@ class Database:
             await self.db.execute(
                 "ALTER TABLE galaxy_listens ADD COLUMN last_audio_position REAL NOT NULL DEFAULT 0"
             )
+        if "fully_listened" not in galaxy_listen_columns:
+            await self.db.execute(
+                "ALTER TABLE galaxy_listens ADD COLUMN fully_listened INTEGER NOT NULL DEFAULT 0"
+            )
+            await self.db.execute(
+                """UPDATE galaxy_listens SET fully_listened = 1
+                   WHERE completed_at IS NOT NULL AND duration_seconds > 0
+                     AND eligible_seconds >= duration_seconds * 0.98
+                     AND seeked_seconds <= 0.5"""
+            )
         async with self.db.execute("PRAGMA table_info(galaxy_users)") as cursor:
             galaxy_user_columns = {row["name"] for row in await cursor.fetchall()}
         if "auto_navigation" not in galaxy_user_columns:
@@ -6878,15 +6893,27 @@ class Database:
             await self.db.execute(
                 "ALTER TABLE galaxy_users ADD COLUMN expedition_days INTEGER NOT NULL DEFAULT 1"
             )
+        if "skip_completed" not in galaxy_user_columns:
+            await self.db.execute(
+                "ALTER TABLE galaxy_users ADD COLUMN skip_completed INTEGER NOT NULL DEFAULT 1"
+            )
+        if "shop_collapsed" not in galaxy_user_columns:
+            await self.db.execute(
+                "ALTER TABLE galaxy_users ADD COLUMN shop_collapsed INTEGER NOT NULL DEFAULT 0"
+            )
+        if "volume_percent" not in galaxy_user_columns:
+            await self.db.execute(
+                "ALTER TABLE galaxy_users ADD COLUMN volume_percent INTEGER NOT NULL DEFAULT 80"
+            )
         defaults = (
-            ("scout", "hull", "Scout", "Reliable starter exploration ship.", 0, '{"color":"#8b7cff"}', 0),
-            ("raven", "hull", "Raven", "Klangtresor raven with animated wings and violet aura.", 120, '{"color":"#181520"}', 10),
-            ("nebula", "hull", "Nebula", "Curved hull with a violet canopy.", 240, '{"color":"#a855f7"}', 20),
-            ("ion_blue", "trail", "Ion Blue", "Classic blue engine trail.", 0, '{"color":"#64d8ff"}', 0),
-            ("plasma_pink", "trail", "Plasma Pink", "Bright magenta engine trail.", 80, '{"color":"#f472d0"}', 10),
-            ("solar_gold", "trail", "Solar Gold", "Warm golden engine trail.", 160, '{"color":"#fbbf24"}', 20),
-            ("pulse", "scanner", "Pulse Scanner", "Standard planetary scan pulse.", 0, '{"color":"#8b7cff"}', 0),
-            ("rune", "scanner", "Rune Scanner", "A runic scan wave.", 100, '{"color":"#d946ef"}', 10)
+            ("scout", "hull", "Scout", "Reliable starter exploration ship.", 0, '{"effect":"ship","color":"#f2efff"}', 0),
+            ("raven", "hull", "Raven", "Klangtresor raven with animated wings and violet aura.", 120, '{"effect":"raven","color":"#b44dff"}', 10),
+            ("nebula", "hull", "Nebula", "Curved hull with a violet canopy.", 240, '{"effect":"ship","color":"#a855f7"}', 20),
+            ("ion_blue", "trail", "Ion Blue", "Classic blue engine trail.", 0, '{"effect":"engine","color":"#64d8ff"}', 0),
+            ("plasma_pink", "trail", "Plasma Pink", "Bright magenta engine trail.", 80, '{"effect":"sparkle","color":"#f472d0"}', 10),
+            ("solar_gold", "trail", "Solar Gold", "Warm golden engine trail.", 160, '{"effect":"engine","color":"#fbbf24"}', 20),
+            ("pulse", "scanner", "Pulse Scanner", "Standard planetary scan pulse.", 0, '{"effect":"pulse","color":"#8b7cff"}', 0),
+            ("rune", "scanner", "Rune Scanner", "A rotating runic targeting field.", 100, '{"effect":"rune","color":"#d946ef"}', 10)
         )
         await self.db.executemany(
             """INSERT OR IGNORE INTO galaxy_upgrades
@@ -6894,6 +6921,21 @@ class Database:
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             defaults,
         )
+        legacy_configs = {
+            "scout": ('{"color":"#8b7cff"}', '{"effect":"ship","color":"#f2efff"}'),
+            "raven": ('{"color":"#181520"}', '{"effect":"raven","color":"#b44dff"}'),
+            "nebula": ('{"color":"#a855f7"}', '{"effect":"ship","color":"#a855f7"}'),
+            "ion_blue": ('{"color":"#64d8ff"}', '{"effect":"engine","color":"#64d8ff"}'),
+            "plasma_pink": ('{"color":"#f472d0"}', '{"effect":"sparkle","color":"#f472d0"}'),
+            "solar_gold": ('{"color":"#fbbf24"}', '{"effect":"engine","color":"#fbbf24"}'),
+            "pulse": ('{"color":"#8b7cff"}', '{"effect":"pulse","color":"#8b7cff"}'),
+            "rune": ('{"color":"#d946ef"}', '{"effect":"rune","color":"#d946ef"}'),
+        }
+        for upgrade_id, (old_config, new_config) in legacy_configs.items():
+            await self.db.execute(
+                "UPDATE galaxy_upgrades SET config_json = ? WHERE id = ? AND config_json = ?",
+                (new_config, upgrade_id, old_config),
+            )
         await self.db.execute(
             """UPDATE galaxy_upgrades
                SET price = 120
@@ -6954,6 +6996,40 @@ class Database:
             f"SELECT * FROM galaxy_upgrades {where} ORDER BY category, sort_order, name"
         ) as cursor:
             return [dict(row) for row in await cursor.fetchall()]
+
+    async def galaxy_update_upgrade(
+        self, upgrade_id: str, *, name: str, description: str, price: int,
+        enabled: bool, effect: str, color: str
+    ) -> bool:
+        async with self.db.execute(
+            "SELECT category FROM galaxy_upgrades WHERE id = ?", (upgrade_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            return False
+        category = row["category"]
+        allowed_effects = {
+            "hull": {"ship", "raven"},
+            "trail": {"engine", "sparkle"},
+            "scanner": {"pulse", "rune"},
+        }
+        if effect not in allowed_effects[category] or not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+            return False
+        starter_ids = {"scout", "ion_blue", "pulse"}
+        await self.db.execute(
+            """UPDATE galaxy_upgrades
+               SET name = ?, description = ?, price = ?, enabled = ?,
+                   config_json = ?, updated_at = ? WHERE id = ?""",
+            (
+                name.strip()[:40] or upgrade_id,
+                description.strip()[:180], max(0, min(int(price), 100000)),
+                1 if (enabled or upgrade_id in starter_ids) else 0,
+                json.dumps({"effect": effect, "color": color.lower()}, separators=(",", ":")),
+                time.time(), upgrade_id,
+            ),
+        )
+        await self.db.commit()
+        return True
 
     async def galaxy_get_owned_upgrades(self, discord_user_id: int) -> list[str]:
         async with self.db.execute(
@@ -7094,19 +7170,40 @@ class Database:
         return True
 
     async def galaxy_set_preferences(
-        self, discord_user_id: int, *, auto_navigation: bool, expedition_days: int
+        self, discord_user_id: int, *, auto_navigation: bool, expedition_days: int,
+        skip_completed: bool, shop_collapsed: bool, volume_percent: int
     ) -> dict:
         days = int(expedition_days)
         if days not in {1, 3, 7, 14, 30}:
             raise ValueError("Invalid expedition range.")
+        volume = max(0, min(100, int(volume_percent)))
         await self.db.execute(
             """UPDATE galaxy_users
-               SET auto_navigation = ?, expedition_days = ?, updated_at = ?
+               SET auto_navigation = ?, expedition_days = ?, skip_completed = ?,
+                   shop_collapsed = ?, volume_percent = ?, updated_at = ?
                WHERE discord_user_id = ?""",
-            (1 if auto_navigation else 0, days, time.time(), int(discord_user_id)),
+            (
+                1 if auto_navigation else 0, days, 1 if skip_completed else 0,
+                1 if shop_collapsed else 0, volume, time.time(), int(discord_user_id),
+            ),
         )
         await self.db.commit()
         return await self.galaxy_get_profile(discord_user_id)
+
+    async def galaxy_get_fully_listened_message_ids(
+        self, discord_user_id: int, message_ids: list[int]
+    ) -> set[int]:
+        ids = [int(message_id) for message_id in message_ids]
+        if not ids:
+            return set()
+        placeholders = ",".join("?" for _ in ids)
+        async with self.db.execute(
+            f"""SELECT DISTINCT message_id FROM galaxy_listens
+                WHERE discord_user_id = ? AND fully_listened = 1
+                  AND message_id IN ({placeholders})""",
+            (int(discord_user_id), *ids),
+        ) as cursor:
+            return {int(row["message_id"]) for row in await cursor.fetchall()}
 
     async def get_galaxy_player_song_reactions(self, message_id: int) -> list[dict]:
         async with self.db.execute(
@@ -7289,10 +7386,14 @@ class Database:
                 0, min(raw_credits, max(0, int(daily_cap) - earned_today))
             )
             now = time.time()
+            fully_listened = eligible >= duration * 0.98 and forward_seek <= 0.5
             await self.db.execute(
                 """UPDATE galaxy_listens SET completed_at = ?, credits_awarded = ?,
-                       reaction_status = ? WHERE id = ?""",
-                (now, award, "queued" if reaction_emoji_id else "disabled", int(listen_id)),
+                       fully_listened = ?, reaction_status = ? WHERE id = ?""",
+                (
+                    now, award, 1 if fully_listened else 0,
+                    "queued" if reaction_emoji_id else "disabled", int(listen_id),
+                ),
             )
             if award:
                 cursor = await self.db.execute(

@@ -3808,6 +3808,31 @@ def create_app(db: Database, bot=None) -> Quart:
                 await flash("The Galaxy settings form expired.", "error")
                 return redirect(request.url)
 
+            if form.get("form_kind") == "shop":
+                changed = 0
+                for upgrade in await db.galaxy_get_upgrades(enabled_only=False):
+                    prefix = f"upgrade_{upgrade['id']}_"
+                    try:
+                        updated = await db.galaxy_update_upgrade(
+                            upgrade["id"],
+                            name=str(form.get(prefix + "name") or upgrade["name"]),
+                            description=str(form.get(prefix + "description") or ""),
+                            price=int(form.get(prefix + "price") or 0),
+                            enabled=bool(form.get(prefix + "enabled")),
+                            effect=str(form.get(prefix + "effect") or ""),
+                            color=str(form.get(prefix + "color") or ""),
+                        )
+                    except (TypeError, ValueError):
+                        updated = False
+                    changed += int(updated)
+                await db.add_audit_log(
+                    event_type="galaxy_shop_changed",
+                    details=f"Updated {changed} Galaxy shop items",
+                    actor=session.get("username", "unknown"),
+                )
+                await flash(f"Updated {changed} Galaxy shop items.", "success")
+                return redirect(request.url)
+
             def bounded(name: str, default: int, low: int, high: int) -> str:
                 try:
                     return str(max(low, min(high, int(form.get(name) or default))))
@@ -3879,12 +3904,18 @@ def create_app(db: Database, bot=None) -> Quart:
             users = int((await cursor.fetchone())[0])
         async with db.db.execute("SELECT COUNT(*) FROM galaxy_listens WHERE completed_at IS NOT NULL") as cursor:
             listens = int((await cursor.fetchone())[0])
+        upgrades = await db.galaxy_get_upgrades(enabled_only=False)
+        for upgrade in upgrades:
+            try:
+                upgrade["config"] = json.loads(upgrade.get("config_json") or "{}")
+            except (TypeError, json.JSONDecodeError):
+                upgrade["config"] = {}
         return await render_template(
             "galaxy_game.html",
             settings=settings,
             channels=channels,
             emojis=emojis,
-            upgrades=await db.galaxy_get_upgrades(enabled_only=False),
+            upgrades=upgrades,
             galaxy_users=users,
             galaxy_listens=listens,
             csrf_token=csrf,
@@ -4216,6 +4247,12 @@ def create_app(db: Database, bot=None) -> Quart:
 
         for song in songs:
             song["title"] = str(song.get("title") or "").strip() or "Unknown song"
+        fully_listened = await db.galaxy_get_fully_listened_message_ids(
+            int(identity["discord_user_id"]),
+            [int(song["message_id"]) for song in songs],
+        )
+        for song in songs:
+            song["fully_listened"] = int(song["message_id"]) in fully_listened
         raw_token = secrets.token_urlsafe(32)
         token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
         expedition_id = await db.galaxy_create_expedition(
@@ -4243,6 +4280,12 @@ def create_app(db: Database, bot=None) -> Quart:
         expedition = await _galaxy_expedition_for_identity(identity, token)
         if not expedition:
             return {"error": "expedition_not_found"}, 404
+        fully_listened = await db.galaxy_get_fully_listened_message_ids(
+            int(identity["discord_user_id"]),
+            [int(song["message_id"]) for song in expedition["songs"]],
+        )
+        for song in expedition["songs"]:
+            song["fully_listened"] = int(song["message_id"]) in fully_listened
         return {
             "token": token,
             "expedition_id": int(expedition["id"]),
@@ -4349,6 +4392,9 @@ def create_app(db: Database, bot=None) -> Quart:
                     print(f"[galaxy-react] {thread_error}", flush=True)
             else:
                 thread_ok, thread_error = False, "Unknown song message"
+        completed_listen = await db.galaxy_get_listen(
+            listen_id, int(identity["discord_user_id"])
+        )
         return {
             "ok": ok,
             "credits": credits,
@@ -4356,6 +4402,7 @@ def create_app(db: Database, bot=None) -> Quart:
             "profile": await db.galaxy_get_profile(int(identity["discord_user_id"])),
             "thread": thread_ok,
             "warning": thread_error,
+            "fully_listened": bool(completed_listen and completed_listen.get("fully_listened")),
         }, (200 if ok else 409)
 
     @app.route("/galaxy/api/shop")
@@ -4401,11 +4448,16 @@ def create_app(db: Database, bot=None) -> Quart:
         data = await request.get_json(silent=True) or {}
         if not isinstance(data.get("auto_navigation"), bool):
             return {"error": "invalid_auto_navigation"}, 400
+        if not isinstance(data.get("skip_completed"), bool) or not isinstance(data.get("shop_collapsed"), bool):
+            return {"error": "invalid_preferences"}, 400
         try:
             profile = await db.galaxy_set_preferences(
                 int(identity["discord_user_id"]),
                 auto_navigation=data["auto_navigation"],
                 expedition_days=int(data.get("expedition_days")),
+                skip_completed=data["skip_completed"],
+                shop_collapsed=data["shop_collapsed"],
+                volume_percent=int(data.get("volume_percent")),
             )
         except (TypeError, ValueError):
             return {"error": "invalid_expedition_days"}, 400
