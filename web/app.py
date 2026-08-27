@@ -9997,7 +9997,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 pass
         def _is_replaced_submission(song: dict) -> bool:
             reason = str(song.get("remove_reason") or "")
-            return reason.startswith("replaced_by:") or bool(song.get("replacement_song_id"))
+            return not bool(song.get("active")) and reason.startswith("replaced_by:")
 
         hide_replaced = settings.get("trya_dcs_hide_replaced_submissions") == "on"
         submission_songs = [
