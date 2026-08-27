@@ -170,15 +170,33 @@ class GalaxyDatabaseTests(unittest.IsolatedAsyncioTestCase):
     async def test_admin_can_configure_safe_shop_effects(self):
         self.assertTrue(await self.db.galaxy_update_upgrade(
             "nebula", name="Aurora", description="Custom hull", price=333,
-            enabled=True, effect="raven", color="#12abef",
+            enabled=True, effect="cube", color="#12abef",
         ))
         upgrades = {row["id"]: row for row in await self.db.galaxy_get_upgrades()}
         self.assertEqual(upgrades["nebula"]["name"], "Aurora")
         self.assertEqual(upgrades["nebula"]["price"], 333)
-        self.assertIn('"effect":"raven"', upgrades["nebula"]["config_json"])
+        self.assertIn('"effect":"cube"', upgrades["nebula"]["config_json"])
         self.assertFalse(await self.db.galaxy_update_upgrade(
             "nebula", name="Bad", description="", price=1,
             enabled=True, effect="javascript", color="red",
+        ))
+
+        created = await self.db.galaxy_create_upgrade(
+            category="trail", name="Matrix Wake", description="Green nebula",
+            price=175, enabled=False, effect="nebula", color="#a4ec6c",
+        )
+        self.assertIsNotNone(created)
+        self.assertEqual(created["id"], "matrix_wake")
+        self.assertEqual(created["enabled"], 0)
+        self.assertIn('"effect":"nebula"', created["config_json"])
+        duplicate = await self.db.galaxy_create_upgrade(
+            category="trail", name="Matrix Wake", description="Warp variant",
+            price=225, enabled=True, effect="warp", color="#8b7cff",
+        )
+        self.assertEqual(duplicate["id"], "matrix_wake_2")
+        self.assertIsNone(await self.db.galaxy_create_upgrade(
+            category="scanner", name="Unsafe", description="", price=1,
+            enabled=True, effect="warp", color="#ffffff",
         ))
 
     async def test_complete_no_seek_earns_more_than_forward_seek(self):

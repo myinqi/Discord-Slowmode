@@ -18,7 +18,7 @@ from quart import (
     Quart, flash, make_response, redirect, render_template, request,
     session, url_for, websocket,
 )
-from bot.database import Database
+from bot.database import Database, GALAXY_UPGRADE_EFFECTS
 from bot.backup import (
     create_full_data_archive,
     prune_restore_backups,
@@ -3833,6 +3833,33 @@ def create_app(db: Database, bot=None) -> Quart:
                 await flash(f"Updated {changed} Galaxy shop items.", "success")
                 return redirect(request.url)
 
+            if form.get("form_kind") == "shop_create":
+                try:
+                    upgrade = await db.galaxy_create_upgrade(
+                        category=str(form.get("category") or ""),
+                        name=str(form.get("name") or ""),
+                        description=str(form.get("description") or ""),
+                        price=int(form.get("price") or 0),
+                        enabled=bool(form.get("enabled")),
+                        effect=str(form.get("effect") or ""),
+                        color=str(form.get("color") or ""),
+                    )
+                except (TypeError, ValueError):
+                    upgrade = None
+                if not upgrade:
+                    await flash("The new Galaxy shop item is invalid.", "error")
+                    return redirect(request.url)
+                await db.add_audit_log(
+                    event_type="galaxy_shop_item_created",
+                    details=(
+                        f"Created {upgrade['id']} ({upgrade['category']}, "
+                        f"{upgrade['price']} credits)"
+                    ),
+                    actor=session.get("username", "unknown"),
+                )
+                await flash(f"Created Galaxy shop item {upgrade['name']}.", "success")
+                return redirect(request.url)
+
             def bounded(name: str, default: int, low: int, high: int) -> str:
                 try:
                     return str(max(low, min(high, int(form.get(name) or default))))
@@ -3916,6 +3943,7 @@ def create_app(db: Database, bot=None) -> Quart:
             channels=channels,
             emojis=emojis,
             upgrades=upgrades,
+            galaxy_effects=GALAXY_UPGRADE_EFFECTS,
             galaxy_users=users,
             galaxy_listens=listens,
             csrf_token=csrf,

@@ -447,8 +447,10 @@ Configuration groups:
 
 - upgrade enable/disable;
 - editable names, descriptions and prices;
-- category-safe effect presets and colors (`ship`/`raven`, `engine`/`sparkle`,
-  `pulse`/`rune`);
+- category-safe effect presets and colors (`ship`/`raven`/Klangtresor `cube`,
+  `engine`/`sparkle`/Klangtresor `nebula`/`warp`, `pulse`/`rune`);
+- creation of additional hull, trail and scanner shop items from those safe presets;
+  creation never equips or grants an item automatically;
 - sort order;
 - user balance adjustment with audit entry;
 - economy reset only through explicit destructive confirmation.

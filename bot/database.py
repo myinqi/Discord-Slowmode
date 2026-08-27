@@ -20,6 +20,24 @@ DEFAULT_COLLECTIBLE_RARITY_WEIGHTS = {
 }
 COLLECTIBLE_RARITY_WEIGHTS_SETTING = "collectible_card_rarity_weights"
 
+GALAXY_UPGRADE_EFFECTS = {
+    "hull": {
+        "ship": "Spacecraft",
+        "raven": "Animated raven",
+        "cube": "Klangtresor music matrix",
+    },
+    "trail": {
+        "engine": "Engine beam",
+        "sparkle": "Spark particles",
+        "nebula": "Klangtresor green nebula",
+        "warp": "Klangtresor warp wake",
+    },
+    "scanner": {
+        "pulse": "Pulse rings",
+        "rune": "Rotating rune",
+    },
+}
+
 
 def calculate_galaxy_listen_credits(
     *,
@@ -6997,6 +7015,13 @@ class Database:
         ) as cursor:
             return [dict(row) for row in await cursor.fetchall()]
 
+    async def galaxy_get_upgrade(self, upgrade_id: str) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM galaxy_upgrades WHERE id = ?", (str(upgrade_id),)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return dict(row) if row else None
+
     async def galaxy_update_upgrade(
         self, upgrade_id: str, *, name: str, description: str, price: int,
         enabled: bool, effect: str, color: str
@@ -7008,12 +7033,10 @@ class Database:
         if not row:
             return False
         category = row["category"]
-        allowed_effects = {
-            "hull": {"ship", "raven"},
-            "trail": {"engine", "sparkle"},
-            "scanner": {"pulse", "rune"},
-        }
-        if effect not in allowed_effects[category] or not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+        if (
+            effect not in GALAXY_UPGRADE_EFFECTS.get(category, {})
+            or not re.fullmatch(r"#[0-9a-fA-F]{6}", color)
+        ):
             return False
         starter_ids = {"scout", "ion_blue", "pulse"}
         await self.db.execute(
@@ -7030,6 +7053,52 @@ class Database:
         )
         await self.db.commit()
         return True
+
+    async def galaxy_create_upgrade(
+        self, *, category: str, name: str, description: str, price: int,
+        enabled: bool, effect: str, color: str
+    ) -> Optional[dict]:
+        category = str(category or "").strip().lower()
+        name = str(name or "").strip()[:40]
+        effect = str(effect or "").strip().lower()
+        color = str(color or "").strip().lower()
+        if (
+            not name
+            or effect not in GALAXY_UPGRADE_EFFECTS.get(category, {})
+            or not re.fullmatch(r"#[0-9a-f]{6}", color)
+        ):
+            return None
+        base_id = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")[:32]
+        if not base_id:
+            base_id = f"custom_{category}"
+        upgrade_id = base_id
+        suffix = 2
+        while await self.galaxy_get_upgrade(upgrade_id):
+            suffix_text = f"_{suffix}"
+            upgrade_id = f"{base_id[:40-len(suffix_text)]}{suffix_text}"
+            suffix += 1
+            if suffix > 9999:
+                return None
+        async with self.db.execute(
+            "SELECT COALESCE(MAX(sort_order), 0) + 10 FROM galaxy_upgrades WHERE category = ?",
+            (category,),
+        ) as cursor:
+            sort_order = int((await cursor.fetchone())[0])
+        now = time.time()
+        await self.db.execute(
+            """INSERT INTO galaxy_upgrades
+                   (id, category, name, description, price, config_json,
+                    enabled, sort_order, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                upgrade_id, category, name, str(description or "").strip()[:180],
+                max(0, min(int(price), 100000)),
+                json.dumps({"effect": effect, "color": color}, separators=(",", ":")),
+                1 if enabled else 0, sort_order, now, now,
+            ),
+        )
+        await self.db.commit()
+        return await self.galaxy_get_upgrade(upgrade_id)
 
     async def galaxy_get_owned_upgrades(self, discord_user_id: int) -> list[str]:
         async with self.db.execute(
