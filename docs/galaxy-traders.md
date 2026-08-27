@@ -81,9 +81,13 @@ The route is a quadratic or cubic Bezier transfer curve. Normal playback derives
 progress from the audio clock. On a seek, the ship remains at its current visual
 position, a new curve is created from that position to the same target, and its new
 duration equals the remaining audio duration. Seeking forward therefore increases
-velocity; seeking backward decreases it. The route ends tangentially at an orbital
-entry point. The `ended` event transitions the ship into a 20-second elliptical orbit
-which follows the planet as it moves around the star.
+velocity; seeking backward decreases it. Planets use visually compressed Kepler-like
+motion: inner planets advance faster while distant planets retain a practical minimum
+speed. The route targets the planet's predicted position at the end of the song rather
+than its current position and ends tangentially at an orbital entry point. Pausing also
+pauses the active transfer clock, while seeking recalculates the intercept. The `ended`
+event transitions the ship into a 20-second elliptical orbit which follows the planet
+as it continues around the star.
 
 The purchasable Raven hull uses the Klangtresor raven vector model: powered transit
 has animated wingbeats, while the arrival orbit switches to a slower gliding motion

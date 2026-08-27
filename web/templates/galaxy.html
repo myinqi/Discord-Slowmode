@@ -28,7 +28,7 @@
 <div id="status" class="status"></div><audio id="audio" preload="metadata" crossorigin="anonymous"></audio>
 <script src="{{ url_for('static', filename='galaxy_raven.js') }}"></script>
 <script>
-const CSRF={{ csrf_token|tojson }};const canvas=document.getElementById('map'),ctx=canvas.getContext('2d'),audio=document.getElementById('audio'),reducedMotion=matchMedia('(prefers-reduced-motion: reduce)').matches;const ORBIT_PERIOD_MS=20000,AUTO_NAVIGATION_ORBIT_MS=4000;let cfg=null,expedition=null,planets=[],selected=-1,visited=new Set(),ship={x:0,y:0},journey=null,orbitState=null,autoNavigationTimer=null,view={x:0,y:0,zoom:1},drag=null,listenId=null,heartbeat=null,seeked=false,forwardSeekSeconds=0,lastFrame=0,mediaRequest=0;const statusEl=document.getElementById('status');
+const CSRF={{ csrf_token|tojson }};const canvas=document.getElementById('map'),ctx=canvas.getContext('2d'),audio=document.getElementById('audio'),reducedMotion=matchMedia('(prefers-reduced-motion: reduce)').matches;const ORBIT_PERIOD_MS=20000,AUTO_NAVIGATION_ORBIT_MS=4000,PLANET_BASE_SPEED=.034;let cfg=null,expedition=null,planets=[],selected=-1,visited=new Set(),ship={x:0,y:0},journey=null,orbitState=null,autoNavigationTimer=null,view={x:0,y:0,zoom:1},drag=null,listenId=null,heartbeat=null,seeked=false,forwardSeekSeconds=0,lastFrame=0,mediaRequest=0,orbitClock=0,orbitClockLast=null,orbitAudioTime=0;const statusEl=document.getElementById('status');
 function status(text){statusEl.textContent=text;statusEl.classList.add('show');clearTimeout(statusEl._t);statusEl._t=setTimeout(()=>statusEl.classList.remove('show'),3500)}function fmt(v){v=Math.max(0,Math.floor(v||0));return Math.floor(v/60)+':'+String(v%60).padStart(2,'0')}function hash(s){let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}return h>>>0}function rand(seed){seed|=0;return()=>{seed=seed+0x6D2B79F5|0;let t=Math.imul(seed^seed>>>15,1|seed);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
 function autoNavigationEnabled(profile=cfg?.profile){return profile?.auto_navigation===undefined||profile?.auto_navigation===null||Number(profile.auto_navigation)!==0}
 function profileEnabled(key,defaultValue=true,profile=cfg?.profile){const value=profile?.[key];return value===undefined||value===null?defaultValue:Number(value)!==0}
@@ -36,23 +36,27 @@ function selectedUpgrade(category){const id=cfg?.profile?.[`selected_${category}
 function selectedEffect(category,fallbackEffect,fallbackColor){const upgrade=selectedUpgrade(category),config=upgrade?.config||{};return{effect:config.effect||fallbackEffect,color:config.color||fallbackColor,name:upgrade?.name||cfg?.profile?.[`selected_${category}`]||category}}
 function nextPlanetIndex(after){for(let i=after+1;i<planets.length;i++){if(!profileEnabled('skip_completed',true)||!planets[i].song.fully_listened)return i}return-1}
 function resize(){const r=canvas.getBoundingClientRect(),d=Math.min(devicePixelRatio||1,2);canvas.width=Math.max(1,Math.floor(r.width*d));canvas.height=Math.max(1,Math.floor(r.height*d));ctx.setTransform(d,0,0,d,0,0)}new ResizeObserver(resize).observe(canvas);
-function buildPlanets(songs){const mobile=innerWidth<700,max=mobile?cfg.mobile_planet_limit:cfg.desktop_planet_limit;return songs.slice(0,max).map((song,i)=>{const r=rand(hash(song.message_id));return{song,index:i,orbit:105+i*27,ecc:.72+r()*.2,angle:r()*Math.PI*2,speed:.025/(1+i*.07),radius:10+r()*10,hue:Math.floor(r()*360),ring:r()>.68,moons:Math.min(3,Math.floor((song.reaction_count||0)/5)),x:0,y:0}})}function planetPosition(p,t){const a=p.angle+t*p.speed;return{x:Math.cos(a)*p.orbit,y:Math.sin(a)*p.orbit*p.ecc}}
+function buildPlanets(songs){const mobile=innerWidth<700,max=mobile?cfg.mobile_planet_limit:cfg.desktop_planet_limit;return songs.slice(0,max).map((song,i)=>{const r=rand(hash(song.message_id)),orbit=105+i*27,keplerFactor=Math.max(.18,Math.pow(orbit/105,-1.25));return{song,index:i,orbit,ecc:.72+r()*.2,angle:r()*Math.PI*2,speed:PLANET_BASE_SPEED*keplerFactor*(.92+r()*.16),radius:10+r()*10,hue:Math.floor(r()*360),ring:r()>.68,moons:Math.min(3,Math.floor((song.reaction_count||0)/5)),x:0,y:0}})}function planetPosition(p,t){const a=p.angle+t*p.speed;return{x:Math.cos(a)*p.orbit,y:Math.sin(a)*p.orbit*p.ecc}}
+function updateOrbitClock(timestamp){if(reducedMotion)return 0;if(orbitClockLast===null)orbitClockLast=timestamp;const wallDelta=Math.max(0,Math.min(.25,(timestamp-orbitClockLast)/1000));orbitClockLast=timestamp;if(journey&&isFinite(audio.currentTime)){const audioDelta=audio.currentTime-orbitAudioTime;if(audioDelta>0)orbitClock+=audioDelta;orbitAudioTime=audio.currentTime}else orbitClock+=wallDelta;return orbitClock}
 function screen(p,w,h){return{x:w/2+(p.x+view.x)*view.zoom,y:h/2+(p.y+view.y)*view.zoom}}function world(x,y,w,h){return{x:(x-w/2)/view.zoom-view.x,y:(y-h/2)/view.zoom-view.y}}
 function beginJourney(){
     if(selected<0||!isFinite(audio.duration))return;
-    const target=planets[selected],now=reducedMotion?0:performance.now()/1000;
-    const currentTarget=planetPosition(target,now);
-    const radius=target.radius+24/view.zoom;
+    const target=planets[selected],remaining=Math.max(0,audio.duration-audio.currentTime),currentTime=reducedMotion?0:orbitClock;
+    const currentTarget=planetPosition(target,currentTime);
+    const radius=target.radius+24;
     const phase=Math.atan2((ship.y-currentTarget.y)/.72,ship.x-currentTarget.x);
-    const targetX=currentTarget.x+Math.cos(phase)*radius,targetY=currentTarget.y+Math.sin(phase)*radius*.72;
+    const targetOrbitTime=reducedMotion?0:orbitClock+remaining,targetPosition=planetPosition(target,targetOrbitTime);
+    const targetX=targetPosition.x+Math.cos(phase)*radius,targetY=targetPosition.y+Math.sin(phase)*radius*.72;
     const tangent={x:-Math.sin(phase)*radius,y:Math.cos(phase)*radius*.72};
     const tangentLength=Math.hypot(tangent.x,tangent.y)||1,distance=Math.hypot(targetX-ship.x,targetY-ship.y);
     const handle=Math.min(110,Math.max(30,distance*.34));
-    journey={x:ship.x,y:ship.y,audioStart:audio.currentTime,targetIndex:selected,orbitPhase:phase,handle};
+    journey={x:ship.x,y:ship.y,audioStart:audio.currentTime,targetIndex:selected,targetOrbitTime,orbitPhase:phase,handle};
+    orbitAudioTime=audio.currentTime;
     orbitState=null;
 }
 function arriveAtPlanet(timestamp=performance.now()){
     if(selected<0||!planets[selected])return;
+    updateOrbitClock(timestamp);
     const target=planets[selected],phase=journey?.orbitPhase??Math.atan2((ship.y-target.y)/.72,ship.x-target.x);
     visited.add(selected);
     orbitState={planetIndex:selected,phase,startedAt:timestamp,arrivedAt:timestamp};
@@ -65,7 +69,7 @@ function draw(timestamp){
     const targetFps=reducedMotion?15:(cfg?cfg.target_fps:60);
     if(timestamp-lastFrame<1000/targetFps)return;
     lastFrame=timestamp;
-    const w=canvas.clientWidth,h=canvas.clientHeight,t=reducedMotion?0:timestamp/1000;
+    const w=canvas.clientWidth,h=canvas.clientHeight,t=updateOrbitClock(timestamp);
     ctx.clearRect(0,0,w,h);
     const starRand=rand(1337),starCount=reducedMotion?60:180;
     for(let i=0;i<starCount;i++){
@@ -93,12 +97,12 @@ function draw(timestamp){
     if(journey&&selected>=0){
         const duration=Math.max(.1,audio.duration-journey.audioStart);
         const progress=Math.max(0,Math.min(1,(audio.currentTime-journey.audioStart)/duration));
-        const destination=planets[journey.targetIndex],radius=destination.radius+24/view.zoom,phase=journey.orbitPhase;
-        const tx=destination.x+Math.cos(phase)*radius,ty=destination.y+Math.sin(phase)*radius*.72;
+        const destination=planets[journey.targetIndex],radius=destination.radius+24,phase=journey.orbitPhase,intercept=planetPosition(destination,journey.targetOrbitTime);
+        const tx=intercept.x+Math.cos(phase)*radius,ty=intercept.y+Math.sin(phase)*radius*.72;
         const tangent={x:-Math.sin(phase)*radius,y:Math.cos(phase)*radius*.72},tangentLength=Math.hypot(tangent.x,tangent.y)||1;
         const cx=tx-tangent.x/tangentLength*journey.handle,cy=ty-tangent.y/tangentLength*journey.handle;
         ctx.save();ctx.setLineDash([5/view.zoom,7/view.zoom]);ctx.lineWidth=1/view.zoom;
-        ctx.strokeStyle='rgba(123,216,255,.38)';ctx.beginPath();ctx.moveTo(journey.x,journey.y);ctx.quadraticCurveTo(cx,cy,tx,ty);ctx.stroke();ctx.restore();
+        ctx.strokeStyle='rgba(123,216,255,.38)';ctx.beginPath();ctx.moveTo(journey.x,journey.y);ctx.quadraticCurveTo(cx,cy,tx,ty);ctx.stroke();ctx.setLineDash([2/view.zoom,6/view.zoom]);ctx.strokeStyle='rgba(184,135,255,.22)';ctx.beginPath();ctx.moveTo(destination.x,destination.y);ctx.lineTo(intercept.x,intercept.y);ctx.stroke();ctx.setLineDash([]);ctx.strokeStyle='rgba(184,135,255,.7)';ctx.beginPath();ctx.arc(tx,ty,4/view.zoom,0,Math.PI*2);ctx.stroke();ctx.restore();
         const u=1-progress;
         ship.x=u*u*journey.x+2*u*progress*cx+progress*progress*tx;
         ship.y=u*u*journey.y+2*u*progress*cy+progress*progress*ty;
@@ -108,7 +112,7 @@ function draw(timestamp){
         if(!audio.paused)document.getElementById('flight-state').textContent=`In flight · ${Math.round(progress*100)}%`;
     }else if(orbitState&&planets[orbitState.planetIndex]){
         const target=planets[orbitState.planetIndex],elapsed=reducedMotion?0:timestamp-orbitState.startedAt;
-        const phase=orbitState.phase+elapsed/ORBIT_PERIOD_MS*Math.PI*2,radius=target.radius+24/view.zoom;
+        const phase=orbitState.phase+elapsed/ORBIT_PERIOD_MS*Math.PI*2,radius=target.radius+24;
         ship.x=target.x+Math.cos(phase)*radius;ship.y=target.y+Math.sin(phase)*radius*.72;
         shipAngle=Math.atan2(Math.cos(phase)*.72,-Math.sin(phase));shipMode='orbit';
     }
