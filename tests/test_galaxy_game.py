@@ -6,7 +6,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 try:
-    from bot.database import Database, calculate_galaxy_listen_credits
+    from bot.database import (
+        GALAXY_UPGRADE_EFFECTS,
+        Database,
+        calculate_galaxy_listen_credits,
+    )
 except ModuleNotFoundError as exc:
     if exc.name != "aiosqlite":
         raise
@@ -168,6 +172,10 @@ class GalaxyDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(profile["volume_percent"], 35)
 
     async def test_admin_can_configure_safe_shop_effects(self):
+        self.assertTrue(
+            {"cube", "explorer", "destroyer", "battlestar"}
+            <= set(GALAXY_UPGRADE_EFFECTS["hull"])
+        )
         self.assertTrue(await self.db.galaxy_update_upgrade(
             "nebula", name="Aurora", description="Custom hull", price=333,
             enabled=True, effect="cube", color="#12abef",
@@ -198,6 +206,12 @@ class GalaxyDatabaseTests(unittest.IsolatedAsyncioTestCase):
             category="scanner", name="Unsafe", description="", price=1,
             enabled=True, effect="warp", color="#ffffff",
         ))
+        carrier = await self.db.galaxy_create_upgrade(
+            category="hull", name="Colonial Carrier", description="Armored carrier",
+            price=400, enabled=True, effect="battlestar", color="#9a9ca4",
+        )
+        self.assertIsNotNone(carrier)
+        self.assertIn('"effect":"battlestar"', carrier["config_json"])
 
     async def test_complete_no_seek_earns_more_than_forward_seek(self):
         _, complete_listen = await self._listen(

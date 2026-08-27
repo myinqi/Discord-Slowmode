@@ -25,6 +25,9 @@ GALAXY_UPGRADE_EFFECTS = {
         "ship": "Spacecraft",
         "raven": "Animated raven",
         "cube": "Klangtresor music matrix",
+        "explorer": "Federation-style explorer cruiser",
+        "destroyer": "Star-destroyer wedge",
+        "battlestar": "Battlestar carrier",
     },
     "trail": {
         "engine": "Engine beam",
