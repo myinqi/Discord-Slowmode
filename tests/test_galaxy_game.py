@@ -134,12 +134,8 @@ class GalaxyDatabaseTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await cursor.fetchone())[0], 1)
 
     async def test_transactional_shop_and_loadout(self):
-        await self.db.db.execute(
-            "UPDATE galaxy_users SET credits = 500 WHERE discord_user_id = 42"
-        )
-        await self.db.db.commit()
-        bought, _ = await self.db.galaxy_buy_upgrade(42, "raven")
-        self.assertTrue(bought)
+        upgrades = {upgrade["id"]: upgrade for upgrade in await self.db.galaxy_get_upgrades()}
+        self.assertEqual(upgrades["raven"]["price"], 0)
         self.assertTrue(await self.db.galaxy_set_loadout(42, "hull", "raven"))
         profile = await self.db.galaxy_get_profile(42)
         self.assertEqual(profile["selected_hull"], "raven")

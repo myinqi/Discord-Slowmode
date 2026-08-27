@@ -80,10 +80,11 @@ velocity; seeking backward decreases it. The route ends tangentially at an orbit
 entry point. The `ended` event transitions the ship into a 20-second elliptical orbit
 which follows the planet as it moves around the star.
 
-The Raven hull uses the Klangtresor raven vector model: powered transit has animated
-wingbeats, while the arrival orbit switches to a slower gliding motion with a violet
-aura and feather particles. Reduced-motion mode parks the Raven on its orbit and
-suppresses particles. Other hulls retain the standard spacecraft rendering.
+The Raven is a free starter hull and uses the Klangtresor raven vector model: powered
+transit has animated wingbeats, while the arrival orbit switches to a slower gliding
+motion with a violet aura and feather particles. Reduced-motion mode parks the Raven
+on its orbit and suppresses particles. Other hulls retain the standard spacecraft
+rendering.
 
 When a tab resumes after browser throttling, the route is recalculated from
 `audio.currentTime`; the server is never asked to update animation frames.

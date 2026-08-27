@@ -6856,7 +6856,7 @@ class Database:
             )
         defaults = (
             ("scout", "hull", "Scout", "Reliable starter exploration ship.", 0, '{"color":"#8b7cff"}', 0),
-            ("raven", "hull", "Raven", "Angular black exploration hull.", 120, '{"color":"#181520"}', 10),
+            ("raven", "hull", "Raven", "Klangtresor raven with animated wings and violet aura.", 0, '{"color":"#181520"}', 10),
             ("nebula", "hull", "Nebula", "Curved hull with a violet canopy.", 240, '{"color":"#a855f7"}', 20),
             ("ion_blue", "trail", "Ion Blue", "Classic blue engine trail.", 0, '{"color":"#64d8ff"}', 0),
             ("plasma_pink", "trail", "Plasma Pink", "Bright magenta engine trail.", 80, '{"color":"#f472d0"}', 10),
@@ -6869,6 +6869,13 @@ class Database:
                (id, category, name, description, price, config_json, sort_order)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             defaults,
+        )
+        await self.db.execute(
+            """UPDATE galaxy_upgrades
+               SET price = 0, description = ?
+               WHERE id = 'raven' AND price = 120
+                 AND description = 'Angular black exploration hull.'""",
+            ("Klangtresor raven with animated wings and violet aura.",),
         )
         await self.db.commit()
 
