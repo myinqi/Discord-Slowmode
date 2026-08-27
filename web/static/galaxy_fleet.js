@@ -149,6 +149,7 @@
   }
 
   function galaxyFleetDraw(g, effect, position, scale, angle, now, glow, color, thrust) {
+    let rendered = true;
     g.save(); g.translate(position[0], position[1]); g.rotate(angle); g.scale(scale, scale);
     halo(g, color, glow);
     g.shadowColor = color; g.shadowBlur = 5;
@@ -160,7 +161,9 @@
     else if (effect === 'borg_cube') borgCube(g, color, now, thrust);
     else if (effect === 'bird_of_prey') birdOfPrey(g, color, now, thrust);
     else if (effect === 'basestar') basestar(g, color, now, thrust);
+    else rendered = false;
     g.restore();
+    return rendered;
   }
 
   root.galaxyFleetDraw = galaxyFleetDraw;
