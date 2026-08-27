@@ -458,6 +458,7 @@ def create_app(db: Database, bot=None) -> Quart:
     app.trya_dcs_member_rate = {}
     app.trya_dcs_token_rate = {}
     app.trya_dcs_presence = {}
+    app.galaxy_api_rate = {}
     # Serializes manual starts of both radio managers. The scheduled Exp.
     # Radio start additionally checks the legacy manager before it fires.
     app.radio_start_lock = asyncio.Lock()
@@ -495,6 +496,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('party_playlist', 'Party Playlist'),
         ('playlist_search', 'Playlist Search'),
         ('player', 'Suno Player'),
+        ('galaxy_game', 'Galaxy Expeditions'),
         ('song_stats', 'Song Stats'),
         ('user_stats', 'User Stats'),
         ('reaction_stats', 'Reaction Stats'),
@@ -538,6 +540,7 @@ def create_app(db: Database, bot=None) -> Quart:
         {"key": "party_playlist", "endpoint": "party_playlist", "icon": "🎧", "label": "Party Playlist", "perm": "party_playlist"},
         {"key": "playlist_search", "endpoint": "playlist_search", "icon": "🔍", "label": "Playlist Search", "perm": "playlist_search"},
         {"key": "player", "endpoint": "player", "icon": "🎵", "label": "Suno Player", "perm": "player"},
+        {"key": "galaxy_game", "endpoint": "galaxy_game_admin", "icon": "G", "label": "Galaxy Expeditions", "perm": "galaxy_game"},
         {"key": "song_stats", "endpoint": "song_stats", "icon": "📈", "label": "Song Stats", "perm": "song_stats"},
         {"key": "user_stats", "endpoint": "user_stats", "icon": "👤", "label": "User Stats", "perm": "user_stats"},
         {"key": "reaction_stats", "endpoint": "reaction_stats", "icon": "💬", "label": "Reaction Stats", "perm": "reaction_stats"},
@@ -3767,6 +3770,584 @@ def create_app(db: Database, bot=None) -> Quart:
                     ch_name = gch.name
             channels.append({"id": ch["channel_id"], "name": ch_name})
         return channels
+
+    @app.route("/galaxy-game", methods=["GET", "POST"])
+    @permission_required("galaxy_game")
+    async def galaxy_game_admin():
+        csrf = session.get("galaxy_admin_csrf")
+        if not csrf:
+            csrf = secrets.token_urlsafe(32)
+            session["galaxy_admin_csrf"] = csrf
+        defaults = {
+            "galaxy_enabled": "off",
+            "galaxy_allowed_channel_ids": "",
+            "galaxy_default_channel_id": "",
+            "galaxy_max_range_days": "30",
+            "galaxy_default_song_limit": "30",
+            "galaxy_max_song_limit": "75",
+            "galaxy_auto_navigation": "on",
+            "galaxy_heartbeat_seconds": "12",
+            "galaxy_min_listen_seconds": "30",
+            "galaxy_min_listen_percent": "70",
+            "galaxy_credits_per_minute": "2",
+            "galaxy_full_listen_bonus_percent": "25",
+            "galaxy_forward_seek_penalty_percent": "100",
+            "galaxy_daily_credit_cap": "200",
+            "galaxy_repeat_cooldown_days": "7",
+            "galaxy_reaction_enabled": "off",
+            "galaxy_reaction_emoji_id": "",
+            "galaxy_desktop_planet_limit": "75",
+            "galaxy_mobile_planet_limit": "35",
+            "galaxy_target_fps": "60",
+        }
+        if request.method == "POST":
+            form = await request.form
+            submitted = str(form.get("csrf_token") or "")
+            if not submitted or not hmac.compare_digest(submitted, csrf):
+                await flash("The Galaxy settings form expired.", "error")
+                return redirect(request.url)
+
+            def bounded(name: str, default: int, low: int, high: int) -> str:
+                try:
+                    return str(max(low, min(high, int(form.get(name) or default))))
+                except (TypeError, ValueError):
+                    return str(default)
+
+            monitored = await db.get_monitored_channels()
+            known_channels = {str(row["channel_id"]) for row in monitored}
+            allowed = [
+                channel_id for channel_id in form.getlist("allowed_channel_ids")
+                if channel_id in known_channels
+            ]
+            default_channel = str(form.get("default_channel_id") or "")
+            if default_channel not in allowed:
+                default_channel = allowed[0] if allowed else ""
+            emoji_id = str(form.get("reaction_emoji_id") or "")
+            guild = get_guild()
+            known_emojis = {str(emoji.id) for emoji in guild.emojis} if guild else set()
+            if emoji_id not in known_emojis:
+                emoji_id = ""
+            values = {
+                "galaxy_enabled": "on" if form.get("enabled") else "off",
+                "galaxy_allowed_channel_ids": ",".join(dict.fromkeys(allowed)),
+                "galaxy_default_channel_id": default_channel,
+                "galaxy_max_range_days": bounded("max_range_days", 30, 1, 365),
+                "galaxy_default_song_limit": bounded("default_song_limit", 30, 5, 100),
+                "galaxy_max_song_limit": bounded("max_song_limit", 75, 5, 150),
+                "galaxy_auto_navigation": "on" if form.get("auto_navigation") else "off",
+                "galaxy_heartbeat_seconds": bounded("heartbeat_seconds", 12, 8, 30),
+                "galaxy_min_listen_seconds": bounded("min_listen_seconds", 30, 5, 600),
+                "galaxy_min_listen_percent": bounded("min_listen_percent", 70, 10, 100),
+                "galaxy_credits_per_minute": bounded("credits_per_minute", 2, 1, 100),
+                "galaxy_full_listen_bonus_percent": bounded("full_listen_bonus_percent", 25, 0, 200),
+                "galaxy_forward_seek_penalty_percent": bounded("forward_seek_penalty_percent", 100, 1, 500),
+                "galaxy_daily_credit_cap": bounded("daily_credit_cap", 200, 1, 10000),
+                "galaxy_repeat_cooldown_days": bounded("repeat_cooldown_days", 7, 0, 365),
+                "galaxy_reaction_enabled": "on" if form.get("reaction_enabled") and emoji_id else "off",
+                "galaxy_reaction_emoji_id": emoji_id,
+                "galaxy_desktop_planet_limit": bounded("desktop_planet_limit", 75, 10, 150),
+                "galaxy_mobile_planet_limit": bounded("mobile_planet_limit", 35, 5, 75),
+                "galaxy_target_fps": "30" if form.get("target_fps") == "30" else "60",
+            }
+            if int(values["galaxy_default_song_limit"]) > int(values["galaxy_max_song_limit"]):
+                values["galaxy_default_song_limit"] = values["galaxy_max_song_limit"]
+            for key, value in values.items():
+                await db.set_setting(key, value)
+            await db.add_audit_log(
+                event_type="galaxy_settings_changed",
+                details=f"Enabled={values['galaxy_enabled']}, channels={len(allowed)}, reaction={values['galaxy_reaction_enabled']}",
+                actor=session.get("username", "unknown"),
+            )
+            await flash("Galaxy Expeditions settings saved.", "success")
+            return redirect(request.url)
+        settings = {
+            key: await db.get_setting(key) or default for key, default in defaults.items()
+        }
+        guild = get_guild()
+        channels = []
+        for row in await db.get_monitored_channels():
+            channel = guild.get_channel(int(row["channel_id"])) if guild else None
+            channels.append({
+                "id": str(row["channel_id"]),
+                "name": channel.name if channel else f"channel-{row['channel_id']}",
+            })
+        emojis = [
+            {"id": str(emoji.id), "name": emoji.name, "url": str(emoji.url)}
+            for emoji in (guild.emojis if guild else []) if emoji.available
+        ]
+        async with db.db.execute("SELECT COUNT(*) FROM galaxy_users") as cursor:
+            users = int((await cursor.fetchone())[0])
+        async with db.db.execute("SELECT COUNT(*) FROM galaxy_listens WHERE completed_at IS NOT NULL") as cursor:
+            listens = int((await cursor.fetchone())[0])
+        return await render_template(
+            "galaxy_game.html",
+            settings=settings,
+            channels=channels,
+            emojis=emojis,
+            upgrades=await db.galaxy_get_upgrades(enabled_only=False),
+            galaxy_users=users,
+            galaxy_listens=listens,
+            csrf_token=csrf,
+            oauth_callback_url=f"{_public_web_url()}/galaxy/oauth/callback",
+        )
+
+    def _galaxy_identity() -> dict | None:
+        identity = session.get("galaxy_discord")
+        return identity if isinstance(identity, dict) and identity.get("discord_user_id") else None
+
+    async def _galaxy_membership_valid(user_id: int) -> bool:
+        guild = get_guild()
+        if not guild:
+            return False
+        member = guild.get_member(int(user_id))
+        if member:
+            return True
+        try:
+            return bool(await guild.fetch_member(int(user_id)))
+        except Exception:
+            return False
+
+    def _galaxy_csrf_valid(value: str) -> bool:
+        expected = str(session.get("galaxy_csrf") or "")
+        origin = (request.headers.get("Origin") or "").rstrip("/")
+        if origin and origin != _public_web_url().rstrip("/"):
+            return False
+        return bool(expected and value and hmac.compare_digest(expected, value))
+
+    def _galaxy_rate_allowed(user_id: int, action: str, limit: int, window: float) -> bool:
+        now = time.monotonic()
+        key = (int(user_id), action)
+        recent = [stamp for stamp in app.galaxy_api_rate.get(key, []) if now - stamp < window]
+        if len(recent) >= limit:
+            app.galaxy_api_rate[key] = recent
+            return False
+        recent.append(now)
+        app.galaxy_api_rate[key] = recent
+        return True
+
+    @app.route("/galaxy")
+    async def galaxy_home():
+        if (await db.get_setting("galaxy_enabled") or "off") != "on":
+            return await render_template("trya_dcs_unavailable.html", reason="Galaxy Expeditions is currently disabled."), 503
+        identity = _galaxy_identity()
+        if not identity:
+            return redirect(url_for("galaxy_oauth_start"))
+        if not await _galaxy_membership_valid(int(identity["discord_user_id"])):
+            session.pop("galaxy_discord", None)
+            return await render_template("trya_dcs_unavailable.html", reason="Discord server membership is required."), 403
+        csrf = secrets.token_urlsafe(32)
+        session["galaxy_csrf"] = csrf
+        return await render_template(
+            "galaxy.html",
+            identity=identity,
+            csrf_token=csrf,
+        )
+
+    @app.route("/galaxy/oauth/start")
+    async def galaxy_oauth_start():
+        client_id, client_secret = await _player_discord_oauth_credentials()
+        if not client_id or not client_secret:
+            return await render_template("trya_dcs_unavailable.html", reason="Galaxy Discord OAuth is not configured."), 503
+        state = secrets.token_urlsafe(32)
+        session["galaxy_oauth_state"] = state
+        params = {
+            "client_id": client_id,
+            "response_type": "code",
+            "redirect_uri": f"{_public_web_url()}/galaxy/oauth/callback",
+            "scope": "identify",
+            "state": state,
+            "prompt": "consent",
+        }
+        return redirect(f"https://discord.com/oauth2/authorize?{urlencode(params)}")
+
+    @app.route("/galaxy/oauth/callback")
+    async def galaxy_oauth_callback():
+        expected = session.pop("galaxy_oauth_state", "")
+        returned = request.args.get("state", "")
+        if not expected or not hmac.compare_digest(expected, returned):
+            return await render_template("trya_dcs_unavailable.html", reason="Galaxy OAuth state was invalid."), 400
+        code = request.args.get("code", "")
+        client_id, client_secret = await _player_discord_oauth_credentials()
+        if not code or not client_id or not client_secret:
+            return await render_template("trya_dcs_unavailable.html", reason="Galaxy OAuth response was incomplete."), 400
+        try:
+            timeout = aiohttp.ClientTimeout(total=15)
+            callback_url = f"{_public_web_url()}/galaxy/oauth/callback"
+            async with aiohttp.ClientSession(timeout=timeout) as http:
+                async with http.post(
+                    "https://discord.com/api/v10/oauth2/token",
+                    data={
+                        "client_id": client_id,
+                        "client_secret": client_secret,
+                        "grant_type": "authorization_code",
+                        "code": code,
+                        "redirect_uri": callback_url,
+                    },
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                ) as response:
+                    token = await response.json(content_type=None)
+                    if response.status != 200 or not token.get("access_token"):
+                        raise RuntimeError("Discord token exchange failed")
+                async with http.get(
+                    "https://discord.com/api/v10/users/@me",
+                    headers={"Authorization": f"Bearer {token['access_token']}"},
+                ) as response:
+                    user = await response.json(content_type=None)
+                    if response.status != 200:
+                        raise RuntimeError("Discord identity lookup failed")
+        except Exception as exc:
+            print(f"[galaxy-oauth] {exc}", flush=True)
+            return await render_template("trya_dcs_unavailable.html", reason="Discord login failed."), 502
+        user_id = int(user["id"])
+        if not await _galaxy_membership_valid(user_id):
+            return await render_template("trya_dcs_unavailable.html", reason="Discord server membership is required."), 403
+        guild = get_guild()
+        member = guild.get_member(user_id) if guild else None
+        display_name = getattr(member, "display_name", None) or user.get("global_name") or user.get("username") or "Explorer"
+        avatar_hash = user.get("avatar")
+        avatar_url = f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.png?size=128" if avatar_hash else ""
+        await db.galaxy_upsert_user(user_id, display_name, avatar_url)
+        session["galaxy_discord"] = {
+            "discord_user_id": str(user_id),
+            "display_name": display_name,
+            "avatar_url": avatar_url,
+        }
+        return redirect(url_for("galaxy_home"))
+
+    @app.route("/galaxy/logout", methods=["POST"])
+    async def galaxy_logout():
+        form = await request.form
+        if not _galaxy_csrf_valid(str(form.get("csrf_token") or "")):
+            return "", 403
+        session.pop("galaxy_discord", None)
+        session.pop("galaxy_csrf", None)
+        return redirect(url_for("galaxy_home"))
+
+    async def _galaxy_api_user():
+        if (await db.get_setting("galaxy_enabled") or "off") != "on":
+            return None
+        identity = _galaxy_identity()
+        if not identity or not await _galaxy_membership_valid(int(identity["discord_user_id"])):
+            return None
+        return identity
+
+    @app.route("/galaxy/api/config")
+    async def galaxy_api_config():
+        identity = await _galaxy_api_user()
+        if not identity:
+            return {"error": "forbidden"}, 403
+        allowed = {
+            item for item in (await db.get_setting("galaxy_allowed_channel_ids") or "").split(",")
+            if item.isdigit()
+        }
+        guild = get_guild()
+        channels = []
+        for row in await db.get_monitored_channels():
+            channel_id = str(row["channel_id"])
+            if channel_id not in allowed:
+                continue
+            channel = guild.get_channel(int(channel_id)) if guild else None
+            channels.append({"id": channel_id, "name": channel.name if channel else f"channel-{channel_id}"})
+        return {
+            "channels": channels,
+            "default_channel_id": await db.get_setting("galaxy_default_channel_id") or "",
+            "max_range_days": int(await db.get_setting("galaxy_max_range_days") or "30"),
+            "default_song_limit": int(await db.get_setting("galaxy_default_song_limit") or "30"),
+            "max_song_limit": int(await db.get_setting("galaxy_max_song_limit") or "75"),
+            "auto_navigation": (await db.get_setting("galaxy_auto_navigation") or "on") == "on",
+            "heartbeat_seconds": int(await db.get_setting("galaxy_heartbeat_seconds") or "12"),
+            "credits_per_minute": int(await db.get_setting("galaxy_credits_per_minute") or "2"),
+            "full_listen_bonus_percent": int(await db.get_setting("galaxy_full_listen_bonus_percent") or "25"),
+            "forward_seek_penalty_percent": int(await db.get_setting("galaxy_forward_seek_penalty_percent") or "100"),
+            "desktop_planet_limit": int(await db.get_setting("galaxy_desktop_planet_limit") or "75"),
+            "mobile_planet_limit": int(await db.get_setting("galaxy_mobile_planet_limit") or "35"),
+            "target_fps": int(await db.get_setting("galaxy_target_fps") or "60"),
+            "profile": await db.galaxy_get_profile(int(identity["discord_user_id"])),
+        }
+
+    @app.route("/galaxy/api/channels")
+    async def galaxy_api_channels():
+        identity = await _galaxy_api_user()
+        if not identity:
+            return {"error": "forbidden"}, 403
+        allowed = {
+            item for item in (await db.get_setting("galaxy_allowed_channel_ids") or "").split(",")
+            if item.isdigit()
+        }
+        guild = get_guild()
+        channels = []
+        for row in await db.get_monitored_channels():
+            channel_id = str(row["channel_id"])
+            if channel_id in allowed:
+                channel = guild.get_channel(int(channel_id)) if guild else None
+                channels.append({
+                    "id": channel_id,
+                    "name": channel.name if channel else f"channel-{channel_id}",
+                })
+        return {"channels": channels}
+
+    @app.route("/galaxy/api/profile")
+    async def galaxy_api_profile():
+        identity = await _galaxy_api_user()
+        if not identity:
+            return {"error": "forbidden"}, 403
+        return {"profile": await db.galaxy_get_profile(int(identity["discord_user_id"]))}
+
+    @app.route("/galaxy/api/expeditions", methods=["POST"])
+    async def galaxy_api_create_expedition():
+        identity = await _galaxy_api_user()
+        if not identity:
+            return {"error": "forbidden"}, 403
+        if not _galaxy_csrf_valid(request.headers.get("X-CSRF-Token", "")):
+            return {"error": "invalid_csrf"}, 403
+        if not _galaxy_rate_allowed(int(identity["discord_user_id"]), "expedition", 10, 60):
+            return {"error": "rate_limited"}, 429
+        data = await request.get_json(silent=True) or {}
+        allowed = {
+            int(item) for item in (await db.get_setting("galaxy_allowed_channel_ids") or "").split(",")
+            if item.isdigit()
+        }
+        try:
+            channel_id = int(data.get("channel_id"))
+            days = max(1, min(int(data.get("days") or 7), int(await db.get_setting("galaxy_max_range_days") or "30")))
+            limit = max(5, min(int(data.get("limit") or 30), int(await db.get_setting("galaxy_max_song_limit") or "75")))
+        except (TypeError, ValueError):
+            return {"error": "invalid_parameters"}, 400
+        if channel_id not in allowed:
+            return {"error": "channel_not_allowed"}, 403
+        from bot.suno_urls import extract_suno_uuid
+        rows = await db.get_player_songs(channel_id=channel_id, limit=min(500, limit * 5), offset=0)
+        cutoff = time.time() - days * 86400
+        songs = []
+        for row in rows:
+            try:
+                if float(row.get("posted_at") or 0) < cutoff:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            uuid = str(row.get("suno_uuid") or "").lower()
+            if not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", uuid):
+                uuid = extract_suno_uuid(row.get("url")) or ""
+            if not uuid or not row.get("message_id"):
+                continue
+            songs.append({
+                "message_id": str(row["message_id"]),
+                "channel_id": str(row["channel_id"]),
+                "user_id": str(row.get("user_id") or ""),
+                "uuid": uuid,
+                "url": f"https://suno.com/song/{uuid}",
+                "title": row.get("song_title") or "Unknown song",
+                "artist": row.get("user_name") or "Unknown artist",
+                "posted_at": float(row.get("posted_at") or 0),
+                "reaction_count": int(row.get("reaction_count") or 0),
+                "audio_primary": f"https://cdn1.suno.ai/{uuid}.mp3",
+                "audio_fallback": f"https://cdn1.suno.ai/{uuid}.m4a",
+                "artwork": f"https://cdn1.suno.ai/image_large_{uuid}.jpeg",
+            })
+            if len(songs) >= limit:
+                break
+        if not songs:
+            return {"error": "no_songs"}, 404
+        raw_token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+        expedition_id = await db.galaxy_create_expedition(
+            token_hash=token_hash,
+            discord_user_id=int(identity["discord_user_id"]),
+            channel_id=channel_id,
+            time_range_days=days,
+            song_limit=limit,
+            songs=songs,
+        )
+        return {"token": raw_token, "expedition_id": expedition_id, "songs": songs}
+
+    async def _galaxy_expedition_for_identity(identity: dict, raw_token: str):
+        token_hash = hashlib.sha256(str(raw_token or "").encode()).hexdigest()
+        expedition = await db.galaxy_get_expedition(token_hash)
+        if not expedition or int(expedition["discord_user_id"]) != int(identity["discord_user_id"]):
+            return None
+        return expedition
+
+    @app.route("/galaxy/api/expeditions/<token>")
+    async def galaxy_api_get_expedition(token: str):
+        identity = await _galaxy_api_user()
+        if not identity:
+            return {"error": "forbidden"}, 403
+        expedition = await _galaxy_expedition_for_identity(identity, token)
+        if not expedition:
+            return {"error": "expedition_not_found"}, 404
+        return {
+            "token": token,
+            "expedition_id": int(expedition["id"]),
+            "channel_id": str(expedition["channel_id"]),
+            "time_range_days": int(expedition["time_range_days"]),
+            "song_limit": int(expedition["song_limit"]),
+            "expires_at": float(expedition["expires_at"]),
+            "songs": expedition["songs"],
+        }
+
+    @app.route("/galaxy/api/listens/start", methods=["POST"])
+    async def galaxy_api_listen_start():
+        identity = await _galaxy_api_user()
+        if not identity or not _galaxy_csrf_valid(request.headers.get("X-CSRF-Token", "")):
+            return {"error": "forbidden"}, 403
+        if not _galaxy_rate_allowed(int(identity["discord_user_id"]), "listen_start", 30, 60):
+            return {"error": "rate_limited"}, 429
+        data = await request.get_json(silent=True) or {}
+        expedition = await _galaxy_expedition_for_identity(identity, data.get("token"))
+        if not expedition:
+            return {"error": "invalid_expedition"}, 403
+        message_id = str(data.get("message_id") or "")
+        song = next((item for item in expedition["songs"] if item["message_id"] == message_id), None)
+        if not song:
+            return {"error": "song_not_in_expedition"}, 400
+        try:
+            duration = max(5.0, min(1200.0, float(data.get("duration") or 0)))
+        except (TypeError, ValueError):
+            return {"error": "invalid_duration"}, 400
+        listen = await db.galaxy_start_listen(
+            expedition_id=int(expedition["id"]),
+            discord_user_id=int(identity["discord_user_id"]),
+            message_id=int(song["message_id"]),
+            channel_id=int(song["channel_id"]),
+            suno_uuid=song["uuid"],
+            duration_seconds=duration,
+        )
+        return {"listen_id": int(listen["id"]), "heartbeat_seconds": int(await db.get_setting("galaxy_heartbeat_seconds") or "12")}
+
+    @app.route("/galaxy/api/listens/heartbeat", methods=["POST"])
+    async def galaxy_api_listen_heartbeat():
+        identity = await _galaxy_api_user()
+        if not identity or not _galaxy_csrf_valid(request.headers.get("X-CSRF-Token", "")):
+            return {"error": "forbidden"}, 403
+        if not _galaxy_rate_allowed(int(identity["discord_user_id"]), "heartbeat", 12, 60):
+            return {"error": "rate_limited"}, 429
+        data = await request.get_json(silent=True) or {}
+        try:
+            listen = await db.galaxy_heartbeat_listen(
+                listen_id=int(data.get("listen_id")),
+                discord_user_id=int(identity["discord_user_id"]),
+                audio_position=float(data.get("position") or 0),
+                paused=bool(data.get("paused")),
+                seeked=bool(data.get("seeked")),
+                forward_seek_seconds=float(data.get("forward_seek_seconds") or 0),
+            )
+        except (TypeError, ValueError):
+            listen = None
+        if not listen:
+            return {"error": "listen_not_found"}, 404
+        return {"eligible_seconds": listen["eligible_seconds"], "max_audio_position": listen["max_audio_position"]}
+
+    @app.route("/galaxy/api/listens/complete", methods=["POST"])
+    async def galaxy_api_listen_complete():
+        identity = await _galaxy_api_user()
+        if not identity or not _galaxy_csrf_valid(request.headers.get("X-CSRF-Token", "")):
+            return {"error": "forbidden"}, 403
+        if not _galaxy_rate_allowed(int(identity["discord_user_id"]), "complete", 30, 60):
+            return {"error": "rate_limited"}, 429
+        data = await request.get_json(silent=True) or {}
+        try:
+            emoji_id = int(await db.get_setting("galaxy_reaction_emoji_id") or 0) if (await db.get_setting("galaxy_reaction_enabled") or "off") == "on" else 0
+            ok, credits, message = await db.galaxy_complete_listen(
+                listen_id=int(data.get("listen_id")),
+                discord_user_id=int(identity["discord_user_id"]),
+                minimum_seconds=int(await db.get_setting("galaxy_min_listen_seconds") or "30"),
+                minimum_percent=int(await db.get_setting("galaxy_min_listen_percent") or "70") / 100.0,
+                credits_per_minute=int(await db.get_setting("galaxy_credits_per_minute") or "2"),
+                daily_cap=int(await db.get_setting("galaxy_daily_credit_cap") or "200"),
+                repeat_cooldown_days=int(await db.get_setting("galaxy_repeat_cooldown_days") or "7"),
+                reaction_emoji_id=emoji_id,
+                full_listen_bonus_percent=int(await db.get_setting("galaxy_full_listen_bonus_percent") or "25"),
+                forward_seek_penalty_percent=int(await db.get_setting("galaxy_forward_seek_penalty_percent") or "100"),
+            )
+        except (TypeError, ValueError):
+            return {"error": "invalid_listen"}, 400
+        return {"ok": ok, "credits": credits, "message": message, "profile": await db.galaxy_get_profile(int(identity["discord_user_id"]))}, (200 if ok else 409)
+
+    @app.route("/galaxy/api/shop")
+    async def galaxy_api_shop():
+        identity = await _galaxy_api_user()
+        if not identity:
+            return {"error": "forbidden"}, 403
+        return {"upgrades": await db.galaxy_get_upgrades(), "profile": await db.galaxy_get_profile(int(identity["discord_user_id"]))}
+
+    @app.route("/galaxy/api/shop/buy", methods=["POST"])
+    async def galaxy_api_shop_buy():
+        identity = await _galaxy_api_user()
+        if not identity or not _galaxy_csrf_valid(request.headers.get("X-CSRF-Token", "")):
+            return {"error": "forbidden"}, 403
+        if not _galaxy_rate_allowed(int(identity["discord_user_id"]), "shop", 20, 60):
+            return {"error": "rate_limited"}, 429
+        data = await request.get_json(silent=True) or {}
+        ok, message = await db.galaxy_buy_upgrade(int(identity["discord_user_id"]), str(data.get("upgrade_id") or ""))
+        return {"ok": ok, "message": message, "profile": await db.galaxy_get_profile(int(identity["discord_user_id"]))}, (200 if ok else 409)
+
+    @app.route("/galaxy/api/loadout", methods=["POST"])
+    async def galaxy_api_loadout():
+        identity = await _galaxy_api_user()
+        if not identity or not _galaxy_csrf_valid(request.headers.get("X-CSRF-Token", "")):
+            return {"error": "forbidden"}, 403
+        if not _galaxy_rate_allowed(int(identity["discord_user_id"]), "loadout", 30, 60):
+            return {"error": "rate_limited"}, 429
+        data = await request.get_json(silent=True) or {}
+        ok = await db.galaxy_set_loadout(
+            int(identity["discord_user_id"]),
+            str(data.get("category") or ""),
+            str(data.get("upgrade_id") or ""),
+        )
+        return {"ok": ok, "profile": await db.galaxy_get_profile(int(identity["discord_user_id"]))}, (200 if ok else 400)
+
+    async def _galaxy_reaction_loop():
+        while True:
+            try:
+                if bot and bot.is_ready() and (await db.get_setting("galaxy_reaction_enabled") or "off") == "on":
+                    async with db.db.execute(
+                        """SELECT * FROM galaxy_reaction_jobs
+                           WHERE status IN ('pending','retry') AND attempts < 5
+                           ORDER BY created_at LIMIT 5"""
+                    ) as cursor:
+                        jobs = [dict(row) for row in await cursor.fetchall()]
+                    guild = get_guild()
+                    for job in jobs:
+                        try:
+                            emoji = guild.get_emoji(int(job["emoji_id"])) if guild else None
+                            if not emoji:
+                                raise RuntimeError("Configured guild emoji is unavailable")
+                            channel = bot.get_channel(int(job["channel_id"]))
+                            if channel is None:
+                                channel = await bot.fetch_channel(int(job["channel_id"]))
+                            message = await channel.fetch_message(int(job["message_id"]))
+                            await message.add_reaction(emoji)
+                            await db.db.execute(
+                                "UPDATE galaxy_reaction_jobs SET status = 'done', updated_at = ? WHERE id = ?",
+                                (time.time(), int(job["id"])),
+                            )
+                            await db.db.execute(
+                                """UPDATE galaxy_listens SET reaction_status = 'done'
+                                   WHERE message_id = ? AND channel_id = ?""",
+                                (int(job["message_id"]), int(job["channel_id"])),
+                            )
+                        except Exception as exc:
+                            await db.db.execute(
+                                """UPDATE galaxy_reaction_jobs SET status = 'retry',
+                                       attempts = attempts + 1, last_error = ?, updated_at = ?
+                                   WHERE id = ?""",
+                                (str(exc)[:1000], time.time(), int(job["id"])),
+                            )
+                    if jobs:
+                        await db.db.commit()
+            except Exception as exc:
+                print(f"[galaxy-reactions] {exc}", flush=True)
+            await asyncio.sleep(15)
+
+    @app.before_serving
+    async def start_galaxy_reaction_worker():
+        app.galaxy_reaction_task = asyncio.create_task(_galaxy_reaction_loop())
+
+    @app.after_serving
+    async def stop_galaxy_reaction_worker():
+        task = getattr(app, "galaxy_reaction_task", None)
+        if task:
+            task.cancel()
 
     @app.route("/player")
     @permission_required('player')

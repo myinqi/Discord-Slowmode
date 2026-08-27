@@ -20,6 +20,43 @@ DEFAULT_COLLECTIBLE_RARITY_WEIGHTS = {
 COLLECTIBLE_RARITY_WEIGHTS_SETTING = "collectible_card_rarity_weights"
 
 
+def calculate_galaxy_listen_credits(
+    *,
+    duration_seconds: float,
+    eligible_seconds: float,
+    forward_seek_seconds: float,
+    credits_per_minute: int,
+    full_listen_bonus_percent: int = 25,
+    forward_seek_penalty_percent: int = 100,
+) -> int:
+    """Calculate a qualified listen reward; daily/repeat limits are applied later."""
+    duration = max(1.0, float(duration_seconds))
+    eligible = max(0.0, min(duration, float(eligible_seconds)))
+    forward_seek = max(0.0, min(duration, float(forward_seek_seconds)))
+    rate = max(1, int(credits_per_minute))
+    full_song_credits = max(1, int(duration / 60.0 * rate))
+    coverage = min(1.0, eligible / duration)
+    credits = max(1, int(full_song_credits * coverage))
+    if coverage >= 0.98 and forward_seek < 0.5:
+        credits += math.ceil(
+            full_song_credits
+            * max(0, min(200, int(full_listen_bonus_percent)))
+            / 100.0
+        )
+    elif forward_seek > 0:
+        penalty = max(
+            1,
+            math.ceil(
+                full_song_credits
+                * (forward_seek / duration)
+                * max(1, min(500, int(forward_seek_penalty_percent)))
+                / 100.0
+            ),
+        )
+        credits = max(0, credits - penalty)
+    return credits
+
+
 class Database:
     def __init__(self, db_path: str):
         self.db_path = db_path
@@ -457,6 +494,7 @@ class Database:
         await self.db.execute("DELETE FROM trya_stream_submission_bans")
         await self.db.commit()
         await self._run_migrations()
+        await self.ensure_galaxy_tables()
 
     async def _run_migrations(self):
         async with self.db.execute("PRAGMA table_info(monitored_channels)") as cursor:
@@ -3333,7 +3371,7 @@ class Database:
         """Get songs for the web player with reaction counts."""
         if channel_id:
             sql = """
-                SELECT sp.id, sp.url, sp.song_title, sp.user_name, sp.posted_at, sp.channel_id,
+                SELECT sp.id, sp.url, sp.suno_uuid, sp.song_title, sp.user_name, sp.posted_at, sp.channel_id,
                        sp.message_id, sp.user_id,
                        COUNT(sr.id) as reaction_count
                 FROM song_posts sp
@@ -3346,7 +3384,7 @@ class Database:
             params = (channel_id, limit, offset)
         else:
             sql = """
-                SELECT sp.id, sp.url, sp.song_title, sp.user_name, sp.posted_at, sp.channel_id,
+                SELECT sp.id, sp.url, sp.suno_uuid, sp.song_title, sp.user_name, sp.posted_at, sp.channel_id,
                        sp.message_id, sp.user_id,
                        COUNT(sr.id) as reaction_count
                 FROM song_posts sp
@@ -6684,6 +6722,500 @@ class Database:
             )
         await self.db.commit()
         return await self.get_trya_dcs_emoji_favorites(user_id)
+
+    async def ensure_galaxy_tables(self) -> None:
+        await self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS galaxy_users (
+                discord_user_id INTEGER PRIMARY KEY,
+                discord_name TEXT NOT NULL,
+                avatar_url TEXT NOT NULL DEFAULT '',
+                credits INTEGER NOT NULL DEFAULT 0 CHECK (credits >= 0),
+                lifetime_credits INTEGER NOT NULL DEFAULT 0 CHECK (lifetime_credits >= 0),
+                selected_hull TEXT NOT NULL DEFAULT 'scout',
+                selected_trail TEXT NOT NULL DEFAULT 'ion_blue',
+                selected_scanner TEXT NOT NULL DEFAULT 'pulse',
+                created_at REAL NOT NULL DEFAULT (unixepoch()),
+                updated_at REAL NOT NULL DEFAULT (unixepoch()),
+                last_seen_at REAL NOT NULL DEFAULT (unixepoch())
+            );
+            CREATE TABLE IF NOT EXISTS galaxy_upgrades (
+                id TEXT PRIMARY KEY,
+                category TEXT NOT NULL CHECK (category IN ('hull','trail','scanner')),
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                price INTEGER NOT NULL CHECK (price >= 0),
+                config_json TEXT NOT NULL DEFAULT '{}',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                sort_order INTEGER NOT NULL DEFAULT 100,
+                created_at REAL NOT NULL DEFAULT (unixepoch()),
+                updated_at REAL NOT NULL DEFAULT (unixepoch())
+            );
+            CREATE TABLE IF NOT EXISTS galaxy_user_upgrades (
+                discord_user_id INTEGER NOT NULL,
+                upgrade_id TEXT NOT NULL,
+                purchased_at REAL NOT NULL DEFAULT (unixepoch()),
+                PRIMARY KEY (discord_user_id, upgrade_id),
+                FOREIGN KEY (discord_user_id) REFERENCES galaxy_users(discord_user_id) ON DELETE CASCADE,
+                FOREIGN KEY (upgrade_id) REFERENCES galaxy_upgrades(id) ON DELETE RESTRICT
+            );
+            CREATE TABLE IF NOT EXISTS galaxy_expeditions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                token_hash TEXT UNIQUE NOT NULL,
+                discord_user_id INTEGER NOT NULL,
+                channel_id INTEGER NOT NULL,
+                time_range_days INTEGER NOT NULL,
+                song_limit INTEGER NOT NULL,
+                songs_json TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL,
+                completed_at REAL,
+                FOREIGN KEY (discord_user_id) REFERENCES galaxy_users(discord_user_id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS galaxy_listens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                expedition_id INTEGER NOT NULL,
+                discord_user_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                channel_id INTEGER NOT NULL,
+                suno_uuid TEXT NOT NULL DEFAULT '',
+                duration_seconds REAL NOT NULL DEFAULT 0,
+                eligible_seconds REAL NOT NULL DEFAULT 0,
+                max_audio_position REAL NOT NULL DEFAULT 0,
+                last_audio_position REAL NOT NULL DEFAULT 0,
+                seeked_seconds REAL NOT NULL DEFAULT 0,
+                started_at REAL NOT NULL,
+                last_heartbeat_at REAL NOT NULL,
+                completed_at REAL,
+                credits_awarded INTEGER NOT NULL DEFAULT 0,
+                reaction_status TEXT NOT NULL DEFAULT 'pending',
+                UNIQUE (expedition_id, message_id),
+                FOREIGN KEY (expedition_id) REFERENCES galaxy_expeditions(id) ON DELETE CASCADE,
+                FOREIGN KEY (discord_user_id) REFERENCES galaxy_users(discord_user_id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS galaxy_credit_ledger (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                discord_user_id INTEGER NOT NULL,
+                amount INTEGER NOT NULL,
+                reason TEXT NOT NULL,
+                reference_type TEXT NOT NULL,
+                reference_id TEXT NOT NULL,
+                created_at REAL NOT NULL DEFAULT (unixepoch()),
+                UNIQUE (discord_user_id, reason, reference_type, reference_id),
+                FOREIGN KEY (discord_user_id) REFERENCES galaxy_users(discord_user_id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS galaxy_reaction_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                channel_id INTEGER NOT NULL,
+                emoji_id INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL DEFAULT (unixepoch()),
+                updated_at REAL NOT NULL DEFAULT (unixepoch()),
+                UNIQUE (message_id, emoji_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_galaxy_expeditions_user
+                ON galaxy_expeditions(discord_user_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_galaxy_expeditions_expiry
+                ON galaxy_expeditions(expires_at);
+            CREATE INDEX IF NOT EXISTS idx_galaxy_listens_user
+                ON galaxy_listens(discord_user_id, started_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_galaxy_listens_heartbeat
+                ON galaxy_listens(last_heartbeat_at, completed_at);
+            CREATE INDEX IF NOT EXISTS idx_galaxy_credit_ledger_user
+                ON galaxy_credit_ledger(discord_user_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_galaxy_reaction_jobs_status
+                ON galaxy_reaction_jobs(status, updated_at);
+        """)
+        async with self.db.execute("PRAGMA table_info(galaxy_listens)") as cursor:
+            galaxy_listen_columns = {row["name"] for row in await cursor.fetchall()}
+        if "last_audio_position" not in galaxy_listen_columns:
+            await self.db.execute(
+                "ALTER TABLE galaxy_listens ADD COLUMN last_audio_position REAL NOT NULL DEFAULT 0"
+            )
+        defaults = (
+            ("scout", "hull", "Scout", "Reliable starter exploration ship.", 0, '{"color":"#8b7cff"}', 0),
+            ("raven", "hull", "Raven", "Angular black exploration hull.", 120, '{"color":"#181520"}', 10),
+            ("nebula", "hull", "Nebula", "Curved hull with a violet canopy.", 240, '{"color":"#a855f7"}', 20),
+            ("ion_blue", "trail", "Ion Blue", "Classic blue engine trail.", 0, '{"color":"#64d8ff"}', 0),
+            ("plasma_pink", "trail", "Plasma Pink", "Bright magenta engine trail.", 80, '{"color":"#f472d0"}', 10),
+            ("solar_gold", "trail", "Solar Gold", "Warm golden engine trail.", 160, '{"color":"#fbbf24"}', 20),
+            ("pulse", "scanner", "Pulse Scanner", "Standard planetary scan pulse.", 0, '{"color":"#8b7cff"}', 0),
+            ("rune", "scanner", "Rune Scanner", "A runic scan wave.", 100, '{"color":"#d946ef"}', 10)
+        )
+        await self.db.executemany(
+            """INSERT OR IGNORE INTO galaxy_upgrades
+               (id, category, name, description, price, config_json, sort_order)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            defaults,
+        )
+        await self.db.commit()
+
+    async def galaxy_upsert_user(
+        self, discord_user_id: int, discord_name: str, avatar_url: str = ""
+    ) -> dict:
+        now = time.time()
+        await self.db.execute(
+            """INSERT INTO galaxy_users
+                   (discord_user_id, discord_name, avatar_url, created_at, updated_at, last_seen_at)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(discord_user_id) DO UPDATE SET
+                   discord_name = excluded.discord_name,
+                   avatar_url = excluded.avatar_url,
+                   updated_at = excluded.updated_at,
+                   last_seen_at = excluded.last_seen_at""",
+            (int(discord_user_id), discord_name[:100], avatar_url[:500], now, now, now),
+        )
+        await self.db.commit()
+        return await self.galaxy_get_user(discord_user_id)
+
+    async def galaxy_get_user(self, discord_user_id: int) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM galaxy_users WHERE discord_user_id = ?",
+            (int(discord_user_id),),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def galaxy_get_upgrades(self, enabled_only: bool = True) -> list[dict]:
+        where = "WHERE enabled = 1" if enabled_only else ""
+        async with self.db.execute(
+            f"SELECT * FROM galaxy_upgrades {where} ORDER BY category, sort_order, name"
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def galaxy_get_owned_upgrades(self, discord_user_id: int) -> list[str]:
+        async with self.db.execute(
+            "SELECT upgrade_id FROM galaxy_user_upgrades WHERE discord_user_id = ?",
+            (int(discord_user_id),),
+        ) as cursor:
+            owned = [row["upgrade_id"] for row in await cursor.fetchall()]
+        for upgrade in await self.galaxy_get_upgrades():
+            if int(upgrade.get("price") or 0) == 0 and upgrade["id"] not in owned:
+                owned.append(upgrade["id"])
+        return owned
+
+    async def galaxy_create_expedition(
+        self,
+        *,
+        token_hash: str,
+        discord_user_id: int,
+        channel_id: int,
+        time_range_days: int,
+        song_limit: int,
+        songs: list[dict],
+        ttl_seconds: int = 21600,
+    ) -> int:
+        now = time.time()
+        cursor = await self.db.execute(
+            """INSERT INTO galaxy_expeditions
+                   (token_hash, discord_user_id, channel_id, time_range_days,
+                    song_limit, songs_json, created_at, expires_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                token_hash,
+                int(discord_user_id),
+                int(channel_id),
+                int(time_range_days),
+                int(song_limit),
+                json.dumps(songs, ensure_ascii=False, separators=(",", ":")),
+                now,
+                now + max(900, int(ttl_seconds)),
+            ),
+        )
+        await self.db.commit()
+        return int(cursor.lastrowid)
+
+    async def galaxy_get_expedition(self, token_hash: str) -> Optional[dict]:
+        async with self.db.execute(
+            """SELECT * FROM galaxy_expeditions
+               WHERE token_hash = ? AND expires_at > unixepoch()""",
+            (token_hash,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        try:
+            result["songs"] = json.loads(result.pop("songs_json"))
+        except (TypeError, json.JSONDecodeError):
+            result["songs"] = []
+        return result
+
+    async def galaxy_get_profile(self, discord_user_id: int) -> dict:
+        user = await self.galaxy_get_user(discord_user_id)
+        if not user:
+            return {}
+        user["owned_upgrades"] = await self.galaxy_get_owned_upgrades(discord_user_id)
+        return user
+
+    async def galaxy_buy_upgrade(self, discord_user_id: int, upgrade_id: str) -> tuple[bool, str]:
+        async with self.db.execute(
+            "SELECT * FROM galaxy_upgrades WHERE id = ? AND enabled = 1",
+            (upgrade_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            return False, "Upgrade not found."
+        upgrade = dict(row)
+        try:
+            await self.db.execute("BEGIN IMMEDIATE")
+            async with self.db.execute(
+                "SELECT credits FROM galaxy_users WHERE discord_user_id = ?",
+                (int(discord_user_id),),
+            ) as cursor:
+                user = await cursor.fetchone()
+            if not user:
+                await self.db.rollback()
+                return False, "Galaxy profile not found."
+            async with self.db.execute(
+                """SELECT 1 FROM galaxy_user_upgrades
+                   WHERE discord_user_id = ? AND upgrade_id = ?""",
+                (int(discord_user_id), upgrade_id),
+            ) as cursor:
+                if await cursor.fetchone():
+                    await self.db.rollback()
+                    return False, "Upgrade already owned."
+            price = int(upgrade["price"])
+            if int(user["credits"]) < price:
+                await self.db.rollback()
+                return False, "Not enough credits."
+            await self.db.execute(
+                "UPDATE galaxy_users SET credits = credits - ?, updated_at = ? WHERE discord_user_id = ?",
+                (price, time.time(), int(discord_user_id)),
+            )
+            await self.db.execute(
+                "INSERT INTO galaxy_user_upgrades (discord_user_id, upgrade_id) VALUES (?, ?)",
+                (int(discord_user_id), upgrade_id),
+            )
+            await self.db.execute(
+                """INSERT INTO galaxy_credit_ledger
+                       (discord_user_id, amount, reason, reference_type, reference_id)
+                   VALUES (?, ?, 'purchase', 'upgrade', ?)""",
+                (int(discord_user_id), -price, upgrade_id),
+            )
+            await self.db.commit()
+            return True, "Upgrade purchased."
+        except Exception:
+            await self.db.rollback()
+            raise
+
+    async def galaxy_set_loadout(
+        self, discord_user_id: int, category: str, upgrade_id: str
+    ) -> bool:
+        if category not in {"hull", "trail", "scanner"}:
+            return False
+        owned = await self.galaxy_get_owned_upgrades(discord_user_id)
+        if upgrade_id not in owned:
+            return False
+        async with self.db.execute(
+            "SELECT 1 FROM galaxy_upgrades WHERE id = ? AND category = ? AND enabled = 1",
+            (upgrade_id, category),
+        ) as cursor:
+            if not await cursor.fetchone():
+                return False
+        column = {"hull": "selected_hull", "trail": "selected_trail", "scanner": "selected_scanner"}[category]
+        await self.db.execute(
+            f"UPDATE galaxy_users SET {column} = ?, updated_at = ? WHERE discord_user_id = ?",
+            (upgrade_id, time.time(), int(discord_user_id)),
+        )
+        await self.db.commit()
+        return True
+
+    async def galaxy_start_listen(
+        self,
+        *,
+        expedition_id: int,
+        discord_user_id: int,
+        message_id: int,
+        channel_id: int,
+        suno_uuid: str,
+        duration_seconds: float,
+    ) -> dict:
+        now = time.time()
+        await self.db.execute(
+            """INSERT INTO galaxy_listens
+                   (expedition_id, discord_user_id, message_id, channel_id,
+                    suno_uuid, duration_seconds, started_at, last_heartbeat_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(expedition_id, message_id) DO UPDATE SET
+                   last_heartbeat_at = excluded.last_heartbeat_at""",
+            (
+                int(expedition_id), int(discord_user_id), int(message_id),
+                int(channel_id), suno_uuid[:100], max(0.0, float(duration_seconds)),
+                now, now,
+            ),
+        )
+        await self.db.commit()
+        async with self.db.execute(
+            """SELECT * FROM galaxy_listens
+               WHERE expedition_id = ? AND message_id = ?""",
+            (int(expedition_id), int(message_id)),
+        ) as cursor:
+            return dict(await cursor.fetchone())
+
+    async def galaxy_heartbeat_listen(
+        self,
+        *,
+        listen_id: int,
+        discord_user_id: int,
+        audio_position: float,
+        paused: bool,
+        seeked: bool,
+        forward_seek_seconds: float = 0.0,
+    ) -> Optional[dict]:
+        async with self.db.execute(
+            """SELECT * FROM galaxy_listens
+               WHERE id = ? AND discord_user_id = ? AND completed_at IS NULL""",
+            (int(listen_id), int(discord_user_id)),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            return None
+        listen = dict(row)
+        now = time.time()
+        wall_delta = max(0.0, min(30.0, now - float(listen["last_heartbeat_at"])))
+        position = max(0.0, min(float(audio_position), float(listen["duration_seconds"]) + 5.0))
+        previous_position = max(0.0, float(listen.get("last_audio_position") or 0.0))
+        audio_delta = max(0.0, position - previous_position)
+        eligible_add = 0.0
+        seeked_add = 0.0
+        reported_forward_seek = max(0.0, min(float(forward_seek_seconds), audio_delta))
+        if seeked:
+            # New clients report the actual forward jump. For legacy clients the
+            # whole positive delta is treated as skipped, which fails safely.
+            seeked_add = reported_forward_seek if reported_forward_seek > 0 else audio_delta
+            played_delta = max(0.0, audio_delta - seeked_add)
+            if not paused:
+                eligible_add = min(wall_delta, played_delta)
+        elif audio_delta > wall_delta + 3.0:
+            # An unmarked implausible jump is a seek as well. Only the portion
+            # that could have played during wall time remains eligible.
+            seeked_add = max(0.0, audio_delta - wall_delta)
+            if not paused:
+                eligible_add = min(wall_delta, audio_delta - seeked_add)
+        elif not paused:
+            eligible_add = min(wall_delta, audio_delta)
+        await self.db.execute(
+            """UPDATE galaxy_listens SET
+                   eligible_seconds = MIN(duration_seconds, eligible_seconds + ?),
+                   max_audio_position = MAX(max_audio_position, ?),
+                   last_audio_position = ?,
+                   seeked_seconds = MIN(duration_seconds, seeked_seconds + ?),
+                   last_heartbeat_at = ?
+               WHERE id = ?""",
+            (eligible_add, position, position, seeked_add, now, int(listen_id)),
+        )
+        await self.db.commit()
+        async with self.db.execute(
+            "SELECT * FROM galaxy_listens WHERE id = ?", (int(listen_id),)
+        ) as cursor:
+            updated = await cursor.fetchone()
+        return dict(updated) if updated else None
+
+    async def galaxy_complete_listen(
+        self,
+        *,
+        listen_id: int,
+        discord_user_id: int,
+        minimum_seconds: int,
+        minimum_percent: float,
+        credits_per_minute: int,
+        daily_cap: int,
+        repeat_cooldown_days: int = 7,
+        reaction_emoji_id: int = 0,
+        full_listen_bonus_percent: int = 25,
+        forward_seek_penalty_percent: int = 100,
+    ) -> tuple[bool, int, str]:
+        try:
+            await self.db.execute("BEGIN IMMEDIATE")
+            async with self.db.execute(
+                """SELECT * FROM galaxy_listens
+                   WHERE id = ? AND discord_user_id = ?""",
+                (int(listen_id), int(discord_user_id)),
+            ) as cursor:
+                row = await cursor.fetchone()
+            if not row:
+                await self.db.rollback()
+                return False, 0, "Listen session not found."
+            listen = dict(row)
+            if listen.get("completed_at") is not None:
+                await self.db.rollback()
+                return True, int(listen.get("credits_awarded") or 0), "Already completed."
+            duration = max(1.0, float(listen["duration_seconds"]))
+            eligible = max(0.0, float(listen["eligible_seconds"]))
+            required = max(float(minimum_seconds), duration * max(0.0, min(1.0, minimum_percent)))
+            if eligible < min(duration, required):
+                await self.db.rollback()
+                return False, 0, "Not enough verified listening time."
+            start_of_day = int(time.time() // 86400) * 86400
+            async with self.db.execute(
+                """SELECT COALESCE(SUM(amount), 0) AS total
+                   FROM galaxy_credit_ledger
+                   WHERE discord_user_id = ? AND reason = 'listen'
+                     AND created_at >= ?""",
+                (int(discord_user_id), start_of_day),
+            ) as cursor:
+                earned_today = int((await cursor.fetchone())["total"] or 0)
+            repeat_cutoff = time.time() - max(0, int(repeat_cooldown_days)) * 86400
+            async with self.db.execute(
+                """SELECT 1 FROM galaxy_listens
+                   WHERE discord_user_id = ? AND message_id = ? AND id != ?
+                     AND completed_at IS NOT NULL AND completed_at >= ? LIMIT 1""",
+                (
+                    int(discord_user_id), int(listen["message_id"]),
+                    int(listen_id), repeat_cutoff,
+                ),
+            ) as cursor:
+                rewarded_recently = bool(await cursor.fetchone())
+            forward_seek = max(0.0, min(duration, float(listen.get("seeked_seconds") or 0.0)))
+            raw_credits = calculate_galaxy_listen_credits(
+                duration_seconds=duration,
+                eligible_seconds=eligible,
+                forward_seek_seconds=forward_seek,
+                credits_per_minute=credits_per_minute,
+                full_listen_bonus_percent=full_listen_bonus_percent,
+                forward_seek_penalty_percent=forward_seek_penalty_percent,
+            )
+            award = 0 if rewarded_recently else max(
+                0, min(raw_credits, max(0, int(daily_cap) - earned_today))
+            )
+            now = time.time()
+            await self.db.execute(
+                """UPDATE galaxy_listens SET completed_at = ?, credits_awarded = ?,
+                       reaction_status = ? WHERE id = ?""",
+                (now, award, "queued" if reaction_emoji_id else "disabled", int(listen_id)),
+            )
+            if award:
+                cursor = await self.db.execute(
+                    """INSERT OR IGNORE INTO galaxy_credit_ledger
+                           (discord_user_id, amount, reason, reference_type, reference_id, created_at)
+                       VALUES (?, ?, 'listen', 'listen', ?, ?)""",
+                    (int(discord_user_id), award, str(listen_id), now),
+                )
+                if cursor.rowcount:
+                    await self.db.execute(
+                        """UPDATE galaxy_users SET credits = credits + ?,
+                               lifetime_credits = lifetime_credits + ?, updated_at = ?
+                           WHERE discord_user_id = ?""",
+                        (award, award, now, int(discord_user_id)),
+                    )
+            if reaction_emoji_id:
+                await self.db.execute(
+                    """INSERT OR IGNORE INTO galaxy_reaction_jobs
+                           (message_id, channel_id, emoji_id, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (
+                        int(listen["message_id"]), int(listen["channel_id"]),
+                        int(reaction_emoji_id), now, now,
+                    ),
+                )
+            await self.db.commit()
+            return True, award, "Expedition credits awarded."
+        except Exception:
+            await self.db.rollback()
+            raise
 
     # -----------------------------------------------------------------------
     # Relic Hunt — table creation
