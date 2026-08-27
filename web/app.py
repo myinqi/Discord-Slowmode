@@ -10989,6 +10989,22 @@ def create_app(db: Database, bot=None) -> Quart:
         }
         village = await db.relic_get_village_areas()
         prefix = (await db.relic_get_setting("command_prefix")) or "!"
+        built_in_commands = (
+            "raven", "nest", "items", "top", "rank", "daily",
+            "ritual", "combine", "village", "phrase", "solve", "relichelp",
+        )
+        custom_commands = [
+            str(row.get("command") or "").strip().lstrip("!").lower()
+            for row in await db.relic_get_all_custom_commands()
+            if row.get("enabled")
+        ]
+        available_commands = []
+        seen_commands = set()
+        for command in (*built_in_commands, *custom_commands):
+            if not command or command in seen_commands:
+                continue
+            seen_commands.add(command)
+            available_commands.append(f"{prefix}{command}")
         try:
             rotation_seconds = max(
                 5,
@@ -11072,12 +11088,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 }
                 for row in recent
             ][:16],
-            "commands": [
-                f"{prefix}{command}" for command in (
-                    "raven", "nest", "items", "top", "rank", "daily",
-                    "ritual", "combine", "village", "phrase", "solve", "relichelp",
-                )
-            ],
+            "commands": available_commands,
             "ritual": {
                 "energy": int(ritual.get("energy") or 0),
                 "goal": max(1, int(ritual.get("goal") or 1)),
@@ -11154,6 +11165,25 @@ def create_app(db: Database, bot=None) -> Quart:
             if now - seen_at < 15
         }
         status = await trya_dcs_manager.get_status()
+        guild = get_guild()
+        listeners = []
+        for listener_id in app.trya_dcs_presence:
+            member = guild.get_member(listener_id) if guild else None
+            avatar = getattr(member, "display_avatar", None) if member else None
+            listeners.append({
+                "id": str(listener_id),
+                "display_name": (
+                    member.display_name if member else
+                    session.get("trya_dcs_discord_name")
+                    if listener_id == int(user_id) else "Discord member"
+                ),
+                "avatar_url": (
+                    str(avatar.url) if avatar else
+                    str(session.get("trya_dcs_discord_avatar") or "")
+                    if listener_id == int(user_id) else ""
+                ),
+            })
+        listeners.sort(key=lambda item: item["display_name"].casefold())
         return {
             "running": status["running"],
             "safe_stop_pending": status["safe_stop_pending"],
@@ -11164,6 +11194,7 @@ def create_app(db: Database, bot=None) -> Quart:
             "song_remaining_seconds": status.get("song_remaining_seconds", 0),
             "stream_remaining_seconds": status.get("stream_remaining_seconds", 0),
             "listener_count": len(app.trya_dcs_presence),
+            "listeners": listeners,
             "ffmpeg": status["ffmpeg"],
         }
 
@@ -11798,7 +11829,9 @@ def create_app(db: Database, bot=None) -> Quart:
                         continue
 
                     from bot.cogs.trya_dcs_chat import parse_web_chat_payload
-                    content, reply_to, mention_ids = parse_web_chat_payload(incoming.get("data") or {})
+                    content, reply_to, mention_ids, client_message_id = parse_web_chat_payload(
+                        incoming.get("data") or {}
+                    )
                     if not content:
                         continue
                     now = time.monotonic()
@@ -11824,6 +11857,7 @@ def create_app(db: Database, bot=None) -> Quart:
                             content,
                             reply_to=reply_to,
                             mention_ids=mention_ids,
+                            client_message_id=client_message_id,
                         )
                         await websocket.send(json.dumps({
                             "version": 1, "type": "chat.sent", "timestamp": time.time(), "data": {},
@@ -11879,7 +11913,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 return {"error": "invalid_csrf"}, 403
             payload = await request.get_json(silent=True) or {}
             from bot.cogs.trya_dcs_chat import parse_web_chat_payload
-            content, reply_to, mention_ids = parse_web_chat_payload(payload)
+            content, reply_to, mention_ids, client_message_id = parse_web_chat_payload(payload)
             content = content[:1800]
             if not content or not channel_id or bot is None:
                 return {"error": "invalid_message"}, 400
@@ -11899,6 +11933,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     content,
                     reply_to=reply_to,
                     mention_ids=mention_ids,
+                    client_message_id=client_message_id,
                 )
             except Exception as exc:
                 print(f"[trya-dcs-chat] Fallback message failed: {exc}", flush=True)

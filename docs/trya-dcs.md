@@ -56,9 +56,11 @@ The current implementation includes:
   chat/radio event sidecars and manual or automatic 720p/1080p lightweight renders
   with a Discord-chat sidebar plus previous/current/next song information;
 - a live dashboard below the player with previous/next-song links, playlist
-  position, song/rotation remaining time and in-memory active-listener presence;
+  position, song/rotation remaining time and a clickable active-listener popup
+  with Discord display names and avatars;
 - a configurable rotating community panel and live Raven's Nest panel with
-  leaderboard, commands, finds, combines, ritual, phrase and event state;
+  leaderboard, built-in plus enabled custom commands, finds, combines, ritual,
+  phrase and event state;
 - transport-neutral Raven's Nest command dispatch from native Discord and the
   authenticated web chat into the existing shared `relic_*` database tables;
 - a dedicated OBS contribution listener at `rtmp://HOST:1937/live` with a
@@ -109,7 +111,8 @@ ID collisions while sharing items, recipes, events, ritual, phrase, village and
 leaderboard state. Built-in game responses are written to the shared hunt log and
 rendered as detailed DCS activity instead of flooding chat. Configured custom-command
 responses remain visible chat messages. Webhook echoes and bot responses are excluded
-from command parsing.
+from command parsing. Commands shown in the player are clickable and use the same
+authenticated Discord web-chat transport as manually entered messages.
 
 ## Discord application
 

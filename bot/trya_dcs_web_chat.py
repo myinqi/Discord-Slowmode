@@ -9,7 +9,9 @@ _WEB_CHAT_DEDUP_WINDOW = 3.0
 _recent_web_chat: dict[int, list[tuple[str, str, float]]] = {}
 
 
-def parse_web_chat_payload(payload: dict | None) -> tuple[str, str | None, list[str]]:
+def parse_web_chat_payload(
+    payload: dict | None,
+) -> tuple[str, str | None, list[str], str | None]:
     data = payload if isinstance(payload, dict) else {}
     content = str(data.get("content") or "").strip()
     reply_to = str(data.get("reply_to") or "").strip() or None
@@ -21,13 +23,17 @@ def parse_web_chat_payload(payload: dict | None) -> tuple[str, str | None, list[
         value = str(raw).strip()
         if value.isdigit() and value not in mention_ids:
             mention_ids.append(value)
-    return content, reply_to, mention_ids
+    client_message_id = str(data.get("client_message_id") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", client_message_id):
+        client_message_id = None
+    return content, reply_to, mention_ids, client_message_id
 
 
 def register_web_chat_fingerprint(
     user_id: int,
     content: str,
     reply_to: str | int | None = None,
+    client_message_id: str | None = None,
     *,
     now: float | None = None,
     window: float = _WEB_CHAT_DEDUP_WINDOW,
@@ -35,14 +41,17 @@ def register_web_chat_fingerprint(
 ) -> bool:
     """Return True if this web chat send is new and should be delivered.
 
-    Browsers can submit the same comment twice (Enter + button, Firefox
-    fallback fetch before the input is cleared). Identical content from the
-    same member within a few seconds is treated as one send.
+    Modern clients supply a unique message ID, so intentional repetitions such
+    as game commands remain distinct while a transport retry is deduplicated.
+    Older clients fall back to the original short content-based window.
     """
     target = _recent_web_chat if store is None else store
     stamp = time.monotonic() if now is None else now
     key = int(user_id)
-    fingerprint = (str(content or ""), str(reply_to or ""))
+    fingerprint = (
+        f"id:{client_message_id}" if client_message_id else str(content or ""),
+        str(reply_to or ""),
+    )
     recent = [
         item for item in target.get(key, [])
         if stamp - item[2] < window
@@ -59,13 +68,17 @@ def forget_web_chat_fingerprint(
     user_id: int,
     content: str,
     reply_to: str | int | None = None,
+    client_message_id: str | None = None,
     *,
     store: dict[int, list[tuple[str, str, float]]] | None = None,
 ) -> None:
     """Drop a fingerprint so a failed delivery can be retried."""
     target = _recent_web_chat if store is None else store
     key = int(user_id)
-    fingerprint = (str(content or ""), str(reply_to or ""))
+    fingerprint = (
+        f"id:{client_message_id}" if client_message_id else str(content or ""),
+        str(reply_to or ""),
+    )
     target[key] = [
         item for item in target.get(key, [])
         if not (item[0] == fingerprint[0] and item[1] == fingerprint[1])

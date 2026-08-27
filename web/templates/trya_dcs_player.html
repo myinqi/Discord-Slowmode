@@ -66,6 +66,8 @@
         .dashboard-stats { margin-top:6px; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px 12px; }
         .dashboard-stat strong { display:block; color:#e9e4ef; font-size:13px; }
         .dashboard-stat span { display:block; margin-top:1px; color:#756d80; font-size:10px; }
+        .listener-trigger { width:100%; padding:0; border:0; border-radius:4px; background:transparent; text-align:left; }
+        .listener-trigger:hover, .listener-trigger:focus-visible { background:#211a2d; outline:2px solid #665079; outline-offset:3px; }
         .community-grid { flex:1 0 13rem; min-height:13rem; overflow:hidden; display:grid; grid-template-columns:1fr 1fr; margin:0 16px 12px; }
         .community-panel { display:flex; flex-direction:column; min-width:0; min-height:0; padding:14px 16px 16px; overflow:hidden; }
         .community-panel:first-child { padding-left:0; border-right:1px solid var(--line); }
@@ -86,7 +88,9 @@
         .feedback-row span { font-size:9px; }
         .community-empty { color:#706878; font-size:12px; line-height:1.5; }
         .command-cloud { display:flex; flex-wrap:wrap; align-content:flex-start; align-items:flex-start; gap:6px; }
-        .command-cloud code { flex:0 0 auto; align-self:flex-start; height:auto; padding:4px 7px; border:1px solid #3a3047; border-radius:4px; color:#c8b5dc; background:#100d16; font-size:10px; }
+        .command-cloud button { flex:0 0 auto; align-self:flex-start; height:auto; padding:4px 7px; border:1px solid #3a3047; border-radius:4px; color:#c8b5dc; background:#100d16; font:10px ui-monospace,monospace; }
+        .command-cloud button:hover, .command-cloud button:focus-visible { color:#fff; border-color:#9b67be; background:#21162d; }
+        .command-cloud button:disabled { cursor:not-allowed; opacity:.5; }
         .relic-progress { height:7px; overflow:hidden; border-radius:999px; background:#2b2535; }
         .relic-progress span { display:block; height:100%; width:0; background:linear-gradient(90deg,#7c3aed,#d946ef); transition:width .4s ease; }
         .relic-meta { display:flex; justify-content:space-between; gap:12px; margin:5px 0 12px; color:#8d8498; font-size:10px; }
@@ -140,6 +144,12 @@
         .chat-error { min-height:18px; padding:0 12px 7px; color:#f18c99; font-size:11px; }
         dialog { width:min(560px,calc(100% - 24px)); max-height:min(720px,80vh); padding:0; color:#f1edf7; background:#15121d; border:1px solid var(--line); border-radius:8px; box-shadow:0 22px 70px #000c; }
         dialog::backdrop { background:rgba(0,0,0,.72); }
+        .listener-dialog { width:min(420px,calc(100% - 24px)); }
+        .listener-list { display:grid; gap:7px; max-height:min(520px,65vh); padding:12px; overflow-y:auto; }
+        .listener-row { display:flex; align-items:center; gap:10px; padding:9px 10px; border:1px solid #2d2638; border-radius:6px; background:#0d0b12; }
+        .listener-row img, .listener-avatar-placeholder { width:36px; height:36px; flex:none; border-radius:50%; background:#282230; object-fit:cover; }
+        .listener-avatar-placeholder { display:grid; place-items:center; color:#a99bb8; font-weight:750; }
+        .listener-row strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
         .queue-head { position:sticky; top:0; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:15px 16px; background:#15121d; border-bottom:1px solid var(--line); }
         .queue-head h2 { margin:0; font-size:17px; }
         .queue-list { margin:0; padding:8px 0; list-style:none; overflow-y:auto; }
@@ -253,7 +263,7 @@
                         <div class="dashboard-stat"><strong id="stat-position">—</strong><span>Song position</span></div>
                         <div class="dashboard-stat"><strong id="stat-song-remaining">—</strong><span>Song remaining</span></div>
                         <div class="dashboard-stat"><strong id="stat-stream-remaining">—</strong><span>Stream remaining</span></div>
-                        <div class="dashboard-stat"><strong id="stat-listeners">0</strong><span>Listeners</span></div>
+                        <button id="listener-trigger" class="dashboard-stat listener-trigger" type="button" aria-haspopup="dialog" title="Show listeners"><strong id="stat-listeners">0</strong><span>Listeners</span></button>
                     </div>
                 </div>
             </section>
@@ -298,6 +308,13 @@
         </aside>
     </main>
 </div>
+<dialog id="listener-dialog" class="listener-dialog">
+    <div class="queue-head">
+        <h2>Current listeners</h2>
+        <button id="listener-close" type="button">Close</button>
+    </div>
+    <div id="listener-list" class="listener-list"><div class="community-empty">No listeners online.</div></div>
+</dialog>
 <dialog id="queue-dialog">
     <div class="queue-head">
         <h2>Current playlist</h2>
@@ -359,6 +376,7 @@ let currentSongIndex = 0;
 let currentSongRemaining = 0;
 let currentStreamRemaining = 0;
 let currentListenerCount = 0;
+let currentListeners = [];
 let encoderSongIndex = 0;
 let encoderElapsed = 0;
 let encoderDuration = 0;
@@ -492,6 +510,49 @@ function renderDashboard() {
     document.getElementById('stat-listeners').textContent = String(currentListenerCount);
 }
 
+function renderListeners() {
+    const list = document.getElementById('listener-list');
+    list.replaceChildren();
+    if (!currentListeners.length) {
+        const empty = document.createElement('div');
+        empty.className = 'community-empty';
+        empty.textContent = 'No listeners online.';
+        list.append(empty);
+        return;
+    }
+    for (const listener of currentListeners) {
+        const row = document.createElement('div');
+        row.className = 'listener-row';
+        if (listener.avatar_url) {
+            const avatar = document.createElement('img');
+            avatar.src = listener.avatar_url;
+            avatar.alt = '';
+            avatar.loading = 'lazy';
+            row.append(avatar);
+        } else {
+            const placeholder = document.createElement('span');
+            placeholder.className = 'listener-avatar-placeholder';
+            placeholder.textContent = String(listener.display_name || '?').slice(0, 1).toUpperCase();
+            row.append(placeholder);
+        }
+        const name = document.createElement('strong');
+        name.textContent = listener.display_name || 'Discord member';
+        row.append(name);
+        list.append(row);
+    }
+}
+
+function sendCommand(command) {
+    if (chatInput.disabled) {
+        chatError.textContent = 'Discord chat is not connected yet.';
+        return;
+    }
+    clearPendingReply();
+    chatInput.dataset.mentionIds = '[]';
+    chatInput.value = command;
+    document.getElementById('chat-form').requestSubmit();
+}
+
 function relicRows(container, rows, emptyText) {
     container.replaceChildren();
     if (!rows.length) {
@@ -579,8 +640,11 @@ function renderCommunityInfo() {
     } else if (panel.type === 'commands') {
         content.className = 'command-cloud';
         for (const command of panel.commands) {
-            const item = document.createElement('code');
+            const item = document.createElement('button');
+            item.type = 'button';
             item.textContent = command;
+            item.title = `Send ${command} to chat`;
+            item.addEventListener('click', () => sendCommand(command));
             content.append(item);
         }
     } else if (panel.type === 'ritual') {
@@ -901,6 +965,8 @@ async function refreshStatus() {
         const song = payload.song;
         currentQueue = Array.isArray(payload.playlist) ? payload.playlist : [];
         currentListenerCount = Number(payload.listener_count || 0);
+        currentListeners = Array.isArray(payload.listeners) ? payload.listeners : [];
+        renderListeners();
         if (payload.running && song) {
             const duration = Number(song.duration || 0);
             const remaining = Number(payload.song_remaining_seconds || 0);
@@ -1435,7 +1501,10 @@ function outgoingChatPayload() {
     return {
         content: chatInput.value.trim(),
         reply_to: pendingReply ? pendingReply.message_id : null,
-        mention_ids: JSON.parse(chatInput.dataset.mentionIds || '[]')
+        mention_ids: JSON.parse(chatInput.dataset.mentionIds || '[]'),
+        client_message_id: typeof crypto.randomUUID === 'function'
+            ? crypto.randomUUID()
+            : `${Date.now()}_${Math.random().toString(36).slice(2)}`
     };
 }
 
@@ -1522,6 +1591,15 @@ document.getElementById('queue-button').addEventListener('click', () => {
 document.getElementById('queue-close').addEventListener('click', () => queueDialog.close());
 queueDialog.addEventListener('click', event => {
     if (event.target === queueDialog) queueDialog.close();
+});
+const listenerDialog = document.getElementById('listener-dialog');
+document.getElementById('listener-trigger').addEventListener('click', () => {
+    renderListeners();
+    listenerDialog.showModal();
+});
+document.getElementById('listener-close').addEventListener('click', () => listenerDialog.close());
+listenerDialog.addEventListener('click', event => {
+    if (event.target === listenerDialog) listenerDialog.close();
 });
 queueList.addEventListener('click', event => {
     const link = event.target.closest('a[href]');

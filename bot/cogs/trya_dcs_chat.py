@@ -1,5 +1,6 @@
 """Discord side of the TrYa DCS live-chat bridge."""
 
+import asyncio
 import re
 import time
 
@@ -321,6 +322,7 @@ async def send_web_chat_message(
     *,
     reply_to: str | int | None = None,
     mention_ids: list | None = None,
+    client_message_id: str | None = None,
 ) -> None:
     """Send as the authenticated member through a clearly marked webhook."""
     channel = bot.get_channel(channel_id)
@@ -335,7 +337,9 @@ async def send_web_chat_message(
     if not clean:
         raise ValueError("Message is empty.")
     command_text = clean
-    if not register_web_chat_fingerprint(user_id, command_text, reply_to):
+    if not register_web_chat_fingerprint(
+        user_id, command_text, reply_to, client_message_id
+    ):
         print(f"[trya-dcs-chat] Dropped duplicate web message from {user_id}", flush=True)
         return
 
@@ -390,18 +394,38 @@ async def send_web_chat_message(
                 send_kwargs["reference"] = reference
             await channel.send(**send_kwargs)
     except Exception:
-        forget_web_chat_fingerprint(user_id, command_text, reply_to)
+        forget_web_chat_fingerprint(
+            user_id, command_text, reply_to, client_message_id
+        )
         raise
 
     cog = bot.get_cog("TryaDcsChat")
     if cog:
-        await cog.process_web_relic_command(member, channel, command_text)
+        try:
+            await cog.process_web_relic_command(member, channel, command_text)
+        except Exception as exc:
+            print(
+                f"[trya-dcs-chat] Relic command failed for user={user_id}: {exc}",
+                flush=True,
+            )
+            try:
+                await publish_dcs_game_feedback(
+                    bot.db,
+                    f"@{member.display_name} your command could not be processed. Please try again.",
+                    username="Corax",
+                )
+            except Exception as feedback_exc:
+                print(
+                    f"[trya-dcs-chat] Command error feedback failed: {feedback_exc}",
+                    flush=True,
+                )
 
 
 class TryaDcsChat(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.relic_hunt = RelicHunt(bot.db, stream_kind="dcs")
+        self._relic_command_lock = asyncio.Lock()
 
     async def cog_load(self) -> None:
         await self.relic_hunt.prepare()
@@ -431,6 +455,17 @@ class TryaDcsChat(commands.Cog):
     ) -> bool:
         if not await self._relic_enabled():
             return False
+        async with self._relic_command_lock:
+            return await self._dispatch_relic_command_locked(
+                member, channel, content
+            )
+
+    async def _dispatch_relic_command_locked(
+        self,
+        member: discord.Member,
+        channel,
+        content: str,
+    ) -> bool:
         permissions = getattr(member, "guild_permissions", None)
         is_staff = bool(
             permissions
