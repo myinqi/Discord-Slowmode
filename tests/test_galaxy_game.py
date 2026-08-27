@@ -3,6 +3,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 try:
     from bot.database import Database, calculate_galaxy_listen_credits
@@ -298,6 +299,45 @@ class GalaxyRouteTests(unittest.IsolatedAsyncioTestCase):
             headers={"X-CSRF-Token": "csrf"},
         )
         self.assertEqual(rejected.status_code, 403)
+
+    async def test_missing_song_title_is_resolved_and_persisted(self):
+        missing_uuid = "49a09dfb-bf72-4852-b813-49c3a02d3aab"
+        await self.db.db.execute(
+            """INSERT INTO song_posts
+               (channel_id, user_id, user_name, url, posted_at, message_id,
+                song_title, suno_uuid)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                10, 8, "Legacy Artist", f"https://suno.com/song/{missing_uuid}",
+                time.time() + 1, 100, None, missing_uuid,
+            ),
+        )
+        await self.db.db.commit()
+
+        async def resolve_missing(songs, max_concurrent=5):
+            for song in songs:
+                song["title"] = "Resolved Galaxy Song"
+            return songs
+
+        with patch("bot.suno_meta.enrich_songs", side_effect=resolve_missing):
+            response = await self.client.post(
+                "/galaxy/api/expeditions",
+                json={"channel_id": "10", "days": 7, "limit": 5},
+                headers={"X-CSRF-Token": "csrf"},
+            )
+        self.assertEqual(response.status_code, 200)
+        expedition = await response.get_json()
+        resolved = next(song for song in expedition["songs"] if song["message_id"] == "100")
+        self.assertEqual(resolved["title"], "Resolved Galaxy Song")
+        async with self.db.db.execute(
+            "SELECT song_title FROM song_posts WHERE message_id = 100"
+        ) as cursor:
+            self.assertEqual((await cursor.fetchone())[0], "Resolved Galaxy Song")
+
+    async def test_galaxy_page_uses_custom_favicon(self):
+        response = await self.client.get("/galaxy")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Galaxy_emoji.png", await response.get_data(as_text=True))
 
 
 if __name__ == "__main__":

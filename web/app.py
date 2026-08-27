@@ -459,6 +459,8 @@ def create_app(db: Database, bot=None) -> Quart:
     app.trya_dcs_token_rate = {}
     app.trya_dcs_presence = {}
     app.galaxy_api_rate = {}
+    app.galaxy_metadata_cache = {}
+    app.galaxy_metadata_lock = asyncio.Lock()
     # Serializes manual starts of both radio managers. The scheduled Exp.
     # Radio start additionally checks the legacy manager before it fires.
     app.radio_start_lock = asyncio.Lock()
@@ -4130,13 +4132,16 @@ def create_app(db: Database, bot=None) -> Quart:
                 uuid = extract_suno_uuid(row.get("url")) or ""
             if not uuid or not row.get("message_id"):
                 continue
+            stored_title = str(row.get("song_title") or "").strip()
+            if stored_title.lower() in {"unknown song", "unknown title"}:
+                stored_title = ""
             songs.append({
                 "message_id": str(row["message_id"]),
                 "channel_id": str(row["channel_id"]),
                 "user_id": str(row.get("user_id") or ""),
                 "uuid": uuid,
                 "url": f"https://suno.com/song/{uuid}",
-                "title": row.get("song_title") or "Unknown song",
+                "title": stored_title,
                 "artist": row.get("user_name") or "Unknown artist",
                 "posted_at": float(row.get("posted_at") or 0),
                 "reaction_count": int(row.get("reaction_count") or 0),
@@ -4148,6 +4153,44 @@ def create_app(db: Database, bot=None) -> Quart:
                 break
         if not songs:
             return {"error": "no_songs"}, 404
+
+        missing_titles = [song for song in songs if not song["title"]]
+        if missing_titles:
+            from bot.suno_meta import enrich_songs
+
+            async with app.galaxy_metadata_lock:
+                checked_at = time.monotonic()
+                unresolved = []
+                for song in missing_titles:
+                    cached = app.galaxy_metadata_cache.get(song["uuid"])
+                    if cached and cached.get("title"):
+                        song["title"] = cached["title"]
+                    elif not cached or checked_at - float(cached.get("checked_at") or 0) >= 3600:
+                        unresolved.append(song)
+
+                if unresolved:
+                    await enrich_songs(unresolved, max_concurrent=5)
+                    resolved_titles = []
+                    for song in unresolved:
+                        resolved_title = str(song.get("title") or "").strip()
+                        app.galaxy_metadata_cache[song["uuid"]] = {
+                            "checked_at": checked_at,
+                            "title": resolved_title,
+                        }
+                        if resolved_title:
+                            resolved_titles.append((resolved_title, int(song["message_id"])))
+                    await db.update_song_post_titles(resolved_titles)
+
+                if len(app.galaxy_metadata_cache) > 2048:
+                    oldest = sorted(
+                        app.galaxy_metadata_cache,
+                        key=lambda key: app.galaxy_metadata_cache[key].get("checked_at", 0),
+                    )[:512]
+                    for key in oldest:
+                        app.galaxy_metadata_cache.pop(key, None)
+
+        for song in songs:
+            song["title"] = str(song.get("title") or "").strip() or "Unknown song"
         raw_token = secrets.token_urlsafe(32)
         token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
         expedition_id = await db.galaxy_create_expedition(

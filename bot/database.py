@@ -3406,6 +3406,26 @@ class Database:
                 result.append(d)
             return result
 
+    async def update_song_post_titles(self, titles: list[tuple[str, int]]) -> None:
+        """Persist resolved titles for legacy song posts that still have no title."""
+        cleaned = [
+            (str(title).strip()[:500], int(message_id))
+            for title, message_id in titles
+            if str(title or "").strip()
+        ]
+        if not cleaned:
+            return
+        await self.db.executemany(
+            """UPDATE song_posts SET song_title = ?
+               WHERE message_id = ?
+                 AND (
+                     song_title IS NULL OR TRIM(song_title) = ''
+                     OR LOWER(TRIM(song_title)) IN ('unknown song', 'unknown title')
+                 )""",
+            cleaned,
+        )
+        await self.db.commit()
+
     async def add_song_posts_bulk(self, rows: list[tuple]):
         enriched = [tuple(row) + (extract_suno_uuid(row[3]),) for row in rows]
         await self.db.executemany(

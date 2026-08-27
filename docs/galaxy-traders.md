@@ -49,9 +49,10 @@ rate-limited Discord actions.
 6. The browser generates a deterministic star map from channel ID and message IDs.
 7. The ship starts at a neutral station and the newest song planet is selected.
 8. Pressing Play starts the audio and the flight.
-9. The ship reaches the target exactly when the audio ends.
-10. Auto-navigation selects the next older song, unless the user selects another
-    planet.
+9. The ship reaches the target exactly when the audio ends and then continuously
+   orbits the moving planet.
+10. Auto-navigation leaves the ship in a short, visible arrival orbit before selecting
+    the next older song, unless the user selects another planet.
 11. Valid listening heartbeats accumulate eligible seconds and credits.
 12. A qualifying completion queues the configured bot reaction for the original
     showcase message.
@@ -75,8 +76,14 @@ The route is a quadratic or cubic Bezier transfer curve. Normal playback derives
 progress from the audio clock. On a seek, the ship remains at its current visual
 position, a new curve is created from that position to the same target, and its new
 duration equals the remaining audio duration. Seeking forward therefore increases
-velocity; seeking backward decreases it. The `ended` event always snaps the ship to
-the target.
+velocity; seeking backward decreases it. The route ends tangentially at an orbital
+entry point. The `ended` event transitions the ship into a 20-second elliptical orbit
+which follows the planet as it moves around the star.
+
+The Raven hull uses the Klangtresor raven vector model: powered transit has animated
+wingbeats, while the arrival orbit switches to a slower gliding motion with a violet
+aura and feather particles. Reduced-motion mode parks the Raven on its orbit and
+suppresses particles. Other hulls retain the standard spacecraft rendering.
 
 When a tab resumes after browser throttling, the route is recalculated from
 `audio.currentTime`; the server is never asked to update animation frames.
