@@ -3787,7 +3787,6 @@ def create_app(db: Database, bot=None) -> Quart:
             "galaxy_max_range_days": "30",
             "galaxy_default_song_limit": "30",
             "galaxy_max_song_limit": "75",
-            "galaxy_auto_navigation": "on",
             "galaxy_heartbeat_seconds": "12",
             "galaxy_min_listen_seconds": "30",
             "galaxy_min_listen_percent": "70",
@@ -3836,7 +3835,6 @@ def create_app(db: Database, bot=None) -> Quart:
                 "galaxy_max_range_days": bounded("max_range_days", 30, 1, 365),
                 "galaxy_default_song_limit": bounded("default_song_limit", 30, 5, 100),
                 "galaxy_max_song_limit": bounded("max_song_limit", 75, 5, 150),
-                "galaxy_auto_navigation": "on" if form.get("auto_navigation") else "off",
                 "galaxy_heartbeat_seconds": bounded("heartbeat_seconds", 12, 8, 30),
                 "galaxy_min_listen_seconds": bounded("min_listen_seconds", 30, 5, 600),
                 "galaxy_min_listen_percent": bounded("min_listen_percent", 70, 10, 100),
@@ -4050,13 +4048,14 @@ def create_app(db: Database, bot=None) -> Quart:
                 continue
             channel = guild.get_channel(int(channel_id)) if guild else None
             channels.append({"id": channel_id, "name": channel.name if channel else f"channel-{channel_id}"})
+        profile = await db.galaxy_get_profile(int(identity["discord_user_id"]))
         return {
             "channels": channels,
             "default_channel_id": await db.get_setting("galaxy_default_channel_id") or "",
             "max_range_days": int(await db.get_setting("galaxy_max_range_days") or "30"),
             "default_song_limit": int(await db.get_setting("galaxy_default_song_limit") or "30"),
             "max_song_limit": int(await db.get_setting("galaxy_max_song_limit") or "75"),
-            "auto_navigation": (await db.get_setting("galaxy_auto_navigation") or "on") == "on",
+            "auto_navigation": bool(profile.get("auto_navigation", 1)),
             "heartbeat_seconds": int(await db.get_setting("galaxy_heartbeat_seconds") or "12"),
             "credits_per_minute": int(await db.get_setting("galaxy_credits_per_minute") or "2"),
             "full_listen_bonus_percent": int(await db.get_setting("galaxy_full_listen_bonus_percent") or "25"),
@@ -4064,7 +4063,7 @@ def create_app(db: Database, bot=None) -> Quart:
             "desktop_planet_limit": int(await db.get_setting("galaxy_desktop_planet_limit") or "75"),
             "mobile_planet_limit": int(await db.get_setting("galaxy_mobile_planet_limit") or "35"),
             "target_fps": int(await db.get_setting("galaxy_target_fps") or "60"),
-            "profile": await db.galaxy_get_profile(int(identity["discord_user_id"])),
+            "profile": profile,
         }
 
     @app.route("/galaxy/api/channels")
@@ -4136,7 +4135,7 @@ def create_app(db: Database, bot=None) -> Quart:
         }
         try:
             channel_id = int(data.get("channel_id"))
-            days = max(1, min(int(data.get("days") or 7), int(await db.get_setting("galaxy_max_range_days") or "30")))
+            days = max(1, min(int(data.get("days") or 1), int(await db.get_setting("galaxy_max_range_days") or "30")))
             limit = max(5, min(int(data.get("limit") or 30), int(await db.get_setting("galaxy_max_song_limit") or "75")))
         except (TypeError, ValueError):
             return {"error": "invalid_parameters"}, 400
@@ -4364,6 +4363,26 @@ def create_app(db: Database, bot=None) -> Quart:
             str(data.get("upgrade_id") or ""),
         )
         return {"ok": ok, "profile": await db.galaxy_get_profile(int(identity["discord_user_id"]))}, (200 if ok else 400)
+
+    @app.route("/galaxy/api/preferences", methods=["POST"])
+    async def galaxy_api_preferences():
+        identity = await _galaxy_api_user()
+        if not identity or not _galaxy_csrf_valid(request.headers.get("X-CSRF-Token", "")):
+            return {"error": "forbidden"}, 403
+        if not _galaxy_rate_allowed(int(identity["discord_user_id"]), "preferences", 30, 60):
+            return {"error": "rate_limited"}, 429
+        data = await request.get_json(silent=True) or {}
+        if not isinstance(data.get("auto_navigation"), bool):
+            return {"error": "invalid_auto_navigation"}, 400
+        try:
+            profile = await db.galaxy_set_preferences(
+                int(identity["discord_user_id"]),
+                auto_navigation=data["auto_navigation"],
+                expedition_days=int(data.get("expedition_days")),
+            )
+        except (TypeError, ValueError):
+            return {"error": "invalid_expedition_days"}, 400
+        return {"ok": True, "profile": profile}
 
     async def _galaxy_reaction_loop():
         while True:

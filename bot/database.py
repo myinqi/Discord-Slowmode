@@ -6754,6 +6754,8 @@ class Database:
                 selected_hull TEXT NOT NULL DEFAULT 'scout',
                 selected_trail TEXT NOT NULL DEFAULT 'ion_blue',
                 selected_scanner TEXT NOT NULL DEFAULT 'pulse',
+                auto_navigation INTEGER NOT NULL DEFAULT 1,
+                expedition_days INTEGER NOT NULL DEFAULT 1,
                 created_at REAL NOT NULL DEFAULT (unixepoch()),
                 updated_at REAL NOT NULL DEFAULT (unixepoch()),
                 last_seen_at REAL NOT NULL DEFAULT (unixepoch())
@@ -6854,9 +6856,19 @@ class Database:
             await self.db.execute(
                 "ALTER TABLE galaxy_listens ADD COLUMN last_audio_position REAL NOT NULL DEFAULT 0"
             )
+        async with self.db.execute("PRAGMA table_info(galaxy_users)") as cursor:
+            galaxy_user_columns = {row["name"] for row in await cursor.fetchall()}
+        if "auto_navigation" not in galaxy_user_columns:
+            await self.db.execute(
+                "ALTER TABLE galaxy_users ADD COLUMN auto_navigation INTEGER NOT NULL DEFAULT 1"
+            )
+        if "expedition_days" not in galaxy_user_columns:
+            await self.db.execute(
+                "ALTER TABLE galaxy_users ADD COLUMN expedition_days INTEGER NOT NULL DEFAULT 1"
+            )
         defaults = (
             ("scout", "hull", "Scout", "Reliable starter exploration ship.", 0, '{"color":"#8b7cff"}', 0),
-            ("raven", "hull", "Raven", "Klangtresor raven with animated wings and violet aura.", 0, '{"color":"#181520"}', 10),
+            ("raven", "hull", "Raven", "Klangtresor raven with animated wings and violet aura.", 120, '{"color":"#181520"}', 10),
             ("nebula", "hull", "Nebula", "Curved hull with a violet canopy.", 240, '{"color":"#a855f7"}', 20),
             ("ion_blue", "trail", "Ion Blue", "Classic blue engine trail.", 0, '{"color":"#64d8ff"}', 0),
             ("plasma_pink", "trail", "Plasma Pink", "Bright magenta engine trail.", 80, '{"color":"#f472d0"}', 10),
@@ -6872,11 +6884,30 @@ class Database:
         )
         await self.db.execute(
             """UPDATE galaxy_upgrades
-               SET price = 0, description = ?
-               WHERE id = 'raven' AND price = 120
-                 AND description = 'Angular black exploration hull.'""",
+               SET price = 120
+               WHERE id = 'raven' AND price = 0 AND description = ?""",
             ("Klangtresor raven with animated wings and violet aura.",),
         )
+        for column, category, starter in (
+            ("selected_hull", "hull", "scout"),
+            ("selected_trail", "trail", "ion_blue"),
+            ("selected_scanner", "scanner", "pulse"),
+        ):
+            await self.db.execute(
+                f"""UPDATE galaxy_users
+                    SET {column} = ?, updated_at = ?
+                    WHERE EXISTS (
+                        SELECT 1 FROM galaxy_upgrades selected
+                        WHERE selected.id = galaxy_users.{column}
+                          AND selected.category = ? AND selected.price > 0
+                    )
+                      AND NOT EXISTS (
+                        SELECT 1 FROM galaxy_user_upgrades owned
+                        WHERE owned.discord_user_id = galaxy_users.discord_user_id
+                          AND owned.upgrade_id = galaxy_users.{column}
+                    )""",
+                (starter, time.time(), category),
+            )
         await self.db.commit()
 
     async def galaxy_upsert_user(
@@ -7049,6 +7080,21 @@ class Database:
         )
         await self.db.commit()
         return True
+
+    async def galaxy_set_preferences(
+        self, discord_user_id: int, *, auto_navigation: bool, expedition_days: int
+    ) -> dict:
+        days = int(expedition_days)
+        if days not in {1, 3, 7, 14, 30}:
+            raise ValueError("Invalid expedition range.")
+        await self.db.execute(
+            """UPDATE galaxy_users
+               SET auto_navigation = ?, expedition_days = ?, updated_at = ?
+               WHERE discord_user_id = ?""",
+            (1 if auto_navigation else 0, days, time.time(), int(discord_user_id)),
+        )
+        await self.db.commit()
+        return await self.galaxy_get_profile(discord_user_id)
 
     async def galaxy_start_listen(
         self,

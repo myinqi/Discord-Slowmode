@@ -51,8 +51,9 @@ rate-limited Discord actions.
 8. Pressing Play starts the audio and the flight.
 9. The ship reaches the target exactly when the audio ends and then continuously
    orbits the moving planet.
-10. Auto-navigation leaves the ship in a short, visible arrival orbit before selecting
-    the next older song, unless the user selects another planet.
+10. Per-user auto-navigation is enabled by default and leaves the ship in a short,
+    visible arrival orbit before selecting the next older song. If disabled, the ship
+    remains in orbit until the user selects another planet.
 11. Valid listening heartbeats accumulate eligible seconds and credits.
 12. A qualifying completion queues the configured bot reaction for the original
     showcase message.
@@ -80,13 +81,12 @@ velocity; seeking backward decreases it. The route ends tangentially at an orbit
 entry point. The `ended` event transitions the ship into a 20-second elliptical orbit
 which follows the planet as it moves around the star.
 
-The Raven is a free starter hull and uses the Klangtresor raven vector model: powered
-transit has animated wingbeats, while the arrival orbit switches to a slower gliding
-motion with a violet aura and feather particles. Reduced-motion mode parks the Raven
-on its orbit and suppresses particles. Other hulls retain the standard spacecraft
-rendering.
+The purchasable Raven hull uses the Klangtresor raven vector model: powered transit
+has animated wingbeats, while the arrival orbit switches to a slower gliding motion
+with a violet aura and feather particles. Reduced-motion mode parks the Raven on its
+orbit and suppresses particles. Other hulls retain the standard spacecraft rendering.
 
-The side panel shows the selected song's CDN artwork immediately. A cached Galaxy
+The top-right map overlay shows the selected song's CDN artwork immediately. A cached Galaxy
 metadata request uses the same Suno embed fields as the existing Suno Player and
 replaces the artwork with the muted looping `video_cover_url` when one is available.
 
@@ -254,6 +254,8 @@ lifetime_credits
 selected_hull
 selected_trail
 selected_scanner
+auto_navigation
+expedition_days
 created_at
 updated_at
 last_seen_at
@@ -363,9 +365,11 @@ POST /galaxy/api/listens/start
 POST /galaxy/api/listens/heartbeat
 POST /galaxy/api/listens/complete
 GET  /galaxy/api/profile
+GET  /galaxy/api/media/<uuid>
 GET  /galaxy/api/shop
 POST /galaxy/api/shop/buy
 POST /galaxy/api/loadout
+POST /galaxy/api/preferences
 ```
 
 JSON responses expose only validated, bounded fields. Expedition tokens are random and
