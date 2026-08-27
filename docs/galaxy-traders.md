@@ -56,7 +56,8 @@ rate-limited Discord actions.
     remains in orbit until the user selects another planet.
 11. Valid listening heartbeats accumulate eligible seconds and credits.
 12. A qualifying completion queues the configured bot reaction for the original
-    showcase message.
+    showcase message and records the listener's Discord display name in the shared
+    song reaction thread under a separate **Galaxy Player** heading.
 13. Credits can be spent on ship hulls, engine trails and scanner effects.
 
 ## Travel synchronization
@@ -346,6 +347,18 @@ last_error
 created_at
 updated_at
 UNIQUE(message_id, emoji_id)
+```
+
+### `galaxy_player_song_reactions`
+
+```text
+message_id
+channel_id
+discord_user_id
+discord_display_name
+emoji_id
+reacted_at
+PRIMARY KEY(message_id, discord_user_id, emoji_id)
 ```
 
 Settings continue to use the existing generic `settings` table with a `galaxy_` prefix.

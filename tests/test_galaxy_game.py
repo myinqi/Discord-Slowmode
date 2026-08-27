@@ -132,6 +132,10 @@ class GalaxyDatabaseTests(unittest.IsolatedAsyncioTestCase):
             "SELECT COUNT(*) FROM galaxy_reaction_jobs"
         ) as cursor:
             self.assertEqual((await cursor.fetchone())[0], 1)
+        galaxy_reactions = await self.db.get_galaxy_player_song_reactions(99)
+        self.assertEqual(len(galaxy_reactions), 1)
+        self.assertEqual(galaxy_reactions[0]["discord_display_name"], "Explorer")
+        self.assertEqual(galaxy_reactions[0]["emoji_id"], 123)
 
     async def test_transactional_shop_and_loadout(self):
         self.assertFalse(await self.db.galaxy_set_loadout(42, "hull", "raven"))

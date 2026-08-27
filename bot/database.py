@@ -6837,6 +6837,16 @@ class Database:
                 updated_at REAL NOT NULL DEFAULT (unixepoch()),
                 UNIQUE (message_id, emoji_id)
             );
+            CREATE TABLE IF NOT EXISTS galaxy_player_song_reactions (
+                message_id INTEGER NOT NULL,
+                channel_id INTEGER NOT NULL,
+                discord_user_id INTEGER NOT NULL,
+                discord_display_name TEXT NOT NULL,
+                emoji_id INTEGER NOT NULL,
+                reacted_at REAL NOT NULL DEFAULT (unixepoch()),
+                PRIMARY KEY (message_id, discord_user_id, emoji_id),
+                FOREIGN KEY (discord_user_id) REFERENCES galaxy_users(discord_user_id) ON DELETE CASCADE
+            );
             CREATE INDEX IF NOT EXISTS idx_galaxy_expeditions_user
                 ON galaxy_expeditions(discord_user_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_galaxy_expeditions_expiry
@@ -6849,6 +6859,8 @@ class Database:
                 ON galaxy_credit_ledger(discord_user_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_galaxy_reaction_jobs_status
                 ON galaxy_reaction_jobs(status, updated_at);
+            CREATE INDEX IF NOT EXISTS idx_galaxy_player_reactions_message
+                ON galaxy_player_song_reactions(message_id, reacted_at);
         """)
         async with self.db.execute("PRAGMA table_info(galaxy_listens)") as cursor:
             galaxy_listen_columns = {row["name"] for row in await cursor.fetchall()}
@@ -7096,6 +7108,18 @@ class Database:
         await self.db.commit()
         return await self.galaxy_get_profile(discord_user_id)
 
+    async def get_galaxy_player_song_reactions(self, message_id: int) -> list[dict]:
+        async with self.db.execute(
+            """SELECT discord_user_id, MAX(discord_display_name) AS discord_display_name,
+                      emoji_id, MAX(reacted_at) AS reacted_at
+               FROM galaxy_player_song_reactions
+               WHERE message_id = ?
+               GROUP BY discord_user_id, emoji_id
+               ORDER BY reacted_at, discord_display_name COLLATE NOCASE""",
+            (int(message_id),),
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
     async def galaxy_start_listen(
         self,
         *,
@@ -7127,6 +7151,16 @@ class Database:
             (int(expedition_id), int(message_id)),
         ) as cursor:
             return dict(await cursor.fetchone())
+
+    async def galaxy_get_listen(
+        self, listen_id: int, discord_user_id: int
+    ) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM galaxy_listens WHERE id = ? AND discord_user_id = ?",
+            (int(listen_id), int(discord_user_id)),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return dict(row) if row else None
 
     async def galaxy_heartbeat_listen(
         self,
@@ -7276,9 +7310,26 @@ class Database:
                     )
             if reaction_emoji_id:
                 await self.db.execute(
-                    """INSERT OR IGNORE INTO galaxy_reaction_jobs
+                    """INSERT INTO galaxy_player_song_reactions
+                           (message_id, channel_id, discord_user_id,
+                            discord_display_name, emoji_id, reacted_at)
+                       SELECT ?, ?, discord_user_id, discord_name, ?, ?
+                       FROM galaxy_users WHERE discord_user_id = ?
+                       ON CONFLICT(message_id, discord_user_id, emoji_id) DO UPDATE SET
+                           discord_display_name = excluded.discord_display_name,
+                           reacted_at = excluded.reacted_at""",
+                    (
+                        int(listen["message_id"]), int(listen["channel_id"]),
+                        int(reaction_emoji_id), now, int(discord_user_id),
+                    ),
+                )
+                await self.db.execute(
+                    """INSERT INTO galaxy_reaction_jobs
                            (message_id, channel_id, emoji_id, created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?)""",
+                       VALUES (?, ?, ?, ?, ?)
+                       ON CONFLICT(message_id, emoji_id) DO UPDATE SET
+                           status = 'pending', attempts = 0, last_error = '',
+                           updated_at = excluded.updated_at""",
                     (
                         int(listen["message_id"]), int(listen["channel_id"]),
                         int(reaction_emoji_id), now, now,

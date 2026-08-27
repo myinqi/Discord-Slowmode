@@ -4314,9 +4314,13 @@ def create_app(db: Database, bot=None) -> Quart:
             return {"error": "rate_limited"}, 429
         data = await request.get_json(silent=True) or {}
         try:
+            listen_id = int(data.get("listen_id"))
+            listen = await db.galaxy_get_listen(
+                listen_id, int(identity["discord_user_id"])
+            )
             emoji_id = int(await db.get_setting("galaxy_reaction_emoji_id") or 0) if (await db.get_setting("galaxy_reaction_enabled") or "off") == "on" else 0
             ok, credits, message = await db.galaxy_complete_listen(
-                listen_id=int(data.get("listen_id")),
+                listen_id=listen_id,
                 discord_user_id=int(identity["discord_user_id"]),
                 minimum_seconds=int(await db.get_setting("galaxy_min_listen_seconds") or "30"),
                 minimum_percent=int(await db.get_setting("galaxy_min_listen_percent") or "70") / 100.0,
@@ -4329,7 +4333,30 @@ def create_app(db: Database, bot=None) -> Quart:
             )
         except (TypeError, ValueError):
             return {"error": "invalid_listen"}, 400
-        return {"ok": ok, "credits": credits, "message": message, "profile": await db.galaxy_get_profile(int(identity["discord_user_id"]))}, (200 if ok else 409)
+        thread_ok, thread_error = None, None
+        if ok and emoji_id and listen:
+            song_post = await db.get_song_post_by_message_id(int(listen["message_id"]))
+            if song_post:
+                lock = app.player_reaction_locks.setdefault(
+                    int(listen["message_id"]), asyncio.Lock()
+                )
+                try:
+                    async with lock:
+                        thread_ok, thread_error = await _update_player_reaction_summary(song_post)
+                except Exception as exc:
+                    thread_ok, thread_error = False, str(exc)[:500]
+                if not thread_ok:
+                    print(f"[galaxy-react] {thread_error}", flush=True)
+            else:
+                thread_ok, thread_error = False, "Unknown song message"
+        return {
+            "ok": ok,
+            "credits": credits,
+            "message": message,
+            "profile": await db.galaxy_get_profile(int(identity["discord_user_id"])),
+            "thread": thread_ok,
+            "warning": thread_error,
+        }, (200 if ok else 409)
 
     @app.route("/galaxy/api/shop")
     async def galaxy_api_shop():
@@ -5006,6 +5033,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 return False, f"Could not reopen reaction thread: {exc}"
 
         reactions = await db.get_player_song_reactions(message_id)
+        galaxy_reactions = await db.get_galaxy_player_song_reactions(message_id)
         grouped = {emoji: [] for emoji in PLAYER_REACTION_EMOJIS}
         for reaction in reactions:
             display_name = re.sub(
@@ -5023,15 +5051,30 @@ def create_app(db: Database, bot=None) -> Quart:
                 suffix = f" +{more} more" if more else ""
                 compact_parts.append(f"{emoji} {names[0]}{suffix}")
 
+        lines = []
         if compact_parts:
-            lines = [f"**Player reactions** {' · '.join(compact_parts)}"]
+            lines.append(f"**Player reactions** {' · '.join(compact_parts)}")
             if any(len(names) > 1 for names in grouped.values()):
                 lines.extend(["", "**All reactions**"])
                 for emoji in PLAYER_REACTION_EMOJIS:
                     names = grouped.get(emoji) or []
                     if names:
                         lines.append(f"{emoji} {', '.join(names)}")
-        else:
+        galaxy_grouped = {}
+        for reaction in galaxy_reactions:
+            custom_emoji = guild.get_emoji(int(reaction["emoji_id"]))
+            emoji_text = str(custom_emoji) if custom_emoji else "🪐"
+            display_name = discord.utils.escape_markdown(
+                re.sub(r"\s+", " ", reaction["discord_display_name"]).strip()
+            )
+            galaxy_grouped.setdefault(emoji_text, []).append(display_name)
+        if galaxy_grouped:
+            if lines:
+                lines.append("")
+            lines.append("**Galaxy Player**")
+            for emoji_text, names in galaxy_grouped.items():
+                lines.append(f"{emoji_text} {', '.join(names)}")
+        if not lines:
             lines = ["**Player reactions** No Player reactions yet."]
         summary = "\n".join(lines)
         if len(summary) > 1950:
