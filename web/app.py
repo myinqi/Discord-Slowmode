@@ -4095,6 +4095,31 @@ def create_app(db: Database, bot=None) -> Quart:
             return {"error": "forbidden"}, 403
         return {"profile": await db.galaxy_get_profile(int(identity["discord_user_id"]))}
 
+    @app.route("/galaxy/api/media/<uuid>")
+    async def galaxy_api_media(uuid):
+        identity = await _galaxy_api_user()
+        if not identity:
+            return {"error": "forbidden"}, 403
+        uuid = str(uuid or "").lower()
+        if not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", uuid):
+            return {"error": "invalid_uuid"}, 400
+        async with app.galaxy_metadata_lock:
+            now = time.monotonic()
+            cached = app.galaxy_metadata_cache.get(uuid) or {}
+            if now - float(cached.get("media_checked_at") or 0) >= 3600:
+                meta = await _fetch_suno_meta(uuid)
+                cached = {
+                    **cached,
+                    "media_checked_at": now,
+                    "image_url": meta.get("image_url") or f"https://cdn1.suno.ai/image_large_{uuid}.jpeg",
+                    "video_url": meta.get("video_url") or None,
+                }
+                app.galaxy_metadata_cache[uuid] = cached
+        return {
+            "image_url": cached.get("image_url") or f"https://cdn1.suno.ai/image_large_{uuid}.jpeg",
+            "video_url": cached.get("video_url"),
+        }
+
     @app.route("/galaxy/api/expeditions", methods=["POST"])
     async def galaxy_api_create_expedition():
         identity = await _galaxy_api_user()
@@ -4174,6 +4199,7 @@ def create_app(db: Database, bot=None) -> Quart:
                     for song in unresolved:
                         resolved_title = str(song.get("title") or "").strip()
                         app.galaxy_metadata_cache[song["uuid"]] = {
+                            **(app.galaxy_metadata_cache.get(song["uuid"]) or {}),
                             "checked_at": checked_at,
                             "title": resolved_title,
                         }

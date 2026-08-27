@@ -86,6 +86,10 @@ motion with a violet aura and feather particles. Reduced-motion mode parks the R
 on its orbit and suppresses particles. Other hulls retain the standard spacecraft
 rendering.
 
+The side panel shows the selected song's CDN artwork immediately. A cached Galaxy
+metadata request uses the same Suno embed fields as the existing Suno Player and
+replaces the artwork with the muted looping `video_cover_url` when one is available.
+
 When a tab resumes after browser throttling, the route is recalculated from
 `audio.currentTime`; the server is never asked to update animation frames.
 
