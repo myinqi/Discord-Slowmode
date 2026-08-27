@@ -50,7 +50,8 @@ rate-limited Discord actions.
 7. The ship starts at a neutral station and the newest song planet is selected.
 8. Pressing Play starts the audio and the flight.
 9. The ship reaches the target exactly when the audio ends and then continuously
-   orbits the moving planet.
+   orbits the moving planet. Reached planets, their rings and labels are desaturated
+   for the remainder of the expedition so unexplored destinations remain obvious.
 10. Per-user auto-navigation is enabled by default and leaves the ship in a short,
     visible arrival orbit before selecting the next older song. If disabled, the ship
     remains in orbit until the user selects another planet.
