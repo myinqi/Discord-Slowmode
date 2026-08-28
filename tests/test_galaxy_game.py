@@ -433,10 +433,13 @@ class GalaxyRouteTests(unittest.IsolatedAsyncioTestCase):
         self.app.galaxy_metadata_cache[song_uuid] = {
             "media_checked_at": time.monotonic(),
             "audio_url": audio_url,
+            "audio_encrypted": True,
         }
         response = await self.client.get(f"/galaxy/api/media/{song_uuid}")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual((await response.get_json())["audio_url"], audio_url)
+        payload = await response.get_json()
+        self.assertEqual(payload["audio_url"], audio_url)
+        self.assertTrue(payload["audio_encrypted"])
 
 
 if __name__ == "__main__":

@@ -148,9 +148,11 @@ large existing templates.
 ## Audio-source boundary
 
 Galaxy resolves the current UUID-specific MP3/M4A asset from Suno's embed metadata
-(`media_urls`) when a planet is selected. The result is cached for one hour; legacy
-`cdn1.suno.ai` UUID paths remain fallbacks only. This keeps bandwidth away from Corax
-but still depends on external, undocumented paths, CORS behavior and applicable terms.
+(`media_urls`) when a planet is selected. Current encoded media is decrypted client-side
+with an anonymous, short-lived Suno playback license using the same AES-GCM/AES-CTR flow
+as Suno's web player. The result is cached for one hour; legacy `cdn1.suno.ai` UUID paths
+remain fallbacks only. Audio bytes still flow directly from Suno to the listener's browser,
+not through Corax. This depends on external, undocumented paths, CORS behavior and terms.
 Galaxy audio access stays wrapped behind a source descriptor:
 
 ```json

@@ -4194,13 +4194,46 @@ def create_app(db: Database, bot=None) -> Quart:
                     "image_url": meta.get("image_url") or f"https://cdn1.suno.ai/image_large_{uuid}.jpeg",
                     "video_url": meta.get("video_url") or None,
                     "audio_url": meta.get("audio_url") or None,
+                    "audio_encrypted": bool(meta.get("audio_encrypted")),
                 }
                 app.galaxy_metadata_cache[uuid] = cached
         return {
             "image_url": cached.get("image_url") or f"https://cdn1.suno.ai/image_large_{uuid}.jpeg",
             "video_url": cached.get("video_url"),
             "audio_url": cached.get("audio_url"),
+            "audio_encrypted": bool(cached.get("audio_encrypted")),
         }
+
+    @app.route("/galaxy/api/audio-license/<uuid>")
+    async def galaxy_api_audio_license(uuid):
+        identity = await _galaxy_api_user()
+        if not identity:
+            return {"error": "forbidden"}, 403
+        uuid = str(uuid or "").lower()
+        if not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", uuid):
+            return {"error": "invalid_uuid"}, 400
+        if not _galaxy_rate_allowed(int(identity["discord_user_id"]), "audio_license", 30, 60):
+            return {"error": "rate_limited"}, 429
+        try:
+            async with aiohttp.ClientSession() as suno_session:
+                async with suno_session.post(
+                    "https://studio-api.prod.suno.com/api/mango/rights",
+                    json={"content_params": {"content_id": uuid, "content_type": "clip"}},
+                    headers={
+                        "Origin": "https://suno.com",
+                        "Referer": f"https://suno.com/song/{uuid}",
+                        "User-Agent": "Mozilla/5.0",
+                    },
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as response:
+                    if response.status != 200:
+                        return {"error": "audio_license_unavailable"}, 502
+                    rights = await response.json(content_type=None)
+        except Exception:
+            return {"error": "audio_license_unavailable"}, 502
+        if not all(isinstance(rights.get(key), str) and rights[key] for key in ("key", "iv", "glt")):
+            return {"error": "invalid_audio_license"}, 502
+        return {"key": rights["key"], "iv": rights["iv"], "glt": rights["glt"]}
 
     @app.route("/galaxy/api/expeditions", methods=["POST"])
     async def galaxy_api_create_expedition():
@@ -5448,6 +5481,7 @@ def create_app(db: Database, bot=None) -> Quart:
         """Shared helper to fetch song metadata from Suno embed page."""
         import aiohttp, re, html as _html
         lyrics = title = image_url = artist = video_url = karaoke_video_url = handle = audio_url = None
+        audio_encrypted = False
         try:
             async with aiohttp.ClientSession() as sess:
                 async with sess.get(
@@ -5598,6 +5632,11 @@ def create_app(db: Database, bot=None) -> Quart:
                     # Current pages expose the playable asset in media_urls,
                     # while audio_url itself may point to /api/forbidden.
                     audio_url = _extract_suno_audio_url(html, uuid)
+                    audio_encrypted = bool(
+                        audio_url
+                        and "cdn1.suno.ai" not in audio_url
+                        and "cdn2.suno.ai" not in audio_url
+                    )
         except Exception:
             pass
         if title:
@@ -5613,6 +5652,7 @@ def create_app(db: Database, bot=None) -> Quart:
             "karaoke_video_url": karaoke_video_url,
             "handle": handle,
             "audio_url": audio_url,
+            "audio_encrypted": audio_encrypted,
         }
 
     async def _fetch_elevenmusic_meta(track_id: str):
