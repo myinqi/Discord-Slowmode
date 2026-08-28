@@ -4185,7 +4185,8 @@ def create_app(db: Database, bot=None) -> Quart:
         async with app.galaxy_metadata_lock:
             now = time.monotonic()
             cached = app.galaxy_metadata_cache.get(uuid) or {}
-            if now - float(cached.get("media_checked_at") or 0) >= 3600:
+            force_refresh = request.args.get("refresh") == "1"
+            if force_refresh or now - float(cached.get("media_checked_at") or 0) >= 3600:
                 meta = await _fetch_suno_meta(uuid)
                 cached = {
                     **cached,
