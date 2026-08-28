@@ -69,6 +69,26 @@ def _extract_suno_audio_url(page_html: str, song_uuid: str) -> str | None:
         candidates[0] if candidates else None,
     )
 
+
+async def _request_suno_audio_license(song_uuid: str) -> dict:
+    async with aiohttp.ClientSession() as suno_session:
+        async with suno_session.post(
+            "https://studio-api.prod.suno.com/api/mango/rights",
+            json={"content_params": {"content_id": song_uuid, "content_type": "clip"}},
+            headers={
+                "Origin": "https://suno.com",
+                "Referer": f"https://suno.com/song/{song_uuid}",
+                "User-Agent": "Mozilla/5.0",
+            },
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as response:
+            if response.status != 200:
+                raise RuntimeError(f"Suno audio license HTTP {response.status}")
+            rights = await response.json(content_type=None)
+    if not all(isinstance(rights.get(key), str) and rights[key] for key in ("key", "iv", "glt")):
+        raise RuntimeError("Invalid Suno audio license")
+    return {"key": rights["key"], "iv": rights["iv"], "glt": rights["glt"]}
+
 _SYSTEM_CPU_SAMPLE = {"timestamp": None, "usage_seconds": None}
 _SYSTEM_CPU_LOCK = threading.Lock()
 
@@ -480,6 +500,7 @@ def create_app(db: Database, bot=None) -> Quart:
     app.trya_dcs_token_rate = {}
     app.trya_dcs_presence = {}
     app.galaxy_api_rate = {}
+    app.suno_playback_rate = {}
     app.galaxy_metadata_cache = {}
     app.galaxy_metadata_lock = asyncio.Lock()
     # Serializes manual starts of both radio managers. The scheduled Exp.
@@ -4005,6 +4026,17 @@ def create_app(db: Database, bot=None) -> Quart:
         app.galaxy_api_rate[key] = recent
         return True
 
+    def _suno_playback_rate_allowed(limit: int = 30, window: float = 60) -> bool:
+        now = time.monotonic()
+        key = str(request.remote_addr or "unknown")
+        recent = [stamp for stamp in app.suno_playback_rate.get(key, []) if now - stamp < window]
+        if len(recent) >= limit:
+            app.suno_playback_rate[key] = recent
+            return False
+        recent.append(now)
+        app.suno_playback_rate[key] = recent
+        return True
+
     @app.route("/galaxy")
     async def galaxy_home():
         if (await db.get_setting("galaxy_enabled") or "off") != "on":
@@ -4215,25 +4247,42 @@ def create_app(db: Database, bot=None) -> Quart:
         if not _galaxy_rate_allowed(int(identity["discord_user_id"]), "audio_license", 30, 60):
             return {"error": "rate_limited"}, 429
         try:
-            async with aiohttp.ClientSession() as suno_session:
-                async with suno_session.post(
-                    "https://studio-api.prod.suno.com/api/mango/rights",
-                    json={"content_params": {"content_id": uuid, "content_type": "clip"}},
-                    headers={
-                        "Origin": "https://suno.com",
-                        "Referer": f"https://suno.com/song/{uuid}",
-                        "User-Agent": "Mozilla/5.0",
-                    },
-                    timeout=aiohttp.ClientTimeout(total=10),
-                ) as response:
-                    if response.status != 200:
-                        return {"error": "audio_license_unavailable"}, 502
-                    rights = await response.json(content_type=None)
+            rights = await _request_suno_audio_license(uuid)
         except Exception:
             return {"error": "audio_license_unavailable"}, 502
-        if not all(isinstance(rights.get(key), str) and rights[key] for key in ("key", "iv", "glt")):
-            return {"error": "invalid_audio_license"}, 502
-        return {"key": rights["key"], "iv": rights["iv"], "glt": rights["glt"]}
+        return rights
+
+    @app.route("/api/suno-playback/<uuid>")
+    @app.route("/public/api/suno-playback/<uuid>")
+    async def api_suno_playback(uuid):
+        uuid = str(uuid or "").lower()
+        if not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", uuid):
+            return {"error": "invalid_uuid"}, 400
+        if not _suno_playback_rate_allowed():
+            return {"error": "rate_limited"}, 429
+        async with app.galaxy_metadata_lock:
+            now = time.monotonic()
+            cached = app.galaxy_metadata_cache.get(uuid) or {}
+            if now - float(cached.get("media_checked_at") or 0) >= 3600 or not cached.get("audio_url"):
+                meta = await _fetch_suno_meta(uuid)
+                cached = {
+                    **cached,
+                    "media_checked_at": now,
+                    "audio_url": meta.get("audio_url"),
+                    "audio_encrypted": bool(meta.get("audio_encrypted")),
+                }
+                app.galaxy_metadata_cache[uuid] = cached
+        audio_url = cached.get("audio_url")
+        encrypted = bool(cached.get("audio_encrypted"))
+        if not audio_url:
+            return {"error": "audio_source_unavailable"}, 502
+        payload = {"uuid": uuid, "audio_url": audio_url, "encrypted": encrypted}
+        if encrypted:
+            try:
+                payload["license"] = await _request_suno_audio_license(uuid)
+            except Exception:
+                return {"error": "audio_license_unavailable"}, 502
+        return payload
 
     @app.route("/galaxy/api/expeditions", methods=["POST"])
     async def galaxy_api_create_expedition():

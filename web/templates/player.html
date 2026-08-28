@@ -250,6 +250,7 @@
 
 <audio id="player" preload="none" crossorigin="anonymous" style="display:none"></audio>
 
+<script src="{{ url_for('static', filename='suno_playback.js', v='20260829-1') }}"></script>
 <script>
 var T=[], cur=-1, tSec=0, cd=0, tick=null, shuffled=false, shuffleOrder=[];
 var playedSet=new Set(), hidePlayed=false, loadOffset=0, autoloadEnabled=false;
@@ -552,16 +553,8 @@ async function playTrack(uuid,idx){
     var realIdx=getPlayIndex(idx);var e=T[realIdx];
     setArtwork(uuid,e.imageUrl||null,e.videoUrl||null);setSunoLink(uuid);setArtistLink(e.sunoHandle||null);
     updateMediaSession(e,uuid);
-    // Suno is migrating some songs from .mp3 to .m4a (Opus codec).
-    // Try .mp3 first; on error, fall back to .m4a once.
-    player.src='https://cdn1.suno.ai/'+uuid+'.mp3';
     player.oncanplay=function(){setStatus('');};
-    player.onerror=function(){
-        player.onerror=function(){setStatus('⚠ Could not load audio');};
-        player.src='https://cdn1.suno.ai/'+uuid+'.m4a';
-        player.play().catch(function(){setStatus('Press ▶ to play');});
-    };
-    player.play().catch(function(){setStatus('Press ▶ to play');});
+    SunoPlayback.load(player,uuid,{autoplay:true,onStatus:setStatus}).catch(function(error){setStatus('⚠ '+(error.message||'Could not load audio'));});
     updatePlayBtn();
     fetchSunoMeta(uuid).then(function(meta){
         if(!meta||cur!==idx)return;

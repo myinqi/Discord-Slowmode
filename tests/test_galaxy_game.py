@@ -50,6 +50,20 @@ class GalaxyCreditCalculationTests(unittest.TestCase):
         page_html = rf'\"media_urls\":[{{\"url\":\"{current}\"}}] {legacy}'
         self.assertEqual(_extract_suno_audio_url(page_html, song_uuid), current)
 
+    def test_all_suno_players_use_shared_playback_loader(self):
+        project_root = Path(__file__).resolve().parents[1]
+        templates = (
+            project_root / "web/templates/player.html",
+            project_root / "web/templates/player_public.html",
+            project_root / "web/templates/suno_info.html",
+        )
+        for template in templates:
+            source = template.read_text(encoding="utf-8")
+            with self.subTest(template=template.name):
+                self.assertIn("suno_playback.js", source)
+                self.assertIn("SunoPlayback.load", source)
+                self.assertNotRegex(source, r"cdn1\.suno\.ai/['\"]?\s*\+.*\.(?:mp3|m4a)")
+
 
 class GalaxyDatabaseTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):

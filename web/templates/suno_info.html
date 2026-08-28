@@ -534,6 +534,7 @@
 
 <audio id="audio" preload="none" crossorigin="anonymous" style="display:none"></audio>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<script src="{{ url_for('static', filename='suno_playback.js', v='20260829-1') }}"></script>
 
 <!-- Theater mode overlay ------------------------------------------------ -->
 <div id="theater" class="th-root" hidden>
@@ -1621,6 +1622,9 @@ async function playIndex(i){
     if(i<0 || i>=SONGS.length) return;
     CUR = i;
     var s = SONGS[i];
+    // Cancel an in-flight Suno load and release its temporary decrypted blob
+    // before switching to any provider or song.
+    SunoPlayback.release(audio);
     updateSunoInfoReactionVisibility(s);
     // Highlight row + scroll into view if it's outside the visible area.
     var activeTr = null;
@@ -1756,17 +1760,22 @@ async function playIndex(i){
     }
     // Track played
     PLAYED_SET.add(i);
-    // Set audio source & play. Suno is migrating some songs from .mp3 to
-    // .m4a (Opus codec); try .mp3 first, fall back to .m4a on error.
-    audio.src = 'https://cdn1.suno.ai/'+s.uuid+'.mp3';
-    audio.onerror = function(){
-        audio.onerror = null;
-        audio.src = 'https://cdn1.suno.ai/'+s.uuid+'.m4a';
-        audio.play().catch(function(){});
-    };
-    audio.play().catch(function(){});
+    var playButton=document.getElementById('btn-play');
+    playButton.disabled=true;playButton.title='Resolving Suno audio…';
+    SunoPlayback.load(audio,s.uuid,{
+        autoplay:true,
+        onStatus:function(message){playButton.title=message||'Play/Pause';}
+    }).then(function(){
+        if(CUR===i) playButton.disabled=false;
+    }).catch(function(error){
+        if(CUR!==i) return;
+        playButton.disabled=false;
+        playButton.title=error.message||'Could not load audio';
+        document.getElementById('lyrics-box').innerHTML=
+            '<div style="color:#b66;font-size:13px">Suno audio could not be loaded: '+
+            esc(error.message||'unknown error')+'</div>';
+    });
     updateNavBtns();
-    document.getElementById('btn-play').disabled = false;
     // Optimistic UI from playlist data
     setNowPlaying({
         uuid: s.uuid,
