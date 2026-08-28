@@ -147,16 +147,17 @@ large existing templates.
 
 ## Audio-source boundary
 
-The current Suno Player loads UUID-based audio directly from Suno CDN with MP3 and M4A
-fallback. This keeps bandwidth away from Corax but depends on an external,
-undocumented path, CORS behavior and applicable terms. Galaxy audio access must be
-wrapped behind a source descriptor so an allowed alternative can replace it later:
+Galaxy resolves the current UUID-specific MP3/M4A asset from Suno's embed metadata
+(`media_urls`) when a planet is selected. The result is cached for one hour; legacy
+`cdn1.suno.ai` UUID paths remain fallbacks only. This keeps bandwidth away from Corax
+but still depends on external, undocumented paths, CORS behavior and applicable terms.
+Galaxy audio access stays wrapped behind a source descriptor:
 
 ```json
 {
   "kind": "suno",
-  "primary": "https://cdn1.suno.ai/<uuid>.mp3",
-  "fallback": "https://cdn1.suno.ai/<uuid>.m4a"
+  "primary": "<current media_urls asset>",
+  "fallback": "https://cdn1.suno.ai/<uuid>.mp3"
 }
 ```
 

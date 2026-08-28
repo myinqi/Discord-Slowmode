@@ -41,6 +41,15 @@ class GalaxyCreditCalculationTests(unittest.TestCase):
         self.assertLess(tiny_seek, complete)
         self.assertEqual(large_seek, 80)
 
+    def test_current_suno_audio_asset_is_preferred_over_legacy_cdn(self):
+        from web.app import _extract_suno_audio_url
+
+        song_uuid = "d5cb3c90-dc11-4d79-9553-3fe1fcdf4e8c"
+        current = f"https://audio.example/1/clip/{song_uuid}.m4a"
+        legacy = f"https://cdn1.suno.ai/{song_uuid}.mp3"
+        page_html = rf'\"media_urls\":[{{\"url\":\"{current}\"}}] {legacy}'
+        self.assertEqual(_extract_suno_audio_url(page_html, song_uuid), current)
+
 
 class GalaxyDatabaseTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -417,6 +426,17 @@ class GalaxyRouteTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.get("/galaxy")
         self.assertEqual(response.status_code, 200)
         self.assertIn("Galaxy_emoji.png", await response.get_data(as_text=True))
+
+    async def test_galaxy_media_returns_resolved_audio_url(self):
+        song_uuid = "39a09dfb-bf72-4852-b813-49c3a02d3aaa"
+        audio_url = f"https://audio.example/1/clip/{song_uuid}.m4a"
+        self.app.galaxy_metadata_cache[song_uuid] = {
+            "media_checked_at": time.monotonic(),
+            "audio_url": audio_url,
+        }
+        response = await self.client.get(f"/galaxy/api/media/{song_uuid}")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual((await response.get_json())["audio_url"], audio_url)
 
 
 if __name__ == "__main__":

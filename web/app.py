@@ -48,6 +48,27 @@ ELEVENMUSIC_TRACK_RE = re.compile(
     r'(?:https?://)?(?:www\.)?elevenmusic\.io/tracks/([A-Fa-f0-9]{24})'
 )
 
+
+def _extract_suno_audio_url(page_html: str, song_uuid: str) -> str | None:
+    """Return Suno's current playable asset, preferring non-legacy CDNs."""
+    candidates = [
+        candidate.replace(r"\/", "/")
+        for candidate in re.findall(
+            r'https://[^"\\\s]+\.(?:mp3|m4a)(?:\?[^"\\\s]*)?',
+            page_html or "",
+            flags=re.I,
+        )
+        if song_uuid in candidate
+    ]
+    return next(
+        (
+            candidate for candidate in candidates
+            if "cdn1.suno.ai" not in candidate
+            and "cdn2.suno.ai" not in candidate
+        ),
+        candidates[0] if candidates else None,
+    )
+
 _SYSTEM_CPU_SAMPLE = {"timestamp": None, "usage_seconds": None}
 _SYSTEM_CPU_LOCK = threading.Lock()
 
@@ -4171,11 +4192,13 @@ def create_app(db: Database, bot=None) -> Quart:
                     "media_checked_at": now,
                     "image_url": meta.get("image_url") or f"https://cdn1.suno.ai/image_large_{uuid}.jpeg",
                     "video_url": meta.get("video_url") or None,
+                    "audio_url": meta.get("audio_url") or None,
                 }
                 app.galaxy_metadata_cache[uuid] = cached
         return {
             "image_url": cached.get("image_url") or f"https://cdn1.suno.ai/image_large_{uuid}.jpeg",
             "video_url": cached.get("video_url"),
+            "audio_url": cached.get("audio_url"),
         }
 
     @app.route("/galaxy/api/expeditions", methods=["POST"])
@@ -5423,7 +5446,7 @@ def create_app(db: Database, bot=None) -> Quart:
     async def _fetch_suno_meta(uuid):
         """Shared helper to fetch song metadata from Suno embed page."""
         import aiohttp, re, html as _html
-        lyrics = title = image_url = artist = video_url = karaoke_video_url = handle = None
+        lyrics = title = image_url = artist = video_url = karaoke_video_url = handle = audio_url = None
         try:
             async with aiohttp.ClientSession() as sess:
                 async with sess.get(
@@ -5569,6 +5592,11 @@ def create_app(db: Database, bot=None) -> Quart:
                         m = re.search(r'"handle"\s*:\s*"([^"]+)"', html)
                     if m:
                         handle = m.group(1)
+
+                    # Suno's legacy cdn1 UUID paths now commonly return 403.
+                    # Current pages expose the playable asset in media_urls,
+                    # while audio_url itself may point to /api/forbidden.
+                    audio_url = _extract_suno_audio_url(html, uuid)
         except Exception:
             pass
         if title:
@@ -5583,6 +5611,7 @@ def create_app(db: Database, bot=None) -> Quart:
             "video_url": video_url,
             "karaoke_video_url": karaoke_video_url,
             "handle": handle,
+            "audio_url": audio_url,
         }
 
     async def _fetch_elevenmusic_meta(track_id: str):
