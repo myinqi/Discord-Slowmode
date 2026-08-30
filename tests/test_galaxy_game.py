@@ -50,6 +50,19 @@ class GalaxyCreditCalculationTests(unittest.TestCase):
         page_html = rf'\"media_urls\":[{{\"url\":\"{current}\"}}] {legacy}'
         self.assertEqual(_extract_suno_audio_url(page_html, song_uuid), current)
 
+    def test_suno_handle_is_resolved_from_the_requested_song(self):
+        from web.app import _extract_suno_clip_owner_handle
+
+        requested = "d5cb3c90-dc11-4d79-9553-3fe1fcdf4e8c"
+        other = "6e52cf91-927b-4d5e-9a66-aa2ebf739f07"
+        page = (
+            f'{{"id":"{other}","user_id":"1","handle":"wrong_user"}}'
+            f'{{"id":"{requested}","user_id":"2","handle":"right_user"}}'
+        )
+        self.assertEqual(
+            _extract_suno_clip_owner_handle(page, requested), "right_user"
+        )
+
     def test_all_suno_players_use_shared_playback_loader(self):
         project_root = Path(__file__).resolve().parents[1]
         templates = (

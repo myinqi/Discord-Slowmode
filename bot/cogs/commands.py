@@ -6,7 +6,7 @@ import asyncio
 import io
 import os
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from zoneinfo import ZoneInfo
 import aiohttp
 import discord
@@ -1849,9 +1849,12 @@ class CommandsCog(commands.Cog):
         view = PollSelectView(self.bot, active_polls)
         await interaction.response.send_message("Select a poll to edit:", view=view, ephemeral=True)
 
-    @app_commands.command(name="player", description="Post the link to the Suno web player")
+    @app_commands.command(name="player", description="Show the Suno Player and Galaxy Expeditions")
     async def player_cmd(self, interaction: discord.Interaction):
-        player_url = await self.bot.db.get_setting("player_url")
+        player_url = str(await self.bot.db.get_setting("player_url") or "").strip()
+        public_base = str(getattr(self.bot, "web_url", "") or "").rstrip("/")
+        if not player_url and public_base:
+            player_url = f"{public_base}/public/player"
         if not player_url:
             await interaction.response.send_message(
                 "The player URL is not configured yet. An admin needs to set it in **Settings** on the web interface.",
@@ -1859,12 +1862,40 @@ class CommandsCog(commands.Cog):
             )
             return
 
+        if public_base:
+            galaxy_url = f"{public_base}/galaxy"
+        else:
+            parsed_player_url = urlsplit(player_url)
+            galaxy_url = (
+                f"{parsed_player_url.scheme}://{parsed_player_url.netloc}/galaxy"
+                if parsed_player_url.scheme in {"http", "https"} and parsed_player_url.netloc
+                else ""
+            )
+
         bot_name = await self.bot.db.get_setting("bot_name") or "Slowmode Bot"
         embed = discord.Embed(
-            title="🎵 Suno Web Player",
-            description=f"Listen to all posted songs directly in your browser!\n\n**[▶ Open Player]({player_url})**",
+            title="🎵 Choose your player",
+            description="Two ways to explore the songs posted in our showcase channels:",
             color=discord.Color.purple(),
         )
+        embed.add_field(
+            name="🎵 Suno Player",
+            value=(
+                "The classic player for browsing playlists and listening directly.\n"
+                f"**[▶ Open Suno Player]({player_url})**"
+            ),
+            inline=False,
+        )
+        if galaxy_url:
+            embed.add_field(
+                name="🌌 Galaxy Expeditions",
+                value=(
+                    "The game-like player: fly between song planets, complete listens, "
+                    "earn credits and unlock ship upgrades.\n"
+                    f"**[🚀 Open Galaxy Player]({galaxy_url})**"
+                ),
+                inline=False,
+            )
         embed.set_footer(text=bot_name)
         embed.timestamp = discord.utils.utcnow()
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -2064,7 +2095,7 @@ class CommandsCog(commands.Cog):
 
         # Utility & Fun (all users)
         utility_cmds = (
-            "**`/player`** — Post the link to the Suno web player\n"
+            "**`/player`** — Open the classic Suno Player or Galaxy Expeditions\n"
             "**`/talk [translate] <text>`** — Bot speaks your message in channel\n"
             "**`/translate <to> <text>`** — Translate text privately\n"
             "**`/imageposting <category> [title]`** — Post an image from the library\n"

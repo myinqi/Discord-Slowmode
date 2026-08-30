@@ -318,6 +318,22 @@ def _extract_suno_clip_owner_display_name(page: str, song_id: str | None = None)
     return None
 
 
+def _extract_suno_clip_owner_handle(page: str, song_id: str) -> str | None:
+    id_part = re.escape(song_id)
+    patterns = [
+        rf'\\"id\\":\\"{id_part}\\".*?\\"user_id\\":\\"[^"\\]+\\".*?\\"handle\\":\\"([^"\\]+)\\"',
+        rf'"id"\s*:\s*"{id_part}".*?"user_id"\s*:\s*"[^"]+".*?"handle"\s*:\s*"([^"\\]+)"',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, page, re.S)
+        if not match:
+            continue
+        handle = _decode_suno_json_string(match.group(1)).lstrip("@").strip()
+        if re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", handle):
+            return handle
+    return None
+
+
 async def _rpg_import_enemies(db, raw_json: str, _json) -> tuple[int, list[str]]:
     """Validate + bulk-upsert enemies from a JSON payload.
 
@@ -4227,6 +4243,8 @@ def create_app(db: Database, bot=None) -> Quart:
                     "media_checked_at": now,
                     "image_url": meta.get("image_url") or f"https://cdn1.suno.ai/image_large_{uuid}.jpeg",
                     "video_url": meta.get("video_url") or None,
+                    "suno_artist": meta.get("artist") or None,
+                    "suno_handle": meta.get("handle") or None,
                     "audio_url": meta.get("audio_url") or None,
                     "audio_encrypted": bool(meta.get("audio_encrypted")),
                 }
@@ -4234,6 +4252,8 @@ def create_app(db: Database, bot=None) -> Quart:
         return {
             "image_url": cached.get("image_url") or f"https://cdn1.suno.ai/image_large_{uuid}.jpeg",
             "video_url": cached.get("video_url"),
+            "suno_artist": cached.get("suno_artist"),
+            "suno_handle": cached.get("suno_handle"),
             "audio_url": cached.get("audio_url"),
             "audio_encrypted": bool(cached.get("audio_encrypted")),
         }
@@ -4270,6 +4290,10 @@ def create_app(db: Database, bot=None) -> Quart:
                 cached = {
                     **cached,
                     "media_checked_at": now,
+                    "image_url": meta.get("image_url"),
+                    "video_url": meta.get("video_url"),
+                    "suno_artist": meta.get("artist"),
+                    "suno_handle": meta.get("handle"),
                     "audio_url": meta.get("audio_url"),
                     "audio_encrypted": bool(meta.get("audio_encrypted")),
                 }
@@ -4310,6 +4334,7 @@ def create_app(db: Database, bot=None) -> Quart:
             return {"error": "channel_not_allowed"}, 403
         from bot.suno_urls import extract_suno_uuid
         rows = await db.get_player_songs(channel_id=channel_id, limit=min(500, limit * 5), offset=0)
+        guild = get_guild()
         cutoff = time.time() - days * 86400
         songs = []
         for row in rows:
@@ -4326,6 +4351,19 @@ def create_app(db: Database, bot=None) -> Quart:
             stored_title = str(row.get("song_title") or "").strip()
             if stored_title.lower() in {"unknown song", "unknown title"}:
                 stored_title = ""
+            discord_handle = str(row.get("user_name") or "").strip()
+            discord_display_name = discord_handle or "Unknown artist"
+            try:
+                member = guild.get_member(int(row.get("user_id") or 0)) if guild else None
+            except (TypeError, ValueError):
+                member = None
+            if member:
+                discord_display_name = (
+                    getattr(member, "display_name", None)
+                    or getattr(member, "global_name", None)
+                    or getattr(member, "name", None)
+                    or discord_display_name
+                )
             songs.append({
                 "message_id": str(row["message_id"]),
                 "channel_id": str(row["channel_id"]),
@@ -4333,7 +4371,9 @@ def create_app(db: Database, bot=None) -> Quart:
                 "uuid": uuid,
                 "url": f"https://suno.com/song/{uuid}",
                 "title": stored_title,
-                "artist": row.get("user_name") or "Unknown artist",
+                "artist": discord_display_name,
+                "discord_display_name": discord_display_name,
+                "discord_handle": discord_handle,
                 "posted_at": float(row.get("posted_at") or 0),
                 "reaction_count": int(row.get("reaction_count") or 0),
                 "audio_primary": f"https://cdn1.suno.ai/{uuid}.mp3",
@@ -5686,12 +5726,9 @@ def create_app(db: Database, bot=None) -> Quart:
                     if m:
                         karaoke_video_url = m.group(1).replace("\\/", "/")
 
-                    # Handle (artist URL slug) — first occurrence is the song owner
-                    m = re.search(r'handle\\":\\"([^"\\]+)\\"', html)
-                    if not m:
-                        m = re.search(r'"handle"\s*:\s*"([^"]+)"', html)
-                    if m:
-                        handle = m.group(1)
+                    # Resolve the handle from the same clip object, rather than
+                    # accidentally picking a recommended song's owner.
+                    handle = _extract_suno_clip_owner_handle(html, uuid)
 
                     # Suno's legacy cdn1 UUID paths now commonly return 403.
                     # Current pages expose the playable asset in media_urls,
