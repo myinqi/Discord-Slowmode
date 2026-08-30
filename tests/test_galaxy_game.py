@@ -184,6 +184,8 @@ class GalaxyDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(profile["skip_completed"], 1)
         self.assertEqual(profile["shop_collapsed"], 0)
         self.assertEqual(profile["volume_percent"], 80)
+        self.assertEqual(profile["selected_engine"], "")
+        self.assertEqual(profile["speed_mode"], 0)
         profile = await self.db.galaxy_set_preferences(
             42, auto_navigation=False, expedition_days=14,
             skip_completed=False, shop_collapsed=True, volume_percent=35,
@@ -193,6 +195,7 @@ class GalaxyDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(profile["skip_completed"], 0)
         self.assertEqual(profile["shop_collapsed"], 1)
         self.assertEqual(profile["volume_percent"], 35)
+        self.assertEqual(profile["speed_mode"], 0)
 
     async def test_admin_can_configure_safe_shop_effects(self):
         self.assertTrue(
@@ -208,6 +211,7 @@ class GalaxyDatabaseTests(unittest.IsolatedAsyncioTestCase):
             {"radar", "targeting", "hexgrid"}
             <= set(GALAXY_UPGRADE_EFFECTS["scanner"])
         )
+        self.assertEqual(set(GALAXY_UPGRADE_EFFECTS["engine"]), {"speed"})
         self.assertTrue(await self.db.galaxy_update_upgrade(
             "nebula", name="Aurora", description="Custom hull", price=333,
             enabled=True, effect="cube", color="#12abef",
@@ -244,6 +248,54 @@ class GalaxyDatabaseTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNotNone(carrier)
         self.assertIn('"effect":"battlestar"', carrier["config_json"])
+
+    async def test_editor_created_engine_unlocks_persisted_speed_mode(self):
+        engine = await self.db.galaxy_create_upgrade(
+            category="engine", name="Slipstream Drive",
+            description="Unlocks faster playback.", price=125,
+            enabled=True, effect="speed", color="#8b7cff", playback_rate=1.2,
+        )
+        self.assertIsNotNone(engine)
+        self.assertIn('"playback_rate":1.2', engine["config_json"])
+        self.assertEqual(
+            await self.db.galaxy_get_engine_playback_rate(
+                42, require_speed_mode=False
+            ),
+            1.0,
+        )
+
+        await self.db.db.execute(
+            "UPDATE galaxy_users SET credits = 500 WHERE discord_user_id = 42"
+        )
+        await self.db.db.commit()
+        bought, _ = await self.db.galaxy_buy_upgrade(42, engine["id"])
+        self.assertTrue(bought)
+        self.assertTrue(await self.db.galaxy_set_loadout(42, "engine", engine["id"]))
+        profile = await self.db.galaxy_set_preferences(
+            42, auto_navigation=True, expedition_days=1,
+            skip_completed=True, shop_collapsed=False, volume_percent=80,
+            speed_mode=True,
+        )
+        self.assertEqual(profile["selected_engine"], engine["id"])
+        self.assertEqual(profile["speed_mode"], 1)
+        self.assertAlmostEqual(
+            await self.db.galaxy_get_engine_playback_rate(42), 1.2
+        )
+
+        _, listen = await self._listen(
+            duration=120, token=b"speed-mode", message_id=103
+        )
+        await self.db.db.execute(
+            "UPDATE galaxy_listens SET last_heartbeat_at = ? WHERE id = ?",
+            (time.time() - 10, listen["id"]),
+        )
+        await self.db.db.commit()
+        updated = await self.db.galaxy_heartbeat_listen(
+            listen_id=listen["id"], discord_user_id=42,
+            audio_position=12, paused=False, seeked=False,
+            playback_rate=1.2, maximum_playback_rate=1.2,
+        )
+        self.assertAlmostEqual(updated["eligible_seconds"], 12, delta=.1)
 
     async def test_complete_no_seek_earns_more_than_forward_seek(self):
         _, complete_listen = await self._listen(

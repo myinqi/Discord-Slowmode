@@ -50,6 +50,9 @@ GALAXY_UPGRADE_EFFECTS = {
         "targeting": "Targeting reticle",
         "hexgrid": "Hex-grid scan",
     },
+    "engine": {
+        "speed": "Playback speed unlock",
+    },
 }
 
 
@@ -6787,6 +6790,8 @@ class Database:
                 selected_hull TEXT NOT NULL DEFAULT 'scout',
                 selected_trail TEXT NOT NULL DEFAULT 'ion_blue',
                 selected_scanner TEXT NOT NULL DEFAULT 'pulse',
+                selected_engine TEXT NOT NULL DEFAULT '',
+                speed_mode INTEGER NOT NULL DEFAULT 0,
                 auto_navigation INTEGER NOT NULL DEFAULT 1,
                 expedition_days INTEGER NOT NULL DEFAULT 1,
                 skip_completed INTEGER NOT NULL DEFAULT 1,
@@ -6798,7 +6803,7 @@ class Database:
             );
             CREATE TABLE IF NOT EXISTS galaxy_upgrades (
                 id TEXT PRIMARY KEY,
-                category TEXT NOT NULL CHECK (category IN ('hull','trail','scanner')),
+                category TEXT NOT NULL CHECK (category IN ('hull','trail','scanner','engine')),
                 name TEXT NOT NULL,
                 description TEXT NOT NULL DEFAULT '',
                 price INTEGER NOT NULL CHECK (price >= 0),
@@ -6937,6 +6942,55 @@ class Database:
             await self.db.execute(
                 "ALTER TABLE galaxy_users ADD COLUMN volume_percent INTEGER NOT NULL DEFAULT 80"
             )
+        if "selected_engine" not in galaxy_user_columns:
+            await self.db.execute(
+                "ALTER TABLE galaxy_users ADD COLUMN selected_engine TEXT NOT NULL DEFAULT ''"
+            )
+        if "speed_mode" not in galaxy_user_columns:
+            await self.db.execute(
+                "ALTER TABLE galaxy_users ADD COLUMN speed_mode INTEGER NOT NULL DEFAULT 0"
+            )
+
+        # SQLite cannot extend a CHECK constraint in place. Rebuild only the
+        # upgrade table for installations created before the Engine category.
+        async with self.db.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'galaxy_upgrades'"
+        ) as cursor:
+            upgrade_schema = await cursor.fetchone()
+        if upgrade_schema and "'engine'" not in str(upgrade_schema["sql"] or ""):
+            await self.db.commit()
+            await self.db.execute("PRAGMA foreign_keys=OFF")
+            try:
+                await self.db.executescript("""
+                    BEGIN IMMEDIATE;
+                    DROP TABLE IF EXISTS galaxy_upgrades_new;
+                    CREATE TABLE galaxy_upgrades_new (
+                        id TEXT PRIMARY KEY,
+                        category TEXT NOT NULL CHECK (category IN ('hull','trail','scanner','engine')),
+                        name TEXT NOT NULL,
+                        description TEXT NOT NULL DEFAULT '',
+                        price INTEGER NOT NULL CHECK (price >= 0),
+                        config_json TEXT NOT NULL DEFAULT '{}',
+                        enabled INTEGER NOT NULL DEFAULT 1,
+                        sort_order INTEGER NOT NULL DEFAULT 100,
+                        created_at REAL NOT NULL DEFAULT (unixepoch()),
+                        updated_at REAL NOT NULL DEFAULT (unixepoch())
+                    );
+                    INSERT INTO galaxy_upgrades_new
+                        (id, category, name, description, price, config_json,
+                         enabled, sort_order, created_at, updated_at)
+                    SELECT id, category, name, description, price, config_json,
+                           enabled, sort_order, created_at, updated_at
+                    FROM galaxy_upgrades;
+                    DROP TABLE galaxy_upgrades;
+                    ALTER TABLE galaxy_upgrades_new RENAME TO galaxy_upgrades;
+                    COMMIT;
+                """)
+            except Exception:
+                await self.db.rollback()
+                raise
+            finally:
+                await self.db.execute("PRAGMA foreign_keys=ON")
         defaults = (
             ("scout", "hull", "Scout", "Reliable starter exploration ship.", 0, '{"effect":"ship","color":"#f2efff"}', 0),
             ("raven", "hull", "Raven", "Klangtresor raven with animated wings and violet aura.", 120, '{"effect":"raven","color":"#b44dff"}', 10),
@@ -6978,6 +7032,7 @@ class Database:
             ("selected_hull", "hull", "scout"),
             ("selected_trail", "trail", "ion_blue"),
             ("selected_scanner", "scanner", "pulse"),
+            ("selected_engine", "engine", ""),
         ):
             await self.db.execute(
                 f"""UPDATE galaxy_users
@@ -7038,7 +7093,7 @@ class Database:
 
     async def galaxy_update_upgrade(
         self, upgrade_id: str, *, name: str, description: str, price: int,
-        enabled: bool, effect: str, color: str
+        enabled: bool, effect: str, color: str, playback_rate: float = 1.2
     ) -> bool:
         async with self.db.execute(
             "SELECT category FROM galaxy_upgrades WHERE id = ?", (upgrade_id,)
@@ -7047,11 +7102,21 @@ class Database:
         if not row:
             return False
         category = row["category"]
-        if (
-            effect not in GALAXY_UPGRADE_EFFECTS.get(category, {})
-            or not re.fullmatch(r"#[0-9a-fA-F]{6}", color)
-        ):
+        if effect not in GALAXY_UPGRADE_EFFECTS.get(category, {}):
             return False
+        if category == "engine":
+            try:
+                rate = float(playback_rate)
+            except (TypeError, ValueError):
+                return False
+            if not math.isfinite(rate):
+                return False
+            rate = max(1.05, min(2.0, rate))
+            config = {"effect": effect, "playback_rate": round(rate, 2)}
+        else:
+            if not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+                return False
+            config = {"effect": effect, "color": color.lower()}
         starter_ids = {"scout", "ion_blue", "pulse"}
         await self.db.execute(
             """UPDATE galaxy_upgrades
@@ -7061,7 +7126,7 @@ class Database:
                 name.strip()[:40] or upgrade_id,
                 description.strip()[:180], max(0, min(int(price), 100000)),
                 1 if (enabled or upgrade_id in starter_ids) else 0,
-                json.dumps({"effect": effect, "color": color.lower()}, separators=(",", ":")),
+                json.dumps(config, separators=(",", ":")),
                 time.time(), upgrade_id,
             ),
         )
@@ -7070,18 +7135,27 @@ class Database:
 
     async def galaxy_create_upgrade(
         self, *, category: str, name: str, description: str, price: int,
-        enabled: bool, effect: str, color: str
+        enabled: bool, effect: str, color: str, playback_rate: float = 1.2
     ) -> Optional[dict]:
         category = str(category or "").strip().lower()
         name = str(name or "").strip()[:40]
         effect = str(effect or "").strip().lower()
         color = str(color or "").strip().lower()
-        if (
-            not name
-            or effect not in GALAXY_UPGRADE_EFFECTS.get(category, {})
-            or not re.fullmatch(r"#[0-9a-f]{6}", color)
-        ):
+        if not name or effect not in GALAXY_UPGRADE_EFFECTS.get(category, {}):
             return None
+        if category == "engine":
+            try:
+                rate = float(playback_rate)
+            except (TypeError, ValueError):
+                return None
+            if not math.isfinite(rate):
+                return None
+            rate = max(1.05, min(2.0, rate))
+            config = {"effect": effect, "playback_rate": round(rate, 2)}
+        else:
+            if not re.fullmatch(r"#[0-9a-f]{6}", color):
+                return None
+            config = {"effect": effect, "color": color}
         base_id = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")[:32]
         if not base_id:
             base_id = f"custom_{category}"
@@ -7107,7 +7181,7 @@ class Database:
             (
                 upgrade_id, category, name, str(description or "").strip()[:180],
                 max(0, min(int(price), 100000)),
-                json.dumps({"effect": effect, "color": color}, separators=(",", ":")),
+                json.dumps(config, separators=(",", ":")),
                 1 if enabled else 0, sort_order, now, now,
             ),
         )
@@ -7233,7 +7307,7 @@ class Database:
     async def galaxy_set_loadout(
         self, discord_user_id: int, category: str, upgrade_id: str
     ) -> bool:
-        if category not in {"hull", "trail", "scanner"}:
+        if category not in {"hull", "trail", "scanner", "engine"}:
             return False
         owned = await self.galaxy_get_owned_upgrades(discord_user_id)
         if upgrade_id not in owned:
@@ -7244,7 +7318,12 @@ class Database:
         ) as cursor:
             if not await cursor.fetchone():
                 return False
-        column = {"hull": "selected_hull", "trail": "selected_trail", "scanner": "selected_scanner"}[category]
+        column = {
+            "hull": "selected_hull",
+            "trail": "selected_trail",
+            "scanner": "selected_scanner",
+            "engine": "selected_engine",
+        }[category]
         await self.db.execute(
             f"UPDATE galaxy_users SET {column} = ?, updated_at = ? WHERE discord_user_id = ?",
             (upgrade_id, time.time(), int(discord_user_id)),
@@ -7252,22 +7331,62 @@ class Database:
         await self.db.commit()
         return True
 
+    async def galaxy_get_engine_playback_rate(
+        self, discord_user_id: int, *, require_speed_mode: bool = True
+    ) -> float:
+        async with self.db.execute(
+            """SELECT users.speed_mode, upgrades.id, upgrades.category,
+                      upgrades.config_json, upgrades.enabled, upgrades.price,
+                      EXISTS (
+                          SELECT 1 FROM galaxy_user_upgrades owned
+                          WHERE owned.discord_user_id = users.discord_user_id
+                            AND owned.upgrade_id = upgrades.id
+                      ) AS explicitly_owned
+               FROM galaxy_users users
+               LEFT JOIN galaxy_upgrades upgrades
+                 ON upgrades.id = users.selected_engine
+               WHERE users.discord_user_id = ?""",
+            (int(discord_user_id),),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if (
+            not row
+            or not row["id"]
+            or row["category"] != "engine"
+            or not int(row["enabled"] or 0)
+            or (int(row["price"] or 0) > 0 and not int(row["explicitly_owned"] or 0))
+            or (require_speed_mode and not int(row["speed_mode"] or 0))
+        ):
+            return 1.0
+        try:
+            config = json.loads(row["config_json"] or "{}")
+            rate = float(config.get("playback_rate") or 1.0)
+            return max(1.05, min(2.0, rate)) if math.isfinite(rate) else 1.0
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return 1.0
+
     async def galaxy_set_preferences(
         self, discord_user_id: int, *, auto_navigation: bool, expedition_days: int,
-        skip_completed: bool, shop_collapsed: bool, volume_percent: int
+        skip_completed: bool, shop_collapsed: bool, volume_percent: int,
+        speed_mode: bool = False,
     ) -> dict:
         days = int(expedition_days)
         if days not in {1, 3, 7, 14, 30}:
             raise ValueError("Invalid expedition range.")
         volume = max(0, min(100, int(volume_percent)))
+        engine_rate = await self.galaxy_get_engine_playback_rate(
+            discord_user_id, require_speed_mode=False
+        )
+        speed_enabled = bool(speed_mode and engine_rate > 1.0)
         await self.db.execute(
             """UPDATE galaxy_users
                SET auto_navigation = ?, expedition_days = ?, skip_completed = ?,
-                   shop_collapsed = ?, volume_percent = ?, updated_at = ?
+                   shop_collapsed = ?, volume_percent = ?, speed_mode = ?, updated_at = ?
                WHERE discord_user_id = ?""",
             (
                 1 if auto_navigation else 0, days, 1 if skip_completed else 0,
-                1 if shop_collapsed else 0, volume, time.time(), int(discord_user_id),
+                1 if shop_collapsed else 0, volume, 1 if speed_enabled else 0,
+                time.time(), int(discord_user_id),
             ),
         )
         await self.db.commit()
@@ -7351,6 +7470,8 @@ class Database:
         paused: bool,
         seeked: bool,
         forward_seek_seconds: float = 0.0,
+        playback_rate: float = 1.0,
+        maximum_playback_rate: float = 1.0,
     ) -> Optional[dict]:
         async with self.db.execute(
             """SELECT * FROM galaxy_listens
@@ -7363,6 +7484,15 @@ class Database:
         listen = dict(row)
         now = time.time()
         wall_delta = max(0.0, min(30.0, now - float(listen["last_heartbeat_at"])))
+        try:
+            reported_rate = float(playback_rate)
+            allowed_rate = float(maximum_playback_rate)
+        except (TypeError, ValueError):
+            reported_rate = allowed_rate = 1.0
+        if not math.isfinite(reported_rate) or not math.isfinite(allowed_rate):
+            reported_rate = allowed_rate = 1.0
+        rate = max(1.0, min(reported_rate, allowed_rate, 2.0))
+        playable_delta = wall_delta * rate
         position = max(0.0, min(float(audio_position), float(listen["duration_seconds"]) + 5.0))
         previous_position = max(0.0, float(listen.get("last_audio_position") or 0.0))
         audio_delta = max(0.0, position - previous_position)
@@ -7375,15 +7505,15 @@ class Database:
             seeked_add = reported_forward_seek if reported_forward_seek > 0 else audio_delta
             played_delta = max(0.0, audio_delta - seeked_add)
             if not paused:
-                eligible_add = min(wall_delta, played_delta)
-        elif audio_delta > wall_delta + 3.0:
+                eligible_add = min(playable_delta, played_delta)
+        elif audio_delta > playable_delta + 3.0:
             # An unmarked implausible jump is a seek as well. Only the portion
             # that could have played during wall time remains eligible.
-            seeked_add = max(0.0, audio_delta - wall_delta)
+            seeked_add = max(0.0, audio_delta - playable_delta)
             if not paused:
-                eligible_add = min(wall_delta, audio_delta - seeked_add)
+                eligible_add = min(playable_delta, audio_delta - seeked_add)
         elif not paused:
-            eligible_add = min(wall_delta, audio_delta)
+            eligible_add = min(playable_delta, audio_delta)
         await self.db.execute(
             """UPDATE galaxy_listens SET
                    eligible_seconds = MIN(duration_seconds, eligible_seconds + ?),

@@ -3863,6 +3863,7 @@ def create_app(db: Database, bot=None) -> Quart:
                             enabled=bool(form.get(prefix + "enabled")),
                             effect=str(form.get(prefix + "effect") or ""),
                             color=str(form.get(prefix + "color") or ""),
+                            playback_rate=float(form.get(prefix + "playback_rate") or 1.2),
                         )
                     except (TypeError, ValueError):
                         updated = False
@@ -3885,6 +3886,7 @@ def create_app(db: Database, bot=None) -> Quart:
                         enabled=bool(form.get("enabled")),
                         effect=str(form.get("effect") or ""),
                         color=str(form.get("color") or ""),
+                        playback_rate=float(form.get("playback_rate") or 1.2),
                     )
                 except (TypeError, ValueError):
                     upgrade = None
@@ -4468,6 +4470,9 @@ def create_app(db: Database, bot=None) -> Quart:
             return {"error": "rate_limited"}, 429
         data = await request.get_json(silent=True) or {}
         try:
+            maximum_playback_rate = await db.galaxy_get_engine_playback_rate(
+                int(identity["discord_user_id"])
+            )
             listen = await db.galaxy_heartbeat_listen(
                 listen_id=int(data.get("listen_id")),
                 discord_user_id=int(identity["discord_user_id"]),
@@ -4475,6 +4480,8 @@ def create_app(db: Database, bot=None) -> Quart:
                 paused=bool(data.get("paused")),
                 seeked=bool(data.get("seeked")),
                 forward_seek_seconds=float(data.get("forward_seek_seconds") or 0),
+                playback_rate=float(data.get("playback_rate") or 1),
+                maximum_playback_rate=maximum_playback_rate,
             )
         except (TypeError, ValueError):
             listen = None
@@ -4582,7 +4589,15 @@ def create_app(db: Database, bot=None) -> Quart:
         data = await request.get_json(silent=True) or {}
         if not isinstance(data.get("auto_navigation"), bool):
             return {"error": "invalid_auto_navigation"}, 400
-        if not isinstance(data.get("skip_completed"), bool) or not isinstance(data.get("shop_collapsed"), bool):
+        requested_speed_mode = data.get("speed_mode")
+        if requested_speed_mode is None:
+            current_profile = await db.galaxy_get_profile(int(identity["discord_user_id"]))
+            requested_speed_mode = bool(current_profile.get("speed_mode", 0))
+        if (
+            not isinstance(data.get("skip_completed"), bool)
+            or not isinstance(data.get("shop_collapsed"), bool)
+            or not isinstance(requested_speed_mode, bool)
+        ):
             return {"error": "invalid_preferences"}, 400
         try:
             profile = await db.galaxy_set_preferences(
@@ -4592,6 +4607,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 skip_completed=data["skip_completed"],
                 shop_collapsed=data["shop_collapsed"],
                 volume_percent=int(data.get("volume_percent")),
+                speed_mode=requested_speed_mode,
             )
         except (TypeError, ValueError):
             return {"error": "invalid_expedition_days"}, 400
