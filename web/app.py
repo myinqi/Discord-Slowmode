@@ -9419,6 +9419,67 @@ def create_app(db: Database, bot=None) -> Quart:
 
     app.post_trya_dcs_announcement = _post_trya_dcs_announcement
 
+    async def _trya_dcs_cleanup_loop():
+        """Expire DCS rotation entries without removing archived media/evidence."""
+        from bot.trya_dcs_manager import log_dcs_event
+
+        while True:
+            try:
+                removed = await db.deactivate_due_trya_dcs_submissions()
+                if removed:
+                    log_dcs_event(
+                        f"Removed {len(removed)} expired submission(s) from the DCS playlist; "
+                        "all media and evidence retained."
+                    )
+                pending = await db.get_unnotified_trya_dcs_expiries()
+                if pending:
+                    channel_id = (await db.get_setting(
+                        "trya_dcs_expiry_channel_id"
+                    ) or "").strip()
+                    if not channel_id.isdigit():
+                        await db.mark_trya_dcs_expiry_notified(
+                            [song["id"] for song in pending]
+                        )
+                    elif bot is not None and bot.is_ready():
+                        channel = bot.get_channel(int(channel_id))
+                        if channel is None:
+                            try:
+                                channel = await bot.fetch_channel(int(channel_id))
+                            except Exception as exc:
+                                log_dcs_event(
+                                    f"Expiry channel {channel_id} is unavailable: {exc}",
+                                    "error",
+                                )
+                        if channel is not None:
+                            import discord
+                            try:
+                                for song in pending:
+                                    title = discord.utils.escape_markdown(
+                                        str(song.get("title") or "Untitled")
+                                    )
+                                    creator = discord.utils.escape_markdown(
+                                        str(
+                                            song.get("artist")
+                                            or song.get("user_name")
+                                            or "Unknown artist"
+                                        )
+                                    )
+                                    await channel.send(
+                                        f"⏳ **{title}** by **{creator}** left the DCS "
+                                        "submission playlist.",
+                                        allowed_mentions=discord.AllowedMentions.none(),
+                                    )
+                                    await db.mark_trya_dcs_expiry_notified([song["id"]])
+                            except Exception as exc:
+                                log_dcs_event(
+                                    f"DCS expiry notification failed: {exc}", "error"
+                                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log_dcs_event(f"DCS playlist retention failed: {exc}", "error")
+            await asyncio.sleep(3600)
+
     async def _trya_dcs_schedule_loop():
         """Auto-start TrYa DCS on configured weekdays + time.
 
@@ -9582,6 +9643,16 @@ def create_app(db: Database, bot=None) -> Quart:
 
     @app.before_serving
     async def start_trya_dcs_schedule():
+        try:
+            retention_days = int(
+                await db.get_setting("trya_dcs_submission_playlist_days") or "14"
+            )
+        except (TypeError, ValueError):
+            retention_days = 14
+        if retention_days not in (7, 14):
+            retention_days = 14
+        await db.reschedule_trya_dcs_submission_expiry(retention_days)
+        app.trya_dcs_cleanup_task = asyncio.create_task(_trya_dcs_cleanup_loop())
         app.trya_dcs_schedule_task = asyncio.create_task(_trya_dcs_schedule_loop())
 
     @app.after_serving
@@ -9589,6 +9660,9 @@ def create_app(db: Database, bot=None) -> Quart:
         schedule_task = getattr(app, "trya_dcs_schedule_task", None)
         if schedule_task and not schedule_task.done():
             schedule_task.cancel()
+        cleanup_task = getattr(app, "trya_dcs_cleanup_task", None)
+        if cleanup_task and not cleanup_task.done():
+            cleanup_task.cancel()
         if trya_dcs_manager.is_running:
             await trya_dcs_manager.stop()
 
@@ -9890,6 +9964,8 @@ def create_app(db: Database, bot=None) -> Quart:
             "trya_dcs_rtmp_ingest_url": "rtmp://mediamtx:1935/trya-dcs",
             "trya_dcs_disclaimer": "AI-generated audio and visuals.",
             "trya_dcs_max_per_user": "4",
+            "trya_dcs_submission_playlist_days": "14",
+            "trya_dcs_expiry_channel_id": "",
             "trya_dcs_max_duration_seconds": "360",
             "trya_dcs_max_upload_mib": "20",
             "trya_dcs_loop_mode": "stop",
@@ -10689,7 +10765,7 @@ def create_app(db: Database, bot=None) -> Quart:
                 elif trya_dcs_manager.is_running:
                     await flash("Stop TrYa DCS before changing playlist assignments.", "error")
                 else:
-                    await db.update_trya_dcs_song(song_id, playlist_source=source)
+                    await db.set_trya_dcs_playlist_source(song_id, source)
                     await flash(f"Song assigned to the {source} playlist.", "success")
                 return redirect(request.url)
             if action in {"approve_song", "reject_song"}:
@@ -10743,6 +10819,14 @@ def create_app(db: Database, bot=None) -> Quart:
                             "error",
                         )
                         return redirect(request.url)
+                expiry_channel_id = str(
+                    form.get("expiry_channel_id") or ""
+                ).strip()
+                if expiry_channel_id and not expiry_channel_id.isdigit():
+                    await flash(
+                        "Submission expiry channel must contain digits only.", "error"
+                    )
+                    return redirect(request.url)
 
                 def bounded_int(name: str, default: int, low: int, high: int) -> int:
                     try:
@@ -10783,6 +10867,10 @@ def create_app(db: Database, bot=None) -> Quart:
                     "trya_dcs_max_per_user": str(
                         bounded_int("max_per_user", 4, 1, 20)
                     ),
+                    "trya_dcs_submission_playlist_days": (
+                        "7" if str(form.get("submission_playlist_days")) == "7" else "14"
+                    ),
+                    "trya_dcs_expiry_channel_id": expiry_channel_id,
                     "trya_dcs_max_duration_seconds": str(
                         bounded_int("max_duration_seconds", 360, 60, 1200)
                     ),
@@ -10853,6 +10941,9 @@ def create_app(db: Database, bot=None) -> Quart:
                     values["trya_dcs_schedule_enabled"] = "off"
                 for key, value in values.items():
                     await db.set_setting(key, value)
+                await db.reschedule_trya_dcs_submission_expiry(
+                    int(values["trya_dcs_submission_playlist_days"])
+                )
                 if values["trya_dcs_moderation_enabled"] != "on":
                     await db.db.execute(
                         """UPDATE trya_dcs_songs

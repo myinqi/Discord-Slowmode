@@ -435,6 +435,10 @@ class Database:
                 submitted_at REAL NOT NULL DEFAULT (unixepoch()),
                 uploaded_at REAL,
                 active INTEGER NOT NULL DEFAULT 1,
+                playlist_expires_at REAL,
+                playlist_removed_at REAL,
+                playlist_remove_reason TEXT,
+                playlist_expiry_notified_at REAL,
                 removed_at REAL,
                 remove_reason TEXT,
                 replacement_song_id INTEGER
@@ -552,7 +556,21 @@ class Database:
             dcs_song_columns = [row[1] async for row in cursor]
         if "wlm_url" not in dcs_song_columns:
             await self.db.execute("ALTER TABLE trya_dcs_songs ADD COLUMN wlm_url TEXT")
-            await self.db.commit()
+        for column, definition in (
+            ("playlist_expires_at", "REAL"),
+            ("playlist_removed_at", "REAL"),
+            ("playlist_remove_reason", "TEXT"),
+            ("playlist_expiry_notified_at", "REAL"),
+        ):
+            if column not in dcs_song_columns:
+                await self.db.execute(
+                    f"ALTER TABLE trya_dcs_songs ADD COLUMN {column} {definition}"
+                )
+        await self.db.execute(
+            """CREATE INDEX IF NOT EXISTS idx_trya_dcs_submission_expiry
+               ON trya_dcs_songs(playlist_source, active, playlist_expires_at)"""
+        )
+        await self.db.commit()
 
         async with self.db.execute(
             "PRAGMA table_info(discord_member_events)"
@@ -6381,7 +6399,9 @@ class Database:
             "material_rights_attested", "technical_processing_attested",
             "private_playback_attested", "rights_accepted_at", "uploaded_at",
             "active", "removed_at", "remove_reason", "replacement_song_id",
-            "upload_token", "playlist_source",
+            "upload_token", "playlist_source", "playlist_expires_at",
+            "playlist_removed_at", "playlist_remove_reason",
+            "playlist_expiry_notified_at",
         }
         updates = {key: value for key, value in fields.items() if key in allowed}
         if not updates:
@@ -6427,7 +6447,22 @@ class Database:
             approved_at=time.time(),
             approved_by="validated-upload",
             analysis_status="pending",
+            playlist_removed_at=None,
+            playlist_remove_reason=None,
+            playlist_expiry_notified_at=None,
         )
+        if (song.get("playlist_source") or "submission") == "submission":
+            try:
+                retention_days = int(
+                    await self.get_setting("trya_dcs_submission_playlist_days") or "14"
+                )
+            except (TypeError, ValueError):
+                retention_days = 14
+            if retention_days not in (7, 14):
+                retention_days = 14
+            evidence["playlist_expires_at"] = time.time() + retention_days * 86400
+        else:
+            evidence["playlist_expires_at"] = None
         update_fields = (
             "original_sha256", "original_filename", "original_mime",
             "original_size", "original_archive_filename", "mp3_filename",
@@ -6437,7 +6472,8 @@ class Database:
             "official_download_attested", "material_rights_attested",
             "technical_processing_attested", "private_playback_attested",
             "active", "approval_status", "approved_at", "approved_by",
-            "analysis_status",
+            "analysis_status", "playlist_expires_at", "playlist_removed_at",
+            "playlist_remove_reason", "playlist_expiry_notified_at",
         )
         try:
             await self.db.execute("BEGIN IMMEDIATE")
@@ -6480,6 +6516,102 @@ class Database:
             await self.db.rollback()
             raise
         return await self.get_trya_dcs_song(song_id)
+
+    async def reschedule_trya_dcs_submission_expiry(self, retention_days: int) -> int:
+        """Apply DCS playlist retention without touching archived media/evidence."""
+        days = int(retention_days)
+        if days not in (7, 14):
+            raise ValueError("DCS submission retention must be 7 or 14 days")
+        cursor = await self.db.execute(
+            """UPDATE trya_dcs_songs
+               SET playlist_expires_at =
+                   COALESCE(uploaded_at, submitted_at, unixepoch()) + ?
+               WHERE active = 1 AND playlist_source = 'submission'
+                 AND removed_at IS NULL""",
+            (days * 86400,),
+        )
+        await self.db.commit()
+        return max(0, int(cursor.rowcount or 0))
+
+    async def set_trya_dcs_playlist_source(
+        self, song_id: int, playlist_source: str
+    ) -> Optional[dict]:
+        """Move a retained DCS song and maintain its playlist expiry metadata."""
+        source = str(playlist_source or "submission").strip().lower()
+        if source not in {"submission", "intro", "outro"}:
+            raise ValueError("invalid DCS playlist_source")
+        song = await self.get_trya_dcs_song(song_id)
+        if not song:
+            return None
+        expires_at = None
+        if source == "submission" and song.get("active"):
+            try:
+                days = int(
+                    await self.get_setting("trya_dcs_submission_playlist_days") or "14"
+                )
+            except (TypeError, ValueError):
+                days = 14
+            if days not in (7, 14):
+                days = 14
+            expires_at = time.time() + days * 86400
+        await self.update_trya_dcs_song(
+            song_id,
+            playlist_source=source,
+            playlist_expires_at=expires_at,
+            playlist_removed_at=None,
+            playlist_remove_reason=None,
+            playlist_expiry_notified_at=None,
+        )
+        return await self.get_trya_dcs_song(song_id)
+
+    async def deactivate_due_trya_dcs_submissions(
+        self, reason: str = "submission_retention_elapsed"
+    ) -> list[dict]:
+        """Leave due songs archived, but remove them from the active DCS playlist."""
+        async with self.db.execute(
+            """SELECT * FROM trya_dcs_songs
+               WHERE active = 1 AND playlist_source = 'submission'
+                 AND removed_at IS NULL AND playlist_expires_at IS NOT NULL
+                 AND playlist_expires_at <= unixepoch()"""
+        ) as cursor:
+            rows = [dict(row) for row in await cursor.fetchall()]
+        if not rows:
+            return []
+        ids = [int(row["id"]) for row in rows]
+        placeholders = ",".join("?" for _ in ids)
+        await self.db.execute(
+            f"""UPDATE trya_dcs_songs
+                SET active = 0, playlist_removed_at = unixepoch(),
+                    playlist_remove_reason = ?
+                WHERE id IN ({placeholders}) AND active = 1""",
+            (reason, *ids),
+        )
+        await self.db.commit()
+        return rows
+
+    async def get_unnotified_trya_dcs_expiries(self) -> list[dict]:
+        async with self.db.execute(
+            """SELECT * FROM trya_dcs_songs
+               WHERE playlist_remove_reason = 'submission_retention_elapsed'
+                 AND playlist_removed_at IS NOT NULL
+                 AND playlist_expiry_notified_at IS NULL
+               ORDER BY playlist_removed_at ASC, id ASC"""
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def mark_trya_dcs_expiry_notified(self, song_ids: list[int]) -> None:
+        ids = [int(song_id) for song_id in song_ids]
+        if not ids:
+            return
+        placeholders = ",".join("?" for _ in ids)
+        await self.db.execute(
+            f"""UPDATE trya_dcs_songs
+                SET playlist_expiry_notified_at = unixepoch()
+                WHERE id IN ({placeholders})
+                  AND playlist_expiry_notified_at IS NULL""",
+            ids,
+        )
+        await self.db.commit()
 
     async def delete_trya_dcs_song(
         self, song_id: int, *, user_id: int | None = None

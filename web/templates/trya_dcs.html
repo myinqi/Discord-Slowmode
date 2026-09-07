@@ -205,6 +205,26 @@
                 <p class="text-gray-500 text-[11px] mt-1">Applies only to the submission playlist. Intro and outro are unlimited.</p>
             </label>
             <label class="block">
+                <span class="block text-gray-400 text-xs mb-1">Submission playlist retention</span>
+                <select name="submission_playlist_days"
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white focus:border-discord-blurple focus:outline-none">
+                    <option value="7" {% if settings.trya_dcs_submission_playlist_days == '7' %}selected{% endif %}>7 days</option>
+                    <option value="14" {% if settings.trya_dcs_submission_playlist_days == '14' %}selected{% endif %}>14 days</option>
+                </select>
+                <p class="text-gray-500 text-[11px] mt-1">After this time, a song leaves only the active submission playlist. Uploaded media and evidence remain archived.</p>
+            </label>
+            <label class="block">
+                <span class="block text-gray-400 text-xs mb-1">Submission expiry channel</span>
+                <select name="expiry_channel_id"
+                    class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white focus:border-discord-blurple focus:outline-none">
+                    <option value="">Disabled</option>
+                    {% for channel in text_channels %}
+                    <option value="{{ channel.id }}" {% if settings.trya_dcs_expiry_channel_id == channel.id|string %}selected{% endif %}># {{ channel.name }}</option>
+                    {% endfor %}
+                </select>
+                <p class="text-gray-500 text-[11px] mt-1">Posts one short English notice whenever a submission leaves the playlist automatically.</p>
+            </label>
+            <label class="block">
                 <span class="block text-gray-400 text-xs mb-1">Maximum song duration (seconds)</span>
                 <input type="number" name="max_duration_seconds" min="60" max="1200" step="30" value="{{ settings.trya_dcs_max_duration_seconds }}"
                     class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-white focus:border-discord-blurple focus:outline-none">

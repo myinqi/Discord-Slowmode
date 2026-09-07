@@ -141,6 +141,57 @@ class TryaDcsDatabaseTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(stored["playlist_source"], "intro")
 
+    async def test_submission_expiry_only_deactivates_playlist_entry(self):
+        await self.db.set_setting("trya_dcs_submission_playlist_days", "7")
+        song_id, _ = await self._new_slot(user_id=100)
+        stored = await self._finalize(song_id, "expiring")
+        self.assertGreater(stored["playlist_expires_at"], time.time() + 6 * 86400)
+
+        await self.db.update_trya_dcs_song(
+            song_id, title="Expired song", playlist_expires_at=time.time() - 1
+        )
+        removed = await self.db.deactivate_due_trya_dcs_submissions()
+        stored = await self.db.get_trya_dcs_song(song_id)
+
+        self.assertEqual([song["id"] for song in removed], [song_id])
+        self.assertEqual(stored["active"], 0)
+        self.assertEqual(stored["playlist_remove_reason"], "submission_retention_elapsed")
+        self.assertIsNotNone(stored["playlist_removed_at"])
+        self.assertIsNone(stored["removed_at"])
+        self.assertIsNone(stored["playlist_expiry_notified_at"])
+        self.assertEqual(stored["mp3_filename"], "expiring-work.mp3")
+        self.assertEqual(
+            stored["original_archive_filename"], "expiring-original.mp3"
+        )
+
+        pending = await self.db.get_unnotified_trya_dcs_expiries()
+        self.assertEqual([song["id"] for song in pending], [song_id])
+        await self.db.mark_trya_dcs_expiry_notified([song_id])
+        self.assertEqual(await self.db.get_unnotified_trya_dcs_expiries(), [])
+
+    async def test_intro_and_outro_never_receive_playlist_expiry(self):
+        for source in ("intro", "outro"):
+            song_id, _ = await self._new_slot(user_id=100, playlist_source=source)
+            stored = await self._finalize(song_id, f"no-expiry-{source}")
+            self.assertIsNone(stored["playlist_expires_at"])
+
+    async def test_retention_change_reschedules_active_submissions_only(self):
+        submission_id, _ = await self._new_slot(user_id=100)
+        intro_id, _ = await self._new_slot(user_id=100, playlist_source="intro")
+        await self._finalize(submission_id, "rescheduled")
+        await self._finalize(intro_id, "intro-retained")
+
+        await self.db.reschedule_trya_dcs_submission_expiry(7)
+        submission = await self.db.get_trya_dcs_song(submission_id)
+        intro = await self.db.get_trya_dcs_song(intro_id)
+
+        self.assertAlmostEqual(
+            submission["playlist_expires_at"],
+            submission["uploaded_at"] + 7 * 86400,
+            delta=1,
+        )
+        self.assertIsNone(intro["playlist_expires_at"])
+
     async def test_intro_slot_is_created_without_counting_as_submission(self):
         submission_id, _ = await self._new_slot(user_id=100)
         await self._finalize(submission_id, "submission")
