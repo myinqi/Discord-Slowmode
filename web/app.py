@@ -36,6 +36,11 @@ from bot.trya_stream_files import (
     cleanup_orphan_trya_stream_hook_files,
     trya_stream_hook_cache_path,
 )
+from bot.suno_audio import (
+    extract_suno_audio_url as _extract_suno_audio_url,
+    request_audio_license as _request_suno_audio_license,
+    write_playable_suno_audio,
+)
 from bot.suno_urls import resolve_suno_uuid
 from config import Config
 
@@ -48,46 +53,6 @@ ELEVENMUSIC_TRACK_RE = re.compile(
     r'(?:https?://)?(?:www\.)?elevenmusic\.io/tracks/([A-Fa-f0-9]{24})'
 )
 
-
-def _extract_suno_audio_url(page_html: str, song_uuid: str) -> str | None:
-    """Return Suno's current playable asset, preferring non-legacy CDNs."""
-    candidates = [
-        candidate.replace(r"\/", "/")
-        for candidate in re.findall(
-            r'https://[^"\\\s]+\.(?:mp3|m4a)(?:\?[^"\\\s]*)?',
-            page_html or "",
-            flags=re.I,
-        )
-        if song_uuid in candidate
-    ]
-    return next(
-        (
-            candidate for candidate in candidates
-            if "cdn1.suno.ai" not in candidate
-            and "cdn2.suno.ai" not in candidate
-        ),
-        candidates[0] if candidates else None,
-    )
-
-
-async def _request_suno_audio_license(song_uuid: str) -> dict:
-    async with aiohttp.ClientSession() as suno_session:
-        async with suno_session.post(
-            "https://studio-api.prod.suno.com/api/mango/rights",
-            json={"content_params": {"content_id": song_uuid, "content_type": "clip"}},
-            headers={
-                "Origin": "https://suno.com",
-                "Referer": f"https://suno.com/song/{song_uuid}",
-                "User-Agent": "Mozilla/5.0",
-            },
-            timeout=aiohttp.ClientTimeout(total=10),
-        ) as response:
-            if response.status != 200:
-                raise RuntimeError(f"Suno audio license HTTP {response.status}")
-            rights = await response.json(content_type=None)
-    if not all(isinstance(rights.get(key), str) and rights[key] for key in ("key", "iv", "glt")):
-        raise RuntimeError("Invalid Suno audio license")
-    return {"key": rights["key"], "iv": rights["iv"], "glt": rights["glt"]}
 
 _SYSTEM_CPU_SAMPLE = {"timestamp": None, "usage_seconds": None}
 _SYSTEM_CPU_LOCK = threading.Lock()
@@ -16563,24 +16528,12 @@ def create_app(db: Database, bot=None) -> Quart:
                             except OSError:
                                 pass
 
-                        last_status = None
                         try:
-                            for ext in ("mp3", "m4a"):
-                                audio_url = f"https://cdn1.suno.ai/{song_uuid}.{ext}"
-                                async with sess.get(
-                                    audio_url,
-                                    timeout=aiohttp.ClientTimeout(total=120),
-                                ) as resp:
-                                    last_status = resp.status
-                                    if resp.status != 200:
-                                        continue
-                                    with open(src_path, "wb") as fh:
-                                        async for chunk in resp.content.iter_chunked(1024 * 256):
-                                            if chunk:
-                                                fh.write(chunk)
-                                    break
-                            else:
-                                raise RuntimeError(f"audio download returned HTTP {last_status}")
+                            if not song_uuid:
+                                raise RuntimeError("missing song UUID")
+                            await write_playable_suno_audio(
+                                song_uuid, src_path, session=sess
+                            )
 
                             codec_args = [
                                 "-c:a", "libmp3lame", "-b:a", "320k", "-write_xing", "1"
@@ -17113,7 +17066,7 @@ def create_app(db: Database, bot=None) -> Quart:
     async def songripper_download_mp3():
         """Download Suno audio server-side and re-encode it to a clean MP3."""
         from quart import Response, jsonify
-        import aiohttp, re as _re, tempfile
+        import re as _re, tempfile
 
         blocked = await _songripper_conversion_block_response()
         if blocked is not None:
@@ -17136,27 +17089,11 @@ def create_app(db: Database, bot=None) -> Quart:
             return jsonify({"error": "A resolved Suno song UUID is required."}), 400
         audio_id = uuid_match.group(0)
 
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         try:
             with tempfile.TemporaryDirectory(prefix="songripper_") as tmpdir:
                 src_path = os.path.join(tmpdir, "source.audio")
                 out_path = os.path.join(tmpdir, "clean.mp3")
-                last_status = None
-
-                async with aiohttp.ClientSession(headers=headers) as sess:
-                    for ext in ("mp3", "m4a"):
-                        url = f"https://cdn1.suno.ai/{audio_id}.{ext}"
-                        async with sess.get(url, timeout=aiohttp.ClientTimeout(total=120)) as resp:
-                            last_status = resp.status
-                            if resp.status != 200:
-                                continue
-                            with open(src_path, "wb") as fh:
-                                async for chunk in resp.content.iter_chunked(1024 * 256):
-                                    if chunk:
-                                        fh.write(chunk)
-                            break
-                    else:
-                        return jsonify({"error": f"Audio not available from Suno ({last_status})."}), 502
+                await write_playable_suno_audio(audio_id, src_path)
 
                 proc = await asyncio.create_subprocess_exec(
                     "ffmpeg", "-y", "-hide_banner", "-v", "error",
@@ -17194,7 +17131,7 @@ def create_app(db: Database, bot=None) -> Quart:
     async def songripper_download_square():
         """Convert Suno audio to a mono square signal with a configurable dead zone."""
         from quart import Response, jsonify
-        import aiohttp, re as _re, tempfile
+        import re as _re, tempfile
 
         blocked = await _songripper_conversion_block_response()
         if blocked is not None:
@@ -17228,27 +17165,11 @@ def create_app(db: Database, bot=None) -> Quart:
             return jsonify({"error": "A resolved Suno song UUID is required."}), 400
         audio_id = uuid_match.group(0)
 
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         try:
             with tempfile.TemporaryDirectory(prefix="songripper_square_") as tmpdir:
                 src_path = os.path.join(tmpdir, "source.audio")
                 out_path = os.path.join(tmpdir, f"square{extension}")
-                last_status = None
-
-                async with aiohttp.ClientSession(headers=headers) as sess:
-                    for ext in ("mp3", "m4a"):
-                        url = f"https://cdn1.suno.ai/{audio_id}.{ext}"
-                        async with sess.get(url, timeout=aiohttp.ClientTimeout(total=120)) as resp:
-                            last_status = resp.status
-                            if resp.status != 200:
-                                continue
-                            with open(src_path, "wb") as fh:
-                                async for chunk in resp.content.iter_chunked(1024 * 256):
-                                    if chunk:
-                                        fh.write(chunk)
-                            break
-                    else:
-                        return jsonify({"error": f"Audio not available from Suno ({last_status})."}), 502
+                await write_playable_suno_audio(audio_id, src_path)
 
                 # First mix to mono. Samples inside the configurable dead zone
                 # become zero; all others become either -0.8 or +0.8. This keeps

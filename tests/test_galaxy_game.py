@@ -69,6 +69,7 @@ class GalaxyCreditCalculationTests(unittest.TestCase):
             project_root / "web/templates/player.html",
             project_root / "web/templates/player_public.html",
             project_root / "web/templates/suno_info.html",
+            project_root / "web/templates/songripper.html",
         )
         for template in templates:
             source = template.read_text(encoding="utf-8")
