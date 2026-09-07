@@ -7,6 +7,7 @@ import random
 import re
 import time
 from collections import deque
+from urllib.parse import urlsplit
 
 from bot.trya_stream_manager import TryaStreamManager
 from bot.trya_dcs_events import trya_dcs_events
@@ -27,6 +28,7 @@ _DCS_LAST_SONG_PAD_SECONDS = 15.0
 # Viewers sit behind the encoder (HLS). Keep publishing after the last audio
 # so the player can finish the outro before radio.mode goes offline.
 _DCS_END_HOLD_SECONDS = 22.0
+_AUDIO_RELAY_ERROR_LINES = 8
 
 
 _DCS_LOG_BUFFER = deque(maxlen=2000)
@@ -775,8 +777,17 @@ class TryaDcsManager(TryaStreamManager):
 
     async def _audio_relay_loop(self) -> None:
         """Publish the existing AAC track as a lightweight audio-only HLS source."""
-        input_url = self._output_url.rstrip("/")
-        output_url = f"{input_url}-audio"
+        output_url = f"{self._output_url.rstrip('/')}-audio"
+        parsed_output = urlsplit(self._output_url)
+        relay_host = parsed_output.hostname or "mediamtx"
+        if ":" in relay_host and not relay_host.startswith("["):
+            relay_host = f"[{relay_host}]"
+        relay_path = parsed_output.path or "/trya-dcs"
+        # Reading RTMP from MediaMTX and immediately publishing RTMP back into
+        # the same instance can make the reader connection churn. RTSP/TCP is
+        # an internal-only, stable bridge and its port is not exposed by
+        # docker-compose.
+        input_url = f"rtsp://{relay_host}:8554{relay_path}"
         try:
             while self.is_running:
                 process = await asyncio.create_subprocess_exec(
@@ -785,6 +796,8 @@ class TryaDcsManager(TryaStreamManager):
                     "-hide_banner",
                     "-loglevel",
                     "warning",
+                    "-rtsp_transport",
+                    "tcp",
                     "-i",
                     input_url,
                     "-map",
@@ -796,19 +809,27 @@ class TryaDcsManager(TryaStreamManager):
                     "flv",
                     output_url,
                     stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE,
                 )
                 self._audio_relay_process = process
                 await asyncio.sleep(1)
                 if process.returncode is None:
                     self._log("Audio-only DCS relay is live.")
-                return_code = await process.wait()
+                _, stderr = await process.communicate()
+                return_code = process.returncode
                 if self._audio_relay_process is process:
                     self._audio_relay_process = None
                 if not self.is_running:
                     return
+                error_lines = [
+                    line.strip()
+                    for line in stderr.decode("utf-8", errors="replace").splitlines()
+                    if line.strip()
+                ]
+                error_detail = " | ".join(error_lines[-_AUDIO_RELAY_ERROR_LINES:])
                 self._log(
-                    f"Audio-only relay ended with code {return_code}; retrying.",
+                    f"Audio-only relay ended with code {return_code}"
+                    f"{f': {error_detail}' if error_detail else ''}; retrying.",
                     "error",
                 )
                 await asyncio.sleep(2)

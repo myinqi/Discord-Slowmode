@@ -198,6 +198,12 @@
                 <input type="url" name="public_url" value="{{ settings.trya_dcs_public_url }}"
                     class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2 text-gray-300 font-mono text-sm focus:border-discord-blurple focus:outline-none">
             </label>
+            <label class="block lg:col-span-2">
+                <span class="block text-gray-400 text-xs mb-1">Audio-only Player URL</span>
+                <input type="url" value="{{ audio_player_url }}" readonly
+                    class="w-full bg-discord-darker border border-gray-700 rounded-lg px-3 py-2 text-gray-300 font-mono text-sm cursor-text select-all">
+                <p class="text-gray-500 text-[11px] mt-1">Discord-protected alternative for listeners who cannot use the full video stream.</p>
+            </label>
             <label class="block">
                 <span class="block text-gray-400 text-xs mb-1">Maximum active submission songs per member</span>
                 <input type="number" name="max_per_user" min="1" max="20" value="{{ settings.trya_dcs_max_per_user }}"

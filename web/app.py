@@ -11188,6 +11188,7 @@ def create_app(db: Database, bot=None) -> Quart:
             mediamtx_detail=mediamtx_detail,
             oauth_ready=oauth_ready,
             oauth_callback_url=f"{_public_web_url()}/trya-dcs/oauth/callback",
+            audio_player_url=f"{_public_web_url()}/trya-dcs/audio",
             protected_hls_url=f"{_public_web_url()}/dcs-stream/{stream_path}/index.m3u8",
             data_directory=TRYA_DCS_DIR,
             offline_image_configured=offline_image_configured,

@@ -1,7 +1,10 @@
 logLevel: info
 logDestinations: [stdout]
 
-rtsp: false
+# Used only inside the Compose network by the audio-only relay. No RTSP port is
+# exposed on the host.
+rtsp: true
+rtspAddress: :8554
 rtmp: true
 rtmpAddress: :1935
 srt: false
