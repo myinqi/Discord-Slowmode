@@ -11054,16 +11054,28 @@ def create_app(db: Database, bot=None) -> Quart:
             reason = str(song.get("remove_reason") or "")
             return not bool(song.get("active")) and reason.startswith("replaced_by:")
 
+        def _is_expired_submission(song: dict) -> bool:
+            return (
+                not bool(song.get("active"))
+                and song.get("playlist_remove_reason")
+                == "submission_retention_elapsed"
+            )
+
+        def _is_hidden_submission(song: dict) -> bool:
+            return _is_replaced_submission(song) or _is_expired_submission(song)
+
         hide_replaced = settings.get("trya_dcs_hide_replaced_submissions") == "on"
         submission_songs = [
             song for song in songs_desc
             if (song.get("playlist_source") or "submission") not in {"intro", "outro"}
             and song.get("remove_reason") != "removed_by_owner"
         ]
-        replaced_submission_count = sum(1 for song in submission_songs if _is_replaced_submission(song))
+        hidden_submission_count = sum(
+            1 for song in submission_songs if _is_hidden_submission(song)
+        )
         if hide_replaced:
             submission_songs = [
-                song for song in submission_songs if not _is_replaced_submission(song)
+                song for song in submission_songs if not _is_hidden_submission(song)
             ]
         active_submission_songs = [song for song in submission_songs if song.get("active")]
         active_submission_duration = int(round(sum(
@@ -11121,7 +11133,7 @@ def create_app(db: Database, bot=None) -> Quart:
             songs=songs_desc,
             submission_songs=submission_songs,
             hide_replaced_submissions=hide_replaced,
-            replaced_submission_count=replaced_submission_count,
+            hidden_submission_count=hidden_submission_count,
             active_submission_count=len(active_submission_songs),
             active_submission_duration_text=active_submission_duration_text,
             intro_songs=intro_songs,

@@ -620,7 +620,7 @@
                 <input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="toggle_hide_replaced_submissions">
                 <label class="inline-flex items-center gap-2 text-gray-300 text-sm cursor-pointer select-none">
                     <input type="checkbox" name="hide_replaced" value="1" class="rounded border-gray-600 bg-discord-darker" {% if hide_replaced_submissions %}checked{% endif %} onchange="this.form.submit()">
-                    <span>Hide replaced songs{% if replaced_submission_count %} <span class="text-gray-500">({{ replaced_submission_count }})</span>{% endif %}</span>
+                    <span>Hide replaced and expired songs{% if hidden_submission_count %} <span class="text-gray-500">({{ hidden_submission_count }})</span>{% endif %}</span>
                 </label>
             </form>
             <a href="{{ url_for('trya_dcs_consent_csv') }}" class="inline-flex justify-center px-3 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm">Export evidence CSV</a>
@@ -651,7 +651,17 @@
                     </td>
                     {% endif %}
                     <td class="px-5 py-3">
-                        <span class="{{ 'text-green-300' if song.active else 'text-gray-500' }}">{{ 'Active' if song.active else (song.remove_reason or 'Awaiting upload') }}</span>
+                        <span class="{{ 'text-green-300' if song.active else 'text-gray-500' }}">
+                            {% if song.active %}
+                                Active
+                            {% elif song.playlist_remove_reason == 'submission_retention_elapsed' %}
+                                Expired from submission playlist
+                            {% elif song.remove_reason %}
+                                {{ song.remove_reason }}
+                            {% else %}
+                                Awaiting upload
+                            {% endif %}
+                        </span>
                         {% if song.active and song.uploaded_at %}
                         <form method="POST" class="mt-2 flex gap-1">
                             <input type="hidden" name="csrf_token" value="{{ admin_csrf }}"><input type="hidden" name="action" value="set_playlist_source"><input type="hidden" name="song_id" value="{{ song.id }}">
