@@ -7,7 +7,6 @@ import random
 import re
 import time
 from collections import deque
-from urllib.parse import urlsplit
 
 from bot.trya_stream_manager import TryaStreamManager
 from bot.trya_dcs_events import trya_dcs_events
@@ -778,16 +777,10 @@ class TryaDcsManager(TryaStreamManager):
     async def _audio_relay_loop(self) -> None:
         """Publish the existing AAC track as a lightweight audio-only HLS source."""
         output_url = f"{self._output_url.rstrip('/')}-audio"
-        parsed_output = urlsplit(self._output_url)
-        relay_host = parsed_output.hostname or "mediamtx"
-        if ":" in relay_host and not relay_host.startswith("["):
-            relay_host = f"[{relay_host}]"
-        relay_path = parsed_output.path or "/trya-dcs"
-        # Reading RTMP from MediaMTX and immediately publishing RTMP back into
-        # the same instance can make the reader connection churn. RTSP/TCP is
-        # an internal-only, stable bridge and its port is not exposed by
-        # docker-compose.
-        input_url = f"rtsp://{relay_host}:8554{relay_path}"
+        # Consume MediaMTX's existing internal HLS output. This avoids the
+        # unstable RTMP read-back connection without requiring another
+        # MediaMTX listener or an exposed port.
+        input_url = hls_url_from_rtmp(self._output_url)
         try:
             while self.is_running:
                 process = await asyncio.create_subprocess_exec(
@@ -796,8 +789,6 @@ class TryaDcsManager(TryaStreamManager):
                     "-hide_banner",
                     "-loglevel",
                     "warning",
-                    "-rtsp_transport",
-                    "tcp",
                     "-i",
                     input_url,
                     "-map",
