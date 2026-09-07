@@ -27,3 +27,5 @@ playback: false
 paths:
   trya-dcs:
     source: publisher
+  trya-dcs-audio:
+    source: publisher

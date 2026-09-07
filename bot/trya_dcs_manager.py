@@ -61,6 +61,8 @@ class TryaDcsManager(TryaStreamManager):
         self._cached_loop_path: str | None = None
         self._safe_stop_task: asyncio.Task | None = None
         self._announce_task: asyncio.Task | None = None
+        self._audio_relay_task: asyncio.Task | None = None
+        self._audio_relay_process: asyncio.subprocess.Process | None = None
 
     def _log(self, line: str, level: str = "info") -> None:
         log_dcs_event(line, level)
@@ -304,6 +306,25 @@ class TryaDcsManager(TryaStreamManager):
         self._announce_task = None
         if announcer and announcer is not asyncio.current_task() and not announcer.done():
             announcer.cancel()
+        audio_relay_task = self._audio_relay_task
+        self._audio_relay_task = None
+        if (
+            audio_relay_task
+            and audio_relay_task is not asyncio.current_task()
+            and not audio_relay_task.done()
+        ):
+            audio_relay_task.cancel()
+        audio_relay = self._audio_relay_process
+        self._audio_relay_process = None
+        if audio_relay and audio_relay.returncode is None:
+            try:
+                audio_relay.terminate()
+                await asyncio.wait_for(audio_relay.wait(), timeout=5)
+            except Exception:
+                try:
+                    audio_relay.kill()
+                except ProcessLookupError:
+                    pass
         process = self._process
         if process and process.returncode is None:
             try:
@@ -716,6 +737,8 @@ class TryaDcsManager(TryaStreamManager):
             raise RuntimeError(f"FFmpeg exited during startup ({self._process.returncode}).")
         self._stream_ready_event.set()
         self._log("MediaMTX publisher is live.")
+        if not self._audio_relay_task or self._audio_relay_task.done():
+            self._audio_relay_task = asyncio.create_task(self._audio_relay_loop())
         if vod_path:
             asyncio.create_task(
                 self.vod.start_hls_recorder(hls_url_from_rtmp(self._output_url))
@@ -749,6 +772,59 @@ class TryaDcsManager(TryaStreamManager):
             and not self._safe_stop_requested
         ):
             raise RuntimeError(f"FFmpeg exited with code {self._process.returncode}.")
+
+    async def _audio_relay_loop(self) -> None:
+        """Publish the existing AAC track as a lightweight audio-only HLS source."""
+        input_url = self._output_url.rstrip("/")
+        output_url = f"{input_url}-audio"
+        try:
+            while self.is_running:
+                process = await asyncio.create_subprocess_exec(
+                    "ffmpeg",
+                    "-nostdin",
+                    "-hide_banner",
+                    "-loglevel",
+                    "warning",
+                    "-i",
+                    input_url,
+                    "-map",
+                    "0:a:0",
+                    "-vn",
+                    "-c:a",
+                    "copy",
+                    "-f",
+                    "flv",
+                    output_url,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                self._audio_relay_process = process
+                await asyncio.sleep(1)
+                if process.returncode is None:
+                    self._log("Audio-only DCS relay is live.")
+                return_code = await process.wait()
+                if self._audio_relay_process is process:
+                    self._audio_relay_process = None
+                if not self.is_running:
+                    return
+                self._log(
+                    f"Audio-only relay ended with code {return_code}; retrying.",
+                    "error",
+                )
+                await asyncio.sleep(2)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if self.is_running:
+                self._log(f"Audio-only relay failed: {exc}", "error")
+        finally:
+            process = self._audio_relay_process
+            if process and process.returncode is None:
+                try:
+                    process.terminate()
+                except ProcessLookupError:
+                    pass
+            self._audio_relay_process = None
 
     async def _bounded_setting(self, key: str, default: int, low: int, high: int) -> int:
         try:

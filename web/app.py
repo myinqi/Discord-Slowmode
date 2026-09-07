@@ -3979,6 +3979,22 @@ def create_app(db: Database, bot=None) -> Quart:
         identity = session.get("galaxy_discord")
         return identity if isinstance(identity, dict) and identity.get("discord_user_id") else None
 
+    def _discord_oauth_avatar_url(user_id: int, avatar_hash: str | None) -> str:
+        """Build Discord's animated CDN URL when OAuth returns an animated hash."""
+        avatar_hash = str(avatar_hash or "").strip()
+        if not avatar_hash:
+            return ""
+        extension = "gif" if avatar_hash.startswith("a_") else "png"
+        return (
+            f"https://cdn.discordapp.com/avatars/{int(user_id)}/"
+            f"{avatar_hash}.{extension}?size=128"
+        )
+
+    def _discord_member_avatar_url(member, fallback: str = "") -> str:
+        """Prefer the guild display avatar, including animated profile images."""
+        avatar = getattr(member, "display_avatar", None) if member else None
+        return str(avatar.url) if avatar else fallback
+
     async def _galaxy_membership_valid(user_id: int) -> bool:
         guild = get_guild()
         if not guild:
@@ -4030,6 +4046,21 @@ def create_app(db: Database, bot=None) -> Quart:
         if not await _galaxy_membership_valid(int(identity["discord_user_id"])):
             session.pop("galaxy_discord", None)
             return await render_template("trya_dcs_unavailable.html", reason="Discord server membership is required."), 403
+        user_id = int(identity["discord_user_id"])
+        guild = get_guild()
+        member = guild.get_member(user_id) if guild else None
+        if member is not None:
+            current_identity = dict(identity)
+            current_identity["display_name"] = member.display_name
+            current_identity["avatar_url"] = _discord_member_avatar_url(
+                member, str(identity.get("avatar_url") or "")
+            )
+            if current_identity != identity:
+                identity = current_identity
+                session["galaxy_discord"] = identity
+                await db.galaxy_upsert_user(
+                    user_id, identity["display_name"], identity["avatar_url"]
+                )
         csrf = secrets.token_urlsafe(32)
         session["galaxy_csrf"] = csrf
         return await render_template(
@@ -4100,7 +4131,9 @@ def create_app(db: Database, bot=None) -> Quart:
         member = guild.get_member(user_id) if guild else None
         display_name = getattr(member, "display_name", None) or user.get("global_name") or user.get("username") or "Explorer"
         avatar_hash = user.get("avatar")
-        avatar_url = f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.png?size=128" if avatar_hash else ""
+        avatar_url = _discord_member_avatar_url(
+            member, _discord_oauth_avatar_url(user_id, avatar_hash)
+        )
         await db.galaxy_upsert_user(user_id, display_name, avatar_url)
         session["galaxy_discord"] = {
             "discord_user_id": str(user_id),
@@ -4671,10 +4704,75 @@ def create_app(db: Database, bot=None) -> Quart:
         if task:
             task.cancel()
 
+    async def _refresh_linked_player_discord(connection: dict | None) -> dict | None:
+        """Refresh a persistent Player identity from its current guild profile."""
+        if not connection:
+            return None
+        try:
+            discord_user_id = int(connection["discord_user_id"])
+        except (KeyError, TypeError, ValueError):
+            return connection
+        guild = get_guild()
+        member = guild.get_member(discord_user_id) if guild else None
+        if guild and member is None:
+            try:
+                member = await guild.fetch_member(discord_user_id)
+            except Exception:
+                member = None
+        if member is None:
+            return connection
+        refreshed = dict(connection)
+        refreshed["discord_display_name"] = member.display_name
+        refreshed["discord_avatar"] = _discord_member_avatar_url(
+            member, str(connection.get("discord_avatar") or "")
+        )
+        if (
+            refreshed["discord_display_name"] != connection.get("discord_display_name")
+            or refreshed["discord_avatar"] != connection.get("discord_avatar")
+        ):
+            await db.link_player_discord_account(
+                web_user_id=int(connection["web_user_id"]),
+                discord_user_id=discord_user_id,
+                discord_username=str(
+                    connection.get("discord_username") or member.name
+                ),
+                discord_display_name=refreshed["discord_display_name"],
+                discord_avatar=refreshed["discord_avatar"],
+            )
+        return refreshed
+
+    async def _refresh_public_player_discord() -> dict | None:
+        """Refresh the session-scoped identity used by the external Player."""
+        connection = session.get("public_player_discord")
+        if not isinstance(connection, dict):
+            return None
+        try:
+            discord_user_id = int(connection["discord_user_id"])
+        except (KeyError, TypeError, ValueError):
+            return connection
+        guild = get_guild()
+        member = guild.get_member(discord_user_id) if guild else None
+        if guild and member is None:
+            try:
+                member = await guild.fetch_member(discord_user_id)
+            except Exception:
+                member = None
+        if member is None:
+            return connection
+        refreshed = dict(connection)
+        refreshed["discord_display_name"] = member.display_name
+        refreshed["discord_avatar"] = _discord_member_avatar_url(
+            member, str(connection.get("discord_avatar") or "")
+        )
+        if refreshed != connection:
+            session["public_player_discord"] = refreshed
+        return refreshed
+
     @app.route("/player")
     @permission_required('player')
     async def player():
         connection = await db.get_player_discord_connection(session["user_id"])
+        connection = await _refresh_linked_player_discord(connection)
         client_id, client_secret = await _player_discord_oauth_credentials()
         return await render_template(
             "player.html",
@@ -4849,10 +4947,11 @@ def create_app(db: Database, bot=None) -> Quart:
     @app.route("/public/player")
     async def player_public():
         client_id, client_secret = await _player_discord_oauth_credentials()
+        connection = await _refresh_public_player_discord()
         return await render_template(
             "player_public.html",
             channels=await _get_player_channels(),
-            discord_connection=session.get("public_player_discord"),
+            discord_connection=connection,
             discord_oauth_ready=bool(client_id and client_secret),
         )
 
@@ -5329,6 +5428,7 @@ def create_app(db: Database, bot=None) -> Quart:
         from quart import jsonify
 
         connection = await db.get_player_discord_connection(session["user_id"])
+        connection = await _refresh_linked_player_discord(connection)
         emojis = []
         message_id = request.args.get("message_id", "")
         if connection and message_id.isdigit():
@@ -5346,7 +5446,7 @@ def create_app(db: Database, bot=None) -> Quart:
     async def api_public_player_discord_status():
         from quart import jsonify
 
-        connection = session.get("public_player_discord")
+        connection = await _refresh_public_player_discord()
         emojis = []
         message_id = request.args.get("message_id", "")
         if connection and message_id.isdigit():
@@ -11833,16 +11933,22 @@ def create_app(db: Database, bot=None) -> Quart:
             return await render_template("trya_dcs_unavailable.html", reason="Your current server membership could not be verified."), 403
 
         avatar_hash = identity.get("avatar")
+        guild = get_guild()
+        member = guild.get_member(user_id) if guild else None
         session["trya_dcs_discord_user_id"] = user_id
         session["trya_dcs_discord_name"] = identity.get("global_name") or identity.get("username") or "Discord member"
-        session["trya_dcs_discord_avatar"] = (
-            f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.png?size=128"
-            if avatar_hash else ""
+        session["trya_dcs_discord_avatar"] = _discord_member_avatar_url(
+            member, _discord_oauth_avatar_url(user_id, avatar_hash)
         )
         session["trya_dcs_guild_id"] = guild_id
         session["trya_dcs_membership_checked_at"] = time.time()
         next_path = session.pop("trya_dcs_oauth_next", "")
-        if not re.fullmatch(r"/trya-dcs/upload/[A-Za-z0-9_-]{20,100}", next_path):
+        if (
+            next_path != "/trya-dcs/audio"
+            and not re.fullmatch(
+                r"/trya-dcs/upload/[A-Za-z0-9_-]{20,100}", next_path
+            )
+        ):
             next_path = url_for("trya_dcs_player")
         return redirect(next_path)
 
@@ -11917,6 +12023,13 @@ def create_app(db: Database, bot=None) -> Quart:
                 await db.revoke_trya_dcs_user_tokens(int(user_id))
                 return await render_template("trya_dcs_unavailable.html", reason="Discord server membership is required."), 403
             session["trya_dcs_membership_checked_at"] = time.time()
+        guild = get_guild()
+        member = guild.get_member(int(user_id)) if guild else None
+        if member is not None:
+            session["trya_dcs_discord_name"] = member.display_name
+            session["trya_dcs_discord_avatar"] = _discord_member_avatar_url(
+                member, str(session.get("trya_dcs_discord_avatar") or "")
+            )
         player_csrf = secrets.token_urlsafe(32)
         session["trya_dcs_player_csrf"] = player_csrf
         offline_filename = os.path.basename(
@@ -11935,6 +12048,44 @@ def create_app(db: Database, bot=None) -> Quart:
             disclaimer=await db.get_setting("trya_dcs_disclaimer") or "AI-generated audio and visuals.",
             player_csrf=player_csrf,
             offline_image_url=offline_image_url,
+        )
+
+    @app.route("/trya-dcs/audio")
+    async def trya_dcs_audio_player():
+        """Discord-protected audio-only alternative to the full DCS player."""
+        if (await db.get_setting("trya_dcs_enabled") or "off") != "on":
+            return await render_template(
+                "trya_dcs_unavailable.html",
+                reason="The community stream is currently disabled.",
+            ), 503
+        user_id = session.get("trya_dcs_discord_user_id")
+        guild_id = int(
+            await db.get_setting("trya_dcs_guild_id") or Config.GUILD_ID or 0
+        )
+        if not user_id:
+            session["trya_dcs_oauth_next"] = "/trya-dcs/audio"
+            return redirect(url_for("trya_dcs_oauth_start"))
+        if not await _trya_dcs_membership_valid(int(user_id), guild_id):
+            await db.revoke_trya_dcs_user_tokens(int(user_id))
+            return await render_template(
+                "trya_dcs_unavailable.html",
+                reason="Discord server membership is required.",
+            ), 403
+        session["trya_dcs_membership_checked_at"] = time.time()
+        guild = get_guild()
+        member = guild.get_member(int(user_id)) if guild else None
+        if member is not None:
+            session["trya_dcs_discord_name"] = member.display_name
+            session["trya_dcs_discord_avatar"] = _discord_member_avatar_url(
+                member, str(session.get("trya_dcs_discord_avatar") or "")
+            )
+        player_csrf = secrets.token_urlsafe(32)
+        session["trya_dcs_player_csrf"] = player_csrf
+        return await render_template(
+            "trya_dcs_audio.html",
+            discord_name=session.get("trya_dcs_discord_name"),
+            discord_avatar=session.get("trya_dcs_discord_avatar"),
+            player_csrf=player_csrf,
         )
 
     @app.route("/trya-dcs/api/events")
@@ -12347,9 +12498,9 @@ def create_app(db: Database, bot=None) -> Quart:
         token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
         now = time.time()
         ttl = max(300, min(900, int(await db.get_setting("trya_dcs_stream_token_ttl_seconds") or "600")))
-        forwarded_for = request.headers.get("X-Forwarded-For", request.remote_addr or "")
+        user_agent = request.headers.get("User-Agent", "")
         fingerprint = hashlib.sha256(
-            f"{forwarded_for.split(',')[0].strip()}|{request.headers.get('User-Agent', '')}".encode("utf-8")
+            f"dcs-browser-v1|{user_agent}".encode("utf-8")
         ).hexdigest()
         await db.issue_trya_dcs_stream_token(
             token_hash=token_hash,
@@ -12359,9 +12510,12 @@ def create_app(db: Database, bot=None) -> Quart:
             expires_at=now + ttl,
             remote_fingerprint=fingerprint,
         )
-        response = await make_response(
-            {"hls_url": "/dcs-stream/trya-dcs/index.m3u8", "expires_in": ttl}
-        )
+        stream_mode = (request.args.get("mode") or "video").strip().lower()
+        stream_path = "trya-dcs-audio" if stream_mode == "audio" else "trya-dcs"
+        response = await make_response({
+            "hls_url": f"/dcs-stream/{stream_path}/index.m3u8",
+            "expires_in": ttl,
+        })
         response.set_cookie(
             "trya_dcs_stream_token",
             raw_token,
@@ -12409,14 +12563,24 @@ def create_app(db: Database, bot=None) -> Quart:
         token = await db.get_trya_dcs_stream_token(token_hash)
         if not token:
             return "", 401
-        forwarded_for = request.headers.get("X-Forwarded-For", request.remote_addr or "")
+        user_agent = request.headers.get("User-Agent", "")
         fingerprint = hashlib.sha256(
-            f"{forwarded_for.split(',')[0].strip()}|{request.headers.get('User-Agent', '')}".encode("utf-8")
+            f"dcs-browser-v1|{user_agent}".encode("utf-8")
         ).hexdigest()
-        if token.get("remote_fingerprint") and not hmac.compare_digest(
-            token["remote_fingerprint"], fingerprint
+        stored_fingerprint = str(token.get("remote_fingerprint") or "")
+        if stored_fingerprint and not hmac.compare_digest(
+            stored_fingerprint, fingerprint
         ):
-            return "", 401
+            # Transitional compatibility for tokens created before the IP
+            # binding was removed. New tokens never include the client IP.
+            forwarded_for = request.headers.get(
+                "X-Forwarded-For", request.remote_addr or ""
+            )
+            legacy_fingerprint = hashlib.sha256(
+                f"{forwarded_for.split(',')[0].strip()}|{user_agent}".encode("utf-8")
+            ).hexdigest()
+            if not hmac.compare_digest(stored_fingerprint, legacy_fingerprint):
+                return "", 401
         recheck = max(60, min(900, int(await db.get_setting("trya_dcs_membership_recheck_seconds") or "300")))
         if time.time() - float(token["last_membership_check_at"]) >= recheck:
             valid = await _trya_dcs_membership_valid(
@@ -18039,6 +18203,7 @@ def create_app(db: Database, bot=None) -> Quart:
         except (ValueError, TypeError): pass
         has_party = bool(_user.get("is_admin")) or "party_playlist" in _perms
         discord_connection = await db.get_player_discord_connection(session["user_id"])
+        discord_connection = await _refresh_linked_player_discord(discord_connection)
         client_id, client_secret = await _player_discord_oauth_credentials()
         return await render_template("suno_info.html",
             channels=await _get_player_channels(), has_party=has_party,
@@ -18051,6 +18216,7 @@ def create_app(db: Database, bot=None) -> Quart:
         from quart import jsonify
 
         connection = await db.get_player_discord_connection(session["user_id"])
+        connection = await _refresh_linked_player_discord(connection)
         message_id = request.args.get("message_id", "")
         emojis = []
         if connection and message_id.isdigit():

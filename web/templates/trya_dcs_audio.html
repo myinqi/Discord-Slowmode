@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="robots" content="noindex,nofollow,noarchive">
+    <title>TrYa DCS · Audio only</title>
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='TrYa_logo.png') }}">
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.6.13/dist/hls.min.js"></script>
+    <style>
+        :root{color-scheme:dark;--bg:#07060b;--panel:#15121d;--line:#332d40;--muted:#9b93aa;--accent:#b044e4}
+        *{box-sizing:border-box}html,body{margin:0;min-height:100%;background:radial-gradient(circle at 50% 0,#21142d,var(--bg) 55%);color:#f1edf7;font-family:system-ui,sans-serif}
+        body{min-height:100vh;display:grid;place-items:center;padding:18px}.shell{width:min(620px,100%)}
+        header{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:14px}.brand{display:flex;align-items:center;gap:10px}.brand img{width:42px;height:42px;border-radius:9px}.brand strong{display:block;font-size:19px}.brand span{display:block;color:var(--muted);font-size:12px;margin-top:2px}
+        .identity{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px}.identity img{width:30px;height:30px;border-radius:50%;object-fit:cover}
+        button,.link{border:1px solid var(--line);border-radius:6px;background:#211a2d;color:#eeeaf6;padding:8px 11px;text-decoration:none;cursor:pointer;font:inherit;font-size:13px}
+        .card{padding:24px;border:1px solid var(--line);border-radius:11px;background:rgba(21,18,29,.94);box-shadow:0 22px 70px #0008}.kicker{color:#aa79c8;font-size:11px;font-weight:750;letter-spacing:.1em;text-transform:uppercase}.live{display:inline-block;width:8px;height:8px;margin-right:6px;border-radius:50%;background:#686170}.live.on{background:#54d68a;box-shadow:0 0 12px #54d68a}
+        h1{margin:12px 0 5px;font-size:24px;overflow-wrap:anywhere}.artist{min-height:20px;margin:0 0 20px;color:var(--muted)}audio{display:block;width:100%;margin:4px 0 18px;accent-color:var(--accent)}
+        .state{min-height:20px;color:#b9afc5;font-size:13px}.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px;padding-top:18px;border-top:1px solid var(--line)}.song-link[hidden]{display:none}.song-link{color:#ebc7ff}.full{margin-left:auto}.hint{margin:16px 0 0;color:#746d7e;font-size:11px;line-height:1.45}
+        @media(max-width:560px){header{align-items:flex-start;flex-direction:column}.identity{width:100%;flex-wrap:wrap}.card{padding:18px}.full{margin-left:0}}
+    </style>
+</head>
+<body>
+<div class="shell">
+    <header>
+        <div class="brand"><img src="{{ url_for('static', filename='TrYa_logo.png') }}" alt="TrYa"><div><strong>TrYa DCS</strong><span>Audio-only alternative</span></div></div>
+        <div class="identity">{% if discord_avatar %}<img src="{{ discord_avatar }}" alt="">{% endif %}<span>{{ discord_name }}</span><form method="POST" action="{{ url_for('trya_dcs_logout') }}"><input type="hidden" name="csrf_token" value="{{ player_csrf }}"><button type="submit">Sign out</button></form></div>
+    </header>
+    <main class="card">
+        <div class="kicker"><span id="live-dot" class="live"></span><span id="stream-label">Checking stream</span></div>
+        <h1 id="song-title">TrYa Discord Community Stream</h1>
+        <p id="song-artist" class="artist">Waiting for stream metadata</p>
+        <audio id="audio" controls playsinline preload="none"></audio>
+        <div id="state" class="state">Authorizing private audio access…</div>
+        <div class="actions">
+            <a id="suno-link" class="link song-link" href="#" target="_blank" rel="noopener noreferrer" hidden>Open in Suno ↗</a>
+            <a id="wlm-link" class="link song-link" href="#" target="_blank" rel="noopener noreferrer" hidden>Open in WLM ↗</a>
+            <a class="link full" href="{{ url_for('trya_dcs_player') }}">Open full stream</a>
+        </div>
+        <p class="hint">This player carries only the AAC audio track. It uses the same Discord membership checks and temporary protected access as the full DCS stream.</p>
+    </main>
+</div>
+<script>
+const audio=document.getElementById('audio'),state=document.getElementById('state');
+const title=document.getElementById('song-title'),artist=document.getElementById('song-artist');
+const liveDot=document.getElementById('live-dot'),streamLabel=document.getElementById('stream-label');
+const sunoLink=document.getElementById('suno-link'),wlmLink=document.getElementById('wlm-link');
+let hls=null,renewTimer=null;
+
+function setState(message){state.textContent=message}
+function setLink(element,url){element.hidden=!url;element.href=url||'#'}
+
+async function authorizeAudio(initial=false){
+    if(initial)setState('Authorizing private audio access…');
+    const response=await fetch('{{ url_for("trya_dcs_stream_token", mode="audio") }}',{method:'POST',credentials:'same-origin',headers:{Accept:'application/json'}});
+    if(!response.ok){setState(response.status===403?'Discord membership could not be verified.':'The audio stream is currently unavailable.');return}
+    const payload=await response.json();
+    if(initial){
+        if(audio.canPlayType('application/vnd.apple.mpegurl')){
+            audio.src=payload.hls_url;
+        }else if(window.Hls&&Hls.isSupported()){
+            hls=new Hls({lowLatencyMode:false,backBufferLength:30,maxBufferLength:45,liveSyncDuration:20,liveMaxLatencyDuration:45});
+            hls.loadSource(payload.hls_url);hls.attachMedia(audio);
+            hls.on(Hls.Events.MANIFEST_PARSED,()=>setState('Press play to listen.'));
+            hls.on(Hls.Events.ERROR,(_,data)=>{
+                if(!data.fatal)return;
+                setState('Audio connection lost. Reconnecting…');
+                if(data.type===Hls.ErrorTypes.NETWORK_ERROR)setTimeout(()=>hls&&hls.startLoad(),2000);
+                else if(data.type===Hls.ErrorTypes.MEDIA_ERROR)hls.recoverMediaError();
+                else{hls.destroy();hls=null;setTimeout(()=>authorizeAudio(true),2000)}
+            });
+        }else{setState('This browser does not support HLS audio.');return}
+    }
+    clearTimeout(renewTimer);
+    renewTimer=setTimeout(()=>authorizeAudio(false),Math.max(60,Number(payload.expires_in||600)-90)*1000);
+}
+
+async function refreshStatus(){
+    try{
+        const response=await fetch('{{ url_for("trya_dcs_public_status") }}',{credentials:'same-origin',headers:{Accept:'application/json'}});
+        if(!response.ok)return;
+        const payload=await response.json(),song=payload.song||{};
+        liveDot.classList.toggle('on',Boolean(payload.running));
+        streamLabel.textContent=payload.running?'Live audio stream':'Stream offline';
+        title.textContent=song.title||'TrYa Discord Community Stream';
+        artist.textContent=song.artist||song.submitted_by||'Waiting for stream metadata';
+        setLink(sunoLink,song.suno_url);setLink(wlmLink,song.wlm_url);
+        if(!payload.running)setState('The community stream is currently offline.');
+    }catch(_){/* keep the audio connection independent of metadata */}
+}
+
+audio.addEventListener('playing',()=>setState('Playing live audio.'));
+audio.addEventListener('waiting',()=>setState('Buffering live audio…'));
+audio.addEventListener('error',()=>setState('The audio stream could not be played.'));
+authorizeAudio(true).catch(()=>setState('Could not initialize private audio access.'));
+refreshStatus();setInterval(refreshStatus,3000);
+</script>
+</body>
+</html>

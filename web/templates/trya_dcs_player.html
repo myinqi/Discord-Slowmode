@@ -20,6 +20,8 @@
         .brand { font-size:22px; font-weight:750; }
         .identity { display:flex; align-items:center; gap:9px; color:var(--muted); font-size:14px; }
         .identity img { width:32px; height:32px; border-radius:50%; object-fit:cover; }
+        .identity-link { color:#d7c9e7; text-decoration:none; border:1px solid var(--line); border-radius:6px; padding:7px 10px; }
+        .identity-link:hover { color:#fff; background:#211a2d; }
         button { border:1px solid var(--line); border-radius:6px; background:#211a2d; color:#eeeaf6; padding:8px 12px; cursor:pointer; }
         .layout { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0, 1fr) minmax(300px, 390px); grid-template-rows:minmax(0, 1fr); gap:14px; overflow:hidden; }
         .video-panel, .chat-panel { min-height:0; max-height:100%; border:1px solid var(--line); background:var(--panel); border-radius:8px; }
@@ -223,6 +225,7 @@
             </div>
         </div>
         <div class="identity">
+            <a class="identity-link" href="{{ url_for('trya_dcs_audio_player') }}">Audio only</a>
             {% if discord_avatar %}<img src="{{ discord_avatar }}" alt="">{% endif %}
             <span>{{ discord_name }}</span>
             <form method="POST" action="{{ url_for('trya_dcs_logout') }}"><input type="hidden" name="csrf_token" value="{{ player_csrf }}"><button type="submit">Sign out</button></form>
