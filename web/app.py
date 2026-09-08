@@ -10,7 +10,7 @@ import secrets
 import time
 import threading
 from datetime import datetime, timedelta
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
 import bcrypt
 import aiohttp
@@ -41,7 +41,7 @@ from bot.suno_audio import (
     request_audio_license as _request_suno_audio_license,
     write_playable_suno_audio,
 )
-from bot.suno_urls import resolve_suno_uuid
+from bot.suno_urls import extract_suno_uuid, resolve_suno_uuid
 from config import Config
 
 SUNO_URL_PATTERN = re.compile(r'https://suno\.com/(?:s|song)/[\w-]+')
@@ -484,6 +484,8 @@ def create_app(db: Database, bot=None) -> Quart:
     app.suno_playback_rate = {}
     app.galaxy_metadata_cache = {}
     app.galaxy_metadata_lock = asyncio.Lock()
+    app.galaxy_wlm_cache = {}
+    app.galaxy_wlm_lock = asyncio.Lock()
     # Serializes manual starts of both radio managers. The scheduled Exp.
     # Radio start additionally checks the legacy manager before it fires.
     app.radio_start_lock = asyncio.Lock()
@@ -3823,6 +3825,7 @@ def create_app(db: Database, bot=None) -> Quart:
             "galaxy_desktop_planet_limit": "75",
             "galaxy_mobile_planet_limit": "35",
             "galaxy_target_fps": "60",
+            "galaxy_wlm_enabled": "off",
         }
         if request.method == "POST":
             form = await request.form
@@ -3925,11 +3928,18 @@ def create_app(db: Database, bot=None) -> Quart:
                 "galaxy_desktop_planet_limit": bounded("desktop_planet_limit", 75, 10, 150),
                 "galaxy_mobile_planet_limit": bounded("mobile_planet_limit", 35, 5, 75),
                 "galaxy_target_fps": "30" if form.get("target_fps") == "30" else "60",
+                "galaxy_wlm_enabled": "on" if form.get("wlm_enabled") else "off",
             }
             if int(values["galaxy_default_song_limit"]) > int(values["galaxy_max_song_limit"]):
                 values["galaxy_default_song_limit"] = values["galaxy_max_song_limit"]
             for key, value in values.items():
                 await db.set_setting(key, value)
+            submitted_wlm_key = str(form.get("wlm_api_key") or "").strip()
+            if form.get("clear_wlm_api_key"):
+                await db.set_setting("galaxy_wlm_api_key", "")
+            elif submitted_wlm_key:
+                await db.set_setting("galaxy_wlm_api_key", submitted_wlm_key)
+            app.galaxy_wlm_cache.clear()
             await db.add_audit_log(
                 event_type="galaxy_settings_changed",
                 details=f"Enabled={values['galaxy_enabled']}, channels={len(allowed)}, reaction={values['galaxy_reaction_enabled']}",
@@ -3940,6 +3950,7 @@ def create_app(db: Database, bot=None) -> Quart:
         settings = {
             key: await db.get_setting(key) or default for key, default in defaults.items()
         }
+        wlm_api_key_configured = bool(await db.get_setting("galaxy_wlm_api_key"))
         guild = get_guild()
         channels = []
         for row in await db.get_monitored_channels():
@@ -3973,6 +3984,7 @@ def create_app(db: Database, bot=None) -> Quart:
             galaxy_listens=listens,
             csrf_token=csrf,
             oauth_callback_url=f"{_public_web_url()}/galaxy/oauth/callback",
+            wlm_api_key_configured=wlm_api_key_configured,
         )
 
     def _galaxy_identity() -> dict | None:
@@ -4159,6 +4171,140 @@ def create_app(db: Database, bot=None) -> Quart:
             return None
         return identity
 
+    async def _galaxy_wlm_ready() -> tuple[bool, str]:
+        enabled = (await db.get_setting("galaxy_wlm_enabled") or "off") == "on"
+        api_key = (await db.get_setting("galaxy_wlm_api_key") or "").strip()
+        return bool(enabled and api_key), api_key
+
+    async def _galaxy_wlm_request(path: str, params: dict | None = None) -> dict:
+        ready, api_key = await _galaxy_wlm_ready()
+        if not ready:
+            raise RuntimeError("WLM is not configured")
+        safe_path = "/" + str(path or "").lstrip("/")
+        cache_key = (safe_path, tuple(sorted((str(k), str(v)) for k, v in (params or {}).items())))
+        now = time.monotonic()
+        cached = app.galaxy_wlm_cache.get(cache_key)
+        if cached and now - float(cached[0]) < 300:
+            return cached[1]
+        async with app.galaxy_wlm_lock:
+            cached = app.galaxy_wlm_cache.get(cache_key)
+            if cached and now - float(cached[0]) < 300:
+                return cached[1]
+            timeout = aiohttp.ClientTimeout(total=15)
+            url = f"https://api.welovemusic.ai/api/v1/partner{safe_path}"
+            async with aiohttp.ClientSession(timeout=timeout) as http:
+                async with http.get(
+                    url,
+                    params=params,
+                    headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+                ) as response:
+                    payload = await response.json(content_type=None)
+                    if response.status != 200 or not isinstance(payload, dict):
+                        detail = str(payload.get("error") if isinstance(payload, dict) else "")
+                        raise RuntimeError(detail[:160] or f"WLM returned HTTP {response.status}")
+            app.galaxy_wlm_cache[cache_key] = (time.monotonic(), payload)
+            if len(app.galaxy_wlm_cache) > 256:
+                oldest = sorted(app.galaxy_wlm_cache, key=lambda key: app.galaxy_wlm_cache[key][0])[:64]
+                for key in oldest:
+                    app.galaxy_wlm_cache.pop(key, None)
+            return payload
+
+    def _galaxy_wlm_track_message_id(track_id: str) -> int:
+        digest = hashlib.sha256(f"wlm:{track_id}".encode()).digest()
+        # Discord snowflakes are positive. A stable negative ID keeps WLM
+        # listening history in the existing schema without collision risk.
+        return -(int.from_bytes(digest[:8], "big") & ((1 << 63) - 1) or 1)
+
+    def _galaxy_https_url(value) -> str:
+        value = str(value or "").strip()
+        return value if value.startswith("https://") else ""
+
+    def _galaxy_wlm_song(track: dict) -> dict | None:
+        track_id = str(track.get("id") or "").strip()
+        title = str(track.get("title") or "").strip()
+        audio_url = _galaxy_https_url(track.get("directMp3Url"))
+        if not track_id or not title or not audio_url:
+            return None
+        suno_url = _galaxy_https_url(track.get("sunoUrl"))
+        suno_uuid = extract_suno_uuid(suno_url) or ""
+        artist_name = str(track.get("artistName") or "").strip() or "Unknown WLM artist"
+        try:
+            rating = max(0.0, min(5.0, float(track.get("ratingAvg") or 0)))
+        except (TypeError, ValueError):
+            rating = 0.0
+        def count(name: str) -> int:
+            try:
+                return max(0, int(track.get(name) or 0))
+            except (TypeError, ValueError):
+                return 0
+        return {
+            "source": "wlm",
+            "message_id": str(_galaxy_wlm_track_message_id(track_id)),
+            "channel_id": "0",
+            "user_id": "",
+            "uuid": suno_uuid,
+            "url": suno_url,
+            "title": title,
+            "artist": artist_name,
+            "discord_display_name": "",
+            "discord_handle": "",
+            "wlm_track_id": track_id,
+            "wlm_artist_id": str(track.get("artistId") or ""),
+            "wlm_artist_name": artist_name,
+            "genres": [str(item)[:60] for item in (track.get("genres") or []) if str(item).strip()][:10],
+            "listens": count("listens"),
+            "likes": count("likes"),
+            "rating_avg": rating,
+            "published_at": str(track.get("publishedAt") or ""),
+            "posted_at": time.time(),
+            "reaction_count": count("likes"),
+            "audio_primary": audio_url,
+            "audio_fallback": f"https://cdn1.suno.ai/{suno_uuid}.mp3" if suno_uuid else "",
+            "artwork": _galaxy_https_url(track.get("imageUrl")),
+        }
+
+    @app.route("/galaxy/api/wlm/catalog")
+    async def galaxy_api_wlm_catalog():
+        identity = await _galaxy_api_user()
+        if not identity:
+            return {"error": "forbidden"}, 403
+        try:
+            playlists, genres = await asyncio.gather(
+                _galaxy_wlm_request("/playlists", {"limit": 100}),
+                _galaxy_wlm_request("/genres"),
+            )
+        except Exception as exc:
+            return {"error": "wlm_unavailable", "message": str(exc)}, 502
+        return {
+            "playlists": playlists.get("data") or [],
+            "genres": genres.get("genres") or [],
+        }
+
+    @app.route("/galaxy/api/wlm/artists/<artist_id>")
+    async def galaxy_api_wlm_artist(artist_id: str):
+        identity = await _galaxy_api_user()
+        if not identity:
+            return {"error": "forbidden"}, 403
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", artist_id or ""):
+            return {"error": "invalid_artist"}, 400
+        try:
+            raw_artist = await _galaxy_wlm_request(f"/artists/{quote(artist_id, safe='')}")
+        except Exception as exc:
+            return {"error": "wlm_artist_unavailable", "message": str(exc)}, 502
+        artist = {
+            "id": str(raw_artist.get("id") or artist_id),
+            "artistName": str(raw_artist.get("artistName") or "")[:200],
+            "username": str(raw_artist.get("username") or "")[:100],
+            "bio": str(raw_artist.get("bio") or "")[:2000],
+            "avatarUrl": _galaxy_https_url(raw_artist.get("avatarUrl")),
+            "socialLinks": {
+                str(name)[:40]: _galaxy_https_url(url)
+                for name, url in (raw_artist.get("socialLinks") or {}).items()
+                if _galaxy_https_url(url)
+            } if isinstance(raw_artist.get("socialLinks"), dict) else {},
+        }
+        return {"artist": artist}
+
     @app.route("/galaxy/api/config")
     async def galaxy_api_config():
         identity = await _galaxy_api_user()
@@ -4177,6 +4323,7 @@ def create_app(db: Database, bot=None) -> Quart:
             channel = guild.get_channel(int(channel_id)) if guild else None
             channels.append({"id": channel_id, "name": channel.name if channel else f"channel-{channel_id}"})
         profile = await db.galaxy_get_profile(int(identity["discord_user_id"]))
+        wlm_ready, _ = await _galaxy_wlm_ready()
         return {
             "channels": channels,
             "default_channel_id": await db.get_setting("galaxy_default_channel_id") or "",
@@ -4191,6 +4338,7 @@ def create_app(db: Database, bot=None) -> Quart:
             "desktop_planet_limit": int(await db.get_setting("galaxy_desktop_planet_limit") or "75"),
             "mobile_planet_limit": int(await db.get_setting("galaxy_mobile_planet_limit") or "35"),
             "target_fps": int(await db.get_setting("galaxy_target_fps") or "60"),
+            "wlm_available": wlm_ready,
             "profile": profile,
         }
 
@@ -4318,72 +4466,112 @@ def create_app(db: Database, bot=None) -> Quart:
         if not _galaxy_rate_allowed(int(identity["discord_user_id"]), "expedition", 10, 60):
             return {"error": "rate_limited"}, 429
         data = await request.get_json(silent=True) or {}
-        allowed = {
-            int(item) for item in (await db.get_setting("galaxy_allowed_channel_ids") or "").split(",")
-            if item.isdigit()
-        }
+        source = str(data.get("source") or "discord")
         try:
-            channel_id = int(data.get("channel_id"))
             days = max(1, min(int(data.get("days") or 1), int(await db.get_setting("galaxy_max_range_days") or "30")))
             limit = max(5, min(int(data.get("limit") or 30), int(await db.get_setting("galaxy_max_song_limit") or "75")))
         except (TypeError, ValueError):
             return {"error": "invalid_parameters"}, 400
-        if channel_id not in allowed:
-            return {"error": "channel_not_allowed"}, 403
-        from bot.suno_urls import extract_suno_uuid
-        rows = await db.get_player_songs(channel_id=channel_id, limit=min(500, limit * 5), offset=0)
-        guild = get_guild()
-        cutoff = time.time() - days * 86400
         songs = []
-        for row in rows:
+        source_label = "Discord showcase"
+        if source in {"wlm_playlist", "wlm_genre", "wlm_artist"}:
+            collection_id = str(data.get("collection_id") or "").strip()
+            valid_collection = (
+                bool(re.fullmatch(r"[A-Za-z0-9_-]{1,100}", collection_id))
+                if source != "wlm_genre"
+                else bool(collection_id and len(collection_id) <= 60 and not any(ord(c) < 32 for c in collection_id))
+            )
+            if not valid_collection:
+                return {"error": "invalid_wlm_collection"}, 400
             try:
-                if float(row.get("posted_at") or 0) < cutoff:
+                if source == "wlm_playlist":
+                    payload = await _galaxy_wlm_request(
+                        f"/playlists/{quote(collection_id, safe='')}"
+                    )
+                    tracks = payload.get("tracks") or []
+                    source_label = str(payload.get("title") or collection_id)
+                else:
+                    parameter = "genre" if source == "wlm_genre" else "artistId"
+                    payload = await _galaxy_wlm_request(
+                        "/tracks", {parameter: collection_id, "limit": min(100, limit)}
+                    )
+                    tracks = payload.get("data") or []
+                    source_label = collection_id
+                for track in tracks:
+                    song = _galaxy_wlm_song(track) if isinstance(track, dict) else None
+                    if song:
+                        songs.append(song)
+                    if len(songs) >= limit:
+                        break
+            except Exception as exc:
+                return {"error": "wlm_unavailable", "message": str(exc)}, 502
+            channel_id = 0
+        elif source == "discord":
+            allowed = {
+                int(item) for item in (await db.get_setting("galaxy_allowed_channel_ids") or "").split(",")
+                if item.isdigit()
+            }
+            try:
+                channel_id = int(data.get("channel_id"))
+            except (TypeError, ValueError):
+                return {"error": "invalid_parameters"}, 400
+            if channel_id not in allowed:
+                return {"error": "channel_not_allowed"}, 403
+            rows = await db.get_player_songs(channel_id=channel_id, limit=min(500, limit * 5), offset=0)
+            guild = get_guild()
+            cutoff = time.time() - days * 86400
+            for row in rows:
+                try:
+                    if float(row.get("posted_at") or 0) < cutoff:
+                        continue
+                except (TypeError, ValueError):
                     continue
-            except (TypeError, ValueError):
-                continue
-            uuid = str(row.get("suno_uuid") or "").lower()
-            if not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", uuid):
-                uuid = extract_suno_uuid(row.get("url")) or ""
-            if not uuid or not row.get("message_id"):
-                continue
-            stored_title = str(row.get("song_title") or "").strip()
-            if stored_title.lower() in {"unknown song", "unknown title"}:
-                stored_title = ""
-            discord_handle = str(row.get("user_name") or "").strip()
-            discord_display_name = discord_handle or "Unknown artist"
-            try:
-                member = guild.get_member(int(row.get("user_id") or 0)) if guild else None
-            except (TypeError, ValueError):
-                member = None
-            if member:
-                discord_display_name = (
-                    getattr(member, "display_name", None)
-                    or getattr(member, "global_name", None)
-                    or getattr(member, "name", None)
-                    or discord_display_name
-                )
-            songs.append({
-                "message_id": str(row["message_id"]),
-                "channel_id": str(row["channel_id"]),
-                "user_id": str(row.get("user_id") or ""),
-                "uuid": uuid,
-                "url": f"https://suno.com/song/{uuid}",
-                "title": stored_title,
-                "artist": discord_display_name,
-                "discord_display_name": discord_display_name,
-                "discord_handle": discord_handle,
-                "posted_at": float(row.get("posted_at") or 0),
-                "reaction_count": int(row.get("reaction_count") or 0),
-                "audio_primary": f"https://cdn1.suno.ai/{uuid}.mp3",
-                "audio_fallback": f"https://cdn1.suno.ai/{uuid}.m4a",
-                "artwork": f"https://cdn1.suno.ai/image_large_{uuid}.jpeg",
-            })
-            if len(songs) >= limit:
-                break
+                uuid = str(row.get("suno_uuid") or "").lower()
+                if not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", uuid):
+                    uuid = extract_suno_uuid(row.get("url")) or ""
+                if not uuid or not row.get("message_id"):
+                    continue
+                stored_title = str(row.get("song_title") or "").strip()
+                if stored_title.lower() in {"unknown song", "unknown title"}:
+                    stored_title = ""
+                discord_handle = str(row.get("user_name") or "").strip()
+                discord_display_name = discord_handle or "Unknown artist"
+                try:
+                    member = guild.get_member(int(row.get("user_id") or 0)) if guild else None
+                except (TypeError, ValueError):
+                    member = None
+                if member:
+                    discord_display_name = (
+                        getattr(member, "display_name", None)
+                        or getattr(member, "global_name", None)
+                        or getattr(member, "name", None)
+                        or discord_display_name
+                    )
+                songs.append({
+                    "source": "discord",
+                    "message_id": str(row["message_id"]),
+                    "channel_id": str(row["channel_id"]),
+                    "user_id": str(row.get("user_id") or ""),
+                    "uuid": uuid,
+                    "url": f"https://suno.com/song/{uuid}",
+                    "title": stored_title,
+                    "artist": discord_display_name,
+                    "discord_display_name": discord_display_name,
+                    "discord_handle": discord_handle,
+                    "posted_at": float(row.get("posted_at") or 0),
+                    "reaction_count": int(row.get("reaction_count") or 0),
+                    "audio_primary": f"https://cdn1.suno.ai/{uuid}.mp3",
+                    "audio_fallback": f"https://cdn1.suno.ai/{uuid}.m4a",
+                    "artwork": f"https://cdn1.suno.ai/image_large_{uuid}.jpeg",
+                })
+                if len(songs) >= limit:
+                    break
+        else:
+            return {"error": "invalid_source"}, 400
         if not songs:
             return {"error": "no_songs"}, 404
 
-        missing_titles = [song for song in songs if not song["title"]]
+        missing_titles = [song for song in songs if song.get("source") == "discord" and not song["title"]]
         if missing_titles:
             from bot.suno_meta import enrich_songs
 
@@ -4437,7 +4625,13 @@ def create_app(db: Database, bot=None) -> Quart:
             song_limit=limit,
             songs=songs,
         )
-        return {"token": raw_token, "expedition_id": expedition_id, "songs": songs}
+        return {
+            "token": raw_token,
+            "expedition_id": expedition_id,
+            "source": source,
+            "source_label": source_label,
+            "songs": songs,
+        }
 
     async def _galaxy_expedition_for_identity(identity: dict, raw_token: str):
         token_hash = hashlib.sha256(str(raw_token or "").encode()).hexdigest()
@@ -4540,7 +4734,11 @@ def create_app(db: Database, bot=None) -> Quart:
             listen = await db.galaxy_get_listen(
                 listen_id, int(identity["discord_user_id"])
             )
-            emoji_id = int(await db.get_setting("galaxy_reaction_emoji_id") or 0) if (await db.get_setting("galaxy_reaction_enabled") or "off") == "on" else 0
+            emoji_id = int(await db.get_setting("galaxy_reaction_emoji_id") or 0) if (
+                listen
+                and int(listen.get("channel_id") or 0) > 0
+                and (await db.get_setting("galaxy_reaction_enabled") or "off") == "on"
+            ) else 0
             ok, credits, message = await db.galaxy_complete_listen(
                 listen_id=listen_id,
                 discord_user_id=int(identity["discord_user_id"]),

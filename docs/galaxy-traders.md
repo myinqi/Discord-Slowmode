@@ -145,6 +145,30 @@ The existing Suno Player already provides useful building blocks:
 Shared logic should be moved into small service helpers instead of duplicating the
 large existing templates.
 
+## We Love Music partner integration
+
+The Galaxy admin page stores a WLM Partner API key and can enable the integration
+independently. The key is used only by the server and is never included in player
+configuration or browser requests. Partner responses are cached briefly to protect the
+upstream rate limit.
+
+When configured, the expedition picker offers three additional flows:
+
+- a public WLM playlist as an ordered star system;
+- a WLM genre as a generated collection of planets;
+- all available tracks by a selected WLM artist, launched from that artist's profile.
+
+WLM tracks use `directMp3Url` for playback and `imageUrl` for artwork. The player shows
+the WLM artist profile, genres, listens, likes, and the current average 0–5 star rating.
+A stable internal ID derived from the WLM track ID lets the existing listening history,
+completed-planet state, skip-completed preference, and credit validation work without a
+Discord message. WLM tracks do not create Discord reaction jobs.
+
+The current Partner API has no documented endpoint for reporting a completed listening
+session or submitting a 0–5 star rating. Those actions remain disabled until WLM adds
+the corresponding write endpoints. Song submission is intentionally deferred to a
+future Discord slash command.
+
 ## Audio-source boundary
 
 Galaxy resolves the current UUID-specific MP3/M4A asset from Suno's embed metadata

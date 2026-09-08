@@ -521,6 +521,66 @@ class GalaxyRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["audio_url"], audio_url)
         self.assertTrue(payload["audio_encrypted"])
 
+    async def test_wlm_catalog_playlist_and_artist_expeditions(self):
+        await self.db.set_setting("galaxy_wlm_enabled", "on")
+        await self.db.set_setting("galaxy_wlm_api_key", "wlm_live_test_secret")
+        now = time.monotonic()
+        track = {
+            "id": "track-1",
+            "title": "Orbit of Hearts",
+            "artistId": "artist-1",
+            "artistName": "Nova",
+            "sunoUrl": "https://suno.com/song/39a09dfb-bf72-4852-b813-49c3a02d3aaa",
+            "directMp3Url": "https://media.welovemusic.ai/orbit.mp3",
+            "imageUrl": "https://media.welovemusic.ai/orbit.jpg",
+            "genres": ["Synthwave"],
+            "listens": 12,
+            "likes": 4,
+            "ratingAvg": 4.5,
+            "publishedAt": "2026-09-01T00:00:00Z",
+        }
+        self.app.galaxy_wlm_cache.update({
+            ("/playlists", (("limit", "100"),)): (
+                now, {"data": [{"slug": "night-drive", "title": "Night Drive", "trackCount": 1}]}
+            ),
+            ("/genres", ()): (now, {"genres": [{"label": "Synthwave", "slug": "synthwave"}]}),
+            ("/playlists/night-drive", ()): (
+                now, {"slug": "night-drive", "title": "Night Drive", "tracks": [track]}
+            ),
+            ("/artists/artist-1", ()): (
+                now, {"id": "artist-1", "artistName": "Nova", "username": "nova", "bio": "From deep space."}
+            ),
+        })
+
+        config = await self.client.get("/galaxy/api/config")
+        config_payload = await config.get_json()
+        self.assertTrue(config_payload["wlm_available"])
+        self.assertNotIn("wlm_live_test_secret", str(config_payload))
+
+        catalog = await self.client.get("/galaxy/api/wlm/catalog")
+        self.assertEqual(catalog.status_code, 200)
+        self.assertEqual((await catalog.get_json())["playlists"][0]["slug"], "night-drive")
+
+        response = await self.client.post(
+            "/galaxy/api/expeditions",
+            json={"source": "wlm_playlist", "collection_id": "night-drive", "limit": 5},
+            headers={"X-CSRF-Token": "csrf"},
+        )
+        self.assertEqual(response.status_code, 200)
+        expedition = await response.get_json()
+        self.assertEqual(expedition["source"], "wlm_playlist")
+        self.assertEqual(expedition["source_label"], "Night Drive")
+        self.assertEqual(expedition["songs"][0]["source"], "wlm")
+        self.assertEqual(
+            expedition["songs"][0]["audio_primary"],
+            "https://media.welovemusic.ai/orbit.mp3",
+        )
+        self.assertEqual(expedition["songs"][0]["rating_avg"], 4.5)
+
+        artist = await self.client.get("/galaxy/api/wlm/artists/artist-1")
+        self.assertEqual(artist.status_code, 200)
+        self.assertEqual((await artist.get_json())["artist"]["artistName"], "Nova")
+
 
 if __name__ == "__main__":
     unittest.main()

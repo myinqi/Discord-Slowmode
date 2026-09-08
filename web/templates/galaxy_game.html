@@ -26,6 +26,21 @@
         </div>
     </section>
     <section class="bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden">
+        <div class="px-5 py-4 border-b border-gray-700/50 flex items-center gap-3">
+            <img src="{{ url_for('static', filename='We Love Music.png') }}" alt="" class="w-9 h-9 rounded object-contain bg-black/30 p-1">
+            <div><h3 class="text-white font-semibold">We Love Music</h3><p class="text-gray-500 text-sm mt-1">Adds WLM playlists, genres and artists as Galaxy expedition sources.</p></div>
+        </div>
+        <div class="p-5 space-y-4">
+            <label class="flex items-start gap-3"><input type="checkbox" name="wlm_enabled" value="1" class="mt-1" {% if settings.galaxy_wlm_enabled == 'on' %}checked{% endif %}><span><span class="block text-white font-medium">Enable We Love Music sources</span><span class="block text-gray-500 text-sm">The Partner API key stays on the server and is never sent to a player.</span></span></label>
+            <label class="block">
+                <span class="block text-gray-500 text-xs mb-1">WLM Partner API key {% if wlm_api_key_configured %}<span class="text-green-400">· configured</span>{% endif %}</span>
+                <input type="password" name="wlm_api_key" autocomplete="new-password" placeholder="{{ 'Leave empty to keep the saved key' if wlm_api_key_configured else 'wlm_live_…' }}" class="w-full bg-discord-darker border border-gray-600 rounded px-3 py-2 text-white font-mono">
+                <span class="block text-gray-600 text-xs mt-1">Required scopes: tracks:read, playlists:read and artists:read.</span>
+            </label>
+            {% if wlm_api_key_configured %}<label class="flex items-center gap-2 text-gray-400 text-sm"><input type="checkbox" name="clear_wlm_api_key" value="1">Remove saved WLM API key</label>{% endif %}
+        </div>
+    </section>
+    <section class="bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden">
         <div class="px-5 py-4 border-b border-gray-700/50"><h3 class="text-white font-semibold">Listening and credits</h3><p class="text-gray-500 text-sm mt-1">Skipped audio never counts as verified listening time.</p></div>
         <div class="p-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
             <label class="block"><span class="block text-gray-500 text-xs mb-1">Heartbeat seconds</span><input type="number" name="heartbeat_seconds" min="8" max="30" value="{{ settings.galaxy_heartbeat_seconds }}" class="w-full bg-discord-darker border border-gray-600 rounded px-3 py-2 text-white"></label>
