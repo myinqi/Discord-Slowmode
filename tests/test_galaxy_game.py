@@ -541,7 +541,13 @@ class GalaxyRouteTests(unittest.IsolatedAsyncioTestCase):
         }
         self.app.galaxy_wlm_cache.update({
             ("/playlists", (("limit", "100"),)): (
-                now, {"data": [{"slug": "night-drive", "title": "Night Drive", "trackCount": 1}]}
+                now, {"data": [
+                    {"slug": "night-drive", "title": "Night Drive", "trackCount": 1,
+                     "type": "SMART", "communityId": None},
+                    {"slug": "trya-weekly", "title": "Tarja Ravenveil Weekly Top 10",
+                     "trackCount": 10, "type": "COMMUNITY",
+                     "communityId": "123"},
+                ]}
             ),
             ("/genres", ()): (now, {"genres": [{"label": "Synthwave", "slug": "synthwave"}]}),
             ("/playlists/night-drive", ()): (
@@ -560,6 +566,9 @@ class GalaxyRouteTests(unittest.IsolatedAsyncioTestCase):
         catalog = await self.client.get("/galaxy/api/wlm/catalog")
         self.assertEqual(catalog.status_code, 200)
         self.assertEqual((await catalog.get_json())["playlists"][0]["slug"], "night-drive")
+        self.assertEqual(
+            (await catalog.get_json())["preferred_playlist_slug"], "trya-weekly"
+        )
 
         response = await self.client.post(
             "/galaxy/api/expeditions",

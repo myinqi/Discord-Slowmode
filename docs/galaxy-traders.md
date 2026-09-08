@@ -158,6 +158,10 @@ When configured, the expedition picker offers three additional flows:
 - a WLM genre as a generated collection of planets;
 - all available tracks by a selected WLM artist, launched from that artist's profile.
 
+For WLM playlists, the player preselects the `COMMUNITY` playlist whose
+`communityId` matches the configured Discord guild. It falls back to the first public
+playlist only when WLM does not return a matching community assignment.
+
 WLM tracks use `directMp3Url` for playback and `imageUrl` for artwork. The player shows
 the WLM artist profile, genres, listens, likes, and the current average 0–5 star rating.
 A stable internal ID derived from the WLM track ID lets the existing listening history,

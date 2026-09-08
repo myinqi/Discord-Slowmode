@@ -4275,9 +4275,31 @@ def create_app(db: Database, bot=None) -> Quart:
             )
         except Exception as exc:
             return {"error": "wlm_unavailable", "message": str(exc)}, 502
+        playlist_rows = playlists.get("data") or []
+        guild = get_guild()
+        community_id = str(
+            getattr(guild, "id", "")
+            or await db.get_setting("guild_id")
+            or Config.GUILD_ID
+            or ""
+        )
+        preferred_playlist_slug = ""
+        for playlist in playlist_rows:
+            if (
+                str(playlist.get("type") or "").upper() == "COMMUNITY"
+                and str(playlist.get("communityId") or "") == community_id
+            ):
+                preferred_playlist_slug = str(playlist.get("slug") or "")
+                break
+        if not preferred_playlist_slug:
+            for playlist in playlist_rows:
+                if str(playlist.get("communityId") or "") == community_id:
+                    preferred_playlist_slug = str(playlist.get("slug") or "")
+                    break
         return {
-            "playlists": playlists.get("data") or [],
+            "playlists": playlist_rows,
             "genres": genres.get("genres") or [],
+            "preferred_playlist_slug": preferred_playlist_slug,
         }
 
     @app.route("/galaxy/api/wlm/artists/<artist_id>")
