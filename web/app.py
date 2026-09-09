@@ -484,6 +484,8 @@ def create_app(db: Database, bot=None) -> Quart:
     app.suno_playback_rate = {}
     app.galaxy_metadata_cache = {}
     app.galaxy_metadata_lock = asyncio.Lock()
+    app.galaxy_suno_feed_cache = {}
+    app.galaxy_suno_feed_lock = asyncio.Lock()
     app.galaxy_wlm_cache = {}
     app.galaxy_wlm_lock = asyncio.Lock()
     # Serializes manual starts of both radio managers. The scheduled Exp.
@@ -4219,6 +4221,115 @@ def create_app(db: Database, bot=None) -> Quart:
         value = str(value or "").strip()
         return value if value.startswith("https://") else ""
 
+    def _galaxy_suno_feed_message_id(song_uuid: str) -> int:
+        digest = hashlib.sha256(f"suno-feed:{song_uuid}".encode()).digest()
+        return -(int.from_bytes(digest[:8], "big") & ((1 << 63) - 1) or 1)
+
+    def _galaxy_suno_feed_song(clip: dict) -> dict | None:
+        song_uuid = str(clip.get("id") or "").strip().lower()
+        title = str(clip.get("title") or "").strip()
+        if (
+            not title
+            or str(clip.get("status") or "complete") != "complete"
+            or not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", song_uuid)
+        ):
+            return None
+        artist = str(clip.get("display_name") or "").strip() or "Unknown Suno artist"
+        handle = str(clip.get("handle") or "").strip().lstrip("@")
+        try:
+            posted_at = datetime.fromisoformat(
+                str(clip.get("created_at") or "").replace("Z", "+00:00")
+            ).timestamp()
+        except (TypeError, ValueError):
+            posted_at = time.time()
+        try:
+            reactions = max(0, int(clip.get("upvote_count") or 0))
+        except (TypeError, ValueError):
+            reactions = 0
+        try:
+            play_count = max(0, int(clip.get("play_count") or 0))
+        except (TypeError, ValueError):
+            play_count = 0
+        return {
+            "source": "suno",
+            "message_id": str(_galaxy_suno_feed_message_id(song_uuid)),
+            "channel_id": "0",
+            "user_id": str(clip.get("user_id") or ""),
+            "uuid": song_uuid,
+            "url": f"https://suno.com/song/{song_uuid}",
+            "title": title,
+            "artist": artist,
+            "discord_display_name": "",
+            "discord_handle": "",
+            "suno_artist": artist,
+            "suno_handle": handle,
+            "posted_at": posted_at,
+            "reaction_count": reactions,
+            "play_count": play_count,
+            "audio_primary": f"https://cdn1.suno.ai/{song_uuid}.mp3",
+            "audio_fallback": f"https://cdn1.suno.ai/{song_uuid}.m4a",
+            "artwork": _galaxy_https_url(clip.get("image_url")),
+        }
+
+    async def _galaxy_suno_new_songs(limit: int) -> list[dict]:
+        limit = max(5, min(150, int(limit)))
+        now = time.monotonic()
+        cached = app.galaxy_suno_feed_cache
+        if (
+            cached
+            and now - float(cached.get("checked_at") or 0) < 60
+            and int(cached.get("requested_limit") or 0) >= limit
+        ):
+            return list(cached.get("items") or [])[:limit]
+        async with app.galaxy_suno_feed_lock:
+            cached = app.galaxy_suno_feed_cache
+            if (
+                cached
+                and time.monotonic() - float(cached.get("checked_at") or 0) < 60
+                and int(cached.get("requested_limit") or 0) >= limit
+            ):
+                return list(cached.get("items") or [])[:limit]
+            clips: list[dict] = []
+            cursor = None
+            timeout = aiohttp.ClientTimeout(total=20)
+            headers = {
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Origin": "https://suno.com",
+                "Referer": "https://suno.com/",
+                "User-Agent": "Mozilla/5.0 (compatible; CoraxBot/1.0)",
+            }
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as http:
+                for _ in range(4):
+                    async with http.post(
+                        "https://studio-api-prod.suno.com/api/unified/feed",
+                        json={
+                            "feed_id": "new_songs",
+                            "cursor": cursor,
+                            "page_size": min(50, max(20, limit - len(clips))),
+                        },
+                    ) as response:
+                        payload = await response.json(content_type=None)
+                        if response.status != 200 or not isinstance(payload, dict):
+                            raise RuntimeError(f"Suno returned HTTP {response.status}")
+                    feed = payload.get("feed") or {}
+                    rows = feed.get("items") or []
+                    for row in rows:
+                        clip = row.get("content_item") if isinstance(row, dict) else None
+                        if isinstance(clip, dict) and str(row.get("content_type") or "clip") == "clip":
+                            clips.append(clip)
+                            if len(clips) >= limit:
+                                break
+                    cursor = feed.get("next_cursor")
+                    if len(clips) >= limit or not cursor:
+                        break
+            app.galaxy_suno_feed_cache = {
+                "checked_at": time.monotonic(),
+                "requested_limit": limit,
+                "items": clips,
+            }
+            return clips[:limit]
+
     def _galaxy_wlm_song(track: dict) -> dict | None:
         track_id = str(track.get("id") or "").strip()
         title = str(track.get("title") or "").strip()
@@ -4496,7 +4607,22 @@ def create_app(db: Database, bot=None) -> Quart:
             return {"error": "invalid_parameters"}, 400
         songs = []
         source_label = "Discord showcase"
-        if source in {"wlm_playlist", "wlm_genre", "wlm_artist"}:
+        if source == "suno_new_songs":
+            if str(data.get("collection_id") or "new_songs") != "new_songs":
+                return {"error": "invalid_suno_collection"}, 400
+            try:
+                clips = await _galaxy_suno_new_songs(limit)
+            except Exception as exc:
+                return {"error": "suno_feed_unavailable", "message": str(exc)}, 502
+            for clip in clips:
+                song = _galaxy_suno_feed_song(clip)
+                if song:
+                    songs.append(song)
+                if len(songs) >= limit:
+                    break
+            channel_id = 0
+            source_label = "Suno · New Songs"
+        elif source in {"wlm_playlist", "wlm_genre", "wlm_artist"}:
             collection_id = str(data.get("collection_id") or "").strip()
             valid_collection = (
                 bool(re.fullmatch(r"[A-Za-z0-9_-]{1,100}", collection_id))

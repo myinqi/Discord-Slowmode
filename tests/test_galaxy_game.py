@@ -505,7 +505,47 @@ class GalaxyRouteTests(unittest.IsolatedAsyncioTestCase):
     async def test_galaxy_page_uses_custom_favicon(self):
         response = await self.client.get("/galaxy")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Galaxy_emoji.png", await response.get_data(as_text=True))
+        page = await response.get_data(as_text=True)
+        self.assertIn("Galaxy_emoji.png", page)
+        self.assertIn("Suno_logo.png", page)
+        self.assertIn("Suno · New Songs", page)
+
+    async def test_official_suno_new_songs_expedition(self):
+        song_uuid = "535fd183-d482-48fe-a689-dd131e9ecf21"
+        self.app.galaxy_suno_feed_cache = {
+            "checked_at": time.monotonic(),
+            "requested_limit": 5,
+            "items": [{
+                "id": song_uuid,
+                "status": "complete",
+                "title": "Candy in Your Pocket",
+                "display_name": "BLUE O’SEON",
+                "handle": "michaeladdy",
+                "user_id": "artist-1",
+                "created_at": "2026-09-09T00:30:19.436Z",
+                "play_count": 9,
+                "upvote_count": 6,
+                "image_url": f"https://cdn2.suno.ai/image_{song_uuid}.jpeg",
+            }],
+        }
+        response = await self.client.post(
+            "/galaxy/api/expeditions",
+            json={
+                "source": "suno_new_songs",
+                "collection_id": "new_songs",
+                "limit": 5,
+            },
+            headers={"X-CSRF-Token": "csrf"},
+        )
+        self.assertEqual(response.status_code, 200)
+        expedition = await response.get_json()
+        self.assertEqual(expedition["source"], "suno_new_songs")
+        self.assertEqual(expedition["source_label"], "Suno · New Songs")
+        self.assertEqual(expedition["songs"][0]["source"], "suno")
+        self.assertEqual(expedition["songs"][0]["uuid"], song_uuid)
+        self.assertEqual(expedition["songs"][0]["suno_handle"], "michaeladdy")
+        self.assertEqual(expedition["songs"][0]["reaction_count"], 6)
+        self.assertLess(int(expedition["songs"][0]["message_id"]), 0)
 
     async def test_galaxy_media_returns_resolved_audio_url(self):
         song_uuid = "39a09dfb-bf72-4852-b813-49c3a02d3aaa"

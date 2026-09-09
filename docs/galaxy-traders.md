@@ -173,6 +173,16 @@ session or submitting a 0–5 star rating. Those actions remain disabled until W
 the corresponding write endpoints. Song submission is intentionally deferred to a
 future Discord slash command.
 
+## Official Suno feed
+
+The expedition picker also exposes Suno's official **New Songs** feed. The backend
+requests the same anonymous unified-feed endpoint used by
+`https://suno.com/explore/feed/new_songs`, caches results for one minute, and maps its
+public clip metadata to Galaxy planets. Suno creator names, handles, covers, likes, and
+links are retained. Completed-listen history and skip-completed behavior use a stable
+source-specific internal ID, while Discord reaction jobs remain disabled because these
+tracks do not originate from a Discord showcase message.
+
 ## Audio-source boundary
 
 Galaxy resolves the current UUID-specific MP3/M4A asset from Suno's embed metadata
