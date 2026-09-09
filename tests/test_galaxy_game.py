@@ -178,6 +178,19 @@ class GalaxyDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(galaxy_reactions[0]["discord_display_name"], "Explorer")
         self.assertEqual(galaxy_reactions[0]["emoji_id"], 123)
 
+        expedition = await self.db.galaxy_get_expedition_by_id(listen["expedition_id"])
+        self.assertEqual(expedition["songs"][0]["message_id"], "99")
+        await self.db.galaxy_set_wlm_report_result(
+            listen["id"], reported=False, error="temporary upstream error"
+        )
+        failed = await self.db.galaxy_get_listen(listen["id"], 42)
+        self.assertIsNone(failed["wlm_reported_at"])
+        self.assertEqual(failed["wlm_report_error"], "temporary upstream error")
+        await self.db.galaxy_set_wlm_report_result(listen["id"], reported=True)
+        reported = await self.db.galaxy_get_listen(listen["id"], 42)
+        self.assertIsNotNone(reported["wlm_reported_at"])
+        self.assertEqual(reported["wlm_report_error"], "")
+
     async def test_transactional_shop_and_loadout(self):
         self.assertFalse(await self.db.galaxy_set_loadout(42, "hull", "raven"))
         await self.db.db.execute(
@@ -509,6 +522,8 @@ class GalaxyRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Galaxy_emoji.png", page)
         self.assertIn("Suno_logo.png", page)
         self.assertIn("Suno · New Songs", page)
+        self.assertIn("Rate this track", page)
+        self.assertIn("/ratings", page)
 
     async def test_official_suno_new_songs_expedition(self):
         song_uuid = "535fd183-d482-48fe-a689-dd131e9ecf21"
@@ -596,6 +611,10 @@ class GalaxyRouteTests(unittest.IsolatedAsyncioTestCase):
             ("/artists/artist-1", ()): (
                 now, {"id": "artist-1", "artistName": "Nova", "username": "nova", "bio": "From deep space."}
             ),
+            ("/tracks/track-1/ratings", (("discordId", "42"),)): (
+                now, {"trackId": "track-1", "ratingCount": 8,
+                      "ratingAvg": 4.25, "myRating": 5}
+            ),
         })
 
         config = await self.client.get("/galaxy/api/config")
@@ -629,6 +648,16 @@ class GalaxyRouteTests(unittest.IsolatedAsyncioTestCase):
         artist = await self.client.get("/galaxy/api/wlm/artists/artist-1")
         self.assertEqual(artist.status_code, 200)
         self.assertEqual((await artist.get_json())["artist"]["artistName"], "Nova")
+
+        ratings = await self.client.get("/galaxy/api/wlm/tracks/track-1/ratings")
+        self.assertEqual(ratings.status_code, 200)
+        self.assertEqual((await ratings.get_json())["myRating"], 5)
+        invalid_rating = await self.client.post(
+            "/galaxy/api/wlm/tracks/track-1/ratings",
+            json={"rating": 0},
+            headers={"X-CSRF-Token": "csrf"},
+        )
+        self.assertEqual(invalid_rating.status_code, 400)
 
 
 if __name__ == "__main__":

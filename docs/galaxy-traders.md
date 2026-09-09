@@ -163,15 +163,20 @@ For WLM playlists, the player preselects the `COMMUNITY` playlist whose
 playlist only when WLM does not return a matching community assignment.
 
 WLM tracks use `directMp3Url` for playback and `imageUrl` for artwork. The player shows
-the WLM artist profile, genres, listens, likes, and the current average 0–5 star rating.
+the WLM artist profile, genres, listens, likes, and the current average 1–5 star rating.
 A stable internal ID derived from the WLM track ID lets the existing listening history,
 completed-planet state, skip-completed preference, and credit validation work without a
 Discord message. WLM tracks do not create Discord reaction jobs.
 
-The current Partner API has no documented endpoint for reporting a completed listening
-session or submitting a 0–5 star rating. Those actions remain disabled until WLM adds
-the corresponding write endpoints. Song submission is intentionally deferred to a
-future Discord slash command.
+The interactive star row loads the authenticated Discord member's `myRating` through
+`GET /tracks/:id/ratings?discordId=...` and writes a 1–5 rating through the corresponding
+`POST` endpoint. The browser never supplies the acting member ID; the backend derives it
+from the verified Galaxy OAuth session. When a locally verified WLM listen completes,
+Galaxy reports its eligible duration, track duration, and completion state once through
+`POST /tracks/:id/listens`. A successful report is persisted on the local listen record;
+an upstream failure never blocks Galaxy credits and remains retryable. The API key needs
+`engagement:read`, `ratings:write`, and `playback:write` in addition to the catalog scopes.
+Song submission is intentionally deferred to a future Discord slash command.
 
 ## Official Suno feed
 

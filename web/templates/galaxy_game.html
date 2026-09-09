@@ -35,7 +35,7 @@
             <label class="block">
                 <span class="block text-gray-500 text-xs mb-1">WLM Partner API key {% if wlm_api_key_configured %}<span class="text-green-400">· configured</span>{% endif %}</span>
                 <input type="password" name="wlm_api_key" autocomplete="new-password" placeholder="{{ 'Leave empty to keep the saved key' if wlm_api_key_configured else 'wlm_live_…' }}" class="w-full bg-discord-darker border border-gray-600 rounded px-3 py-2 text-white font-mono">
-                <span class="block text-gray-600 text-xs mt-1">Required scopes: tracks:read, playlists:read and artists:read.</span>
+                <span class="block text-gray-600 text-xs mt-1">Required scopes: tracks:read, playlists:read, artists:read, engagement:read, ratings:write and playback:write.</span>
             </label>
             {% if wlm_api_key_configured %}<label class="flex items-center gap-2 text-gray-400 text-sm"><input type="checkbox" name="clear_wlm_api_key" value="1">Remove saved WLM API key</label>{% endif %}
         </div>

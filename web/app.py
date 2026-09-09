@@ -54,6 +54,12 @@ ELEVENMUSIC_TRACK_RE = re.compile(
 )
 
 
+class GalaxyWlmApiError(RuntimeError):
+    def __init__(self, status: int, message: str):
+        self.status = int(status)
+        super().__init__(message)
+
+
 _SYSTEM_CPU_SAMPLE = {"timestamp": None, "usage_seconds": None}
 _SYSTEM_CPU_LOCK = threading.Lock()
 
@@ -4178,37 +4184,54 @@ def create_app(db: Database, bot=None) -> Quart:
         api_key = (await db.get_setting("galaxy_wlm_api_key") or "").strip()
         return bool(enabled and api_key), api_key
 
-    async def _galaxy_wlm_request(path: str, params: dict | None = None) -> dict:
+    async def _galaxy_wlm_request(
+        path: str,
+        params: dict | None = None,
+        *,
+        method: str = "GET",
+        body: dict | None = None,
+    ) -> dict:
         ready, api_key = await _galaxy_wlm_ready()
         if not ready:
             raise RuntimeError("WLM is not configured")
+        method = str(method or "GET").upper()
+        cacheable = method == "GET" and body is None
         safe_path = "/" + str(path or "").lstrip("/")
         cache_key = (safe_path, tuple(sorted((str(k), str(v)) for k, v in (params or {}).items())))
         now = time.monotonic()
-        cached = app.galaxy_wlm_cache.get(cache_key)
+        cached = app.galaxy_wlm_cache.get(cache_key) if cacheable else None
         if cached and now - float(cached[0]) < 300:
             return cached[1]
         async with app.galaxy_wlm_lock:
-            cached = app.galaxy_wlm_cache.get(cache_key)
+            cached = app.galaxy_wlm_cache.get(cache_key) if cacheable else None
             if cached and now - float(cached[0]) < 300:
                 return cached[1]
             timeout = aiohttp.ClientTimeout(total=15)
             url = f"https://api.welovemusic.ai/api/v1/partner{safe_path}"
             async with aiohttp.ClientSession(timeout=timeout) as http:
-                async with http.get(
+                async with http.request(
+                    method,
                     url,
                     params=params,
+                    json=body,
                     headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
                 ) as response:
-                    payload = await response.json(content_type=None)
-                    if response.status != 200 or not isinstance(payload, dict):
+                    try:
+                        payload = await response.json(content_type=None)
+                    except Exception:
+                        payload = {}
+                    if not 200 <= response.status < 300 or not isinstance(payload, dict):
                         detail = str(payload.get("error") if isinstance(payload, dict) else "")
-                        raise RuntimeError(detail[:160] or f"WLM returned HTTP {response.status}")
-            app.galaxy_wlm_cache[cache_key] = (time.monotonic(), payload)
-            if len(app.galaxy_wlm_cache) > 256:
-                oldest = sorted(app.galaxy_wlm_cache, key=lambda key: app.galaxy_wlm_cache[key][0])[:64]
-                for key in oldest:
-                    app.galaxy_wlm_cache.pop(key, None)
+                        raise GalaxyWlmApiError(
+                            response.status,
+                            detail[:240] or f"WLM returned HTTP {response.status}",
+                        )
+            if cacheable:
+                app.galaxy_wlm_cache[cache_key] = (time.monotonic(), payload)
+                if len(app.galaxy_wlm_cache) > 256:
+                    oldest = sorted(app.galaxy_wlm_cache, key=lambda key: app.galaxy_wlm_cache[key][0])[:64]
+                    for key in oldest:
+                        app.galaxy_wlm_cache.pop(key, None)
             return payload
 
     def _galaxy_wlm_track_message_id(track_id: str) -> int:
@@ -4437,6 +4460,45 @@ def create_app(db: Database, bot=None) -> Quart:
             } if isinstance(raw_artist.get("socialLinks"), dict) else {},
         }
         return {"artist": artist}
+
+    @app.route("/galaxy/api/wlm/tracks/<track_id>/ratings", methods=["GET", "POST"])
+    async def galaxy_api_wlm_track_ratings(track_id: str):
+        identity = await _galaxy_api_user()
+        if not identity:
+            return {"error": "forbidden"}, 403
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", track_id or ""):
+            return {"error": "invalid_track"}, 400
+        discord_id = str(identity["discord_user_id"])
+        try:
+            if request.method == "GET":
+                if not _galaxy_rate_allowed(int(discord_id), "wlm_rating_read", 40, 60):
+                    return {"error": "rate_limited"}, 429
+                return await _galaxy_wlm_request(
+                    f"/tracks/{quote(track_id, safe='')}/ratings",
+                    {"discordId": discord_id},
+                )
+            if not _galaxy_csrf_valid(request.headers.get("X-CSRF-Token", "")):
+                return {"error": "invalid_csrf"}, 403
+            if not _galaxy_rate_allowed(int(discord_id), "wlm_rating_write", 8, 60):
+                return {"error": "rate_limited"}, 429
+            data = await request.get_json(silent=True) or {}
+            rating = int(data.get("rating"))
+            if rating not in {1, 2, 3, 4, 5}:
+                return {"error": "Rating must be between 1 and 5."}, 400
+            payload = await _galaxy_wlm_request(
+                f"/tracks/{quote(track_id, safe='')}/ratings",
+                method="POST",
+                body={"discordId": discord_id, "rating": rating},
+            )
+            app.galaxy_wlm_cache.clear()
+            return payload
+        except (TypeError, ValueError):
+            return {"error": "Rating must be between 1 and 5."}, 400
+        except GalaxyWlmApiError as exc:
+            status = exc.status if exc.status in {400, 401, 403, 404, 429} else 502
+            return {"error": "wlm_rating_failed", "message": str(exc)}, status
+        except Exception as exc:
+            return {"error": "wlm_unavailable", "message": str(exc)}, 502
 
     @app.route("/galaxy/api/config")
     async def galaxy_api_config():
@@ -4920,6 +4982,49 @@ def create_app(db: Database, bot=None) -> Quart:
         completed_listen = await db.galaxy_get_listen(
             listen_id, int(identity["discord_user_id"])
         )
+        wlm_listen_result, wlm_warning = None, None
+        if ok and completed_listen and not completed_listen.get("wlm_reported_at"):
+            source_expedition = await db.galaxy_get_expedition_by_id(
+                int(completed_listen["expedition_id"])
+            )
+            source_song = next(
+                (
+                    item for item in (source_expedition or {}).get("songs", [])
+                    if str(item.get("message_id")) == str(completed_listen["message_id"])
+                ),
+                None,
+            )
+            wlm_track_id = str((source_song or {}).get("wlm_track_id") or "")
+            if (source_song or {}).get("source") == "wlm" and re.fullmatch(
+                r"[A-Za-z0-9_-]{1,100}", wlm_track_id
+            ):
+                try:
+                    duration = max(1.0, float(completed_listen["duration_seconds"]))
+                    eligible = max(
+                        0.0,
+                        min(duration, float(completed_listen["eligible_seconds"])),
+                    )
+                    wlm_listen_result = await _galaxy_wlm_request(
+                        f"/tracks/{quote(wlm_track_id, safe='')}/listens",
+                        method="POST",
+                        body={
+                            "discordId": str(identity["discord_user_id"]),
+                            "durationSeconds": round(eligible, 3),
+                            "trackDurationSeconds": round(duration, 3),
+                            "completed": bool(completed_listen.get("fully_listened")),
+                        },
+                    )
+                    await db.galaxy_set_wlm_report_result(listen_id, reported=True)
+                    app.galaxy_wlm_cache.clear()
+                except Exception as exc:
+                    wlm_warning = str(exc)[:500]
+                    await db.galaxy_set_wlm_report_result(
+                        listen_id, reported=False, error=wlm_warning
+                    )
+                    print(
+                        f"[galaxy-wlm-listen] listen={listen_id}: {wlm_warning}",
+                        flush=True,
+                    )
         return {
             "ok": ok,
             "credits": credits,
@@ -4927,6 +5032,8 @@ def create_app(db: Database, bot=None) -> Quart:
             "profile": await db.galaxy_get_profile(int(identity["discord_user_id"])),
             "thread": thread_ok,
             "warning": thread_error,
+            "wlm_listen": wlm_listen_result,
+            "wlm_warning": wlm_warning,
             "fully_listened": bool(completed_listen and completed_listen.get("fully_listened")),
         }, (200 if ok else 409)
 

@@ -6984,6 +6984,8 @@ class Database:
                 fully_listened INTEGER NOT NULL DEFAULT 0,
                 credits_awarded INTEGER NOT NULL DEFAULT 0,
                 reaction_status TEXT NOT NULL DEFAULT 'pending',
+                wlm_reported_at REAL,
+                wlm_report_error TEXT NOT NULL DEFAULT '',
                 UNIQUE (expedition_id, message_id),
                 FOREIGN KEY (expedition_id) REFERENCES galaxy_expeditions(id) ON DELETE CASCADE,
                 FOREIGN KEY (discord_user_id) REFERENCES galaxy_users(discord_user_id) ON DELETE CASCADE
@@ -7051,6 +7053,14 @@ class Database:
                    WHERE completed_at IS NOT NULL AND duration_seconds > 0
                      AND eligible_seconds >= duration_seconds * 0.98
                      AND seeked_seconds <= 0.5"""
+            )
+        if "wlm_reported_at" not in galaxy_listen_columns:
+            await self.db.execute(
+                "ALTER TABLE galaxy_listens ADD COLUMN wlm_reported_at REAL"
+            )
+        if "wlm_report_error" not in galaxy_listen_columns:
+            await self.db.execute(
+                "ALTER TABLE galaxy_listens ADD COLUMN wlm_report_error TEXT NOT NULL DEFAULT ''"
             )
         async with self.db.execute("PRAGMA table_info(galaxy_users)") as cursor:
             galaxy_user_columns = {row["name"] for row in await cursor.fetchall()}
@@ -7377,6 +7387,36 @@ class Database:
         except (TypeError, json.JSONDecodeError):
             result["songs"] = []
         return result
+
+    async def galaxy_get_expedition_by_id(self, expedition_id: int) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM galaxy_expeditions WHERE id = ?",
+            (int(expedition_id),),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        try:
+            result["songs"] = json.loads(result.pop("songs_json"))
+        except (TypeError, json.JSONDecodeError):
+            result["songs"] = []
+        return result
+
+    async def galaxy_set_wlm_report_result(
+        self, listen_id: int, *, reported: bool, error: str = ""
+    ) -> None:
+        await self.db.execute(
+            """UPDATE galaxy_listens
+               SET wlm_reported_at = ?, wlm_report_error = ?
+               WHERE id = ?""",
+            (
+                time.time() if reported else None,
+                "" if reported else str(error or "")[:500],
+                int(listen_id),
+            ),
+        )
+        await self.db.commit()
 
     async def galaxy_get_profile(self, discord_user_id: int) -> dict:
         user = await self.galaxy_get_user(discord_user_id)
