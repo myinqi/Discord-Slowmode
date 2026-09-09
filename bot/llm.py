@@ -721,7 +721,8 @@ class OllamaClient:
     async def chat(self, messages: list[dict], tools: list[dict] | None = None,
                    max_tokens: int = 512, model: str | None = None,
                    temperature: float = 0.6, top_p: float = 0.9,
-                   repeat_penalty: float = 1.1) -> dict:
+                   repeat_penalty: float = 1.1,
+                   keep_alive: str | int | None = None) -> dict:
         payload = {
             "model": model or self.model,
             "messages": messages,
@@ -735,6 +736,8 @@ class OllamaClient:
         }
         if tools:
             payload["tools"] = tools
+        if keep_alive is not None:
+            payload["keep_alive"] = keep_alive
         timeout = aiohttp.ClientTimeout(total=self.timeout)
         async with aiohttp.ClientSession(timeout=timeout) as sess:
             async with sess.post(f"{self.base_url}/api/chat", json=payload) as resp:

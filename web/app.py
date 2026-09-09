@@ -488,6 +488,8 @@ def create_app(db: Database, bot=None) -> Quart:
     app.trya_dcs_presence = {}
     app.galaxy_api_rate = {}
     app.suno_playback_rate = {}
+    app.suno_prompt_ai_rate = {}
+    app.suno_prompt_ai_lock = asyncio.Lock()
     app.galaxy_metadata_cache = {}
     app.galaxy_metadata_lock = asyncio.Lock()
     app.galaxy_suno_feed_cache = {}
@@ -551,6 +553,7 @@ def create_app(db: Database, bot=None) -> Quart:
         ('executioner', 'Executioner'),
         ('songripper', 'Songripper'),
         ('suno_analyzer', 'Suno Analyzer'),
+        ('suno_prompt_generator', 'Suno Prompt Generator'),
         ('suno_promotion', 'Suno Promotion'),
         ('suno_info', 'Suno Info'),
         ('audit', 'Audit Log'),
@@ -601,6 +604,7 @@ def create_app(db: Database, bot=None) -> Quart:
         {"key": "executioner", "endpoint": "executioner", "icon": "🪓", "label": "Executioner", "perm": "executioner"},
         {"key": "songripper", "endpoint": "songripper", "icon": "💿", "label": "Songripper", "perm": "songripper"},
         {"key": "suno_analyzer", "endpoint": "suno_analyzer", "icon": "🔬", "label": "Suno Analyzer", "perm": "suno_analyzer"},
+        {"key": "suno_prompt_generator", "endpoint": "suno_prompt_generator", "icon": "P", "label": "Suno Prompt Generator", "perm": "suno_prompt_generator"},
         {"key": "suno_promotion", "endpoint": "suno_promotion", "icon": "⭐", "label": "Suno Promotion", "perm": "suno_promotion"},
         {"key": "suno_info", "endpoint": "suno_info", "icon": "trya_logo", "label": "Suno Playlist Player", "perm": "suno_info"},
         {"key": "audit", "endpoint": "audit", "icon": "📋", "label": "Audit Log", "perm": "audit"},
@@ -16895,6 +16899,114 @@ def create_app(db: Database, bot=None) -> Quart:
             mimetype="application/json",
             headers={"Content-Disposition": "attachment; filename=relic_items.json"},
         )
+
+    def _suno_prompt_ai_blocked() -> bool:
+        process = getattr(trya_dcs_manager, "_process", None)
+        task = getattr(trya_dcs_manager, "_task", None)
+        start_lock = getattr(trya_dcs_manager, "_start_lock", None)
+        return bool(
+            trya_dcs_manager.is_running
+            or (start_lock and start_lock.locked())
+            or (process and process.returncode is None)
+            or (task and not task.done())
+        )
+
+    @app.route("/suno-prompt-generator")
+    @permission_required("suno_prompt_generator")
+    async def suno_prompt_generator():
+        from bot.suno_prompt_generator import (
+            ENERGY, ERAS, GENRES, MOODS, PRODUCTIONS, STRUCTURES, VOCALS,
+        )
+
+        csrf = session.get("suno_prompt_csrf")
+        if not csrf:
+            csrf = secrets.token_urlsafe(32)
+            session["suno_prompt_csrf"] = csrf
+        return await render_template(
+            "suno_prompt_generator.html",
+            csrf_token=csrf,
+            ai_blocked=_suno_prompt_ai_blocked(),
+            genres=GENRES,
+            moods=MOODS,
+            eras=ERAS,
+            vocals=VOCALS,
+            energy_levels=ENERGY,
+            structures=STRUCTURES,
+            productions=PRODUCTIONS,
+        )
+
+    @app.route("/suno-prompt-generator/enhance", methods=["POST"])
+    @permission_required("suno_prompt_generator")
+    async def suno_prompt_generator_enhance():
+        from bot.llm import OllamaClient
+        from bot.suno_prompt_generator import (
+            ai_messages, normalize_prompt_request, parse_ai_prompt_response,
+        )
+
+        expected = str(session.get("suno_prompt_csrf") or "")
+        submitted = str(request.headers.get("X-CSRF-Token") or "")
+        if not expected or not submitted or not hmac.compare_digest(expected, submitted):
+            return {"error": "The request token expired. Reload the page."}, 403
+        origin = (request.headers.get("Origin") or "").rstrip("/")
+        if origin and origin != _public_web_url().rstrip("/"):
+            return {"error": "Invalid request origin."}, 403
+        if _suno_prompt_ai_blocked():
+            return {
+                "error": "AI enhancement is unavailable while TrYa DCS is active.",
+                "code": "dcs_active",
+            }, 409
+        now = time.monotonic()
+        user_id = int(session.get("user_id") or 0)
+        recent = [stamp for stamp in app.suno_prompt_ai_rate.get(user_id, []) if now - stamp < 60]
+        if len(recent) >= 3:
+            return {"error": "AI enhancement is limited to three requests per minute."}, 429
+        recent.append(now)
+        app.suno_prompt_ai_rate[user_id] = recent
+        if app.suno_prompt_ai_lock.locked():
+            return {"error": "Another prompt is currently being enhanced."}, 429
+
+        fields = normalize_prompt_request(await request.get_json(silent=True) or {})
+        if not any(fields.get(key) for key in ("idea", "genre", "custom_genre")):
+            return {"error": "Add a creative direction or select a genre first."}, 400
+        async with app.suno_prompt_ai_lock:
+            if _suno_prompt_ai_blocked():
+                return {
+                    "error": "AI enhancement is unavailable while TrYa DCS is active.",
+                    "code": "dcs_active",
+                }, 409
+            cfg = await db.get_llm_config()
+            model = (cfg.get("model") or Config.LLM_MODEL).strip()
+            client = OllamaClient(
+                base_url=Config.OLLAMA_URL,
+                model=model,
+                timeout=Config.LLM_REQUEST_TIMEOUT,
+            )
+            started = time.monotonic()
+            try:
+                response = await client.chat(
+                    ai_messages(fields),
+                    max_tokens=420,
+                    temperature=0.72,
+                    top_p=0.9,
+                    repeat_penalty=1.08,
+                    keep_alive=0,
+                )
+                styles, exclude_styles = parse_ai_prompt_response(
+                    (response.get("message") or {}).get("content")
+                )
+            except Exception as exc:
+                print(f"[suno-prompt] AI enhancement failed: {type(exc).__name__}: {exc}", flush=True)
+                return {"error": "Corax could not enhance this prompt. The local generator remains available."}, 502
+            await db.add_audit_log(
+                event_type="suno_prompt_ai_enhanced",
+                actor=session.get("username", "unknown"),
+                details=(
+                    f"model={model}, styles_chars={len(styles)}, "
+                    f"exclude_chars={len(exclude_styles)}, "
+                    f"latency_ms={int((time.monotonic() - started) * 1000)}"
+                ),
+            )
+            return {"styles": styles, "exclude_styles": exclude_styles}
 
     # --- Suno Audio Analyzer ---
     @app.route("/suno-analyzer")

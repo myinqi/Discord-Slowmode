@@ -1,0 +1,226 @@
+{% extends "base.html" %}
+{% block title %}Suno Prompt Generator{% endblock %}
+{% block content %}
+<div class="max-w-7xl mx-auto space-y-6">
+    <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+        <div>
+            <h2 class="text-2xl font-bold text-white">Suno Prompt Generator</h2>
+            <p class="text-gray-400 text-sm mt-1">Build focused English prompts for Suno Styles and Exclude Styles.</p>
+        </div>
+        <div class="flex flex-wrap gap-2 text-xs">
+            <span class="px-3 py-1.5 rounded-full border border-green-700/50 bg-green-950/30 text-green-300">Local generator available</span>
+            <span id="ai-badge" class="px-3 py-1.5 rounded-full border {{ 'border-amber-700/50 bg-amber-950/30 text-amber-300' if ai_blocked else 'border-blue-700/50 bg-blue-950/30 text-blue-300' }}">{{ 'AI paused for TrYa DCS' if ai_blocked else 'AI enhancement available' }}</span>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1.15fr)_minmax(380px,0.85fr)] gap-6 items-start">
+        <section class="bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden">
+            <div class="px-5 py-4 border-b border-gray-700/50">
+                <h3 class="text-white font-semibold">Creative direction</h3>
+                <p class="text-gray-500 text-sm mt-1">Choose as much or as little detail as you need.</p>
+            </div>
+            <div class="p-5 space-y-5">
+                <label class="block">
+                    <span class="block text-gray-300 text-sm mb-1">Describe the song</span>
+                    <textarea id="idea" maxlength="800" rows="3" placeholder="A nocturnal journey that begins intimate and grows into a triumphant final chorus..." class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2.5 text-white placeholder-gray-600 resize-y"></textarea>
+                </label>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <label class="block">
+                        <span class="block text-gray-400 text-xs mb-1">Genre</span>
+                        <select id="genre" class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2.5 text-white">
+                            <option value="">Choose a genre</option>
+                            {% for value in genres %}<option value="{{ value }}">{{ value }}</option>{% endfor %}
+                        </select>
+                    </label>
+                    <label class="block">
+                        <span class="block text-gray-400 text-xs mb-1">Custom genre or blend</span>
+                        <input id="custom-genre" maxlength="100" placeholder="Nordic folk metal" class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2.5 text-white placeholder-gray-600">
+                    </label>
+                    <label class="block">
+                        <span class="block text-gray-400 text-xs mb-1">Era</span>
+                        <select id="era" class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2.5 text-white"><option value="">No era preference</option>{% for value in eras %}<option value="{{ value }}">{{ value }}</option>{% endfor %}</select>
+                    </label>
+                    <label class="block">
+                        <span class="block text-gray-400 text-xs mb-1">Tempo</span>
+                        <div class="relative"><input id="bpm" type="number" min="40" max="240" placeholder="120" class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2.5 pr-14 text-white placeholder-gray-600"><span class="absolute right-3 top-2.5 text-gray-500 text-sm">BPM</span></div>
+                    </label>
+                    <label class="block">
+                        <span class="block text-gray-400 text-xs mb-1">Energy</span>
+                        <select id="energy" class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2.5 text-white"><option value="">Unspecified</option>{% for value in energy_levels %}<option value="{{ value }}">{{ value }}</option>{% endfor %}</select>
+                    </label>
+                    <label class="block">
+                        <span class="block text-gray-400 text-xs mb-1">Song structure</span>
+                        <select id="structure" class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2.5 text-white"><option value="">Unspecified</option>{% for value in structures %}<option value="{{ value }}">{{ value }}</option>{% endfor %}</select>
+                    </label>
+                    <label class="block">
+                        <span class="block text-gray-400 text-xs mb-1">Vocals</span>
+                        <select id="vocals" class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2.5 text-white"><option value="">Unspecified</option>{% for value in vocals %}<option value="{{ value }}">{{ value }}</option>{% endfor %}</select>
+                    </label>
+                    <label class="block">
+                        <span class="block text-gray-400 text-xs mb-1">Vocal character</span>
+                        <input id="vocal-details" maxlength="200" placeholder="breathy verses, powerful layered chorus" class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2.5 text-white placeholder-gray-600">
+                    </label>
+                    <label class="block md:col-span-2">
+                        <span class="block text-gray-400 text-xs mb-1">Instruments and sonic elements</span>
+                        <input id="instruments" maxlength="300" placeholder="fingerpicked acoustic guitar, deep toms, analog synth pads" class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2.5 text-white placeholder-gray-600">
+                    </label>
+                    <label class="block md:col-span-2">
+                        <span class="block text-gray-400 text-xs mb-1">Production aesthetic</span>
+                        <select id="production" class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2.5 text-white"><option value="">Unspecified</option>{% for value in productions %}<option value="{{ value }}">{{ value }}</option>{% endfor %}</select>
+                    </label>
+                </div>
+
+                <fieldset>
+                    <legend class="text-gray-400 text-xs mb-2">Mood — choose up to five</legend>
+                    <div id="mood-grid" class="flex flex-wrap gap-2">
+                        {% for value in moods %}<label class="mood-chip cursor-pointer"><input type="checkbox" value="{{ value }}" class="sr-only peer"><span class="block px-3 py-1.5 rounded-full border border-gray-600 bg-discord-darker text-gray-400 text-sm peer-checked:border-discord-blurple peer-checked:bg-discord-blurple/20 peer-checked:text-indigo-200">{{ value }}</span></label>{% endfor %}
+                    </div>
+                </fieldset>
+
+                <label class="block">
+                    <span class="block text-gray-400 text-xs mb-1">Things to avoid</span>
+                    <input id="exclude" maxlength="500" placeholder="generic pop hooks, bright major-key mood, excessive vocal runs" class="w-full bg-discord-darker border border-gray-600 rounded-lg px-3 py-2.5 text-white placeholder-gray-600">
+                </label>
+
+                <div class="flex flex-wrap gap-3 pt-1">
+                    <button id="generate-btn" type="button" class="px-4 py-2.5 rounded-lg bg-discord-blurple hover:bg-indigo-500 text-white font-medium">Generate prompt</button>
+                    <button id="random-btn" type="button" class="px-4 py-2.5 rounded-lg border border-gray-600 hover:bg-discord-lighter text-gray-200">Randomize</button>
+                    <button id="ai-btn" type="button" {% if ai_blocked %}disabled{% endif %} class="px-4 py-2.5 rounded-lg border border-blue-700/60 bg-blue-950/30 text-blue-300 hover:bg-blue-900/40 disabled:opacity-40 disabled:cursor-not-allowed">Enhance with Corax AI</button>
+                </div>
+                <p id="status" class="text-sm text-gray-500 min-h-5" aria-live="polite">{% if ai_blocked %}AI processing is disabled until the TrYa DCS stream has stopped.{% endif %}</p>
+            </div>
+        </section>
+
+        <section class="bg-discord-dark border border-gray-700/50 rounded-lg overflow-hidden xl:sticky xl:top-6">
+            <div class="px-5 py-4 border-b border-gray-700/50">
+                <h3 class="text-white font-semibold">Suno fields</h3>
+                <p class="text-gray-500 text-sm mt-1">Review and edit before copying into Suno Custom Mode.</p>
+            </div>
+            <div class="p-5 space-y-5">
+                <div>
+                    <div class="flex items-center justify-between mb-1"><label for="styles-output" class="text-gray-300 text-sm">Styles</label><span id="styles-count" class="text-gray-500 text-xs">0 / 1000</span></div>
+                    <textarea id="styles-output" maxlength="1000" rows="12" placeholder="Your style prompt will appear here." class="w-full bg-gray-950 border border-gray-600 rounded-lg px-3 py-2.5 text-white placeholder-gray-700 resize-y"></textarea>
+                    <button type="button" data-copy="styles-output" class="copy-btn mt-2 px-3 py-1.5 rounded border border-gray-600 hover:bg-discord-lighter text-gray-300 text-sm">Copy Styles</button>
+                </div>
+                <div>
+                    <div class="flex items-center justify-between mb-1"><label for="exclude-output" class="text-gray-300 text-sm">Exclude Styles</label><span id="exclude-count" class="text-gray-500 text-xs">0 / 1000</span></div>
+                    <textarea id="exclude-output" maxlength="1000" rows="5" placeholder="Optional negative style guidance." class="w-full bg-gray-950 border border-gray-600 rounded-lg px-3 py-2.5 text-white placeholder-gray-700 resize-y"></textarea>
+                    <button type="button" data-copy="exclude-output" class="copy-btn mt-2 px-3 py-1.5 rounded border border-gray-600 hover:bg-discord-lighter text-gray-300 text-sm">Copy Exclude Styles</button>
+                </div>
+                <div class="rounded-lg border border-gray-700 bg-discord-darker p-4 text-xs text-gray-500 leading-relaxed">
+                    Artist references entered in free text are not copied safely by the local generator. Corax AI translates them into generic musical characteristics. Always review the result before use. This tool is not affiliated with or endorsed by Suno, Inc.
+                </div>
+            </div>
+        </section>
+    </div>
+</div>
+<script>
+(() => {
+    const csrfToken = {{ csrf_token|tojson }};
+    const choices = {
+        genres: {{ genres|list|tojson }}, moods: {{ moods|list|tojson }}, eras: {{ eras|list|tojson }},
+        vocals: {{ vocals|list|tojson }}, energy: {{ energy_levels|list|tojson }},
+        structures: {{ structures|list|tojson }}, productions: {{ productions|list|tojson }}
+    };
+    const $ = id => document.getElementById(id);
+    const selectedMoods = () => [...document.querySelectorAll('#mood-grid input:checked')].map(input => input.value).slice(0, 5);
+    const fields = () => ({
+        idea: $('idea').value.trim(), genre: $('genre').value, custom_genre: $('custom-genre').value.trim(),
+        moods: selectedMoods(), era: $('era').value, bpm: Number.parseInt($('bpm').value, 10) || 0,
+        energy: $('energy').value, instruments: $('instruments').value.trim(), vocals: $('vocals').value,
+        vocal_details: $('vocal-details').value.trim(), structure: $('structure').value,
+        production: $('production').value, exclude: $('exclude').value.trim()
+    });
+    const updateCount = (output, counter) => {
+        const length = $(output).value.length;
+        $(counter).textContent = `${length} / 1000`;
+        $(counter).classList.toggle('text-red-400', length >= 1000);
+    };
+    const setOutputs = (styles, exclude) => {
+        $('styles-output').value = String(styles || '').slice(0, 1000);
+        $('exclude-output').value = String(exclude || '').slice(0, 1000);
+        updateCount('styles-output', 'styles-count');
+        updateCount('exclude-output', 'exclude-count');
+    };
+    const generate = () => {
+        const value = fields();
+        const parts = [];
+        const genre = value.custom_genre || value.genre;
+        if (genre) parts.push(genre);
+        parts.push(...value.moods);
+        if (value.era) parts.push(`${value.era} aesthetic`);
+        if (value.bpm >= 40 && value.bpm <= 240) parts.push(`${value.bpm} BPM`);
+        if (value.energy) parts.push(`${value.energy.toLowerCase()} energy`);
+        if (value.instruments) parts.push(`featuring ${value.instruments}`);
+        if (value.vocals) parts.push(value.vocals.toLowerCase());
+        if (value.vocal_details) parts.push(value.vocal_details);
+        if (value.structure) parts.push(`${value.structure.toLowerCase()} structure`);
+        if (value.production) parts.push(`${value.production.toLowerCase()} production`);
+        if (value.idea) parts.push(value.idea);
+        setOutputs(parts.join(', '), value.exclude);
+        $('status').textContent = parts.length ? 'Local prompt generated.' : 'Choose a genre or describe your song first.';
+    };
+    const pick = values => values[Math.floor(Math.random() * values.length)];
+    const randomize = () => {
+        $('genre').value = pick(choices.genres);
+        $('custom-genre').value = '';
+        $('era').value = pick(choices.eras);
+        $('vocals').value = pick(choices.vocals);
+        $('energy').value = pick(choices.energy);
+        $('structure').value = pick(choices.structures);
+        $('production').value = pick(choices.productions);
+        $('bpm').value = String(65 + Math.floor(Math.random() * 101));
+        document.querySelectorAll('#mood-grid input').forEach(input => { input.checked = false; });
+        [...choices.moods].sort(() => Math.random() - 0.5).slice(0, 2).forEach(value => {
+            const input = [...document.querySelectorAll('#mood-grid input')].find(item => item.value === value);
+            if (input) input.checked = true;
+        });
+        generate();
+    };
+    $('mood-grid').addEventListener('change', event => {
+        const checked = [...document.querySelectorAll('#mood-grid input:checked')];
+        if (checked.length > 5) event.target.checked = false;
+        const atLimit = document.querySelectorAll('#mood-grid input:checked').length >= 5;
+        document.querySelectorAll('#mood-grid input:not(:checked)').forEach(input => { input.disabled = atLimit; });
+        if (!atLimit) document.querySelectorAll('#mood-grid input:checked').forEach(input => { input.disabled = false; });
+    });
+    $('generate-btn').addEventListener('click', generate);
+    $('random-btn').addEventListener('click', randomize);
+    $('styles-output').addEventListener('input', () => updateCount('styles-output', 'styles-count'));
+    $('exclude-output').addEventListener('input', () => updateCount('exclude-output', 'exclude-count'));
+    $('ai-btn').addEventListener('click', async () => {
+        generate();
+        if (!$('styles-output').value.trim()) return;
+        const button = $('ai-btn');
+        button.disabled = true;
+        button.textContent = 'Corax is refining...';
+        $('status').textContent = 'Generating a refined prompt. This can take a moment.';
+        try {
+            const response = await fetch({{ url_for('suno_prompt_generator_enhance')|tojson }}, {
+                method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken},
+                body: JSON.stringify(fields())
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'AI enhancement failed.');
+            setOutputs(data.styles, data.exclude_styles);
+            $('status').textContent = 'Prompt enhanced by Corax AI. Review it before use.';
+        } catch (error) {
+            $('status').textContent = error.message;
+        } finally {
+            button.disabled = false;
+            button.textContent = 'Enhance with Corax AI';
+        }
+    });
+    document.querySelectorAll('.copy-btn').forEach(button => button.addEventListener('click', async () => {
+        const value = $(button.dataset.copy).value;
+        if (!value) return;
+        await navigator.clipboard.writeText(value);
+        const previous = button.textContent;
+        button.textContent = 'Copied';
+        setTimeout(() => { button.textContent = previous; }, 1200);
+    }));
+    setOutputs('', '');
+})();
+</script>
+{% endblock %}
