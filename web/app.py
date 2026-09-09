@@ -4418,7 +4418,18 @@ def create_app(db: Database, bot=None) -> Quart:
             or ""
         )
         preferred_playlist_slug = ""
+        # WLM community IDs are internal UUIDs and cannot be matched against
+        # the Discord guild snowflake. Prefer our community chart by its stable
+        # public title; keep the ID checks as a future-compatible fallback.
+        preferred_title = "tarja ravenveil weekly top 10"
         for playlist in playlist_rows:
+            title = " ".join(str(playlist.get("title") or "").split()).casefold()
+            if title == preferred_title:
+                preferred_playlist_slug = str(playlist.get("slug") or "")
+                break
+        for playlist in playlist_rows:
+            if preferred_playlist_slug:
+                break
             if (
                 str(playlist.get("type") or "").upper() == "COMMUNITY"
                 and str(playlist.get("communityId") or "") == community_id
