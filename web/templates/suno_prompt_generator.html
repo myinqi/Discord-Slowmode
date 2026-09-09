@@ -143,11 +143,11 @@
         updateCount('styles-output', 'styles-count');
         updateCount('exclude-output', 'exclude-count');
     };
-    const generate = () => {
+    const generate = (message = 'Local prompt generated.') => {
         const value = fields();
         const parts = [];
-        const genre = value.custom_genre || value.genre;
-        if (genre) parts.push(genre);
+        if (value.genre) parts.push(value.genre);
+        if (value.custom_genre) parts.push(value.custom_genre);
         parts.push(...value.moods);
         if (value.era) parts.push(`${value.era} aesthetic`);
         if (value.bpm >= 40 && value.bpm <= 240) parts.push(`${value.bpm} BPM`);
@@ -159,7 +159,7 @@
         if (value.production) parts.push(`${value.production.toLowerCase()} production`);
         if (value.idea) parts.push(value.idea);
         setOutputs(parts.join(', '), value.exclude);
-        $('status').textContent = parts.length ? 'Local prompt generated.' : 'Choose a genre or describe your song first.';
+        $('status').textContent = parts.length ? message : 'Choose a genre or describe your song first.';
     };
     const pick = values => values[Math.floor(Math.random() * values.length)];
     const randomize = () => {
@@ -184,8 +184,19 @@
         const atLimit = document.querySelectorAll('#mood-grid input:checked').length >= 5;
         document.querySelectorAll('#mood-grid input:not(:checked)').forEach(input => { input.disabled = atLimit; });
         if (!atLimit) document.querySelectorAll('#mood-grid input:checked').forEach(input => { input.disabled = false; });
+        generate('Local prompt updated from your current selections.');
     });
-    $('generate-btn').addEventListener('click', generate);
+    const inputIds = [
+        'idea', 'genre', 'custom-genre', 'era', 'bpm', 'energy', 'instruments',
+        'vocals', 'vocal-details', 'structure', 'production', 'exclude'
+    ];
+    inputIds.forEach(id => {
+        const input = $(id);
+        input.addEventListener(input.tagName === 'SELECT' ? 'change' : 'input', () => {
+            generate('Local prompt updated from your current selections.');
+        });
+    });
+    $('generate-btn').addEventListener('click', () => generate());
     $('random-btn').addEventListener('click', randomize);
     $('styles-output').addEventListener('input', () => updateCount('styles-output', 'styles-count'));
     $('exclude-output').addEventListener('input', () => updateCount('exclude-output', 'exclude-count'));

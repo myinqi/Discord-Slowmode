@@ -10,6 +10,7 @@ try:
     from bot.suno_prompt_generator import (
         ai_messages,
         build_style_prompt,
+        enforce_selected_fields,
         normalize_prompt_request,
         parse_ai_prompt_response,
     )
@@ -24,6 +25,7 @@ class SunoPromptGeneratorTests(unittest.TestCase):
         fields = normalize_prompt_request({
             "idea": "  A dark final chorus\x00  ",
             "genre": "Metal",
+            "custom_genre": "Nordic folk metal",
             "moods": ["Dark", "Triumphant", "Not allowed"],
             "era": "1980s",
             "bpm": "128",
@@ -35,9 +37,15 @@ class SunoPromptGeneratorTests(unittest.TestCase):
             "exclude": "generic pop",
         })
         styles, exclude = build_style_prompt(fields)
-        self.assertIn("Metal, Dark, Triumphant", styles)
+        self.assertIn("Metal, Nordic folk metal, Dark, Triumphant", styles)
+        self.assertIn("1980s aesthetic", styles)
         self.assertIn("128 BPM", styles)
+        self.assertIn("high energy", styles)
+        self.assertIn("distorted guitar, analog synth", styles)
         self.assertIn("female lead", styles)
+        self.assertIn("verse-chorus-bridge structure", styles)
+        self.assertIn("wide cinematic production", styles)
+        self.assertIn("A dark final chorus", styles)
         self.assertEqual(exclude, "generic pop")
         self.assertLessEqual(len(styles), 1000)
 
@@ -51,6 +59,35 @@ class SunoPromptGeneratorTests(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             parse_ai_prompt_response("not json")
+
+    def test_ai_output_cannot_drop_selected_fields(self):
+        fields = normalize_prompt_request({
+            "idea": "A nocturnal journey",
+            "genre": "Folk",
+            "custom_genre": "Nordic folk metal",
+            "moods": ["Energetic", "Haunting", "Mysterious"],
+            "era": "2000s",
+            "bpm": 112,
+            "energy": "High",
+            "vocals": "Female Lead",
+            "structure": "Verse-Chorus-Bridge",
+            "production": "Clean Modern",
+            "exclude": "Pop, Rap, Electronic",
+        })
+        styles, exclude = enforce_selected_fields(
+            "Nordic folk metal with high-energy verses, female lead vocals, energetic, haunting and mysterious",
+            "Pop",
+            fields,
+        )
+        self.assertIn("Folk", styles)
+        self.assertIn("Nordic folk metal", styles)
+        self.assertIn("112 BPM", styles)
+        self.assertIn("2000s aesthetic", styles)
+        self.assertIn("verse-chorus-bridge structure", styles)
+        self.assertIn("clean modern production", styles)
+        self.assertIn("A nocturnal journey", styles)
+        self.assertIn("Rap", exclude)
+        self.assertIn("Electronic", exclude)
 
 
 class SunoPromptGeneratorRouteTests(unittest.IsolatedAsyncioTestCase):
@@ -105,7 +142,9 @@ class SunoPromptGeneratorRouteTests(unittest.IsolatedAsyncioTestCase):
                 headers={"X-CSRF-Token": csrf},
             )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual((await response.get_json())["styles"], "Cinematic dark folk, 92 BPM")
+        enhanced = (await response.get_json())["styles"]
+        self.assertIn("Cinematic dark folk, 92 BPM", enhanced)
+        self.assertIn("A moonlit procession", enhanced)
         self.assertEqual(mocked.await_args.kwargs["keep_alive"], 0)
 
     async def test_ai_enhancement_is_blocked_during_dcs(self):

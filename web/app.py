@@ -16940,7 +16940,8 @@ def create_app(db: Database, bot=None) -> Quart:
     async def suno_prompt_generator_enhance():
         from bot.llm import OllamaClient
         from bot.suno_prompt_generator import (
-            ai_messages, normalize_prompt_request, parse_ai_prompt_response,
+            ai_messages, enforce_selected_fields, normalize_prompt_request,
+            parse_ai_prompt_response,
         )
 
         expected = str(session.get("suno_prompt_csrf") or "")
@@ -16993,6 +16994,9 @@ def create_app(db: Database, bot=None) -> Quart:
                 )
                 styles, exclude_styles = parse_ai_prompt_response(
                     (response.get("message") or {}).get("content")
+                )
+                styles, exclude_styles = enforce_selected_fields(
+                    styles, exclude_styles, fields
                 )
             except Exception as exc:
                 print(f"[suno-prompt] AI enhancement failed: {type(exc).__name__}: {exc}", flush=True)
